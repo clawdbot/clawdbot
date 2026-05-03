@@ -388,6 +388,63 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("preserves terminal lifecycle state when caller has a stale running snapshot", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-lifecycle-preserve";
+      const sessionId = "test-lifecycle-preserve-session";
+      const terminalEntry: SessionEntry = {
+        sessionId,
+        updatedAt: 2_000,
+        status: "done",
+        startedAt: 1_000,
+        endedAt: 1_900,
+        runtimeMs: 900,
+      };
+      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: terminalEntry }, null, 2));
+
+      const staleInMemory: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1_100,
+          status: "running",
+          startedAt: 1_000,
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore: staleInMemory,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+        result: {
+          payloads: [],
+          meta: {
+            aborted: false,
+            agentMeta: {
+              provider: "openai",
+              model: "gpt-5.4",
+            },
+          },
+        } as never,
+      });
+
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted).toMatchObject({
+        status: "done",
+        startedAt: 1_000,
+        endedAt: 1_900,
+        runtimeMs: 900,
+        modelProvider: "openai",
+        model: "gpt-5.4",
+      });
+      expect(staleInMemory[sessionKey]?.status).toBe("done");
+    });
+  });
+
   it("persists latest systemPromptReport for downstream warning dedupe", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:codex:report:test-system-prompt-report";
@@ -875,6 +932,248 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.lastInteractionAt).toBeGreaterThan(lastInteractionAt);
+    });
+  });
+
+  it("preserves runtime model and contextTokens when preserveRuntimeModel is true (heartbeat bleed fix)", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-heartbeat-bleed";
+      const sessionId = "test-heartbeat-bleed-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          contextTokens: 1_000_000,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      // Heartbeat turn uses a different model
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "ollama",
+            model: "llama3.2:1b",
+            contextTokens: 128_000,
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        result,
+        preserveRuntimeModel: true,
+      });
+
+      // Runtime model and contextTokens should be preserved from the original entry
+      expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
+      expect(sessionStore[sessionKey]?.modelProvider).toBe("anthropic");
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(1_000_000);
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.model).toBe("claude-opus-4-6");
+      expect(persisted[sessionKey]?.modelProvider).toBe("anthropic");
+      expect(persisted[sessionKey]?.contextTokens).toBe(1_000_000);
+    });
+  });
+
+  it("leaves contextTokens unset when entry has prior model but no contextTokens (heartbeat bleed guard)", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-heartbeat-no-context-tokens";
+      const sessionId = "test-heartbeat-no-context-tokens-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          // contextTokens intentionally missing — older session without cached context
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      // Heartbeat turn uses a different, smaller model
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "ollama",
+            model: "llama3.2:1b",
+            contextTokens: 128_000,
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        result,
+        preserveRuntimeModel: true,
+      });
+
+      // Runtime model should be preserved
+      expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
+      expect(sessionStore[sessionKey]?.modelProvider).toBe("anthropic");
+      // contextTokens should NOT bleed from the heartbeat run's smaller window
+      expect(sessionStore[sessionKey]?.contextTokens).toBeUndefined();
+    });
+  });
+
+  it("does not set runtime model when preserveRuntimeModel is true and entry has no prior runtime model", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-heartbeat-new-session";
+      const sessionId = "test-heartbeat-new-session-id";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "ollama",
+            model: "llama3.2:1b",
+            contextTokens: 128_000,
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "ollama",
+        defaultModel: "llama3.2:1b",
+        result,
+        preserveRuntimeModel: true,
+      });
+
+      // Heartbeat should NOT establish initial model state on an empty session
+      expect(sessionStore[sessionKey]?.model).toBeUndefined();
+      expect(sessionStore[sessionKey]?.modelProvider).toBeUndefined();
+      expect(sessionStore[sessionKey]?.contextTokens).toBeUndefined();
+    });
+  });
+
+  it("preserves model without borrowing heartbeat provider when entry has model but no modelProvider", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-heartbeat-model-no-provider";
+      const sessionId = "test-heartbeat-model-no-provider-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          model: "claude-opus-4-6",
+          // modelProvider intentionally missing
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      // Heartbeat turn uses a different provider
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "ollama",
+            model: "llama3.2:1b",
+            contextTokens: 128_000,
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        result,
+        preserveRuntimeModel: true,
+      });
+
+      // Model preserved, provider NOT borrowed from heartbeat
+      expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
+      expect(sessionStore[sessionKey]?.modelProvider).toBeUndefined();
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.model).toBe("claude-opus-4-6");
+      expect(persisted[sessionKey]?.modelProvider).toBeUndefined();
+    });
+  });
+
+  it("overwrites runtime model when preserveRuntimeModel is false (default behavior)", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-normal-overwrite";
+      const sessionId = "test-normal-overwrite-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          contextTokens: 1_000_000,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "openai",
+            model: "gpt-5.4",
+            contextTokens: 400_000,
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+        result,
+      });
+
+      // Normal turn: runtime model is updated
+      expect(sessionStore[sessionKey]?.model).toBe("gpt-5.4");
+      expect(sessionStore[sessionKey]?.modelProvider).toBe("openai");
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(400_000);
     });
   });
 });

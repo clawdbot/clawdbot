@@ -1,6 +1,6 @@
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
+import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
@@ -85,20 +85,20 @@ function listBundledPluginConfigSecretTargetRegistryEntries(
 }
 
 function listChannelSecretTargetRegistryEntries(
-  bundledPlugins: readonly PluginManifestRecord[],
+  channelPlugins: readonly PluginManifestRecord[],
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
 
-  for (const record of bundledPlugins) {
+  for (const record of channelPlugins) {
     const channelIds = record.channels;
     if (channelIds.length === 0) {
       continue;
     }
     try {
-      const contractApi = loadBundledChannelSecretContractApi(record.id);
+      const contractApi = loadChannelSecretContractApiForRecord(record);
       entries.push(...(contractApi?.secretTargetRegistryEntries ?? []));
     } catch {
-      // Ignore bundled channels that do not expose a usable secret contract artifact.
+      // Ignore channels that do not expose a usable secret contract artifact.
     }
   }
   return entries;
@@ -449,15 +449,17 @@ export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   if (cachedSecretTargetRegistry) {
     return cachedSecretTargetRegistry;
   }
-  const bundledPlugins = loadPluginMetadataSnapshot({
+  const plugins = loadPluginMetadataSnapshot({
     config: {},
     env: process.env,
-  }).plugins.filter((record) => record.origin === "bundled");
+  }).plugins;
+  const bundledPlugins = plugins.filter((record) => record.origin === "bundled");
+  const channelPlugins = plugins.filter((record) => record.channels.length > 0);
   cachedSecretTargetRegistry = [
     ...CORE_SECRET_TARGET_REGISTRY,
     ...listBundledWebProviderSecretTargetRegistryEntries(bundledPlugins),
     ...listBundledPluginConfigSecretTargetRegistryEntries(bundledPlugins),
-    ...listChannelSecretTargetRegistryEntries(bundledPlugins),
+    ...listChannelSecretTargetRegistryEntries(channelPlugins),
   ];
   return cachedSecretTargetRegistry;
 }

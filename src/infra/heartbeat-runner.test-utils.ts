@@ -15,6 +15,10 @@ type HeartbeatSessionSeed = {
   lastChannel: string;
   lastProvider: string;
   lastTo: string;
+  agentHarnessId?: string;
+  agentRuntimeOverride?: string;
+  model?: string;
+  modelProvider?: string;
 };
 
 type HeartbeatReplyFn = NonNullable<HeartbeatDeps["getReplyFromConfig"]>;

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectClawHubPublishablePluginPackages,
@@ -11,7 +11,10 @@ import {
   resolveSelectedClawHubPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-clawhub-release.ts";
-import { OPENCLAW_PLUGIN_NPM_REPOSITORY_URL } from "../scripts/lib/plugin-npm-release.ts";
+import {
+  collectPublishablePluginPackages,
+  OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+} from "../scripts/lib/plugin-npm-release.ts";
 import { cleanupTempDirs, makeTempRepoRoot } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -98,6 +101,60 @@ describe("collectClawHubPublishablePluginPackages", () => {
         packageNames: ["@openclaw/demo-plugin"],
       }).map((plugin) => plugin.packageName),
     ).toEqual(["@openclaw/demo-plugin"]);
+  });
+});
+
+describe("OpenClaw dual-published plugin metadata", () => {
+  const dualPublishedPlugins = [
+    {
+      extensionId: "diagnostics-otel",
+      packageName: "@openclaw/diagnostics-otel",
+    },
+    {
+      extensionId: "diagnostics-prometheus",
+      packageName: "@openclaw/diagnostics-prometheus",
+    },
+  ] as const;
+
+  it("keeps diagnostics plugins selectable through both ClawHub and npm release paths", () => {
+    const packageNames = dualPublishedPlugins.map((plugin) => plugin.packageName);
+    const clawHubPublishable = collectClawHubPublishablePluginPackages(undefined, {
+      packageNames,
+    });
+    const npmPublishable = collectPublishablePluginPackages(undefined, {
+      packageNames,
+    });
+
+    expect(clawHubPublishable.map((plugin) => plugin.packageName)).toEqual(packageNames);
+    expect(npmPublishable.map((plugin) => plugin.packageName)).toEqual(packageNames);
+
+    for (const plugin of dualPublishedPlugins) {
+      const packageJson = JSON.parse(
+        readFileSync(`extensions/${plugin.extensionId}/package.json`, "utf8"),
+      ) as {
+        openclaw?: {
+          install?: {
+            clawhubSpec?: string;
+            defaultChoice?: string;
+            npmSpec?: string;
+          };
+          release?: {
+            publishToClawHub?: boolean;
+            publishToNpm?: boolean;
+          };
+        };
+      };
+
+      expect(packageJson.openclaw?.install).toMatchObject({
+        clawhubSpec: `clawhub:${plugin.packageName}`,
+        defaultChoice: "npm",
+        npmSpec: plugin.packageName,
+      });
+      expect(packageJson.openclaw?.release).toMatchObject({
+        publishToClawHub: true,
+        publishToNpm: true,
+      });
+    }
   });
 });
 
@@ -302,6 +359,41 @@ describe("collectPluginClawHubReleasePlan", () => {
     });
 
     expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(["@openclaw/demo-plugin"]);
+  });
+});
+
+describe("plugin-clawhub-publish.sh", () => {
+  it("previews the publish command through the ClawHub CLI dry-run preflight", () => {
+    const repoDir = createTempPluginRepo();
+    const binDir = join(repoDir, "bin");
+    const markerPath = join(repoDir, "clawhub-invoked");
+    mkdirSync(binDir, { recursive: true });
+    const clawhubPath = join(binDir, "clawhub");
+    writeFileSync(
+      clawhubPath,
+      `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > ${JSON.stringify(markerPath)}\nexit 0\n`,
+    );
+    chmodSync(clawhubPath, 0o755);
+
+    const output = execFileSync(
+      "bash",
+      [
+        join(process.cwd(), "scripts/plugin-clawhub-publish.sh"),
+        "--dry-run",
+        "extensions/demo-plugin",
+      ],
+      {
+        cwd: repoDir,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+        },
+      },
+    );
+
+    expect(output).toContain("Publish command: CLAWHUB_WORKDIR=");
+    expect(readFileSync(markerPath, "utf8")).toContain("--dry-run");
   });
 });
 

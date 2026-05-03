@@ -2,6 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import type { PluginDiagnostic } from "./manifest-types.js";
 
+export type InstalledPluginFileSignature = {
+  size: number;
+  mtimeMs: number;
+  ctimeMs?: number;
+};
+
 function hashString(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
@@ -31,4 +37,41 @@ export function safeHashFile(params: {
     }
     return undefined;
   }
+}
+
+export function safeFileSignature(filePath: string): InstalledPluginFileSignature | undefined {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) {
+      return undefined;
+    }
+    return {
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function fileSignatureMatches(
+  filePath: string,
+  signature: InstalledPluginFileSignature | undefined,
+): boolean | undefined {
+  if (!signature) {
+    return undefined;
+  }
+  if (typeof signature.ctimeMs !== "number") {
+    return undefined;
+  }
+  const current = safeFileSignature(filePath);
+  if (!current) {
+    return false;
+  }
+  return (
+    current.size === signature.size &&
+    current.mtimeMs === signature.mtimeMs &&
+    current.ctimeMs === signature.ctimeMs
+  );
 }

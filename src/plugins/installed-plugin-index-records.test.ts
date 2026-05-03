@@ -205,6 +205,11 @@ describe("plugin index install records store", () => {
           clawhubPackage: "clawpack-demo",
           clawhubFamily: "code-plugin",
           clawhubChannel: "official",
+          artifactKind: "npm-pack",
+          artifactFormat: "tgz",
+          npmIntegrity: "sha512-clawpack",
+          npmShasum: "1".repeat(40),
+          npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
           clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           clawpackSpecVersion: 1,
           clawpackManifestSha256:
@@ -219,6 +224,11 @@ describe("plugin index install records store", () => {
       "clawpack-demo": {
         source: "clawhub",
         spec: "clawhub:clawpack-demo",
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        npmIntegrity: "sha512-clawpack",
+        npmShasum: "1".repeat(40),
+        npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
         clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         clawpackSpecVersion: 1,
         clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

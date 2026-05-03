@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { consumeGatewayRestartIntentSync, writeGatewayRestartIntentSync } from "./restart.js";
+import {
+  consumeGatewayRestartIntentPayloadSync,
+  consumeGatewayRestartIntentSync,
+  writeGatewayRestartIntentSync,
+} from "./restart.js";
 
 const tempDirs: string[] = [];
 
@@ -58,6 +62,24 @@ describe("gateway restart intent", () => {
     expect(writeGatewayRestartIntentSync({ env, targetPid: process.pid })).toBe(true);
 
     expect(fs.statSync(intentPath(env)).mode & 0o777).toBe(0o600);
+  });
+
+  it("round-trips restart force and wait options", () => {
+    const env = createIntentEnv();
+
+    expect(
+      writeGatewayRestartIntentSync({
+        env,
+        targetPid: process.pid,
+        intent: { force: true, waitMs: 12_345 },
+      }),
+    ).toBe(true);
+
+    expect(consumeGatewayRestartIntentPayloadSync(env)).toEqual({
+      force: true,
+      waitMs: 12_345,
+    });
+    expect(fs.existsSync(intentPath(env))).toBe(false);
   });
 
   it("does not follow an existing intent-path symlink when writing", () => {

@@ -1018,9 +1018,20 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             continue;
           }
           if (event.type === "content_block_delta") {
-            const index = blocks.findIndex((block) => block.index === event.index);
-            const block = blocks[index];
             const delta = event.delta as Record<string, unknown> | undefined;
+            let index = blocks.findIndex((block) => block.index === event.index);
+            let block = blocks[index];
+            if (!block && delta?.type === "text_delta" && typeof delta.text === "string") {
+              const recoveredIndex = typeof event.index === "number" ? event.index : blocks.length;
+              block = { type: "text", text: "", index: recoveredIndex };
+              output.content.push(block);
+              index = output.content.length - 1;
+              stream.push({
+                type: "text_start",
+                contentIndex: index,
+                partial: output as never,
+              });
+            }
             if (
               block?.type === "text" &&
               delta?.type === "text_delta" &&

@@ -10,7 +10,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RunCronAgentTurnResult } from "../../cron/isolated-agent/run.types.js";
 import type { CronJob } from "../../cron/types.js";
-import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -51,7 +51,7 @@ export function createGatewayHooksRequestHandler(params: {
     const sessionKey = resolveMainSessionKeyFromConfig();
     enqueueSystemEvent(value.text, { sessionKey, trusted: false });
     if (value.mode === "now") {
-      requestHeartbeatNow({ reason: "hook:wake" });
+      requestHeartbeat({ source: "hook", intent: "immediate", reason: "hook:wake" });
     }
   };
 
@@ -122,7 +122,7 @@ export function createGatewayHooksRequestHandler(params: {
             trusted: false,
           });
           if (value.wakeMode === "now") {
-            requestHeartbeatNow({ reason: `hook:${jobId}` });
+            requestHeartbeat({ source: "hook", intent: "immediate", reason: `hook:${jobId}` });
           }
         } else if (result.status === "ok" && !value.deliver) {
           logHooks.info("hook agent run completed without announcement", {
@@ -142,7 +142,11 @@ export function createGatewayHooksRequestHandler(params: {
           trusted: false,
         });
         if (value.wakeMode === "now") {
-          requestHeartbeatNow({ reason: `hook:${jobId}:error` });
+          requestHeartbeat({
+            source: "hook",
+            intent: "immediate",
+            reason: `hook:${jobId}:error`,
+          });
         }
       }
     })();

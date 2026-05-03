@@ -14,6 +14,7 @@ import type { ConfiguredEntry, ModelRow } from "./list.types.js";
 
 type AllModelRowSources = {
   rows: ModelRow[];
+  entries?: ConfiguredEntry[];
   context: RowBuilderContext;
   modelRegistry?: ModelRegistry;
   registryModels?: ReturnType<ModelRegistry["getAll"]>;
@@ -28,12 +29,7 @@ export async function appendAllModelRowSources(
   params: AllModelRowSources,
 ): Promise<AppendAllModelRowSourcesResult> {
   if (params.context.filter.provider && params.sourcePlan.kind !== "registry") {
-    let seenKeys = new Set<string>();
-    await appendConfiguredProviderRows({
-      rows: params.rows,
-      context: params.context,
-      seenKeys,
-    });
+    const seenKeys = new Set<string>();
     let catalogRows = 0;
     if (params.sourcePlan.kind === "manifest") {
       catalogRows = await appendManifestCatalogRows({
@@ -63,7 +59,30 @@ export async function appendAllModelRowSources(
         staticOnly: params.sourcePlan.kind === "provider-runtime-static",
       });
     }
-    if (catalogRows === 0 && params.sourcePlan.fallbackToRegistryWhenEmpty) {
+    if (params.entries && params.entries.length > 0) {
+      const missingEntries = params.entries.filter((entry) => !seenKeys.has(entry.key));
+      if (missingEntries.length > 0) {
+        await appendConfiguredRows({
+          rows: params.rows,
+          entries: missingEntries,
+          modelRegistry: params.modelRegistry,
+          context: params.context,
+        });
+        for (const row of params.rows) {
+          seenKeys.add(row.key);
+        }
+      }
+    }
+    await appendConfiguredProviderRows({
+      rows: params.rows,
+      context: params.context,
+      seenKeys,
+    });
+    if (
+      catalogRows === 0 &&
+      params.rows.length === 0 &&
+      params.sourcePlan.fallbackToRegistryWhenEmpty
+    ) {
       if (!params.modelRegistry) {
         return { requiresRegistryFallback: true };
       }
@@ -87,6 +106,22 @@ export async function appendAllModelRowSources(
     resolveWithRegistry: Boolean(params.context.filter.provider),
     skipSuppression: Boolean(params.modelRegistry),
   });
+
+  if (params.context.filter.provider && params.entries && params.entries.length > 0) {
+    const missingEntries = params.entries.filter((entry) => !seenKeys.has(entry.key));
+    if (missingEntries.length > 0) {
+      const appendedRowsStart = params.rows.length;
+      await appendConfiguredRows({
+        rows: params.rows,
+        entries: missingEntries,
+        modelRegistry: params.modelRegistry,
+        context: params.context,
+      });
+      for (const row of params.rows.slice(appendedRowsStart)) {
+        seenKeys.add(row.key);
+      }
+    }
+  }
 
   await appendConfiguredProviderRows({
     rows: params.rows,

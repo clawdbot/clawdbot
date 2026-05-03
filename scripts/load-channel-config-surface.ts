@@ -146,9 +146,26 @@ export async function loadChannelConfigSurfaceModule(
     });
     return jiti(resolvedPath) as Record<string, unknown>;
   };
-  const loadFromPath = (
+  const loadViaNativeImport = async (candidatePath: string) => {
+    const imported = (await import(pathToFileURL(path.resolve(candidatePath)).href)) as Record<
+      string,
+      unknown
+    >;
+    return resolveConfigSchemaExport(imported);
+  };
+  const loadFromPath = async (
     candidatePath: string,
-  ): { schema: Record<string, unknown>; uiHints?: Record<string, unknown> } | null => {
+  ): Promise<{ schema: Record<string, unknown>; uiHints?: Record<string, unknown> } | null> => {
+    try {
+      const resolved = await loadViaNativeImport(candidatePath);
+      if (resolved) {
+        return resolved;
+      }
+    } catch {
+      // Fall through to the compatibility loaders when the module needs custom
+      // plugin SDK aliasing or cannot be imported by the current Node loader.
+    }
+
     try {
       // Prefer the source-aware Jiti path so generated config metadata stays
       // stable before and after build output exists in the repo.

@@ -15,5 +15,5 @@ export function resolveAgentRuntimePolicy(
 }
 
 function hasAgentRuntimePolicy(value: AgentRuntimePolicyConfig | undefined): boolean {
-  return Boolean(value?.id?.trim() || value?.fallback);
+  return Boolean(value?.id?.trim());
 }

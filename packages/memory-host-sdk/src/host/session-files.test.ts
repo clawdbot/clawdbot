@@ -2,7 +2,11 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { buildSessionEntry, listSessionFilesForAgent } from "./session-files.js";
+import {
+  buildSessionEntry,
+  listSessionFilesForAgent,
+  sessionPathForFile,
+} from "./session-files.js";
 
 let fixtureRoot: string;
 let tmpDir: string;
@@ -57,6 +61,28 @@ describe("listSessionFilesForAgent", () => {
 
     expect(files.map((filePath) => path.basename(filePath)).toSorted()).toEqual(
       included.toSorted(),
+    );
+  });
+});
+
+describe("sessionPathForFile", () => {
+  it("includes the owning agent id when the transcript lives under an agent sessions dir", () => {
+    const absPath = path.join(
+      tmpDir,
+      "agents",
+      "main",
+      "sessions",
+      "deleted-session.jsonl.deleted.2026-02-16T22-27-33.000Z",
+    );
+
+    expect(sessionPathForFile(absPath)).toBe(
+      "sessions/main/deleted-session.jsonl.deleted.2026-02-16T22-27-33.000Z",
+    );
+  });
+
+  it("keeps the legacy basename-only path when the agent owner cannot be derived", () => {
+    expect(sessionPathForFile(path.join(tmpDir, "loose-session.jsonl"))).toBe(
+      "sessions/loose-session.jsonl",
     );
   });
 });
@@ -116,28 +142,90 @@ describe("buildSessionEntry", () => {
     expect(entry!.lineMap).toEqual([]);
   });
 
-  it("skips deleted and checkpoint transcripts for dreaming ingestion", async () => {
+  it("indexes usage-counted reset/deleted archives but still skips bak and checkpoint artifacts", async () => {
+    const resetPath = path.join(tmpDir, "ordinary.jsonl.reset.2026-02-16T22-26-33.000Z");
     const deletedPath = path.join(tmpDir, "ordinary.jsonl.deleted.2026-02-16T22-27-33.000Z");
+    const bakPath = path.join(tmpDir, "ordinary.jsonl.bak.2026-02-16T22-28-33.000Z");
     const checkpointPath = path.join(
       tmpDir,
       "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
     );
     const content = JSON.stringify({
       type: "message",
-      message: { role: "user", content: "This should never reach the dreaming corpus." },
+      message: { role: "user", content: "Archived hello" },
     });
+    fsSync.writeFileSync(resetPath, content);
     fsSync.writeFileSync(deletedPath, content);
+    fsSync.writeFileSync(bakPath, content);
     fsSync.writeFileSync(checkpointPath, content);
 
+    const resetEntry = await buildSessionEntry(resetPath);
     const deletedEntry = await buildSessionEntry(deletedPath);
+    const bakEntry = await buildSessionEntry(bakPath);
     const checkpointEntry = await buildSessionEntry(checkpointPath);
 
-    expect(deletedEntry).not.toBeNull();
-    expect(deletedEntry?.content).toBe("");
-    expect(deletedEntry?.lineMap).toEqual([]);
+    // Usage-counted archives (reset, deleted) must surface real content so
+    // post-reset memory_search can recover prior session history.
+    expect(resetEntry?.content).toContain("User: Archived hello");
+    expect(resetEntry?.lineMap).toEqual([1]);
+    expect(deletedEntry?.content).toContain("User: Archived hello");
+    expect(deletedEntry?.lineMap).toEqual([1]);
+
+    // .bak and compaction checkpoints remain opaque pre-archive / snapshot
+    // artifacts and stay empty so they do not get double-indexed.
+    expect(bakEntry).not.toBeNull();
+    expect(bakEntry?.content).toBe("");
+    expect(bakEntry?.lineMap).toEqual([]);
     expect(checkpointEntry).not.toBeNull();
     expect(checkpointEntry?.content).toBe("");
     expect(checkpointEntry?.lineMap).toEqual([]);
+  });
+
+  it("keeps cron-run deleted archives opaque when the live session store entry is gone", async () => {
+    const archivePath = path.join(tmpDir, "cron-run.jsonl.deleted.2026-02-16T22-27-33.000Z");
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "[cron:job-1 Codex Sessions Sync] Run internal sync.",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Internal cron output that must stay out." },
+      }),
+    ];
+    fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(archivePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.content).toBe("");
+    expect(entry?.lineMap).toEqual([]);
+    expect(entry?.generatedByCronRun).toBe(true);
+  });
+
+  it("keeps cron-run reset archives opaque when session metadata preserves the cron key", async () => {
+    const archivePath = path.join(tmpDir, "cron-run.jsonl.reset.2026-02-16T22-26-33.000Z");
+    const jsonlLines = [
+      JSON.stringify({
+        type: "session-meta",
+        data: { sessionKey: "agent:main:cron:job-1:run:run-1" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Internal cron output that must stay out." },
+      }),
+    ];
+    fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(archivePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.content).toBe("");
+    expect(entry?.lineMap).toEqual([]);
+    expect(entry?.generatedByCronRun).toBe(true);
   });
 
   it("skips blank lines and invalid JSON without breaking lineMap", async () => {

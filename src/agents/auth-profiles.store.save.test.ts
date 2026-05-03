@@ -19,6 +19,7 @@ vi.mock("./auth-profiles/external-auth.js", () => ({
 
 describe("saveAuthProfileStore", () => {
   it("strips plaintext when keyRef/tokenRef are present", async () => {
+    const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-"));
     try {
       const store: AuthProfileStore = {
@@ -68,7 +69,9 @@ describe("saveAuthProfileStore", () => {
       });
 
       expect(parsed.profiles["anthropic:default"]?.key).toBe("sk-anthropic-plain");
+      expect(structuredCloneSpy).not.toHaveBeenCalled();
     } finally {
+      structuredCloneSpy.mockRestore();
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });

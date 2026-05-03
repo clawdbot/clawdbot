@@ -2,7 +2,10 @@ import { cancel, isCancel, multiselect } from "@clack/prompts";
 import { promptYesNo } from "../cli/prompt.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { redactMigrationPlan } from "../plugin-sdk/migration.js";
-import { resolvePluginMigrationProviders } from "../plugins/migration-provider-runtime.js";
+import {
+  ensureStandaloneMigrationProviderRegistryLoaded,
+  resolvePluginMigrationProviders,
+} from "../plugins/migration-provider-runtime.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
@@ -72,13 +75,13 @@ async function promptCodexMigrationSkillSelection(
 }
 
 export async function migrateListCommand(runtime: RuntimeEnv, opts: { json?: boolean } = {}) {
-  const providers = resolvePluginMigrationProviders({ cfg: getRuntimeConfig() }).map(
-    (provider) => ({
-      id: provider.id,
-      label: provider.label,
-      description: provider.description,
-    }),
-  );
+  const cfg = getRuntimeConfig();
+  ensureStandaloneMigrationProviderRegistryLoaded({ cfg });
+  const providers = resolvePluginMigrationProviders({ cfg }).map((provider) => ({
+    id: provider.id,
+    label: provider.label,
+    description: provider.description,
+  }));
   if (opts.json) {
     writeRuntimeJson(runtime, { providers });
     return;

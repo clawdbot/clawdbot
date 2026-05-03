@@ -21,6 +21,9 @@ type DiscordAccountStatus = {
   accountId?: unknown;
   enabled?: unknown;
   configured?: unknown;
+  running?: unknown;
+  connected?: unknown;
+  healthState?: unknown;
   application?: unknown;
   audit?: unknown;
 };
@@ -45,6 +48,9 @@ function readDiscordAccountStatus(value: ChannelAccountSnapshot): DiscordAccount
     accountId: value.accountId,
     enabled: value.enabled,
     configured: value.configured,
+    running: value.running,
+    connected: value.connected,
+    healthState: value.healthState,
     application: value.application,
     audit: value.audit,
   };
@@ -122,6 +128,32 @@ export function collectDiscordStatusIssues(
     const accountId = resolveEnabledConfiguredAccountId(account);
     if (!accountId) {
       continue;
+    }
+
+    const running = account.running === true;
+    const healthState = asString(account.healthState);
+    if (
+      healthState === "stale-socket" ||
+      healthState === "stuck" ||
+      healthState === "disconnected" ||
+      healthState === "not-running"
+    ) {
+      const runningLabel = running ? "running" : "not running";
+      issues.push({
+        channel: "discord",
+        accountId,
+        kind: "runtime",
+        message: `Discord gateway transport is degraded (${healthState}; account is ${runningLabel}).`,
+        fix: "Check gateway event-loop health and Discord connectivity, then restart the Discord channel or gateway if the transport does not recover.",
+      });
+    } else if (running && account.connected === false) {
+      issues.push({
+        channel: "discord",
+        accountId,
+        kind: "runtime",
+        message: "Discord gateway transport is running but disconnected.",
+        fix: "Check gateway logs for Discord websocket errors and wait for reconnect; restart the Discord channel or gateway if it does not recover.",
+      });
     }
 
     const app = readDiscordApplicationSummary(account.application);

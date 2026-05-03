@@ -129,8 +129,8 @@ export async function dispatchDiscordComponentEvent(params: {
   const senderUsername = interactionCtx.user.username;
   const senderTag = formatDiscordUserTag(interactionCtx.user);
   const groupChannel =
-    !interactionCtx.isDirectMessage && channelCtx.channelSlug
-      ? `#${channelCtx.channelSlug}`
+    !interactionCtx.isDirectMessage && channelCtx.displayChannelSlug
+      ? `#${channelCtx.displayChannelSlug}`
       : undefined;
   const groupSubject = interactionCtx.isDirectMessage ? undefined : groupChannel;
   const channelConfig = resolveDiscordChannelConfigWithFallback({

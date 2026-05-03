@@ -208,7 +208,7 @@ export function createWhatsAppPluginBase(params: {
     },
     setupWizard: params.setupWizard,
     capabilities: {
-      chatTypes: ["direct", "group"],
+      chatTypes: ["direct", "group", "channel"],
       polls: true,
       reactions: true,
       media: true,

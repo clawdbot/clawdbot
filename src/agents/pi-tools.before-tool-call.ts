@@ -437,7 +437,7 @@ export async function runBeforeToolCallHook(args: {
         });
         return {
           blocked: true,
-          kind: "failure",
+          kind: "veto",
           deniedReason: "tool-loop",
           reason: loopResult.message,
           params,

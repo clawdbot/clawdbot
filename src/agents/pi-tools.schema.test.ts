@@ -48,6 +48,29 @@ describe("normalizeToolParameterSchema", () => {
     });
   });
 
+  it("normalizes typed object schemas with missing or invalid properties", () => {
+    const schemas = [
+      { type: "object" },
+      { type: "object", properties: undefined },
+      { type: "object", properties: null },
+      { type: "object", properties: [] },
+      { type: "object", properties: "invalid" },
+    ];
+
+    for (const schema of schemas) {
+      expect(normalizeToolParameterSchema(schema)).toEqual({
+        type: "object",
+        properties: {},
+      });
+    }
+  });
+
+  it("leaves non-object typed schemas without properties unchanged", () => {
+    const schema = { type: "array", items: { type: "string" } };
+
+    expect(normalizeToolParameterSchema(schema)).toEqual(schema);
+  });
+
   it("inlines local $ref before removing unsupported keywords", () => {
     const cleaned = cleanToolSchemaForGemini({
       type: "object",

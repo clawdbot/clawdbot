@@ -797,6 +797,8 @@ describe("exec notifyOnExit", () => {
 
   it("scopes notifyOnExit heartbeat wake to the exec session key", async () => {
     await expectNotifyOnExitWake(createNotifyOnExitExecTool(), {
+      source: "exec-event",
+      intent: "event",
       reason: "exec-event",
       sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
     });
@@ -804,6 +806,8 @@ describe("exec notifyOnExit", () => {
 
   it("keeps notifyOnExit heartbeat wake unscoped for non-agent session keys", async () => {
     await expectNotifyOnExitWake(createNotifyOnExitExecTool({ sessionKey: "global" }), {
+      source: "exec-event",
+      intent: "event",
       reason: "exec-event",
     });
   });

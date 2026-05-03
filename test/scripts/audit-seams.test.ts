@@ -96,12 +96,17 @@ describe("audit-seams subagent seam classification", () => {
   it("detects parent-stream seams for ACP spawn relays", () => {
     const source = `
       import { onAgentEvent } from "../infra/agent-events.js";
-      import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+      import { requestHeartbeat } from "../infra/heartbeat-wake.js";
       import { enqueueSystemEvent } from "../infra/system-events.js";
 
       export function startAcpSpawnParentStreamRelay() {
         onAgentEvent("agent-output", () => {});
-        requestHeartbeatNow({ sessionKey: "agent:main" });
+        requestHeartbeat({
+          source: "acp-spawn",
+          intent: "event",
+          reason: "acp:spawn:stream",
+          sessionKey: "agent:main",
+        });
         enqueueSystemEvent("progress", { sessionKey: "agent:main", contextKey: "stream" });
         return { streamTo: "parent" };
       }

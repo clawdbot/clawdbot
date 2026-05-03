@@ -125,7 +125,6 @@ export function startGatewayRuntimeServices(params: {
   cfgAtStart: OpenClawConfig;
   channelManager: GatewayChannelManager;
   log: GatewayRuntimeServiceLogger;
-  pluginLookUpTable?: PluginMetadataRegistryView;
 }): {
   heartbeatRunner: HeartbeatRunner;
   channelHealthMonitor: ChannelHealthMonitor | null;
@@ -139,14 +138,7 @@ export function startGatewayRuntimeServices(params: {
   return {
     heartbeatRunner: createNoopHeartbeatRunner(),
     channelHealthMonitor,
-    stopModelPricingRefresh:
-      !params.minimalTestGateway && !isVitestRuntimeEnv()
-        ? startGatewayModelPricingRefreshOnDemand({
-            config: params.cfgAtStart,
-            ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
-            log: params.log,
-          })
-        : () => {},
+    stopModelPricingRefresh: () => {},
   };
 }
 
@@ -158,9 +150,10 @@ export function activateGatewayScheduledServices(params: {
   cron: { start: () => Promise<void> };
   logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
-}): { heartbeatRunner: HeartbeatRunner } {
+  pluginLookUpTable?: PluginMetadataRegistryView;
+}): { heartbeatRunner: HeartbeatRunner; stopModelPricingRefresh: () => void } {
   if (params.minimalTestGateway) {
-    return { heartbeatRunner: createNoopHeartbeatRunner() };
+    return { heartbeatRunner: createNoopHeartbeatRunner(), stopModelPricingRefresh: () => {} };
   }
   const heartbeatRunner = startHeartbeatRunner({ cfg: params.cfgAtStart });
   startGatewayCronWithLogging({
@@ -176,5 +169,12 @@ export function activateGatewayScheduledServices(params: {
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
   });
-  return { heartbeatRunner };
+  const stopModelPricingRefresh = !isVitestRuntimeEnv()
+    ? startGatewayModelPricingRefreshOnDemand({
+        config: params.cfgAtStart,
+        ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
+        log: params.log,
+      })
+    : () => {};
+  return { heartbeatRunner, stopModelPricingRefresh };
 }

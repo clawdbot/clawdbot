@@ -6,6 +6,7 @@ import {
   isStableTag,
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
+  resolveRegistryUpdateChannel,
   resolveUpdateChannelDisplay,
   type UpdateChannel,
   type UpdateChannelSource,
@@ -65,6 +66,15 @@ describe("resolveEffectiveUpdateChannel", () => {
         git: { tag: "v2026.2.24", branch: "feature/test" },
       },
       expected: { channel: "beta", source: "config" },
+    },
+    {
+      name: "uses installed beta version over stale stable config",
+      params: {
+        configChannel: "stable",
+        currentVersion: "2026.5.2-beta.1",
+        installKind: "package" as const,
+      },
+      expected: { channel: "beta", source: "installed-version" },
     },
     {
       name: "uses beta git tag",
@@ -153,6 +163,11 @@ describe("formatUpdateChannelLabel", () => {
       expected: "dev (branch)",
     },
     {
+      name: "formats installed-version labels",
+      params: { channel: "beta", source: "installed-version" as const },
+      expected: "beta (installed version)",
+    },
+    {
       name: "formats default labels",
       params: { channel: "stable", source: "default" as const },
       expected: "stable (default)",
@@ -167,6 +182,20 @@ describe("formatUpdateChannelLabel", () => {
 });
 
 describe("resolveUpdateChannelDisplay", () => {
+  it("labels stale stable config on a beta install from the installed version", () => {
+    expect(
+      resolveUpdateChannelDisplay({
+        configChannel: "stable",
+        currentVersion: "2026.5.2-beta.1",
+        installKind: "package",
+      }),
+    ).toEqual({
+      channel: "beta",
+      source: "installed-version",
+      label: "beta (installed version)",
+    });
+  });
+
   it("includes the derived label for git branches", () => {
     expect(
       resolveUpdateChannelDisplay({
@@ -204,5 +233,16 @@ describe("resolveUpdateChannelDisplay", () => {
       source: "default",
       label: "stable (default)",
     });
+  });
+});
+
+describe("resolveRegistryUpdateChannel", () => {
+  it("queries beta when the installed version is beta even if config is stale stable", () => {
+    expect(
+      resolveRegistryUpdateChannel({
+        configChannel: "stable",
+        currentVersion: "2026.5.2-beta.1",
+      }),
+    ).toBe("beta");
   });
 });

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import { shouldPreserveThinkingBlocks } from "../plugins/provider-replay-helpers.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
@@ -177,6 +178,39 @@ function mergeTranscriptPolicy(
   };
 }
 
+const transcriptPolicyCache = new WeakMap<OpenClawConfig, Map<string, TranscriptPolicy>>();
+
+function canCacheTranscriptPolicy(params: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): params is { config: OpenClawConfig; env?: NodeJS.ProcessEnv } {
+  if (!params.config) {
+    return false;
+  }
+  return !params.env || params.env === process.env;
+}
+
+function resolveTranscriptPolicyCacheKey(params: {
+  modelApi?: string | null;
+  provider: string;
+  modelId?: string | null;
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  return JSON.stringify({
+    provider: params.provider,
+    modelApi: params.modelApi ?? "",
+    modelId: params.modelId ?? "",
+    workspaceDir: params.workspaceDir ?? "",
+    pluginControlPlane: resolvePluginControlPlaneFingerprint({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }),
+  });
+}
+
 export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;
@@ -187,6 +221,16 @@ export function resolveTranscriptPolicy(params: {
   model?: ProviderRuntimeModel;
 }): TranscriptPolicy {
   const provider = normalizeProviderId(params.provider ?? "");
+  const cacheConfig = canCacheTranscriptPolicy(params) ? params.config : undefined;
+  const cacheKey = cacheConfig
+    ? resolveTranscriptPolicyCacheKey({ ...params, provider, config: cacheConfig })
+    : undefined;
+  if (cacheConfig && cacheKey) {
+    const cached = transcriptPolicyCache.get(cacheConfig)?.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
   const runtimePlugin = provider
     ? resolveProviderRuntimePlugin({
         provider,
@@ -208,15 +252,21 @@ export function resolveTranscriptPolicy(params: {
   // Once a provider adopts the replay-policy hook, replay policy should come
   // from the plugin, not from transport-family defaults in core.
   const buildReplayPolicy = runtimePlugin?.buildReplayPolicy;
-  if (buildReplayPolicy) {
-    const pluginPolicy = buildReplayPolicy(context);
-    return mergeTranscriptPolicy(pluginPolicy ?? undefined);
+  const policy = buildReplayPolicy
+    ? mergeTranscriptPolicy(buildReplayPolicy(context) ?? undefined)
+    : mergeTranscriptPolicy(
+        buildUnownedProviderTransportReplayFallback({
+          modelApi: params.modelApi,
+          modelId: params.modelId,
+        }),
+      );
+  if (cacheConfig && cacheKey) {
+    let configCache = transcriptPolicyCache.get(cacheConfig);
+    if (!configCache) {
+      configCache = new Map();
+      transcriptPolicyCache.set(cacheConfig, configCache);
+    }
+    configCache.set(cacheKey, policy);
   }
-
-  return mergeTranscriptPolicy(
-    buildUnownedProviderTransportReplayFallback({
-      modelApi: params.modelApi,
-      modelId: params.modelId,
-    }),
-  );
+  return policy;
 }

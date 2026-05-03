@@ -8,7 +8,11 @@ export {
   type AnyAgentTool,
 } from "../agents/tools/common.js";
 export { resolveCronStyleNow } from "../agents/current-time.js";
-export { resolveDefaultAgentId, resolveSessionAgentId } from "../agents/agent-scope.js";
+export {
+  resolveDefaultAgentId,
+  resolveSessionAgentId,
+  resolveSessionAgentIds,
+} from "../agents/agent-scope.js";
 export { resolveMemorySearchConfig } from "../agents/memory-search.js";
 export { parseNonNegativeByteSize } from "../config/byte-size.js";
 export { getRuntimeConfig, loadConfig } from "../config/config.js";

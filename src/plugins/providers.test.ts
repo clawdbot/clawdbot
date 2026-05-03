@@ -2,11 +2,16 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { OpenClawPackageManifest } from "./manifest.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { ProviderPlugin } from "./types.js";
 
 type ResolveRuntimePluginRegistry = typeof import("./loader.js").resolveRuntimePluginRegistry;
+type ResolveCompatibleRuntimePluginRegistry =
+  typeof import("./loader.js").resolveCompatibleRuntimePluginRegistry;
+type GetRuntimePluginRegistryForLoadOptions =
+  typeof import("./loader.js").getRuntimePluginRegistryForLoadOptions;
 type LoadOpenClawPlugins = typeof import("./loader.js").loadOpenClawPlugins;
 type IsPluginRegistryLoadInFlight = typeof import("./loader.js").isPluginRegistryLoadInFlight;
 type LoadPluginManifestRegistry =
@@ -15,6 +20,8 @@ type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").ap
 type SetActivePluginRegistry = typeof import("./runtime.js").setActivePluginRegistry;
 
 const resolveRuntimePluginRegistryMock = vi.fn<ResolveRuntimePluginRegistry>();
+const getRuntimePluginRegistryForLoadOptionsMock = vi.fn<GetRuntimePluginRegistryForLoadOptions>();
+const resolveCompatibleRuntimePluginRegistryMock = vi.fn<ResolveCompatibleRuntimePluginRegistry>();
 const loadOpenClawPluginsMock = vi.fn<LoadOpenClawPlugins>();
 const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_) => false);
 const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
@@ -41,6 +48,7 @@ function createManifestProviderPlugin(params: {
   activation?: PluginManifestRecord["activation"];
   setup?: PluginManifestRecord["setup"];
   contracts?: PluginManifestRecord["contracts"];
+  packageManifest?: OpenClawPackageManifest;
 }): PluginManifestRecord {
   return {
     id: params.id,
@@ -51,6 +59,7 @@ function createManifestProviderPlugin(params: {
     modelSupport: params.modelSupport,
     activation: params.activation,
     setup: params.setup,
+    packageManifest: params.packageManifest,
     contracts: params.contracts,
     skills: [],
     hooks: [],
@@ -369,6 +378,12 @@ describe("resolvePluginProviders", () => {
         loadOpenClawPluginsMock(...args),
       isPluginRegistryLoadInFlight: (...args: Parameters<IsPluginRegistryLoadInFlight>) =>
         isPluginRegistryLoadInFlightMock(...args),
+      resolveCompatibleRuntimePluginRegistry: (
+        ...args: Parameters<ResolveCompatibleRuntimePluginRegistry>
+      ) => resolveCompatibleRuntimePluginRegistryMock(...args),
+      getRuntimePluginRegistryForLoadOptions: (
+        ...args: Parameters<GetRuntimePluginRegistryForLoadOptions>
+      ) => getRuntimePluginRegistryForLoadOptionsMock(...args),
       resolveRuntimePluginRegistry: (...args: Parameters<ResolveRuntimePluginRegistry>) =>
         resolveRuntimePluginRegistryMock(...args),
     }));
@@ -440,6 +455,8 @@ describe("resolvePluginProviders", () => {
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     resolveRuntimePluginRegistryMock.mockReset();
+    getRuntimePluginRegistryForLoadOptionsMock.mockReset();
+    resolveCompatibleRuntimePluginRegistryMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     isPluginRegistryLoadInFlightMock.mockReset();
     isPluginRegistryLoadInFlightMock.mockReturnValue(false);
@@ -451,6 +468,9 @@ describe("resolvePluginProviders", () => {
     const registry = createEmptyPluginRegistry();
     registry.providers.push({ pluginId: "google", provider, source: "bundled" });
     resolveRuntimePluginRegistryMock.mockReturnValue(registry);
+    getRuntimePluginRegistryForLoadOptionsMock.mockImplementation((...args) =>
+      resolveRuntimePluginRegistryMock(...args),
+    );
     loadOpenClawPluginsMock.mockReturnValue(registry);
     loadPluginManifestRegistryMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
@@ -721,6 +741,35 @@ describe("resolvePluginProviders", () => {
 
     expectLastRuntimeRegistryLoad({
       onlyPluginIds: ["google", "kilocode", "moonshot"],
+    });
+  });
+
+  it("includes present bundled providers in bundled compat expansion", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "google",
+        providerIds: ["google"],
+      }),
+      createManifestProviderPlugin({
+        id: "codex",
+        providerIds: ["codex"],
+      }),
+    ]);
+
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+        },
+      },
+      bundledProviderAllowlistCompat: true,
+    });
+
+    expectResolvedAllowlistState({
+      expectedAllow: ["openrouter", "google", "codex"],
+    });
+    expectLastRuntimeRegistryLoad({
+      onlyPluginIds: ["codex", "google"],
     });
   });
 
@@ -1219,12 +1268,8 @@ describe("resolvePluginProviders", () => {
     });
 
     expect(providers).toEqual([]);
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {},
-        onlyPluginIds: [],
-      }),
-    );
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
 
   it("does not auto-activate workspace runtime owners by default", () => {
@@ -1247,12 +1292,8 @@ describe("resolvePluginProviders", () => {
     });
 
     expect(providers).toEqual([]);
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {},
-        onlyPluginIds: [],
-      }),
-    );
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
 
   it("keeps explicit provider requests scoped when runtime owner activation resolves nothing", () => {
@@ -1278,16 +1319,8 @@ describe("resolvePluginProviders", () => {
     });
 
     expect(providers).toEqual([]);
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {
-          plugins: {
-            allow: ["other-plugin"],
-          },
-        },
-        onlyPluginIds: [],
-      }),
-    );
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
 
   it("does not keep explicitly trusted disabled workspace setup owners discoverable", () => {

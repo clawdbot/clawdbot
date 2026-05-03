@@ -37,6 +37,7 @@ import {
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
+import { buildPluginDependencyStatus } from "./status-dependencies.js";
 import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -212,6 +213,11 @@ function buildPluginRecordFromInstalledIndex(
     hookCount: 0,
     configSchema: false,
     contracts: {},
+    dependencyStatus: buildPluginDependencyStatus({
+      rootDir: plugin.rootDir,
+      dependencies: manifest?.packageDependencies,
+      optionalDependencies: manifest?.packageOptionalDependencies,
+    }),
   };
 }
 
@@ -363,6 +369,14 @@ function buildPluginReport(
       Object.assign({}, plugin, {
         imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
         version: resolveReportedPluginVersion(plugin, params?.env),
+        dependencyStatus:
+          plugin.dependencyStatus ??
+          buildPluginDependencyStatus({
+            rootDir: plugin.rootDir,
+            dependencies: metadataSnapshot?.byPluginId.get(plugin.id)?.packageDependencies,
+            optionalDependencies: metadataSnapshot?.byPluginId.get(plugin.id)
+              ?.packageOptionalDependencies,
+          }),
       }),
     ),
   };

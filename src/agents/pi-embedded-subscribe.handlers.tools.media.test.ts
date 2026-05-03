@@ -142,6 +142,44 @@ async function handleCaseVariantBuiltinMedia(mediaPathOrUrl: string) {
   return ctx;
 }
 
+const providerInventoryText = [
+  "openai: default=sora-2 | models=sora-2",
+  "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
+].join("\n");
+
+async function handleProviderInventoryListResult(params: {
+  toolName: "image_generate" | "video_generate";
+  shouldEmitToolOutput: boolean;
+}) {
+  const ctx = createMockContext({
+    shouldEmitToolOutput: params.shouldEmitToolOutput,
+    onToolResult: vi.fn(),
+    toolResultFormat: "plain",
+  });
+
+  await handleToolExecutionEnd(ctx, {
+    type: "tool_execution_end",
+    toolName: params.toolName,
+    toolCallId: "tc-1",
+    isError: false,
+    result: {
+      content: [{ type: "text", text: providerInventoryText }],
+      details: {
+        providers: [
+          { id: "openai", defaultModel: "sora-2", models: ["sora-2"] },
+          {
+            id: "google",
+            defaultModel: "veo-3.1-fast-generate-preview",
+            models: ["veo-3.1-fast-generate-preview"],
+          },
+        ],
+      },
+    },
+  });
+
+  return ctx;
+}
+
 describe("handleToolExecutionEnd media emission", () => {
   it("does not warn for read tool when path is provided via file_path alias", async () => {
     const ctx = createMockContext();
@@ -424,52 +462,36 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/generated.png"]);
   });
 
-  it("emits provider inventory output for compact video_generate list results", async () => {
-    const ctx = createMockContext({
-      shouldEmitToolOutput: false,
-      onToolResult: vi.fn(),
-      toolResultFormat: "plain",
-    });
+  it.each(["image_generate", "video_generate"] as const)(
+    "keeps %s provider inventory internal when tool output is hidden",
+    async (toolName) => {
+      const ctx = await handleProviderInventoryListResult({
+        toolName,
+        shouldEmitToolOutput: false,
+      });
 
-    await handleToolExecutionEnd(ctx, {
-      type: "tool_execution_end",
-      toolName: "video_generate",
-      toolCallId: "tc-1",
-      isError: false,
-      result: {
-        content: [
-          {
-            type: "text",
-            text: [
-              "openai: default=sora-2 | models=sora-2",
-              "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
-            ].join("\n"),
-          },
-        ],
-        details: {
-          providers: [
-            { id: "openai", defaultModel: "sora-2", models: ["sora-2"] },
-            {
-              id: "google",
-              defaultModel: "veo-3.1-fast-generate-preview",
-              models: ["veo-3.1-fast-generate-preview"],
-            },
-          ],
-        },
-      },
-    });
+      expect(ctx.emitToolOutput).not.toHaveBeenCalled();
+      expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    },
+  );
 
-    expect(ctx.emitToolOutput).toHaveBeenCalledWith(
-      "video_generate",
-      undefined,
-      [
-        "openai: default=sora-2 | models=sora-2",
-        "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
-      ].join("\n"),
-      expect.any(Object),
-    );
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
-  });
+  it.each(["image_generate", "video_generate"] as const)(
+    "emits %s provider inventory when verbose tool output is enabled",
+    async (toolName) => {
+      const ctx = await handleProviderInventoryListResult({
+        toolName,
+        shouldEmitToolOutput: true,
+      });
+
+      expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+        toolName,
+        undefined,
+        providerInventoryText,
+        expect.any(Object),
+      );
+      expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    },
+  );
 
   it("does NOT emit media for error results", async () => {
     const onToolResult = vi.fn();

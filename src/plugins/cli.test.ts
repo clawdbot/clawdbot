@@ -197,6 +197,26 @@ describe("registerPluginCliCommands", () => {
     );
   });
 
+  it("reuses loaded plugin CLI entries on repeat calls for the same program", async () => {
+    const program = createProgram();
+
+    await registerPluginCliCommands(program, {} as OpenClawConfig);
+    await registerPluginCliCommands(program, {} as OpenClawConfig);
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+  });
+
+  it("reloads plugin CLI entries when the requested primary command changes", async () => {
+    const program = createProgram();
+
+    await registerPluginCliCommands(program, {} as OpenClawConfig, undefined, undefined, {
+      primary: "memory",
+    });
+    await registerPluginCliCommands(program, {} as OpenClawConfig);
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(2);
+  });
+
   it("loads plugin CLI commands from the auto-enabled config snapshot", async () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
     mocks.applyPluginAutoEnable.mockReturnValue({

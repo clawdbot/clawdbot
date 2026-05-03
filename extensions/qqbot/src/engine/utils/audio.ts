@@ -3,18 +3,16 @@
  * 音频格式转换工具。
  *
  * Handles SILK ↔ PCM ↔ WAV ↔ MP3 conversions for QQ Bot voice messaging.
- * Prefers ffmpeg when available; falls back to WASM decoders (silk-wasm,
- * mpg123-decoder) for environments without native tooling.
+ * Uses WASM decoders (silk-wasm, mpg123-decoder) and direct QQ-native uploads
+ * without launching native subprocesses.
  *
  * Self-contained within engine/ — no framework SDK dependency.
  */
 
-import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { formatErrorMessage } from "./format.js";
 import { debugLog, debugError, debugWarn } from "./log.js";
-import { detectFfmpeg, isWindows } from "./platform.js";
 import { normalizeLowercaseStringOrEmpty as normalizeLowercase } from "./string-normalize.js";
 
 type SilkWasm = typeof import("silk-wasm");
@@ -184,7 +182,7 @@ function normalizeFormats(formats: string[]): string[] {
 /**
  * Convert a local audio file to Base64-encoded SILK for QQ API upload.
  *
- * Attempts conversion via ffmpeg → WASM decoders → null fallback chain.
+ * Attempts conversion via direct QQ-native upload → WASM decoders → null fallback chain.
  */
 export async function audioFileToSilkBase64(
   filePath: string,
@@ -234,25 +232,6 @@ export async function audioFileToSilkBase64(
 
   const targetRate = 24000;
 
-  const ffmpegCmd = await detectFfmpeg();
-  if (ffmpegCmd) {
-    try {
-      debugLog(
-        `[audio-convert] ffmpeg (${ffmpegCmd}): converting ${ext} (${buf.length} bytes) → PCM s16le ${targetRate}Hz`,
-      );
-      const pcmBuf = await ffmpegToPCM(ffmpegCmd, filePath, targetRate);
-      if (pcmBuf.length === 0) {
-        debugError(`[audio-convert] ffmpeg produced empty PCM output`);
-        return null;
-      }
-      const { silkBuffer } = await pcmToSilk(pcmBuf, targetRate);
-      debugLog(`[audio-convert] ffmpeg: ${ext} → SILK done (${silkBuffer.length} bytes)`);
-      return silkBuffer.toString("base64");
-    } catch (err) {
-      debugError(`[audio-convert] ffmpeg conversion failed: ${formatErrorMessage(err)}`);
-    }
-  }
-
   debugLog(`[audio-convert] fallback: trying WASM decoders for ${ext}`);
 
   if (ext === ".pcm") {
@@ -278,12 +257,9 @@ export async function audioFileToSilkBase64(
     }
   }
 
-  const installHint = isWindows()
-    ? "Install ffmpeg with choco install ffmpeg, scoop install ffmpeg, or from https://ffmpeg.org"
-    : process.platform === "darwin"
-      ? "Install ffmpeg with brew install ffmpeg"
-      : "Install ffmpeg with sudo apt install ffmpeg or sudo yum install ffmpeg";
-  debugError(`[audio-convert] unsupported format: ${ext} (no ffmpeg available). ${installHint}`);
+  debugError(
+    `[audio-convert] unsupported format without native subprocess conversion: ${ext}. Use QQ-native voice formats or WAV/MP3/PCM inputs.`,
+  );
   return null;
 }
 
@@ -386,48 +362,7 @@ async function pcmToSilk(
   };
 }
 
-/** Use ffmpeg to convert any audio to mono 24 kHz PCM s16le. */
-function ffmpegToPCM(
-  ffmpegCmd: string,
-  inputPath: string,
-  sampleRate: number = 24000,
-): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const args = [
-      "-i",
-      inputPath,
-      "-f",
-      "s16le",
-      "-ar",
-      String(sampleRate),
-      "-ac",
-      "1",
-      "-acodec",
-      "pcm_s16le",
-      "-v",
-      "error",
-      "pipe:1",
-    ];
-    execFile(
-      ffmpegCmd,
-      args,
-      {
-        maxBuffer: 50 * 1024 * 1024,
-        encoding: "buffer",
-        ...(isWindows() ? { windowsHide: true } : {}),
-      },
-      (err, stdout) => {
-        if (err) {
-          reject(new Error(`ffmpeg failed: ${err.message}`));
-          return;
-        }
-        resolve(stdout as unknown as Buffer);
-      },
-    );
-  });
-}
-
-/** Decode MP3 to PCM via mpg123-decoder WASM (fallback when ffmpeg is unavailable). */
+/** Decode MP3 to PCM via mpg123-decoder WASM. */
 async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buffer | null> {
   try {
     const { MPEGDecoder } = await import("mpg123-decoder");
@@ -502,7 +437,7 @@ async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buff
   }
 }
 
-/** Parse a standard PCM WAV and extract mono 24 kHz PCM data (fallback without ffmpeg). */
+/** Parse a standard PCM WAV and extract mono 24 kHz PCM data. */
 export function parseWavFallback(buf: Buffer): Buffer | null {
   if (buf.length < 44) {
     return null;

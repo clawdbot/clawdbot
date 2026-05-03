@@ -15,6 +15,8 @@ type Sample = {
   maxRssMb: number | null;
   exitCode: number | null;
   signal: string | null;
+  stdoutTail?: string;
+  stderrTail?: string;
 };
 
 type SummaryStats = {
@@ -328,7 +330,7 @@ function runCase(params: {
         ...process.env,
         OPENCLAW_HIDE_BANNER: "1",
       },
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
       timeout: params.timeoutMs,
       maxBuffer: 32 * 1024 * 1024,
@@ -342,9 +344,19 @@ function runCase(params: {
       maxRssMb: parseMaxRssMb(proc.stderr ?? ""),
       exitCode: proc.status,
       signal: proc.signal,
+      ...(proc.status === 0
+        ? {}
+        : {
+            stdoutTail: tailLines(proc.stdout ?? "", 20),
+            stderrTail: tailLines(proc.stderr ?? "", 20),
+          }),
     });
   }
   return samples;
+}
+
+function tailLines(value: string, maxLines: number): string {
+  return value.split(/\r?\n/).filter(Boolean).slice(-maxLines).join("\n");
 }
 
 function printSuite(result: SuiteResult): void {

@@ -1464,6 +1464,36 @@ public struct SessionsListParams: Codable, Sendable {
     }
 }
 
+public struct SessionsCleanupParams: Codable, Sendable {
+    public let agent: String?
+    public let allagents: Bool?
+    public let enforce: Bool?
+    public let activekey: String?
+    public let fixmissing: Bool?
+
+    public init(
+        agent: String?,
+        allagents: Bool?,
+        enforce: Bool?,
+        activekey: String?,
+        fixmissing: Bool?)
+    {
+        self.agent = agent
+        self.allagents = allagents
+        self.enforce = enforce
+        self.activekey = activekey
+        self.fixmissing = fixmissing
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agent
+        case allagents = "allAgents"
+        case enforce
+        case activekey = "activeKey"
+        case fixmissing = "fixMissing"
+    }
+}
+
 public struct SessionsPreviewParams: Codable, Sendable {
     public let keys: [String]
     public let limit: Int?
@@ -1483,6 +1513,28 @@ public struct SessionsPreviewParams: Codable, Sendable {
         case keys
         case limit
         case maxchars = "maxChars"
+    }
+}
+
+public struct SessionsDescribeParams: Codable, Sendable {
+    public let key: String
+    public let includederivedtitles: Bool?
+    public let includelastmessage: Bool?
+
+    public init(
+        key: String,
+        includederivedtitles: Bool?,
+        includelastmessage: Bool?)
+    {
+        self.key = key
+        self.includederivedtitles = includederivedtitles
+        self.includelastmessage = includelastmessage
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case includederivedtitles = "includeDerivedTitles"
+        case includelastmessage = "includeLastMessage"
     }
 }
 
@@ -2752,6 +2804,7 @@ public struct ChannelsStatusResult: Codable, Sendable {
     public let channels: [String: AnyCodable]
     public let channelaccounts: [String: AnyCodable]
     public let channeldefaultaccountid: [String: AnyCodable]
+    public let eventloop: [String: AnyCodable]?
 
     public init(
         ts: Int,
@@ -2762,7 +2815,8 @@ public struct ChannelsStatusResult: Codable, Sendable {
         channelmeta: [[String: AnyCodable]]?,
         channels: [String: AnyCodable],
         channelaccounts: [String: AnyCodable],
-        channeldefaultaccountid: [String: AnyCodable])
+        channeldefaultaccountid: [String: AnyCodable],
+        eventloop: [String: AnyCodable]?)
     {
         self.ts = ts
         self.channelorder = channelorder
@@ -2773,6 +2827,7 @@ public struct ChannelsStatusResult: Codable, Sendable {
         self.channels = channels
         self.channelaccounts = channelaccounts
         self.channeldefaultaccountid = channeldefaultaccountid
+        self.eventloop = eventloop
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2785,6 +2840,7 @@ public struct ChannelsStatusResult: Codable, Sendable {
         case channels
         case channelaccounts = "channelAccounts"
         case channeldefaultaccountid = "channelDefaultAccountId"
+        case eventloop = "eventLoop"
     }
 }
 
@@ -4272,6 +4328,7 @@ public struct CronRunLogEntry: Codable, Sendable {
     public let deliveryerror: String?
     public let sessionid: String?
     public let sessionkey: String?
+    public let runid: String?
     public let runatms: Int?
     public let durationms: Int?
     public let nextrunatms: Int?
@@ -4292,6 +4349,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         deliveryerror: String?,
         sessionid: String?,
         sessionkey: String?,
+        runid: String?,
         runatms: Int?,
         durationms: Int?,
         nextrunatms: Int?,
@@ -4311,6 +4369,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         self.deliveryerror = deliveryerror
         self.sessionid = sessionid
         self.sessionkey = sessionkey
+        self.runid = runid
         self.runatms = runatms
         self.durationms = durationms
         self.nextrunatms = nextrunatms
@@ -4332,6 +4391,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         case deliveryerror = "deliveryError"
         case sessionid = "sessionId"
         case sessionkey = "sessionKey"
+        case runid = "runId"
         case runatms = "runAtMs"
         case durationms = "durationMs"
         case nextrunatms = "nextRunAtMs"

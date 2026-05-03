@@ -55,6 +55,12 @@ export const SessionSchema = z
     typingMode: TypingModeSchema.optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),
+    writeLock: z
+      .object({
+        acquireTimeoutMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),

@@ -18,6 +18,7 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -127,11 +128,12 @@ function getNodeErrorCode(error: unknown): string | undefined {
 
 type FsSafeModule = typeof import("../infra/fs-safe.js");
 
-let fsSafeModulePromise: Promise<FsSafeModule> | undefined;
+const fsSafeModuleLoader = createLazyImportLoader<FsSafeModule>(
+  () => import("../infra/fs-safe.js"),
+);
 
 async function loadFsSafeModule(): Promise<FsSafeModule> {
-  fsSafeModulePromise ??= import("../infra/fs-safe.js");
-  return await fsSafeModulePromise;
+  return await fsSafeModuleLoader.load();
 }
 
 function shouldSkipScriptPreflightPathError(

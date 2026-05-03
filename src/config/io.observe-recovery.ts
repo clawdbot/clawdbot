@@ -7,6 +7,10 @@ import {
   snapshotConfigAuditProcessInfo,
   type ConfigObserveAuditRecord,
 } from "./io.audit.js";
+import {
+  persistBoundedClobberedConfigSnapshot,
+  persistBoundedClobberedConfigSnapshotSync,
+} from "./io.clobber-snapshot.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { resolveStateDir } from "./paths.js";
 import {
@@ -37,6 +41,8 @@ export type ObserveRecoveryDeps = {
       copyFile(src: string, dest: string): Promise<unknown>;
       chmod?(path: string, mode: number): Promise<unknown>;
       mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<unknown>;
+      readdir(path: string): Promise<string[]>;
+      rmdir(path: string): Promise<unknown>;
       appendFile(
         path: string,
         data: string,
@@ -65,6 +71,8 @@ export type ObserveRecoveryDeps = {
     copyFileSync(src: string, dest: string): unknown;
     chmodSync?(path: string, mode: number): unknown;
     mkdirSync(path: string, options?: { recursive?: boolean; mode?: number }): unknown;
+    readdirSync(path: string): string[];
+    rmdirSync(path: string): unknown;
     appendFileSync(
       path: string,
       data: string,
@@ -530,10 +538,6 @@ function readConfigFingerprintForPathSync(
   }
 }
 
-function formatConfigArtifactTimestamp(ts: string): string {
-  return ts.replaceAll(":", "-").replaceAll(".", "-");
-}
-
 export function resolveLastKnownGoodConfigPath(configPath: string): string {
   return `${configPath}.last-good`;
 }
@@ -573,44 +577,6 @@ function collectPollutedSecretPlaceholders(
     }
   }
   return output;
-}
-
-async function persistClobberedConfigSnapshot(params: {
-  deps: ObserveRecoveryDeps;
-  configPath: string;
-  raw: string;
-  observedAt: string;
-}): Promise<string | null> {
-  const targetPath = `${params.configPath}.clobbered.${formatConfigArtifactTimestamp(params.observedAt)}`;
-  try {
-    await params.deps.fs.promises.writeFile(targetPath, params.raw, {
-      encoding: "utf-8",
-      mode: 0o600,
-      flag: "wx",
-    });
-    return targetPath;
-  } catch {
-    return null;
-  }
-}
-
-function persistClobberedConfigSnapshotSync(params: {
-  deps: ObserveRecoveryDeps;
-  configPath: string;
-  raw: string;
-  observedAt: string;
-}): string | null {
-  const targetPath = `${params.configPath}.clobbered.${formatConfigArtifactTimestamp(params.observedAt)}`;
-  try {
-    params.deps.fs.writeFileSync(targetPath, params.raw, {
-      encoding: "utf-8",
-      mode: 0o600,
-      flag: "wx",
-    });
-    return targetPath;
-  } catch {
-    return null;
-  }
 }
 
 export async function maybeRecoverSuspiciousConfigRead(params: {
@@ -663,7 +629,7 @@ export async function maybeRecoverSuspiciousConfigRead(params: {
     return { raw: params.raw, parsed: params.parsed };
   }
 
-  const clobberedPath = await persistClobberedConfigSnapshot({
+  const clobberedPath = await persistBoundedClobberedConfigSnapshot({
     deps: params.deps,
     configPath: params.configPath,
     raw: params.raw,
@@ -770,7 +736,7 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
     return { raw: params.raw, parsed: params.parsed };
   }
 
-  const clobberedPath = persistClobberedConfigSnapshotSync({
+  const clobberedPath = persistBoundedClobberedConfigSnapshotSync({
     deps: params.deps,
     configPath: params.configPath,
     raw: params.raw,
@@ -924,7 +890,7 @@ export async function recoverConfigFromLastKnownGood(params: {
     stat: stat as ConfigStatMetadataSource,
     observedAt: now,
   });
-  const clobberedPath = await persistClobberedConfigSnapshot({
+  const clobberedPath = await persistBoundedClobberedConfigSnapshot({
     deps,
     configPath: snapshot.path,
     raw: snapshot.raw,

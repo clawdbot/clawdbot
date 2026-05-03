@@ -5,6 +5,12 @@ import {
   readPluginPackageVersion,
   resolveAmbientNodeProxyAgent,
 } from "openclaw/plugin-sdk/extension-shared";
+import {
+  FEISHU_HTTP_TIMEOUT_ENV_VAR,
+  FEISHU_HTTP_TIMEOUT_MAX_MS,
+  FEISHU_HTTP_TIMEOUT_MS,
+  resolveConfiguredHttpTimeoutMs,
+} from "./client-timeout.js";
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
 const require = createRequire(import.meta.url);
@@ -77,10 +83,7 @@ let feishuClientSdk: FeishuClientSdk = defaultFeishuClientSdk;
   }
 }
 
-/** Default HTTP timeout for Feishu API requests (30 seconds). */
-export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
-export const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
-export const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
+export { FEISHU_HTTP_TIMEOUT_ENV_VAR, FEISHU_HTTP_TIMEOUT_MAX_MS, FEISHU_HTTP_TIMEOUT_MS };
 
 type FeishuHttpInstanceLike = Pick<
   typeof feishuClientSdk.defaultHttpInstance,
@@ -146,37 +149,6 @@ export type FeishuClientCredentials = {
   httpTimeoutMs?: number;
   config?: Pick<FeishuConfig, "httpTimeoutMs">;
 };
-
-function resolveConfiguredHttpTimeoutMs(creds: FeishuClientCredentials): number {
-  const clampTimeout = (value: number): number => {
-    const rounded = Math.floor(value);
-    return Math.min(Math.max(rounded, 1), FEISHU_HTTP_TIMEOUT_MAX_MS);
-  };
-
-  const fromDirectField = creds.httpTimeoutMs;
-  if (
-    typeof fromDirectField === "number" &&
-    Number.isFinite(fromDirectField) &&
-    fromDirectField > 0
-  ) {
-    return clampTimeout(fromDirectField);
-  }
-
-  const envRaw = process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
-  if (envRaw) {
-    const envValue = Number(envRaw);
-    if (Number.isFinite(envValue) && envValue > 0) {
-      return clampTimeout(envValue);
-    }
-  }
-
-  const fromConfig = creds.config?.httpTimeoutMs;
-  const timeout = fromConfig;
-  if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
-    return FEISHU_HTTP_TIMEOUT_MS;
-  }
-  return clampTimeout(timeout);
-}
 
 /**
  * Create or get a cached Feishu client for an account.

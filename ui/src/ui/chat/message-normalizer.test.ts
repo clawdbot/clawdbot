@@ -241,13 +241,23 @@ describe("message-normalizer", () => {
       ]);
     });
 
-    it("does not fall back to raw text when an invalid MEDIA line is stripped", () => {
+    it("keeps home-relative MEDIA paths as assistant attachments", () => {
       const result = normalizeMessage({
         role: "assistant",
         content: "MEDIA:~/Pictures/My File.png",
       });
 
-      expect(result.content).toEqual([]);
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "~/Pictures/My File.png",
+            kind: "image",
+            label: "My File.png",
+            mimeType: "image/png",
+          },
+        },
+      ]);
     });
 
     it("preserves relative MEDIA references as visible text instead of dropping the assistant turn", () => {

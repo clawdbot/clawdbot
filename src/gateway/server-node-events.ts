@@ -31,7 +31,7 @@ import {
   normalizeRpcAttachmentsToChatAttachments,
   parseMessageWithAttachments,
   registerApnsRegistration,
-  requestHeartbeatNow,
+  requestHeartbeat,
   resolveChatAttachmentMaxBytes,
   resolveGatewayModelSupportsImages,
   resolveOutboundTarget,
@@ -646,7 +646,12 @@ export const handleNodeEvent = async (
         trusted: false,
       });
       if (queued) {
-        requestHeartbeatNow({ reason: "notifications-event", sessionKey });
+        requestHeartbeat({
+          source: "notifications-event",
+          intent: "event",
+          reason: "notifications-event",
+          sessionKey,
+        });
       }
       return undefined;
     }
@@ -749,8 +754,13 @@ export const handleNodeEvent = async (
         // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
         // keys should keep legacy unscoped behavior so enabled non-main heartbeat
         // agents still run when no explicit agent session is provided.
-        requestHeartbeatNow(
-          scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
+        requestHeartbeat(
+          scopedHeartbeatWakeOptions(sessionKey, {
+            source: "exec-event",
+            intent: "event",
+            reason: "exec-event",
+            coalesceMs: 0,
+          }),
         );
       }
       return undefined;

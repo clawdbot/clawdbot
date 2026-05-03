@@ -15,6 +15,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
 import type { SkillScanFinding } from "./skill-scanner.js";
 import type { ExecFn } from "./windows-acl.js";
@@ -219,6 +220,7 @@ async function listInstalledPluginDirs(params: {
   const pluginDirs = entries
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
+    .filter((name) => !shouldIgnoreInstalledPluginDirName(name))
     .filter(Boolean);
   return { extensionsDir, pluginDirs };
 }

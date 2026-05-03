@@ -10,6 +10,7 @@ const rootEntries = [
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
   "src/infra/warning-filter.ts!",
+  "src/infra/command-explainer/index.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
@@ -43,6 +44,30 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "linkedom",
   "openclaw",
   "pdfjs-dist",
+] as const;
+
+const rootBundledPluginRuntimeDependencies = [
+  "@anthropic-ai/sdk",
+  "@anthropic-ai/vertex-sdk",
+  "@aws-sdk/client-bedrock",
+  "@aws-sdk/client-bedrock-runtime",
+  "@aws-sdk/credential-provider-node",
+  "@aws/bedrock-token-generator",
+  "@google/genai",
+  "@grammyjs/runner",
+  "@grammyjs/transformer-throttler",
+  "@homebridge/ciao",
+  "@mozilla/readability",
+  "@slack/bolt",
+  "@slack/types",
+  "@slack/web-api",
+  "grammy",
+  "linkedom",
+  "minimatch",
+  "node-edge-tts",
+  "openshell",
+  "pdfjs-dist",
+  "tokenjuice",
 ] as const;
 
 const config = {
@@ -111,7 +136,13 @@ const config = {
   workspaces: {
     ".": {
       entry: rootEntries,
-      ignoreDependencies: ["@openclaw/*", "playwright-core", "sqlite-vec"],
+      ignoreDependencies: [
+        "@openclaw/*",
+        "playwright-core",
+        "sqlite-vec",
+        "tree-sitter-bash",
+        ...rootBundledPluginRuntimeDependencies,
+      ],
       project: [
         "src/**/*.ts!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",

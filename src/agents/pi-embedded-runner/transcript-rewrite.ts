@@ -8,7 +8,11 @@ import type {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { getRawSessionAppendMessage } from "../session-raw-append-message.js";
-import { acquireSessionWriteLock } from "../session-write-lock.js";
+import {
+  acquireSessionWriteLock,
+  type SessionWriteLockAcquireTimeoutConfig,
+  resolveSessionWriteLockAcquireTimeoutMs,
+} from "../session-write-lock.js";
 import { log } from "./logger.js";
 import {
   persistTranscriptStateMutation,
@@ -356,11 +360,13 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
   sessionId?: string;
   sessionKey?: string;
   request: TranscriptRewriteRequest;
+  config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<TranscriptRewriteResult> {
   let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
   try {
     sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
+      timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
     });
     const state = await readTranscriptFileState(params.sessionFile);
     const result = rewriteTranscriptEntriesInState({
@@ -373,7 +379,10 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
         state,
         appendedEntries: result.appendedEntries,
       });
-      emitSessionTranscriptUpdate(params.sessionFile);
+      emitSessionTranscriptUpdate({
+        sessionFile: params.sessionFile,
+        sessionKey: params.sessionKey,
+      });
       log.info(
         `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +
           `${result.rewrittenEntries === 1 ? "y" : "ies"} ` +

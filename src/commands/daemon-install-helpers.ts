@@ -19,6 +19,7 @@ import {
   readManagedServiceEnvKeysFromEnvironment,
   writeManagedServiceEnvKeysToEnvironment,
 } from "../daemon/service-managed-env.js";
+import { isNonMinimalServicePathEntry } from "../daemon/service-path-policy.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -169,10 +170,66 @@ function collectConfigSecretRefServiceEnvVars(params: {
   return entries;
 }
 
+function collectExecSecretRefPassEnvServiceEnvVars(params: {
+  env: Record<string, string | undefined>;
+  config?: OpenClawConfig;
+  durableEnvironment: Record<string, string | undefined>;
+  warn?: DaemonInstallWarnFn;
+}): Record<string, string> {
+  if (!params.config) {
+    return {};
+  }
+  const entries: Record<string, string> = {};
+  for (const target of discoverConfigSecretTargets(params.config)) {
+    if (!target.entry.includeInPlan) {
+      continue;
+    }
+    const { ref } = resolveSecretInputRef({
+      value: target.value,
+      refValue: target.refValue,
+      defaults: params.config.secrets?.defaults,
+    });
+    if (!ref || ref.source !== "exec") {
+      continue;
+    }
+    const provider = params.config.secrets?.providers?.[ref.provider];
+    if (!provider || provider.source !== "exec") {
+      continue;
+    }
+    for (const rawKey of provider.passEnv ?? []) {
+      const key = normalizeEnvVarKey(rawKey, { portable: true });
+      if (!key) {
+        params.warn?.(
+          `Exec SecretRef passEnv id "${rawKey}" is not portable and was not added to the service environment`,
+          "Config SecretRef",
+        );
+        continue;
+      }
+      if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+        params.warn?.(
+          `Exec SecretRef passEnv ref "${key}" blocked by host-env security policy`,
+          "Config SecretRef",
+        );
+        continue;
+      }
+      if (Object.hasOwn(params.durableEnvironment, key)) {
+        continue;
+      }
+      const value = params.env[key]?.trim();
+      if (!value) {
+        continue;
+      }
+      entries[key] = value;
+    }
+  }
+  return entries;
+}
+
 function mergeServicePath(
   nextPath: string | undefined,
   existingPath: string | undefined,
   tmpDir: string | undefined,
+  platform: NodeJS.Platform,
 ): string | undefined {
   const segments: string[] = [];
   const seen = new Set<string>();
@@ -233,6 +290,9 @@ function mergeServicePath(
     return normalized;
   };
   const shouldPreserveNormalizedPathSegment = (segment: string) => {
+    if (isNonMinimalServicePathEntry(segment, platform)) {
+      return false;
+    }
     const resolved = path.resolve(segment);
     const realResolved = realpathExistingPath(resolved) ?? resolved;
     return ![...normalizedTmpDirs, ...realTmpDirs].some(
@@ -257,7 +317,9 @@ function mergeServicePath(
     }
   };
   addPath(nextPath);
-  addPath(existingPath, { preserve: true });
+  if (platform !== "darwin") {
+    addPath(existingPath, { preserve: true });
+  }
   return segments.length > 0 ? segments.join(path.delimiter) : undefined;
 }
 
@@ -319,12 +381,19 @@ async function buildGatewayInstallEnvironment(params: {
   warn?: DaemonInstallWarnFn;
   serviceEnvironment: Record<string, string | undefined>;
   existingEnvironment?: Record<string, string | undefined>;
+  platform: NodeJS.Platform;
 }): Promise<Record<string, string | undefined>> {
   const durableEnvironment = collectDurableServiceEnvVars({
     env: params.env,
     config: params.config,
   });
   const configSecretRefEnvironment = collectConfigSecretRefServiceEnvVars({
+    env: params.env,
+    config: params.config,
+    durableEnvironment,
+    warn: params.warn,
+  });
+  const execSecretRefPassEnvEnvironment = collectExecSecretRefPassEnvServiceEnvVars({
     env: params.env,
     config: params.config,
     durableEnvironment,
@@ -342,6 +411,7 @@ async function buildGatewayInstallEnvironment(params: {
     ),
     ...durableEnvironment,
     ...configSecretRefEnvironment,
+    ...execSecretRefPassEnvEnvironment,
     ...authProfileEnvironment,
   };
   const managedServiceEnvKeys = formatManagedServiceEnvKeys(durableEnvironment, {
@@ -353,6 +423,7 @@ async function buildGatewayInstallEnvironment(params: {
     params.serviceEnvironment.PATH,
     params.existingEnvironment?.PATH,
     params.serviceEnvironment.TMPDIR,
+    params.platform,
   );
   if (mergedPath) {
     environment.PATH = mergedPath;
@@ -427,6 +498,7 @@ export async function buildGatewayInstallPlan(params: {
       warn: params.warn,
       serviceEnvironment,
       existingEnvironment: params.existingEnvironment,
+      platform,
     }),
   };
 }

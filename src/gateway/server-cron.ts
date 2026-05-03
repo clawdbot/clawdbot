@@ -22,7 +22,7 @@ import { resolveCronStorePath } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -247,9 +247,11 @@ export function buildGatewayCronService(params: {
         trusted: opts?.trusted,
       });
     },
-    requestHeartbeatNow: (opts) => {
+    requestHeartbeat: (opts) => {
       const { agentId, sessionKey } = resolveCronWakeTarget(opts);
-      requestHeartbeatNow({
+      requestHeartbeat({
+        source: opts?.source ?? "cron",
+        intent: opts?.intent ?? "event",
         reason: opts?.reason,
         agentId,
         sessionKey,
@@ -279,6 +281,8 @@ export function buildGatewayCronService(params: {
         : undefined;
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
+        source: opts?.source ?? "cron",
+        intent: opts?.intent ?? "event",
         reason: opts?.reason,
         agentId,
         sessionKey,
@@ -367,6 +371,7 @@ export function buildGatewayCronService(params: {
           "deliveryError",
           "sessionId",
           "sessionKey",
+          "runId",
           "nextRunAtMs",
           "model",
           "provider",
@@ -406,6 +411,7 @@ export function buildGatewayCronService(params: {
             delivery: evt.delivery,
             sessionId: evt.sessionId,
             sessionKey: evt.sessionKey,
+            runId: evt.runId,
             runAtMs: evt.runAtMs,
             durationMs: evt.durationMs,
             nextRunAtMs: evt.nextRunAtMs,

@@ -18,11 +18,23 @@ type VoiceCallSpeakResult = {
   error?: string;
 };
 
+type VoiceCallDtmfResult = {
+  success?: boolean;
+  error?: string;
+};
+
 type VoiceCallMeetJoinResult = {
   callId: string;
   dtmfSent: boolean;
   introSent: boolean;
 };
+
+function sleep(ms: number): Promise<void> {
+  if (ms <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function createConnectedGatewayClient(
   config: GoogleMeetConfig,
@@ -81,15 +93,13 @@ export async function joinMeetViaVoiceCallGateway(params: {
   try {
     client = await createConnectedGatewayClient(params.config);
     params.logger?.info(
-      `[google-meet] Delegating Twilio join to Voice Call (dtmf=${params.dtmfSequence ? "yes" : "no"}, intro=${params.message ? "yes" : "no"})`,
+      `[google-meet] Delegating Twilio join to Voice Call (dtmf=${params.dtmfSequence ? "post-connect" : "none"}, intro=${params.message ? "delayed" : "none"})`,
     );
     const start = (await client.request(
       "voicecall.start",
       {
         to: params.dialInNumber,
         mode: "conversation",
-        ...(params.message ? { message: params.message } : {}),
-        ...(params.dtmfSequence ? { dtmfSequence: params.dtmfSequence } : {}),
       },
       { timeoutMs: params.config.voiceCall.requestTimeoutMs },
     )) as VoiceCallStartResult;
@@ -97,12 +107,60 @@ export async function joinMeetViaVoiceCallGateway(params: {
       throw new Error(start.error || "voicecall.start did not return callId");
     }
     params.logger?.info(
-      `[google-meet] Voice Call Twilio join started: callId=${start.callId} dtmf=${params.dtmfSequence ? "yes" : "no"} intro=${params.message ? "yes" : "no"}`,
+      `[google-meet] Voice Call Twilio phone leg started: callId=${start.callId}`,
     );
+    let dtmfSent = false;
+    if (params.dtmfSequence) {
+      const delayMs = params.config.voiceCall.dtmfDelayMs;
+      params.logger?.info(
+        `[google-meet] Waiting ${delayMs}ms before sending Meet DTMF for callId=${start.callId}`,
+      );
+      await sleep(delayMs);
+      const dtmf = (await client.request(
+        "voicecall.dtmf",
+        {
+          callId: start.callId,
+          digits: params.dtmfSequence,
+        },
+        { timeoutMs: params.config.voiceCall.requestTimeoutMs },
+      )) as VoiceCallDtmfResult;
+      if (dtmf.success === false) {
+        throw new Error(dtmf.error || "voicecall.dtmf failed");
+      }
+      dtmfSent = true;
+      params.logger?.info(
+        `[google-meet] Meet DTMF sent after phone leg connected: callId=${start.callId} digits=${params.dtmfSequence.length}`,
+      );
+    }
+    let introSent = false;
+    if (params.message) {
+      const delayMs = params.dtmfSequence ? params.config.voiceCall.postDtmfSpeechDelayMs : 0;
+      if (delayMs > 0) {
+        params.logger?.info(
+          `[google-meet] Waiting ${delayMs}ms after Meet DTMF before speaking intro for callId=${start.callId}`,
+        );
+        await sleep(delayMs);
+      }
+      const spoken = (await client.request(
+        "voicecall.speak",
+        {
+          callId: start.callId,
+          message: params.message,
+        },
+        { timeoutMs: params.config.voiceCall.requestTimeoutMs },
+      )) as VoiceCallSpeakResult;
+      if (spoken.success === false) {
+        throw new Error(spoken.error || "voicecall.speak failed");
+      }
+      introSent = true;
+      params.logger?.info(
+        `[google-meet] Intro speech requested after Meet dial sequence: callId=${start.callId}`,
+      );
+    }
     return {
       callId: start.callId,
-      dtmfSent: Boolean(params.dtmfSequence),
-      introSent: Boolean(params.message),
+      dtmfSent,
+      introSent,
     };
   } finally {
     await client?.stopAndWait({ timeoutMs: 1_000 });

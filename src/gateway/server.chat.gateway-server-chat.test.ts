@@ -488,15 +488,16 @@ describe("gateway server chat", () => {
         },
       });
 
-      const agentBlockedRes = await rpcReq(ws, "agent", {
+      vi.mocked(agentCommand).mockClear();
+      const agentAllowedRes = await rpcReq(ws, "agent", {
         sessionKey: "cron:job-1",
         message: "hi",
         idempotencyKey: "idem-2",
       });
-      expect(agentBlockedRes.ok).toBe(false);
-      expect((agentBlockedRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
-        /send blocked/i,
-      );
+      expect(agentAllowedRes.ok).toBe(true);
+      expect(agentAllowedRes.payload?.status).toBe("accepted");
+      expect(agentAllowedRes.payload?.runId).toBe("idem-2");
+      await vi.waitFor(() => expect(agentCommand).toHaveBeenCalled());
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;

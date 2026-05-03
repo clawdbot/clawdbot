@@ -111,6 +111,9 @@ export async function runPluginUpdateCommand(params: {
         nextInstallRecords: nextPluginInstallRecords,
         nextConfig,
         baseHash: (await sourceSnapshotPromise)?.hash,
+        writeOptions: {
+          afterWrite: { mode: "restart", reason: "plugin source changed" },
+        },
       });
     } else {
       await replaceConfigFile({

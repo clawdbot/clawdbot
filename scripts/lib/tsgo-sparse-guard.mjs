@@ -27,6 +27,14 @@ const CORE_PROD_REQUIRED_PATHS = [
     whenPresent: "src/channels/plugins/catalog.ts",
   },
   {
+    path: "scripts/lib/official-external-plugin-catalog.json",
+    whenPresent: "src/plugins/official-external-plugin-catalog.ts",
+  },
+  {
+    path: "scripts/lib/official-external-provider-catalog.json",
+    whenPresent: "src/plugins/official-external-plugin-catalog.ts",
+  },
+  {
     path: "scripts/lib/plugin-sdk-entrypoints.json",
     whenPresent: "src/plugin-sdk/entrypoints.ts",
   },

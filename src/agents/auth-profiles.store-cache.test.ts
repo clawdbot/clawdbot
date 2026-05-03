@@ -130,6 +130,32 @@ describe("auth profile store cache", () => {
     });
   });
 
+  it("isolates cached auth stores without structuredClone", async () => {
+    const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
+    await withAgentDirEnv("openclaw-auth-store-isolated-", (agentDir) => {
+      writeAuthStore(agentDir, "sk-test");
+
+      const first = ensureAuthProfileStore(agentDir);
+      const profile = first.profiles["openai:default"];
+      if (profile?.type === "api_key") {
+        profile.key = "sk-mutated";
+      }
+      first.profiles["anthropic:default"] = {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-added",
+      };
+
+      const second = ensureAuthProfileStore(agentDir);
+      expect(second.profiles["openai:default"]).toMatchObject({
+        key: "sk-test",
+      });
+      expect(second.profiles["anthropic:default"]).toBeUndefined();
+      expect(structuredCloneSpy).not.toHaveBeenCalled();
+    });
+    structuredCloneSpy.mockRestore();
+  });
+
   it("keeps runtime-only external auth out of persisted auth-profiles.json files", async () => {
     mocks.resolveExternalCliAuthProfiles.mockReturnValue([createRuntimeOnlyOverlay("access-1")]);
 

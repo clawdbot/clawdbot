@@ -81,7 +81,7 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
 }
 
 export function isRetryableMemoryEmbeddingError(message: string): boolean {
-  return /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day)/i.test(
+  return /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day|fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|network error|read ECONN|timed out)/i.test(
     message,
   );
 }

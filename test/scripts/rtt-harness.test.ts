@@ -21,11 +21,15 @@ const FIXTURE_PATH = path.resolve(TEST_DIR, "../fixtures/telegram-qa-summary-rtt
 describe("RTT harness", () => {
   it("validates OpenClaw package specs", () => {
     expect(validateOpenClawPackageSpec("openclaw@main")).toBe("openclaw@main");
+    expect(validateOpenClawPackageSpec("openclaw@alpha")).toBe("openclaw@alpha");
     expect(validateOpenClawPackageSpec("openclaw@beta")).toBe("openclaw@beta");
     expect(validateOpenClawPackageSpec("openclaw@latest")).toBe("openclaw@latest");
     expect(validateOpenClawPackageSpec("openclaw@2026.4.30")).toBe("openclaw@2026.4.30");
     expect(validateOpenClawPackageSpec("openclaw@2026.4.30-beta.2")).toBe(
       "openclaw@2026.4.30-beta.2",
+    );
+    expect(validateOpenClawPackageSpec("openclaw@2026.4.30-alpha.2")).toBe(
+      "openclaw@2026.4.30-alpha.2",
     );
 
     expect(() => validateOpenClawPackageSpec("@openclaw/openclaw@beta")).toThrow(

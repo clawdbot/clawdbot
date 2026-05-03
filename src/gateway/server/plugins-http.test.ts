@@ -273,7 +273,7 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(routeHandler).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to the provided registry when the pinned route registry is empty", async () => {
+  it("does not fall back to stale routes when the pinned route registry is empty", async () => {
     const explicitRouteHandler = vi.fn(async (_req, res: ServerResponse) => {
       res.statusCode = 200;
       return true;
@@ -293,8 +293,8 @@ describe("createGatewayPluginRequestHandler", () => {
 
     const { res } = makeMockHttpResponse();
     const handled = await handler({ url: "/demo" } as IncomingMessage, res);
-    expect(handled).toBe(true);
-    expect(explicitRouteHandler).toHaveBeenCalledTimes(1);
+    expect(handled).toBe(false);
+    expect(explicitRouteHandler).not.toHaveBeenCalled();
   });
 
   it("handles routes registered into the pinned startup registry after the active registry changes", async () => {

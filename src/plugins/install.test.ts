@@ -773,7 +773,7 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(true);
     expect(
       warnings.some((warning) =>
-        warning.includes("allowed because it is an official source-linked ClawHub package"),
+        warning.includes("allowed because it is an official OpenClaw package"),
       ),
     ).toBe(true);
   });
@@ -1935,7 +1935,7 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(true);
     expect(
       warnings.some((warning) =>
-        warning.includes("allowed because it is an official source-linked ClawHub package"),
+        warning.includes("allowed because it is an official OpenClaw package"),
       ),
     ).toBe(true);
   });

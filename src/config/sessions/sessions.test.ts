@@ -271,15 +271,13 @@ describe("session lifecycle timestamps", () => {
   });
 });
 
-describe("session store lock (Promise chain mutex)", () => {
-  const lockFixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-lock-test-" });
-  let lockTmpDirs: string[] = [];
+describe("session store writer queue", () => {
+  const writerFixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-writer-test-" });
 
   async function makeTmpStore(
     initial: Record<string, unknown> = {},
   ): Promise<{ dir: string; storePath: string }> {
-    const dir = await lockFixtureRootTracker.make("case");
-    lockTmpDirs.push(dir);
+    const dir = await writerFixtureRootTracker.make("case");
     const storePath = path.join(dir, "sessions.json");
     if (Object.keys(initial).length > 0) {
       await fsPromises.writeFile(storePath, JSON.stringify(initial, null, 2), "utf-8");
@@ -288,16 +286,15 @@ describe("session store lock (Promise chain mutex)", () => {
   }
 
   beforeAll(async () => {
-    await lockFixtureRootTracker.setup();
+    await writerFixtureRootTracker.setup();
   });
 
   afterAll(async () => {
-    await lockFixtureRootTracker.cleanup();
+    await writerFixtureRootTracker.cleanup();
   });
 
   afterEach(async () => {
     clearSessionStoreCacheForTest();
-    lockTmpDirs = [];
   });
 
   it("serializes concurrent updateSessionStore calls without data loss", async () => {

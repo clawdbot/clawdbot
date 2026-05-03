@@ -7,6 +7,7 @@ import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gate
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import {
   normalizeOptionalLowercaseString,
@@ -16,23 +17,20 @@ import { pickGatewaySelfPresence } from "./gateway-presence.js";
 import { isProbeReachable } from "./gateway-status/helpers.js";
 export { pickGatewaySelfPresence } from "./gateway-presence.js";
 
-let gatewayProbeModulePromise: Promise<typeof import("./status.gateway-probe.js")> | undefined;
-let probeGatewayModulePromise: Promise<typeof import("../gateway/probe.js")> | undefined;
-let gatewayCallModulePromise: Promise<typeof import("../gateway/call.js")> | undefined;
+const gatewayProbeModuleLoader = createLazyImportLoader(() => import("./status.gateway-probe.js"));
+const probeGatewayModuleLoader = createLazyImportLoader(() => import("../gateway/probe.js"));
+const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
 
 function loadGatewayProbeModule() {
-  gatewayProbeModulePromise ??= import("./status.gateway-probe.js");
-  return gatewayProbeModulePromise;
+  return gatewayProbeModuleLoader.load();
 }
 
 function loadProbeGatewayModule() {
-  probeGatewayModulePromise ??= import("../gateway/probe.js");
-  return probeGatewayModulePromise;
+  return probeGatewayModuleLoader.load();
 }
 
 function loadGatewayCallModule() {
-  gatewayCallModulePromise ??= import("../gateway/call.js");
-  return gatewayCallModulePromise;
+  return gatewayCallModuleLoader.load();
 }
 
 export type MemoryStatusSnapshot = MemoryProviderStatus & {

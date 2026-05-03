@@ -97,6 +97,30 @@ describe("message hook mappers", () => {
     expect(canonical.guildId).toBe("guild-1");
   });
 
+  it("falls back to raw body when command body is blank", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        BodyForCommands: " \n\t",
+        RawBody: "Readiness probe failed",
+      }),
+    );
+
+    expect(canonical.content).toBe("Readiness probe failed");
+    expect(toPluginMessageReceivedEvent(canonical).content).toBe("Readiness probe failed");
+    expect(toInternalMessageReceivedContext(canonical).content).toBe("Readiness probe failed");
+  });
+
+  it("keeps nonblank command body ahead of raw body for hook content", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        BodyForCommands: "/status",
+        RawBody: "Readiness probe failed",
+      }),
+    );
+
+    expect(canonical.content).toBe("/status");
+  });
+
   it("supports explicit content/messageId overrides", () => {
     const canonical = deriveInboundMessageHookContext(makeInboundCtx(), {
       content: "override-content",

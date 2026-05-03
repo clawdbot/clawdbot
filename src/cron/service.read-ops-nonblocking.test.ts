@@ -82,7 +82,7 @@ describe("CronService read ops while job is running", () => {
     vi.setSystemTime(new Date("2025-12-13T00:00:00.000Z"));
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
     let resolveFinished: (() => void) | undefined;
     const finished = new Promise<void>((resolve) => {
       resolveFinished = resolve;
@@ -95,7 +95,7 @@ describe("CronService read ops while job is running", () => {
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
       runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
       onEvent: (evt) => {
         if (evt.action === "finished" && evt.status === "ok") {
@@ -164,7 +164,7 @@ describe("CronService read ops while job is running", () => {
   it("keeps list and status responsive during manual cron.run execution", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
     const isolatedRun = createDeferredIsolatedRun();
 
     const cron = new CronService({
@@ -172,7 +172,7 @@ describe("CronService read ops while job is running", () => {
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
       runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
     });
 
@@ -217,7 +217,7 @@ describe("CronService read ops while job is running", () => {
   it("keeps list and status responsive after startup defers catch-up runs", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
 
     await writeCronStoreSnapshot({
@@ -247,7 +247,7 @@ describe("CronService read ops while job is running", () => {
       log: noopLogger,
       nowMs: () => nowMs,
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
       runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
       startupDeferredMissedAgentJobDelayMs: 120_000,
     });

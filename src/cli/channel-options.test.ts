@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __testing, resolveCliChannelOptions } from "./channel-options.js";
+import { __testing as startupMetadataTesting } from "./startup-metadata.js";
 
 const readFileSyncMock = vi.hoisted(() => vi.fn());
 
@@ -21,9 +22,15 @@ vi.mock("../channels/ids.js", () => ({
 }));
 
 describe("resolveCliChannelOptions", () => {
+  beforeEach(() => {
+    __testing.resetPrecomputedChannelOptionsForTests();
+    startupMetadataTesting.clearStartupMetadataCache();
+    vi.clearAllMocks();
+  });
+
   afterEach(() => {
     __testing.resetPrecomputedChannelOptionsForTests();
-    vi.clearAllMocks();
+    delete process.env.OPENCLAW_PLUGIN_CATALOG_PATHS;
   });
 
   it("uses precomputed startup metadata when available", async () => {
@@ -47,6 +54,5 @@ describe("resolveCliChannelOptions", () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({ channelOptions: ["cached", "quietchat"] }));
 
     expect(resolveCliChannelOptions()).toEqual(["cached", "quietchat"]);
-    delete process.env.OPENCLAW_PLUGIN_CATALOG_PATHS;
   });
 });

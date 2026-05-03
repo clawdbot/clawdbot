@@ -52,6 +52,7 @@ export async function buildDiscordMessageProcessContext(params: {
     message,
     author,
     sender,
+    canonicalMessageId,
     data,
     client,
     channelInfo,
@@ -295,6 +296,15 @@ export async function buildDiscordMessageProcessContext(params: {
         }))
       : undefined;
   const originatingTo = autoThreadContext?.OriginatingTo ?? dmConversationTarget ?? replyTarget;
+  const effectiveSessionKey =
+    boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey;
+  const effectivePreviousTimestamp =
+    effectiveSessionKey === route.sessionKey
+      ? previousTimestamp
+      : readSessionUpdatedAt({
+          storePath,
+          sessionKey: effectiveSessionKey,
+        });
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
@@ -305,7 +315,7 @@ export async function buildDiscordMessageProcessContext(params: {
     ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),
     From: effectiveFrom,
     To: effectiveTo,
-    SessionKey: boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
+    SessionKey: effectiveSessionKey,
     AccountId: route.accountId,
     ChatType: isDirectMessage ? "direct" : "channel",
     ConversationLabel: fromLabel,
@@ -323,7 +333,10 @@ export async function buildDiscordMessageProcessContext(params: {
     Provider: "discord" as const,
     Surface: "discord" as const,
     WasMentioned: ctx.effectiveWasMentioned,
-    MessageSid: message.id,
+    MessageSid: canonicalMessageId ?? message.id,
+    ...(canonicalMessageId && canonicalMessageId !== message.id
+      ? { MessageSidFull: message.id }
+      : {}),
     ReplyToId: filteredReplyContext?.id,
     ReplyToBody: filteredReplyContext?.body,
     ReplyToSender: filteredReplyContext?.sender,
@@ -331,7 +344,7 @@ export async function buildDiscordMessageProcessContext(params: {
     ModelParentSessionKey:
       autoThreadContext?.ModelParentSessionKey ?? modelParentSessionKey ?? undefined,
     MessageThreadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
-    ThreadStarterBody: threadStarterBody,
+    ThreadStarterBody: !effectivePreviousTimestamp ? threadStarterBody : undefined,
     ThreadLabel: threadLabel,
     Timestamp: resolveTimestampMs(message.timestamp),
     ...mediaPayload,

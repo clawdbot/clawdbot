@@ -62,6 +62,26 @@ jobs:
           sudo ln -sf "$node_bin/corepack" /usr/local/bin/corepack
           sudo ln -sf "$pnpm_bin" /usr/local/bin/pnpm
 
+      - name: Ensure Docker is available
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! command -v docker >/dev/null 2>&1; then
+            curl -fsSL https://get.docker.com | sudo sh
+          fi
+
+          if command -v systemctl >/dev/null 2>&1; then
+            sudo systemctl start docker
+          fi
+
+          if [ -S /var/run/docker.sock ]; then
+            sudo usermod -aG docker "$USER" || true
+            # The runner process keeps its original groups; grant this
+            # ephemeral runner session access without requiring a relogin.
+            sudo chmod 666 /var/run/docker.sock
+          fi
+
       - name: Hydrate provider env helper
         shell: bash
         env:
@@ -90,14 +110,23 @@ jobs:
 
       - name: Mark Crabbox ready
         shell: bash
+        env:
+          CRABBOX_ID: ${{ inputs.crabbox_id }}
+          CRABBOX_JOB: ${{ inputs.crabbox_job }}
         run: |
           set -euo pipefail
-          job="${{ inputs.crabbox_job }}"
+          job="${CRABBOX_JOB}"
           if [ -z "$job" ]; then job=hydrate; fi
+          case "$CRABBOX_ID" in
+            ''|*[!A-Za-z0-9._-]*)
+              echo "Invalid crabbox_id" >&2
+              exit 2
+              ;;
+          esac
           mkdir -p "$HOME/.crabbox/actions"
-          state="$HOME/.crabbox/actions/${{ inputs.crabbox_id }}.env"
-          env_file="$HOME/.crabbox/actions/${{ inputs.crabbox_id }}.env.sh"
-          services_file="$HOME/.crabbox/actions/${{ inputs.crabbox_id }}.services"
+          state="$HOME/.crabbox/actions/${CRABBOX_ID}.env"
+          env_file="$HOME/.crabbox/actions/${CRABBOX_ID}.env.sh"
+          services_file="$HOME/.crabbox/actions/${CRABBOX_ID}.services"
           write_export() {
             key="$1"
             value="${!key-}"
@@ -129,13 +158,22 @@ jobs:
 
       - name: Keep Crabbox job alive
         shell: bash
+        env:
+          CRABBOX_ID: ${{ inputs.crabbox_id }}
+          CRABBOX_KEEP_ALIVE_MINUTES: ${{ inputs.crabbox_keep_alive_minutes }}
         run: |
           set -euo pipefail
-          minutes="${{ inputs.crabbox_keep_alive_minutes }}"
+          case "$CRABBOX_ID" in
+            ''|*[!A-Za-z0-9._-]*)
+              echo "Invalid crabbox_id" >&2
+              exit 2
+              ;;
+          esac
+          minutes="${CRABBOX_KEEP_ALIVE_MINUTES}"
           case "$minutes" in
             ''|*[!0-9]*) minutes=90 ;;
           esac
-          stop="$HOME/.crabbox/actions/${{ inputs.crabbox_id }}.stop"
+          stop="$HOME/.crabbox/actions/${CRABBOX_ID}.stop"
           deadline=$(( $(date +%s) + minutes * 60 ))
           while [ "$(date +%s)" -lt "$deadline" ]; do
             if [ -f "$stop" ]; then

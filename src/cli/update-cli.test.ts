@@ -29,6 +29,7 @@ const runRestartScript = vi.fn();
 const mockedRunDaemonInstall = vi.fn();
 const serviceReadCommand = vi.fn();
 const serviceReadRuntime = vi.fn();
+const mockGetSelfAndAncestorPidsSync = vi.fn(() => new Set<number>([process.pid]));
 const inspectPortUsage = vi.fn();
 const classifyPortListener = vi.fn();
 const formatPortDiagnostics = vi.fn();
@@ -128,6 +129,10 @@ vi.mock("../infra/runtime-guard.js", () => ({
   },
 }));
 
+vi.mock("../infra/restart-stale-pids.js", () => ({
+  getSelfAndAncestorPidsSync: () => mockGetSelfAndAncestorPidsSync(),
+}));
+
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
@@ -184,7 +189,10 @@ vi.mock("../daemon/service.js", () => ({
         ? (command.environment as NodeJS.ProcessEnv | undefined)
         : undefined),
     };
-    const [loaded, runtime] = await Promise.all([serviceLoaded({ env }), serviceReadRuntime(env)]);
+    const [loaded, runtime] = await Promise.all([
+      serviceLoaded({ env }).catch(() => false),
+      serviceReadRuntime(env).catch(() => undefined),
+    ]);
     return {
       installed: command !== null,
       loaded,
@@ -495,6 +503,7 @@ describe("update-cli", () => {
       pid: 4242,
       state: "running",
     });
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
     prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
     runRestartScript.mockResolvedValue(undefined);
     inspectPortUsage.mockResolvedValue({
@@ -610,6 +619,24 @@ describe("update-cli", () => {
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
+  });
+
+  it("does not carry gateway service markers into the post-core update process", async () => {
+    setupUpdatedRootRefresh();
+
+    await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+      async () => {
+        await updateCommand({ yes: true });
+      },
+    );
+
+    const spawnEnv = (spawn.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env;
+    expect(spawnEnv?.OPENCLAW_SERVICE_MARKER).toBeUndefined();
+    expect(spawnEnv?.OPENCLAW_SERVICE_KIND).toBeUndefined();
   });
 
   it("respawns into the updated git root before requested channel persistence", async () => {
@@ -1263,8 +1290,122 @@ describe("update-cli", () => {
     ).toContain("Low disk space near");
   });
 
-  it("refuses package updates from inside the gateway service process", async () => {
+  it("allows package updates from inherited gateway service env when the managed gateway is not running", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    serviceReadRuntime.mockResolvedValueOnce({
+      status: "stopped",
+      state: "stopped",
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+      async () => {
+        await updateCommand({ yes: true });
+      },
+    );
+
+    expect(defaultRuntime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Package updates cannot run from inside the gateway service process.",
+      ),
+    );
+    expectPackageInstallSpec("openclaw@latest");
+  });
+
+  it("refuses package updates from inherited gateway service env when --no-restart leaves the gateway running", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+
+    await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Package updates cannot run from inside the gateway service process.",
+      ),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
+  });
+
+  it.each([
+    {
+      name: "runtime probe fails",
+      setupRuntime: () =>
+        serviceReadRuntime.mockRejectedValueOnce(new Error("runtime probe failed")),
+    },
+    {
+      name: "runtime status is unknown",
+      setupRuntime: () => serviceReadRuntime.mockResolvedValueOnce({ status: "unknown" }),
+    },
+  ])(
+    "refuses package updates from inherited gateway service env when $name",
+    async ({ setupRuntime }) => {
+      mockPackageInstallStatus(createCaseDir("openclaw-update"));
+      serviceReadCommand.mockResolvedValue({
+        programArguments: ["openclaw", "gateway", "run"],
+        environment: {
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        },
+      });
+      setupRuntime();
+
+      await withEnvAsync(
+        {
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        },
+        async () => {
+          await updateCommand({ yes: true });
+        },
+      );
+
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Package updates cannot run from inside the gateway service process.",
+        ),
+      );
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect(serviceStop).not.toHaveBeenCalled();
+      expect(runGatewayUpdate).not.toHaveBeenCalled();
+      expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+        ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+        expect.any(Object),
+      );
+    },
+  );
+
+  it("refuses package updates from inherited gateway service env when the service definition is missing but runtime is live", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    serviceReadCommand.mockResolvedValue(null);
+    serviceReadRuntime.mockResolvedValueOnce({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
 
     await withEnvAsync(
       {
@@ -1282,7 +1423,28 @@ describe("update-cli", () => {
       ),
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(serviceStop).not.toHaveBeenCalled();
     expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
+  });
+
+  it("refuses package updates from inside the active gateway process tree", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    serviceLoaded.mockResolvedValue(true);
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid, 4242]));
+
+    await updateCommand({ yes: true });
+
+    const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).toContain(
+      "openclaw update detected it is running inside the gateway process tree.",
+    );
+    expect(errors.join("\n")).toContain("Gateway PID 4242 is an ancestor");
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(serviceStop).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
       ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
       expect.any(Object),
@@ -1605,7 +1767,15 @@ describe("update-cli", () => {
       };
     });
 
-    await updateCommand({ yes: true });
+    await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+      async () => {
+        await updateCommand({ yes: true });
+      },
+    );
 
     const npmInstallCallIndex = vi
       .mocked(runCommandWithTimeout)

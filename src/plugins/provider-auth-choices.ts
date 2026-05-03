@@ -2,8 +2,8 @@ import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export type ProviderAuthChoiceMetadata = {
@@ -180,7 +180,7 @@ function resolveManifestProviderAuthChoiceCandidates(params?: {
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
 }): ProviderAuthChoiceCandidate[] {
-  const metadataSnapshot = loadPluginMetadataSnapshot({
+  const metadataSnapshot = loadManifestMetadataSnapshot({
     config: params?.config ?? {},
     workspaceDir: params?.workspaceDir,
     env: params?.env ?? process.env,

@@ -23,7 +23,7 @@ describe("agents_list tool", () => {
       agents: {
         defaults: {
           model: "anthropic/claude-opus-4.5",
-          agentRuntime: { id: "pi", fallback: "pi" },
+          agentRuntime: { id: "pi" },
           subagents: { allowAgents: ["codex"] },
         },
         list: [
@@ -32,7 +32,7 @@ describe("agents_list tool", () => {
             id: "codex",
             name: "Codex",
             model: "openai/gpt-5.5",
-            agentRuntime: { id: "codex", fallback: "none" },
+            agentRuntime: { id: "codex" },
           },
         ],
       },
@@ -52,7 +52,7 @@ describe("agents_list tool", () => {
           name: "Codex",
           configured: true,
           model: "openai/gpt-5.5",
-          agentRuntime: { id: "codex", fallback: "none", source: "agent" },
+          agentRuntime: { id: "codex", source: "agent" },
         },
       ],
     });
@@ -83,14 +83,12 @@ describe("agents_list tool", () => {
     });
   });
 
-  it("marks OPENCLAW_AGENT_RUNTIME and fallback env overrides as effective", async () => {
+  it("reports env-forced plugin runtime selections", async () => {
     vi.stubEnv("OPENCLAW_AGENT_RUNTIME", "codex");
-    vi.stubEnv("OPENCLAW_AGENT_HARNESS_FALLBACK", "pi");
     loadConfigMock.mockReturnValue({
       agents: {
         defaults: {
           model: "openai/gpt-5.5",
-          agentRuntime: { fallback: "none" },
         },
         list: [{ id: "main", default: true }],
       },
@@ -106,22 +104,22 @@ describe("agents_list tool", () => {
       agents: [
         {
           id: "main",
-          agentRuntime: { id: "codex", fallback: "pi", source: "env" },
+          agentRuntime: { id: "codex", source: "env" },
         },
       ],
     });
   });
 
-  it("preserves agent fallback-only overrides while inheriting default runtime id", async () => {
+  it("reports per-agent runtime overrides", async () => {
     loadConfigMock.mockReturnValue({
       agents: {
         defaults: {
-          agentRuntime: { id: "auto", fallback: "pi" },
+          agentRuntime: { id: "auto" },
           subagents: { allowAgents: ["strict"] },
         },
         list: [
           { id: "main", default: true },
-          { id: "strict", agentRuntime: { fallback: "none" } },
+          { id: "strict", agentRuntime: { id: "codex" } },
         ],
       },
     } satisfies OpenClawConfig);
@@ -136,7 +134,7 @@ describe("agents_list tool", () => {
       agents: [
         {
           id: "strict",
-          agentRuntime: { id: "auto", fallback: "none", source: "agent" },
+          agentRuntime: { id: "codex", source: "agent" },
         },
       ],
     });

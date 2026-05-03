@@ -46,6 +46,7 @@ import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import type { PluginDependencySpecMap } from "./status-dependencies.js";
 
 /**
  * Resolve a plugin source path, falling back from .ts to .js when the
@@ -130,6 +131,8 @@ export type PluginManifestRecord = {
   activation?: PluginManifestActivation;
   setup?: PluginManifestSetup;
   packageManifest?: OpenClawPackageManifest;
+  packageDependencies?: PluginDependencySpecMap;
+  packageOptionalDependencies?: PluginDependencySpecMap;
   packageChannel?: PluginPackageChannel;
   packageInstall?: PluginPackageInstall;
   qaRunners?: PluginManifestQaRunner[];
@@ -316,6 +319,8 @@ function buildRecord(params: {
     activation: params.manifest.activation,
     setup: params.manifest.setup,
     packageManifest: params.candidate.packageManifest,
+    packageDependencies: params.candidate.packageDependencies,
+    packageOptionalDependencies: params.candidate.packageOptionalDependencies,
     packageChannel: params.candidate.packageManifest?.channel,
     packageInstall: params.candidate.packageManifest?.install,
     qaRunners: params.manifest.qaRunners,
@@ -385,6 +390,8 @@ function buildBundleRecord(params: {
     packageVersion: params.candidate.packageVersion,
     packageDescription: params.candidate.packageDescription,
     packageManifest: params.candidate.packageManifest,
+    packageDependencies: params.candidate.packageDependencies,
+    packageOptionalDependencies: params.candidate.packageOptionalDependencies,
     packageChannel: params.candidate.packageManifest?.channel,
     packageInstall: params.candidate.packageManifest?.install,
     format: "bundle",
@@ -418,8 +425,19 @@ function pushProviderAuthEnvVarsCompatDiagnostic(params: {
   if (params.record.origin === "bundled" || !params.record.providerAuthEnvVars) {
     return;
   }
+  const setupProviderEnvVars = new Map(
+    (params.record.setup?.providers ?? []).map(
+      (provider) => [provider.id, new Set(provider.envVars ?? [])] as const,
+    ),
+  );
   const providerIds = Object.entries(params.record.providerAuthEnvVars)
-    .filter(([providerId, envVars]) => providerId.trim() && envVars.length > 0)
+    .filter(([providerId, envVars]) => {
+      if (!providerId.trim() || envVars.length === 0) {
+        return false;
+      }
+      const mirroredEnvVars = setupProviderEnvVars.get(providerId);
+      return !mirroredEnvVars || envVars.some((envVar) => !mirroredEnvVars.has(envVar));
+    })
     .map(([providerId]) => providerId)
     .toSorted((left, right) => left.localeCompare(right));
   if (providerIds.length === 0) {

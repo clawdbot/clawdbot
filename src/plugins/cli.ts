@@ -17,6 +17,19 @@ type RegisterPluginCliOptions = {
   primary?: string | null;
 };
 
+type PluginCliRegistrationEntries = Awaited<
+  ReturnType<typeof loadPluginCliRegistrationEntriesWithDefaults>
+>;
+
+const PLUGIN_CLI_ENTRIES_CACHE_KEY = Symbol.for("openclaw.plugin-cli-registration-entries-cache");
+
+interface ProgramWithEntriesCache {
+  [PLUGIN_CLI_ENTRIES_CACHE_KEY]?: {
+    primary: string | undefined;
+    entries: PluginCliRegistrationEntries;
+  };
+}
+
 const logger = createPluginCliLogger();
 
 export const loadValidatedConfigForPluginRegistration =
@@ -46,21 +59,27 @@ export async function registerPluginCliCommands(
   const mode = options?.mode ?? "eager";
   const primary = options?.primary ?? undefined;
 
-  await registerPluginCliCommandGroups(
-    program,
-    await loadPluginCliRegistrationEntriesWithDefaults({
+  const programWithCache = program as Command & ProgramWithEntriesCache;
+  const cached = programWithCache[PLUGIN_CLI_ENTRIES_CACHE_KEY];
+  let entries: PluginCliRegistrationEntries;
+  if (cached && cached.primary === primary) {
+    entries = cached.entries;
+  } else {
+    entries = await loadPluginCliRegistrationEntriesWithDefaults({
       cfg,
       env,
       loaderOptions,
       primaryCommand: primary,
-    }),
-    {
-      mode,
-      primary,
-      existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
-      logger,
-    },
-  );
+    });
+    programWithCache[PLUGIN_CLI_ENTRIES_CACHE_KEY] = { primary, entries };
+  }
+
+  await registerPluginCliCommandGroups(program, entries, {
+    mode,
+    primary,
+    existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
+    logger,
+  });
 }
 
 export async function registerPluginCliCommandsFromValidatedConfig(

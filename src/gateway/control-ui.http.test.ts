@@ -37,6 +37,7 @@ describe("handleControlUiHttpRequest", () => {
       assistantAvatar: string;
       assistantAgentId: string;
       localMediaPreviewRoots?: string[];
+      chatMessageMaxWidth?: string;
     };
   }
 
@@ -594,6 +595,7 @@ describe("handleControlUiHttpRequest", () => {
             root: { kind: "resolved", path: tmp },
             config: {
               agents: { defaults: { workspace: tmp } },
+              gateway: { controlUi: { chatMessageMaxWidth: "min(1280px, 82%)" } },
               ui: { assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" } },
             },
           },
@@ -604,6 +606,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantName).toBe("</script><script>alert(1)//");
         expect(parsed.assistantAvatar).toBe("/avatar/main");
         expect(parsed.assistantAgentId).toBe("main");
+        expect(parsed.chatMessageMaxWidth).toBe("min(1280px, 82%)");
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });

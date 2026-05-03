@@ -32,6 +32,12 @@ describe("createDiscordPluginBase", () => {
     expect(plugin.security?.collectAuditFindings).toBeTypeOf("function");
   });
 
+  it("hydrates announce delivery targets from stored session routing", () => {
+    const plugin = createDiscordPluginBase({ setup: {} as never });
+
+    expect(plugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
+  });
+
   it("reports duplicate-token accounts as disabled to gateway startup", () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "same-token");
     const plugin = createDiscordPluginBase({ setup: {} as never });

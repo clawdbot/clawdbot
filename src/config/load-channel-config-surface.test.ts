@@ -149,7 +149,7 @@ describe("loadChannelConfigSurfaceModule", () => {
 
   it("falls back to bun when the source-aware loader fails", async () => {
     await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
-      const { modulePath } = createDemoConfigSchemaModule(repoRoot);
+      const { modulePath } = createDemoConfigSchemaModule(repoRoot, ["export const = ;"]);
 
       const {
         loadChannelConfigSurfaceModule: loadWithFailingJiti,

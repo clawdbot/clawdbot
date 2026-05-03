@@ -10,6 +10,13 @@ import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
 const runWebSearchCalls = vi.hoisted(
   () => [] as Array<{ config?: unknown; runtimeWebSearch?: unknown }>,
 );
+const activeSecretsRuntimeSnapshot = vi.hoisted(() => ({
+  current: null as null | { config: unknown },
+}));
+
+vi.mock("../../secrets/runtime.js", () => ({
+  getActiveSecretsRuntimeSnapshot: () => activeSecretsRuntimeSnapshot.current,
+}));
 
 vi.mock("../../web-search/runtime.js", async () => {
   const { getActivePluginRegistry } = await import("../../plugins/runtime.js");
@@ -68,12 +75,14 @@ vi.mock("../../web-search/runtime.js", async () => {
 beforeEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   clearActiveRuntimeWebToolsMetadata();
+  activeSecretsRuntimeSnapshot.current = null;
   runWebSearchCalls.length = 0;
 });
 
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   clearActiveRuntimeWebToolsMetadata();
+  activeSecretsRuntimeSnapshot.current = null;
 });
 
 describe("web tools defaults", () => {
@@ -196,6 +205,10 @@ describe("web tools defaults", () => {
       },
       diagnostics: [],
     });
+    const runtimeConfig = {
+      tools: { web: { search: { provider: "fresh", fresh: { apiKey: "runtime-key" } } } },
+    };
+    activeSecretsRuntimeSnapshot.current = { config: runtimeConfig };
 
     const tool = createWebSearchTool({
       config: { tools: { web: { search: { provider: "stale" } } } },
@@ -214,7 +227,7 @@ describe("web tools defaults", () => {
 
     expect(result?.details).toMatchObject({ provider: "fresh" });
     expect(runWebSearchCalls).toHaveLength(1);
-    expect(runWebSearchCalls[0]?.config).toBeUndefined();
+    expect(runWebSearchCalls[0]?.config).toBe(runtimeConfig);
     expect(runWebSearchCalls[0]?.runtimeWebSearch).toMatchObject({
       selectedProvider: "fresh",
     });

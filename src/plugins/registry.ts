@@ -92,10 +92,10 @@ import {
 import {
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
-  registerMemoryFlushPlanResolver,
+  registerMemoryFlushPlanResolverForPlugin,
   registerMemoryPromptSupplement,
-  registerMemoryPromptSection,
-  registerMemoryRuntime,
+  registerMemoryPromptSectionForPlugin,
+  registerMemoryRuntimeForPlugin,
 } from "./memory-state.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -248,6 +248,23 @@ export function resolvePluginPath(input: string, rootDir: string | undefined): s
     return resolveUserPath(input);
   }
   return rootDir ? path.resolve(rootDir, trimmed) : resolveUserPath(input);
+}
+
+function isOfficialNpmCodexPluginRecord(record: Pick<PluginRecord, "id" | "rootDir" | "source">) {
+  if (record.id !== "codex") {
+    return false;
+  }
+  const sourcePath = path
+    .normalize(record.rootDir ?? record.source)
+    .split(path.sep)
+    .join("/");
+  return sourcePath.includes("/node_modules/@openclaw/codex");
+}
+
+function canClaimReservedCommandOwnership(
+  record: Pick<PluginRecord, "id" | "origin" | "rootDir" | "source">,
+) {
+  return record.origin === "bundled" || isOfficialNpmCodexPluginRecord(record);
 }
 
 const ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY = Symbol.for("openclaw.activePluginHookRegistrations");
@@ -1428,7 +1445,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     const allowReservedCommandNames = command.ownership === "reserved";
-    if (allowReservedCommandNames && record.origin !== "bundled") {
+    if (allowReservedCommandNames && !canClaimReservedCommandOwnership(record)) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -2380,7 +2397,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryPromptSection(builder);
+                registerMemoryPromptSectionForPlugin(record.id, builder);
               },
               registerMemoryPromptSupplement: (builder) => {
                 if (typeof builder !== "function") {
@@ -2415,7 +2432,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryFlushPlanResolver(resolver);
+                registerMemoryFlushPlanResolverForPlugin(record.id, resolver);
               },
               registerMemoryRuntime: (runtime) => {
                 if (!hasKind(record.kind, "memory")) {
@@ -2435,7 +2452,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryRuntime(runtime);
+                registerMemoryRuntimeForPlugin(record.id, runtime);
               },
               registerMemoryEmbeddingProvider: (adapter) => {
                 if (hasKind(record.kind, "memory")) {

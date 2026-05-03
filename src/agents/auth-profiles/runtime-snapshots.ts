@@ -1,3 +1,4 @@
+import { cloneAuthProfileStore } from "./clone.js";
 import { resolveAuthStorePath } from "./path-resolve.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -5,10 +6,6 @@ const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();
 
 function resolveRuntimeStoreKey(agentDir?: string): string {
   return resolveAuthStorePath(agentDir);
-}
-
-function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
-  return structuredClone(store);
 }
 
 export function getRuntimeAuthProfileStoreSnapshot(

@@ -102,6 +102,35 @@ describe("launchTuiCli", () => {
     );
   });
 
+  it("passes initial message and timeout through to the relaunched TUI", async () => {
+    const child = createChildProcess();
+    spawnMock.mockImplementation((_cmd: string, _args: string[], _opts: SpawnOptions) => {
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
+
+    await launchTuiCli({
+      local: true,
+      deliver: false,
+      message: "Wake up, my friend!",
+      timeoutMs: 300_000,
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      [
+        "/repo/openclaw.mjs",
+        "tui",
+        "--local",
+        "--message",
+        "Wake up, my friend!",
+        "--timeout-ms",
+        "300000",
+      ],
+      expect.objectContaining({ stdio: "inherit" }),
+    );
+  });
+
   it("launches compiled CLI shapes without repeating the current command", async () => {
     process.argv[1] = "setup";
     const child = createChildProcess();

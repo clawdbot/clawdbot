@@ -4,7 +4,11 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
-import { readLatestAssistantReply, waitForAgentRun } from "../run-wait.js";
+import {
+  type AssistantReplySnapshot,
+  readLatestAssistantReplySnapshot,
+  waitForAgentRun,
+} from "../run-wait.js";
 import { runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
@@ -38,6 +42,7 @@ export async function runSessionsSendA2AFlow(params: {
   maxPingPongTurns: number;
   requesterSessionKey?: string;
   requesterChannel?: GatewayMessageChannel;
+  baseline?: AssistantReplySnapshot;
   roundOneReply?: string;
   waitRunId?: string;
 }) {
@@ -52,9 +57,16 @@ export async function runSessionsSendA2AFlow(params: {
         callGateway: sessionsSendA2ADeps.callGateway,
       });
       if (wait.status === "ok") {
-        primaryReply = await readLatestAssistantReply({
+        const latestSnapshot = await readLatestAssistantReplySnapshot({
           sessionKey: params.targetSessionKey,
+          callGateway: sessionsSendA2ADeps.callGateway,
         });
+        const baselineFingerprint = params.baseline?.fingerprint;
+        primaryReply =
+          latestSnapshot.text &&
+          (!baselineFingerprint || latestSnapshot.fingerprint !== baselineFingerprint)
+            ? latestSnapshot.text
+            : undefined;
         latestReply = primaryReply;
       }
     }

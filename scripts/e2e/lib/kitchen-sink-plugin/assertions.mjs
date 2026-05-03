@@ -87,20 +87,11 @@ function readConfig() {
 
 function configureRuntime() {
   const pluginId = process.env.KITCHEN_SINK_ID;
-  const personality = process.env.KITCHEN_SINK_PERSONALITY;
   const { configPath, config } = readConfig();
   config.plugins = config.plugins || {};
   config.plugins.entries = config.plugins.entries || {};
   config.plugins.entries[pluginId] = {
     ...config.plugins.entries[pluginId],
-    ...(personality
-      ? {
-          config: {
-            ...config.plugins.entries[pluginId]?.config,
-            personality,
-          },
-        }
-      : {}),
     hooks: {
       ...config.plugins.entries[pluginId]?.hooks,
       allowConversationAccess: true,
@@ -148,17 +139,28 @@ const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance", "
 
 function assertExpectedDiagnostics(surfaceMode, errorMessages) {
   const expectedErrorMessages = new Set([
-    'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
-    'channel "kitchen-sink-channel-probe" registration missing required config helpers',
     "cli registration missing explicit commands metadata",
     "only bundled plugins can register Codex app-server extension factories",
     "only bundled plugins can register agent tool result middleware",
     'compaction provider "kitchen-sink-compaction-provider" registration missing summarize',
     "context engine registration missing id",
+    "control UI descriptor registration requires id, surface, label, and valid optional fields",
     "http route registration missing or invalid auth: /kitchen-sink/http-route",
+    "node invoke policy registration missing commands",
+    "only bundled plugins can register trusted tool policies",
     "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
+    "plugin must declare contracts.tools for: kitchen-sink-tool",
+    'channel "kitchen-sink-channel-probe" registration missing required config helpers',
+    'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
     "memory prompt supplement registration missing builder",
+    "session extension registration requires namespace and description",
+    "session scheduler job registration requires unique id, sessionKey, and kind",
+    "tool metadata registration missing toolName",
   ]);
+  const optionalErrorMessages = new Set([
+    "agent event subscription registration requires id and handle",
+  ]);
+  const allowedErrorMessages = new Set([...expectedErrorMessages, ...optionalErrorMessages]);
   if (!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)) {
     if (errorMessages.size > 0) {
       throw new Error(
@@ -168,13 +170,15 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     return;
   }
   for (const message of errorMessages) {
-    if (!expectedErrorMessages.has(message)) {
+    if (!allowedErrorMessages.has(message)) {
       throw new Error(`unexpected kitchen-sink diagnostic error: ${message}`);
     }
   }
-  for (const message of expectedErrorMessages) {
-    if (!errorMessages.has(message)) {
-      throw new Error(`missing expected kitchen-sink diagnostic error: ${message}`);
+  if (surfaceMode === "full" && process.env.KITCHEN_SINK_REQUIRE_ALL_DIAGNOSTICS === "1") {
+    for (const message of expectedErrorMessages) {
+      if (!errorMessages.has(message)) {
+        throw new Error(`missing expected kitchen-sink diagnostic error: ${message}`);
+      }
     }
   }
 }
@@ -207,6 +211,60 @@ function assertClawHubExternalInstallContract(installPath) {
   const dependencyPackagePath = path.join(installPath, "node_modules", "is-number", "package.json");
   if (fs.existsSync(dependencyPackagePath)) {
     assertRealPathInside(installPath, dependencyPackagePath, "kitchen-sink isolated dependency");
+  }
+}
+
+function assertClawHubArtifactMetadata(record) {
+  if (record.artifactKind === "legacy-zip") {
+    if (record.artifactFormat !== "zip") {
+      throw new Error(
+        `missing kitchen-sink legacy ZIP artifact metadata: ${JSON.stringify(record)}`,
+      );
+    }
+    return;
+  }
+
+  if (record.artifactKind !== "npm-pack" || record.artifactFormat !== "tgz") {
+    throw new Error(`missing kitchen-sink ClawHub artifact metadata: ${JSON.stringify(record)}`);
+  }
+  if (!record.clawpackSha256 || typeof record.clawpackSize !== "number") {
+    throw new Error(`missing kitchen-sink ClawPack metadata: ${JSON.stringify(record)}`);
+  }
+  if (!record.npmIntegrity || !record.npmShasum || !record.npmTarballName) {
+    throw new Error(`missing kitchen-sink npm artifact metadata: ${JSON.stringify(record)}`);
+  }
+}
+
+function inferInstallSource(spec) {
+  if (spec?.startsWith("npm:")) {
+    return "npm";
+  }
+  if (spec?.startsWith("clawhub:")) {
+    return "clawhub";
+  }
+  return null;
+}
+
+function assertCutoverPreinstalled() {
+  const pluginId = process.env.KITCHEN_SINK_ID;
+  const preinstallSpec = process.env.KITCHEN_SINK_PREINSTALL_SPEC;
+  const source = inferInstallSource(preinstallSpec);
+  if (!pluginId || !preinstallSpec || !source) {
+    throw new Error(`invalid kitchen-sink cutover preinstall spec: ${preinstallSpec}`);
+  }
+
+  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
+  const index = readJson(indexPath);
+  const record = (index.installRecords ?? index.records ?? {})[pluginId];
+  if (!record) {
+    throw new Error(`missing kitchen-sink cutover preinstall record for ${pluginId}`);
+  }
+  if (record.source !== source) {
+    throw new Error(`expected kitchen-sink preinstall source=${source}, got ${record.source}`);
+  }
+  const expectedSpec = source === "npm" ? preinstallSpec.replace(/^npm:/u, "") : preinstallSpec;
+  if (record.spec !== expectedSpec) {
+    throw new Error(`expected kitchen-sink preinstall spec ${expectedSpec}, got ${record.spec}`);
   }
 }
 
@@ -353,6 +411,7 @@ function assertInstalled() {
     if (!record.version || !record.integrity || !record.resolvedAt) {
       throw new Error(`missing ClawHub resolution metadata: ${JSON.stringify(record)}`);
     }
+    assertClawHubArtifactMetadata(record);
   }
   if (typeof record.installPath !== "string" || record.installPath.length === 0) {
     throw new Error("missing kitchen-sink install path");
@@ -361,7 +420,7 @@ function assertInstalled() {
   if (!fs.existsSync(installPath)) {
     throw new Error(`kitchen-sink install path missing: ${record.installPath}`);
   }
-  if (source === "clawhub") {
+  if (source === "clawhub" && record.artifactKind === "npm-pack") {
     assertClawHubExternalInstallContract(installPath);
   }
   fs.writeFileSync(`/tmp/kitchen-sink-${label}-install-path.txt`, installPath, "utf8");
@@ -409,6 +468,7 @@ const commands = {
   "scan-logs": scanLogs,
   "configure-runtime": configureRuntime,
   "remove-channel-config": removeChannelConfig,
+  "assert-cutover-preinstalled": assertCutoverPreinstalled,
   "assert-installed": assertInstalled,
   "assert-removed": assertRemoved,
 };

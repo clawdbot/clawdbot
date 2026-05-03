@@ -190,9 +190,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
       storePath,
       store: { [deletedAgentKey]: { sessionId: "sess-orphan", updatedAt: 1 } },
     });
-    hoisted.listSessionsFromStoreMock.mockReturnValue({
-      sessions: [{ key: deletedAgentKey, sessionId: "sess-orphan" }],
-    });
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
 
     const result = await resolveSessionKeyFromResolveParams({
@@ -207,6 +204,27 @@ describe("resolveSessionKeyFromResolveParams", () => {
         message: 'Agent "deleted-agent" no longer exists in configuration',
       },
     });
+  });
+
+  it("resolves sessionId matches from raw store metadata without hydrating session rows", async () => {
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store: {
+        "agent:main:noisy": { sessionId: "sess-noisy", updatedAt: 2 },
+        "agent:main:target": { sessionId: "sess-target", updatedAt: 1 },
+      },
+    });
+    hoisted.listSessionsFromStoreMock.mockImplementation(() => {
+      throw new Error("session rows should not be materialized for exact sessionId lookup");
+    });
+
+    const result = await resolveSessionKeyFromResolveParams({
+      cfg: {},
+      p: { sessionId: "sess-target" },
+    });
+
+    expect(result).toEqual({ ok: true, key: "agent:main:target" });
+    expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
   });
 
   it("rejects sessions belonging to a deleted agent (label-based lookup)", async () => {

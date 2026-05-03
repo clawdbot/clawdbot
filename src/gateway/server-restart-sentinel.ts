@@ -8,7 +8,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -80,7 +80,7 @@ function enqueueRestartSentinelWake(
     sessionKey,
     ...(deliveryContext ? { deliveryContext } : {}),
   });
-  requestHeartbeatNow({ reason: "wake", sessionKey });
+  requestHeartbeat({ source: "restart-sentinel", intent: "immediate", reason: "wake", sessionKey });
 }
 
 async function waitForOutboundRetry(delayMs: number) {
@@ -235,7 +235,12 @@ async function deliverQueuedSessionDelivery(params: {
           }
         : {}),
     });
-    requestHeartbeatNow({ reason: "wake", sessionKey: canonicalKey });
+    requestHeartbeat({
+      source: "restart-sentinel",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: canonicalKey,
+    });
     return;
   }
 
@@ -250,7 +255,12 @@ async function deliverQueuedSessionDelivery(params: {
           }
         : {}),
     });
-    requestHeartbeatNow({ reason: "wake", sessionKey: canonicalKey });
+    requestHeartbeat({
+      source: "restart-sentinel",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: canonicalKey,
+    });
     return;
   }
 

@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import { ADMIN_SCOPE, PAIRING_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { readConnectPairingRequiredMessage } from "../gateway/protocol/connect-error-details.js";
@@ -12,6 +13,7 @@ import {
 } from "../infra/device-pairing.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import {
   resolvePendingDeviceApprovalState,
   type DevicePairingAccessSummary,
@@ -80,6 +82,15 @@ type DevicePairingList = {
 
 const FALLBACK_NOTICE = "Direct scope access failed; using local fallback.";
 const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
+const OPERATOR_ROLE = "operator";
+const OPERATOR_SCOPE_PREFIX = "operator.";
+const KNOWN_NON_ADMIN_OPERATOR_SCOPES = new Set<OperatorScope>([
+  "operator.approvals",
+  "operator.pairing",
+  "operator.read",
+  "operator.talk.secrets",
+  "operator.write",
+]);
 
 const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
@@ -93,7 +104,12 @@ const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
     )
     .option("--json", "Output JSON", false);
 
-const callGatewayCli = async (method: string, opts: DevicesRpcOpts, params?: unknown) =>
+const callGatewayCli = async (
+  method: string,
+  opts: DevicesRpcOpts,
+  params?: unknown,
+  callOpts?: { scopes?: OperatorScope[] },
+) =>
   withProgress(
     {
       label: `Devices ${method}`,
@@ -110,6 +126,7 @@ const callGatewayCli = async (method: string, opts: DevicesRpcOpts, params?: unk
         timeoutMs: Number(opts.timeout ?? DEFAULT_DEVICES_TIMEOUT_MS),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
+        scopes: callOpts?.scopes,
       }),
   );
 
@@ -171,8 +188,14 @@ async function approvePairingWithFallback(
   opts: DevicesRpcOpts,
   requestId: string,
 ): Promise<Record<string, unknown> | null> {
+  const scopes = await resolveApprovePairingGatewayScopes(opts, requestId);
   try {
-    return await callGatewayCli("device.pair.approve", opts, { requestId });
+    return await callGatewayCli(
+      "device.pair.approve",
+      opts,
+      { requestId },
+      scopes ? { scopes } : undefined,
+    );
   } catch (error) {
     if (!shouldUseLocalPairingFallback(opts, error)) {
       throw error;
@@ -204,6 +227,90 @@ function parseDevicePairingList(value: unknown): DevicePairingList {
     pending: Array.isArray(obj.pending) ? (obj.pending as PendingDevice[]) : [],
     paired: Array.isArray(obj.paired) ? (obj.paired as PairedDevice[]) : [],
   };
+}
+
+function normalizeDeviceRoles(request: PendingDevice): string[] {
+  const roles = new Set<string>();
+  for (const role of request.roles ?? []) {
+    const normalized = normalizeOptionalString(role);
+    if (normalized) {
+      roles.add(normalized);
+    }
+  }
+  const role = normalizeOptionalString(request.role);
+  if (role) {
+    roles.add(role);
+  }
+  return [...roles];
+}
+
+function normalizeOperatorScopes(scopes: string[] | undefined): string[] {
+  return normalizeDeviceAuthScopes(scopes).filter((scope) =>
+    scope.startsWith(OPERATOR_SCOPE_PREFIX),
+  );
+}
+
+function resolvePairedOperatorScopes(paired: PairedDevice | undefined): string[] {
+  const operatorToken = paired?.tokens?.find((token) => {
+    const role = normalizeOptionalString(token.role);
+    return role === OPERATOR_ROLE && !token.revokedAtMs;
+  });
+  return normalizeOperatorScopes(operatorToken?.scopes ?? paired?.scopes);
+}
+
+function resolvePendingOperatorApprovalScopes(
+  request: PendingDevice,
+  paired: PairedDevice | undefined,
+): string[] {
+  if (!normalizeDeviceRoles(request).includes(OPERATOR_ROLE)) {
+    return [];
+  }
+  const requestedScopes = normalizeOperatorScopes(request.scopes);
+  return requestedScopes.length > 0 ? requestedScopes : resolvePairedOperatorScopes(paired);
+}
+
+function isKnownNonAdminOperatorScope(scope: string): scope is OperatorScope {
+  return KNOWN_NON_ADMIN_OPERATOR_SCOPES.has(scope as OperatorScope);
+}
+
+function resolveApprovePairingScopesForRequest(
+  request: PendingDevice,
+  paired: PairedDevice | undefined,
+): OperatorScope[] | undefined {
+  const operatorScopes = resolvePendingOperatorApprovalScopes(request, paired);
+  if (operatorScopes.length === 0) {
+    return undefined;
+  }
+  if (operatorScopes.includes(ADMIN_SCOPE)) {
+    return [ADMIN_SCOPE];
+  }
+  const out = new Set<OperatorScope>([PAIRING_SCOPE]);
+  for (const scope of operatorScopes) {
+    if (!isKnownNonAdminOperatorScope(scope)) {
+      return [ADMIN_SCOPE];
+    }
+    out.add(scope);
+  }
+  return [...out];
+}
+
+async function resolveApprovePairingGatewayScopes(
+  opts: DevicesRpcOpts,
+  requestId: string,
+): Promise<OperatorScope[] | undefined> {
+  try {
+    const list = await listPairingWithFallback(opts);
+    const request = list.pending?.find((pending) => pending.requestId === requestId);
+    if (!request) {
+      return undefined;
+    }
+    return resolveApprovePairingScopesForRequest(
+      request,
+      lookupPairedDevice(indexPairedDevices(list.paired), request),
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 function selectLatestPendingRequest(pending: PendingDevice[] | undefined) {

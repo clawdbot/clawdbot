@@ -1,0 +1,42 @@
+{
+  "entries": [
+    {
+      "name": "@openclaw/codex",
+      "description": "OpenClaw Codex harness and model provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "codex",
+          "label": "Codex"
+        },
+        "providers": [
+          {
+            "id": "codex",
+            "name": "Codex",
+            "docs": "/providers/models",
+            "categories": ["cloud", "llm"],
+            "authChoices": [
+              {
+                "method": "app-server",
+                "choiceId": "codex",
+                "choiceLabel": "Codex app-server",
+                "choiceHint": "Use the Codex app-server runtime and managed model catalog.",
+                "assistantPriority": -40,
+                "groupId": "codex",
+                "groupLabel": "Codex",
+                "groupHint": "Codex app-server model provider",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "npmSpec": "@openclaw/codex",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.1-beta.1"
+        }
+      }
+    }
+  ]
+}

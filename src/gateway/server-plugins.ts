@@ -3,7 +3,7 @@ import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { clearActivatedPluginRuntimeState, loadOpenClawPlugins } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -575,6 +575,7 @@ export function loadGatewayPlugins(params: {
     ).startup.pluginIds,
   ];
   if (pluginIds.length === 0) {
+    clearActivatedPluginRuntimeState();
     const pluginRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable", params.workspaceDir);
     return {
@@ -601,6 +602,7 @@ export function loadGatewayPlugins(params: {
       allowGatewaySubagentBinding: true,
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
+    preferBuiltPluginArtifacts: true,
     ...(params.pluginLookUpTable?.manifestRegistry
       ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
       : {}),

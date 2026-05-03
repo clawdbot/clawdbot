@@ -204,6 +204,9 @@ export function resolveActivePluginHttpRouteRegistry(fallback: PluginRegistry): 
   if (!routeRegistry) {
     return fallback;
   }
+  if (state.httpRoute.pinned) {
+    return routeRegistry;
+  }
   const routeCount = routeRegistry.httpRoutes?.length ?? 0;
   const fallbackRouteCount = fallback.httpRoutes?.length ?? 0;
   if (routeCount === 0 && fallbackRouteCount > 0) {

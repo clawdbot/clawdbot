@@ -216,6 +216,36 @@ describe("handleDiscordMessageAction", () => {
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
+  it("forwards top-level components on sends", async () => {
+    const components = { blocks: [{ type: "text", text: "Pick one" }] };
+
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        message: "hello",
+        components,
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "channel:123",
+      },
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:123",
+        content: "hello",
+        components,
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
   it("does not use another provider's current target for Discord sends", async () => {
     await expect(
       handleDiscordMessageAction({

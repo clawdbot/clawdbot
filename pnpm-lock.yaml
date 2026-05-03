@@ -46,9 +46,39 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 0.21.0
         version: 0.21.0(zod@4.4.1)
+      '@anthropic-ai/sdk':
+        specifier: 0.92.0
+        version: 0.92.0(zod@4.4.1)
+      '@anthropic-ai/vertex-sdk':
+        specifier: ^0.16.0
+        version: 0.16.0(zod@4.4.1)
+      '@aws-sdk/client-bedrock':
+        specifier: 3.1041.0
+        version: 3.1041.0
+      '@aws-sdk/client-bedrock-runtime':
+        specifier: 3.1024.0
+        version: 3.1024.0
+      '@aws-sdk/credential-provider-node':
+        specifier: 3.972.39
+        version: 3.972.39
+      '@aws/bedrock-token-generator':
+        specifier: ^1.1.0
+        version: 1.1.0
       '@clack/prompts':
         specifier: ^1.3.0
         version: 1.3.0
+      '@google/genai':
+        specifier: ^1.51.0
+        version: 1.51.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.1))
+      '@grammyjs/runner':
+        specifier: ^2.0.3
+        version: 2.0.3(grammy@1.42.0)
+      '@grammyjs/transformer-throttler':
+        specifier: ^1.2.1
+        version: 1.2.1(grammy@1.42.0)
+      '@homebridge/ciao':
+        specifier: ^1.3.7
+        version: 1.3.7
       '@lydell/node-pty':
         specifier: 1.2.0-beta.12
         version: 1.2.0-beta.12
@@ -67,6 +97,18 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.4.1)
+      '@mozilla/readability':
+        specifier: ^0.6.0
+        version: 0.6.0
+      '@slack/bolt':
+        specifier: ^4.7.2
+        version: 4.7.2(@types/express@5.0.6)
+      '@slack/types':
+        specifier: ^2.20.1
+        version: 2.20.1
+      '@slack/web-api':
+        specifier: ^7.15.1
+        version: 7.15.1
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
@@ -85,12 +127,18 @@ importers:
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
+      express:
+        specifier: 5.2.1
+        version: 5.2.1
       file-type:
         specifier: 22.0.1
         version: 22.0.1
       global-agent:
         specifier: ^4.1.3
         version: 4.1.3
+      grammy:
+        specifier: ^1.42.0
+        version: 1.42.0
       https-proxy-agent:
         specifier: ^9.0.0
         version: 9.0.0
@@ -106,12 +154,27 @@ importers:
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
+      linkedom:
+        specifier: ^0.18.12
+        version: 0.18.12
       markdown-it:
         specifier: 14.1.1
         version: 14.1.1
+      minimatch:
+        specifier: 10.2.5
+        version: 10.2.5
+      node-edge-tts:
+        specifier: ^1.2.10
+        version: 1.2.10
       openai:
         specifier: ^6.35.0
         version: 6.35.0(ws@8.20.0)(zod@4.4.1)
+      openshell:
+        specifier: 0.1.0
+        version: 0.1.0
+      pdfjs-dist:
+        specifier: ^5.7.284
+        version: 5.7.284
       playwright-core:
         specifier: 1.59.1
         version: 1.59.1
@@ -121,12 +184,15 @@ importers:
       qrcode:
         specifier: 1.5.4
         version: 1.5.4
-      sqlite-vec:
-        specifier: 0.1.9
-        version: 0.1.9
       tar:
         specifier: 7.5.13
         version: 7.5.13
+      tokenjuice:
+        specifier: 0.7.0
+        version: 0.7.0
+      tree-sitter-bash:
+        specifier: ^0.25.1
+        version: 0.25.1
       tslog:
         specifier: ^4.10.2
         version: 4.10.2
@@ -139,6 +205,9 @@ importers:
       web-push:
         specifier: ^3.6.7
         version: 3.6.7
+      web-tree-sitter:
+        specifier: ^0.26.8
+        version: 0.26.8
       ws:
         specifier: ^8.20.0
         version: 8.20.0
@@ -148,6 +217,10 @@ importers:
       zod:
         specifier: ^4.4.1
         version: 4.4.1
+    optionalDependencies:
+      sqlite-vec:
+        specifier: 0.1.9
+        version: 0.1.9
     devDependencies:
       '@copilotkit/aimock':
         specifier: 1.16.4
@@ -6313,6 +6386,10 @@ packages:
     resolution: {integrity: sha512-9MdFxmkKaOYVTV+XVRG8ArDwwQ77XIgIPyKASB1k3JPq3M8fGQQQE3YpMOrKm6g//Ktx8ivZr8xo1Qmtqub+GA==}
     engines: {node: ^18 || ^20 || >= 21}
 
+  node-gyp-build@4.8.4:
+    resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
+    hasBin: true
+
   node-downloader-helper@2.1.11:
     resolution: {integrity: sha512-882fH2C9AWdiPCwz/2beq5t8FGMZK9Dx8TJUOIxzMCbvG7XUKM5BuJwN5f0NKo4SCQK6jR4p2TPm54mYGdGchQ==}
     engines: {node: '>=14.18'}
@@ -7322,6 +7399,14 @@ packages:
     resolution: {integrity: sha512-L0Orpi8qGpRG//Nd+H90vFB+3iHnue1zSSGmNOOCh1GLJ7rUKVwV2HvijphGQS2UmhUZewS9VgvxYIdgr+fG1A==}
     hasBin: true
 
+  tree-sitter-bash@0.25.1:
+    resolution: {integrity: sha512-7hMytuYIMoXOq24yRulgIxthE9YmggZIOHCyPTTuJcu6EU54tYD+4G39cUb28kxC6jMf/AbPfWGLQtgPTdh3xw==}
+    peerDependencies:
+      tree-sitter: ^0.25.0
+    peerDependenciesMeta:
+      tree-sitter:
+        optional: true
+
   trim-lines@3.0.1:
     resolution: {integrity: sha512-kRj8B+YHZCc9kQYdWfJB2/oUl9rA99qbowYYBtr4ui4mZyAQ2JpvVBd/6U2YloATfqBhBTSMhTpgBHtU0Mf3Rg==}
 
@@ -7598,6 +7683,9 @@ packages:
   web-streams-polyfill@3.3.3:
     resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}
     engines: {node: '>= 8'}
+
+  web-tree-sitter@0.26.8:
+    resolution: {integrity: sha512-4sUwi7ZyOrIk5KLgYLkc2A/F0LFMQnBhfb+2Cdl7ik4ePJ6JD+fk4ofI2sA5eGawBKBaK4Vntt7Ww5KcEsay4A==}
 
   webidl-conversions@3.0.1:
     resolution: {integrity: sha512-2JAn3z8AR6rjK8Sm8orRC0h/bcl/DqL7tRPdGZ4I1CjdF+EaMLmYxBHyXuKL849eucPFhvBoxMsflfOb8kxaeQ==}
@@ -13489,8 +13577,9 @@ snapshots:
 
   netmask@2.1.1: {}
 
-  node-addon-api@8.7.0:
-    optional: true
+  node-addon-api@8.7.0: {}
+
+  node-gyp-build@4.8.4: {}
 
   node-downloader-helper@2.1.11: {}
 
@@ -14689,6 +14778,11 @@ snapshots:
 
   tree-kill@1.2.2: {}
 
+  tree-sitter-bash@0.25.1:
+    dependencies:
+      node-addon-api: 8.7.0
+      node-gyp-build: 4.8.4
+
   trim-lines@3.0.1: {}
 
   trough@2.2.0: {}
@@ -14909,6 +15003,8 @@ snapshots:
       - supports-color
 
   web-streams-polyfill@3.3.3: {}
+
+  web-tree-sitter@0.26.8: {}
 
   webidl-conversions@3.0.1: {}
 

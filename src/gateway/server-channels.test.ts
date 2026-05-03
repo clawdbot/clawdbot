@@ -104,6 +104,26 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve: resolvePromise };
 }
 
+async function flushMicrotasks(times = 8): Promise<void> {
+  for (let i = 0; i < times; i += 1) {
+    await Promise.resolve();
+  }
+}
+
+async function waitForMicrotaskCondition(
+  check: () => boolean,
+  message: string,
+  attempts = 100,
+): Promise<void> {
+  for (let i = 0; i < attempts; i += 1) {
+    if (check()) {
+      return;
+    }
+    await Promise.resolve();
+  }
+  throw new Error(message);
+}
+
 function installTestRegistry(
   ...plugins: Array<
     ChannelPlugin<TestAccount> | { plugin: ChannelPlugin<TestAccount>; origin: string }
@@ -616,6 +636,106 @@ describe("server-channels auto restart", () => {
         "channels.discord.approval-bootstrap",
       ]),
     );
+  });
+
+  it("limits whole-channel account startup fanout to four", async () => {
+    const accountIds = ["one", "two", "three", "four", "five", "six"];
+    const releases: Array<() => void> = [];
+    let active = 0;
+    let maxActive = 0;
+    const isConfigured = vi.fn(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => {
+        releases.push(resolve);
+      });
+      active -= 1;
+      return true;
+    });
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        listAccountIds: () => accountIds,
+        isConfigured,
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    const start = manager.startChannel("discord");
+    await flushMicrotasks();
+
+    expect(isConfigured).toHaveBeenCalledTimes(4);
+    expect(maxActive).toBe(4);
+    expect(startAccount).not.toHaveBeenCalled();
+
+    releases.splice(0, 4).forEach((release) => release());
+    await waitForMicrotaskCondition(
+      () => isConfigured.mock.calls.length === 6,
+      "expected second account startup wave",
+    );
+
+    expect(isConfigured).toHaveBeenCalledTimes(6);
+    expect(maxActive).toBe(4);
+
+    releases.splice(0).forEach((release) => release());
+    await start;
+    expect(startAccount).toHaveBeenCalledTimes(6);
+
+    await manager.stopChannel("discord");
+  });
+
+  it("limits channel plugin startup fanout to four", async () => {
+    const channelIds = Array.from({ length: 6 }, (_, index) => `test-${index}` as ChannelId);
+    const releases: Array<() => void> = [];
+    let active = 0;
+    let maxActive = 0;
+    const plugins = channelIds.map((id, index) =>
+      createTestPlugin({
+        id,
+        order: index,
+        isConfigured: async () => {
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          await new Promise<void>((resolve) => {
+            releases.push(resolve);
+          });
+          active -= 1;
+          return true;
+        },
+        startAccount: async ({ abortSignal }) =>
+          await new Promise<void>((resolve) => {
+            abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          }),
+      }),
+    );
+    installTestRegistry(...plugins);
+    const manager = createManager({ channelIds });
+
+    const start = manager.startChannels();
+    await flushMicrotasks();
+
+    expect(releases).toHaveLength(4);
+    expect(maxActive).toBe(4);
+
+    releases.splice(0, 4).forEach((release) => release());
+    await waitForMicrotaskCondition(
+      () => releases.length === 2,
+      "expected second channel startup wave",
+    );
+
+    expect(releases).toHaveLength(2);
+    expect(maxActive).toBe(4);
+
+    releases.splice(0).forEach((release) => release());
+    await start;
+
+    await Promise.all(channelIds.map((id) => manager.stopChannel(id)));
   });
 
   it("evicts stale account lifecycle state during whole-channel reload", async () => {

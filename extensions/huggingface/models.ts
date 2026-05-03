@@ -1,5 +1,10 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { isHuggingfaceModelDiscoveryTestEnvironment } from "./model-discovery-env.js";
 
 export const HUGGINGFACE_BASE_URL = "https://router.huggingface.co/v1";
 export const HUGGINGFACE_POLICY_SUFFIXES = ["cheapest", "fastest"] as const;
@@ -129,7 +134,7 @@ export async function discoverHuggingfaceModels(
   apiKey: string,
   timeoutMs = HUGGINGFACE_DISCOVERY_TIMEOUT_MS,
 ): Promise<ModelDefinitionConfig[]> {
-  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+  if (isHuggingfaceModelDiscoveryTestEnvironment()) {
     return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
   }
 
@@ -139,65 +144,74 @@ export async function discoverHuggingfaceModels(
   }
 
   try {
-    const response = await fetch(`${HUGGINGFACE_BASE_URL}/models`, {
-      signal: AbortSignal.timeout(timeoutMs),
-      headers: {
-        Authorization: `Bearer ${trimmedKey}`,
-        "Content-Type": "application/json",
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${HUGGINGFACE_BASE_URL}/models`,
+      init: {
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: {
+          Authorization: `Bearer ${trimmedKey}`,
+          "Content-Type": "application/json",
+        },
       },
+      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(HUGGINGFACE_BASE_URL),
+      auditContext: "huggingface-model-discovery",
     });
-    if (!response.ok) {
-      return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
-    }
-
-    const body = (await response.json()) as OpenAIListModelsResponse;
-    const data = body?.data;
-    if (!Array.isArray(data) || data.length === 0) {
-      return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
-    }
-
-    const catalogById = new Map(
-      HUGGINGFACE_MODEL_CATALOG.map((model) => [model.id, model] as const),
-    );
-    const seen = new Set<string>();
-    const models: ModelDefinitionConfig[] = [];
-
-    for (const entry of data) {
-      const id = typeof entry?.id === "string" ? entry.id.trim() : "";
-      if (!id || seen.has(id)) {
-        continue;
-      }
-      seen.add(id);
-
-      const catalogEntry = catalogById.get(id);
-      if (catalogEntry) {
-        models.push(buildHuggingfaceModelDefinition(catalogEntry));
-        continue;
+    try {
+      if (!response.ok) {
+        return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
       }
 
-      const inferred = inferredMetaFromModelId(id);
-      const name = displayNameFromApiEntry(entry, inferred.name);
-      const modalities = entry.architecture?.input_modalities;
-      const input: Array<"text" | "image"> =
-        Array.isArray(modalities) && modalities.includes("image") ? ["text", "image"] : ["text"];
-      const providers = Array.isArray(entry.providers) ? entry.providers : [];
-      const providerWithContext = providers.find(
-        (provider) => typeof provider?.context_length === "number" && provider.context_length > 0,
+      const body = (await response.json()) as OpenAIListModelsResponse;
+      const data = body?.data;
+      if (!Array.isArray(data) || data.length === 0) {
+        return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
+      }
+
+      const catalogById = new Map(
+        HUGGINGFACE_MODEL_CATALOG.map((model) => [model.id, model] as const),
       );
-      models.push({
-        id,
-        name,
-        reasoning: inferred.reasoning,
-        input,
-        cost: HUGGINGFACE_DEFAULT_COST,
-        contextWindow: providerWithContext?.context_length ?? HUGGINGFACE_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: HUGGINGFACE_DEFAULT_MAX_TOKENS,
-      });
-    }
+      const seen = new Set<string>();
+      const models: ModelDefinitionConfig[] = [];
 
-    return models.length > 0
-      ? models
-      : HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
+      for (const entry of data) {
+        const id = typeof entry?.id === "string" ? entry.id.trim() : "";
+        if (!id || seen.has(id)) {
+          continue;
+        }
+        seen.add(id);
+
+        const catalogEntry = catalogById.get(id);
+        if (catalogEntry) {
+          models.push(buildHuggingfaceModelDefinition(catalogEntry));
+          continue;
+        }
+
+        const inferred = inferredMetaFromModelId(id);
+        const name = displayNameFromApiEntry(entry, inferred.name);
+        const modalities = entry.architecture?.input_modalities;
+        const input: Array<"text" | "image"> =
+          Array.isArray(modalities) && modalities.includes("image") ? ["text", "image"] : ["text"];
+        const providers = Array.isArray(entry.providers) ? entry.providers : [];
+        const providerWithContext = providers.find(
+          (provider) => typeof provider?.context_length === "number" && provider.context_length > 0,
+        );
+        models.push({
+          id,
+          name,
+          reasoning: inferred.reasoning,
+          input,
+          cost: HUGGINGFACE_DEFAULT_COST,
+          contextWindow: providerWithContext?.context_length ?? HUGGINGFACE_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: HUGGINGFACE_DEFAULT_MAX_TOKENS,
+        });
+      }
+
+      return models.length > 0
+        ? models
+        : HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
+    } finally {
+      await release();
+    }
   } catch {
     return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
   }

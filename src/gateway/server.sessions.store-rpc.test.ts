@@ -67,6 +67,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
     expect.arrayContaining([
       "sessions.list",
       "sessions.preview",
+      "sessions.cleanup",
       "sessions.patch",
       "sessions.reset",
       "sessions.delete",
@@ -78,6 +79,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const directContext = {
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
+    logGateway: { debug: vi.fn() },
     loadGatewayModelCatalog: async () => piSdkMock.models,
     getRuntimeConfig: getRuntimeConfig,
   } as never;
@@ -305,6 +307,23 @@ test("lists and patches session store via sessions.* RPC", async () => {
   });
   expect(spawnedPatchedInvalidKey.ok).toBe(false);
 
+  const cleaned = await directSessionReq<{
+    applied: true;
+    missing: number;
+    appliedCount: number;
+  }>("sessions.cleanup", {
+    enforce: true,
+    fixMissing: true,
+  });
+  expect(cleaned.ok).toBe(true);
+  expect(cleaned.payload?.missing).toBeGreaterThanOrEqual(1);
+  const listAfterCleanup = await directSessionReq<{
+    sessions: Array<{ key: string }>;
+  }>("sessions.list", {});
+  expect(listAfterCleanup.payload?.sessions.some((s) => s.key === "agent:main:subagent:one")).toBe(
+    false,
+  );
+
   piSdkMock.enabled = true;
   piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
   const modelPatched = await directSessionReq<{
@@ -318,7 +337,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
     resolved?: {
       model?: string;
       modelProvider?: string;
-      agentRuntime?: { id: string; fallback?: string; source: string };
+      agentRuntime?: { id: string; source: string };
     };
   }>("sessions.patch", {
     key: "agent:main:main",
@@ -341,7 +360,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
       key: string;
       modelProvider?: string;
       model?: string;
-      agentRuntime?: { id: string; fallback?: string; source: string };
+      agentRuntime?: { id: string; source: string };
     }>;
   }>("sessions.list", {});
   expect(listAfterModelPatch.ok).toBe(true);

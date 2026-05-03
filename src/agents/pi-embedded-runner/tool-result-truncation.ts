@@ -6,7 +6,11 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveAgentContextLimits } from "../agent-scope.js";
-import { acquireSessionWriteLock } from "../session-write-lock.js";
+import {
+  acquireSessionWriteLock,
+  type SessionWriteLockAcquireTimeoutConfig,
+  resolveSessionWriteLockAcquireTimeoutMs,
+} from "../session-write-lock.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import {
@@ -655,7 +659,10 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     replacements: plan.replacements,
   });
   if (rewriteResult.changed && params.sessionFile) {
-    emitSessionTranscriptUpdate(params.sessionFile);
+    emitSessionTranscriptUpdate({
+      sessionFile: params.sessionFile,
+      sessionKey: params.sessionKey,
+    });
   }
 
   log.info(
@@ -679,6 +686,7 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
   maxCharsOverride?: number;
   sessionId?: string;
   sessionKey?: string;
+  config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { state, contextWindowTokens } = params;
   const maxChars = Math.max(
@@ -718,7 +726,10 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
       state,
       appendedEntries: rewriteResult.appendedEntries,
     });
-    emitSessionTranscriptUpdate(params.sessionFile);
+    emitSessionTranscriptUpdate({
+      sessionFile: params.sessionFile,
+      sessionKey: params.sessionKey,
+    });
   }
 
   log.info(
@@ -758,12 +769,16 @@ export async function truncateOversizedToolResultsInSession(params: {
   maxCharsOverride?: number;
   sessionId?: string;
   sessionKey?: string;
+  config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { sessionFile, contextWindowTokens } = params;
   let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
 
   try {
-    sessionLock = await acquireSessionWriteLock({ sessionFile });
+    sessionLock = await acquireSessionWriteLock({
+      sessionFile,
+      timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
+    });
     const state = await readTranscriptFileState(sessionFile);
     return await truncateOversizedToolResultsInTranscriptState({
       state,

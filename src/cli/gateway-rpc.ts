@@ -2,16 +2,18 @@ import type { Command } from "commander";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayClientMode, GatewayClientName } from "../gateway/protocol/client-info.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 export type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
 type GatewayRpcRuntimeModule = typeof import("./gateway-rpc.runtime.js");
 
-let gatewayRpcRuntimePromise: Promise<GatewayRpcRuntimeModule> | undefined;
+const gatewayRpcRuntimeLoader = createLazyImportLoader<GatewayRpcRuntimeModule>(
+  () => import("./gateway-rpc.runtime.js"),
+);
 
 async function loadGatewayRpcRuntime(): Promise<GatewayRpcRuntimeModule> {
-  gatewayRpcRuntimePromise ??= import("./gateway-rpc.runtime.js");
-  return gatewayRpcRuntimePromise;
+  return gatewayRpcRuntimeLoader.load();
 }
 
 export function addGatewayClientOptions(cmd: Command) {

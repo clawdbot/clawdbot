@@ -27,7 +27,6 @@ import {
   shouldSuppressBuiltInModel,
   shouldUnconditionallySuppress,
 } from "../model-suppression.js";
-import { isLegacyModelsAddCodexMetadataModel } from "../openai-codex-models-add-legacy.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import {
   attachModelProviderRequestTransport,
@@ -397,12 +396,10 @@ function resolveConfiguredProviderConfig(
 }
 
 function isModelsAddMetadataModel(params: {
-  provider: string;
   model: NonNullable<InlineProviderConfig["models"]>[number] | undefined;
 }) {
   return (
-    (params.model as { metadataSource?: unknown } | undefined)?.metadataSource === "models-add" ||
-    isLegacyModelsAddCodexMetadataModel(params)
+    (params.model as { metadataSource?: unknown } | undefined)?.metadataSource === "models-add"
   );
 }
 
@@ -528,8 +525,7 @@ function applyConfiguredProviderOverrides(params: {
       ? findConfiguredProviderModel(providerConfig, params.provider, discoveredModel.id)
       : undefined);
   const metadataOverrideModel =
-    params.preferDiscoveredModelMetadata &&
-    isModelsAddMetadataModel({ provider: params.provider, model: configuredModel })
+    params.preferDiscoveredModelMetadata && isModelsAddMetadataModel({ model: configuredModel })
       ? undefined
       : configuredModel;
   const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {

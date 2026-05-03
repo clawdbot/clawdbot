@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
-import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
+import {
+  acquireSessionWriteLock,
+  type SessionWriteLockAcquireTimeoutConfig,
+  resolveSessionWriteLockAcquireTimeoutMs,
+} from "../../agents/session-write-lock.js";
 
 const TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES = 64 * 1024;
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
@@ -188,10 +192,11 @@ export async function appendSessionTranscriptMessage(params: {
   sessionId?: string;
   cwd?: string;
   useRawWhenLinear?: boolean;
+  config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<{ messageId: string }> {
   const lock = await acquireSessionWriteLock({
     sessionFile: params.transcriptPath,
-    timeoutMs: 10_000,
+    timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
     allowReentrant: true,
   });
   try {

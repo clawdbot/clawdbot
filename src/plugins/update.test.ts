@@ -100,6 +100,11 @@ function createSuccessfulClawHubUpdateResult(params?: {
       version: params?.version ?? "2026.5.1-beta.2",
       integrity: "sha256-clawpack",
       resolvedAt: "2026-05-01T00:00:00.000Z",
+      artifactKind: "npm-pack" as const,
+      artifactFormat: "tgz" as const,
+      npmIntegrity: "sha512-clawpack",
+      npmShasum: "2".repeat(40),
+      npmTarballName: `${params?.clawhubPackage ?? "legacy-chat"}-${params?.version ?? "2026.5.1-beta.2"}.tgz`,
       clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       clawpackSpecVersion: 1,
       clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -165,13 +170,14 @@ function createClawHubInstallConfig(params: {
   clawhubPackage: string;
   clawhubFamily: "bundle-plugin" | "code-plugin";
   clawhubChannel: "community" | "official" | "private";
+  spec?: string;
 }): OpenClawConfig {
   return {
     plugins: {
       installs: {
         [params.pluginId]: {
           source: "clawhub" as const,
-          spec: `clawhub:${params.clawhubPackage}`,
+          spec: params.spec ?? `clawhub:${params.clawhubPackage}`,
           installPath: params.installPath,
           clawhubUrl: params.clawhubUrl,
           clawhubPackage: params.clawhubPackage,
@@ -1024,6 +1030,115 @@ describe("updateNpmInstalledPlugins", () => {
     },
   );
 
+  it("tries npm beta for default npm specs on beta channel without persisting the beta tag", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "openclaw-codex-app-server",
+        targetDir: "/tmp/openclaw-codex-app-server",
+        version: "0.2.0-beta.4",
+        npmResolution: {
+          name: "openclaw-codex-app-server",
+          version: "0.2.0-beta.4",
+          resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server",
+      }),
+      pluginIds: ["openclaw-codex-app-server"],
+      updateChannel: "beta",
+    });
+
+    expectNpmUpdateCall({
+      spec: "openclaw-codex-app-server@beta",
+      expectedPluginId: "openclaw-codex-app-server",
+    });
+    expectCodexAppServerInstallState({
+      result,
+      spec: "openclaw-codex-app-server",
+      version: "0.2.0-beta.4",
+      resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
+    });
+  });
+
+  it("falls back to the default npm spec when a beta tag is unavailable", async () => {
+    installPluginFromNpmSpecMock
+      .mockResolvedValueOnce({
+        ok: false,
+        error:
+          "npm ERR! code ETARGET\nnpm ERR! No matching version found for openclaw-codex-app-server@beta.",
+      })
+      .mockResolvedValueOnce(
+        createSuccessfulNpmUpdateResult({
+          pluginId: "openclaw-codex-app-server",
+          targetDir: "/tmp/openclaw-codex-app-server",
+          version: "0.2.6",
+          npmResolution: {
+            name: "openclaw-codex-app-server",
+            version: "0.2.6",
+            resolvedSpec: "openclaw-codex-app-server@0.2.6",
+          },
+        }),
+      );
+
+    const warnMessages: string[] = [];
+    const result = await updateNpmInstalledPlugins({
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server",
+      }),
+      pluginIds: ["openclaw-codex-app-server"],
+      updateChannel: "beta",
+      logger: { warn: (msg) => warnMessages.push(msg) },
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server@beta",
+      }),
+    );
+    expect(installPluginFromNpmSpecMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server",
+      }),
+    );
+    expect(warnMessages).toEqual([expect.stringContaining("has no beta npm release")]);
+    expectCodexAppServerInstallState({
+      result,
+      spec: "openclaw-codex-app-server",
+      version: "0.2.6",
+      resolvedSpec: "openclaw-codex-app-server@0.2.6",
+    });
+  });
+
+  it("preserves explicit npm tags when updating on the beta channel", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "openclaw-codex-app-server",
+        targetDir: "/tmp/openclaw-codex-app-server",
+        version: "0.2.0-rc.1",
+      }),
+    );
+
+    await updateNpmInstalledPlugins({
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server@rc",
+      }),
+      pluginIds: ["openclaw-codex-app-server"],
+      updateChannel: "beta",
+      dryRun: true,
+    });
+
+    expectNpmUpdateCall({
+      spec: "openclaw-codex-app-server@rc",
+      expectedPluginId: "openclaw-codex-app-server",
+    });
+  });
+
   it("updates ClawHub-installed plugins via recorded package metadata", async () => {
     installPluginFromClawHubMock.mockResolvedValue({
       ok: true,
@@ -1036,6 +1151,11 @@ describe("updateNpmInstalledPlugins", () => {
         clawhubPackage: "demo",
         clawhubFamily: "code-plugin",
         clawhubChannel: "official",
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        npmIntegrity: "sha512-next",
+        npmShasum: "1".repeat(40),
+        npmTarballName: "demo-1.2.4.tgz",
         integrity: "sha256-next",
         resolvedAt: "2026-03-22T00:00:00.000Z",
         clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -1075,12 +1195,141 @@ describe("updateNpmInstalledPlugins", () => {
       clawhubPackage: "demo",
       clawhubFamily: "code-plugin",
       clawhubChannel: "official",
+      artifactKind: "npm-pack",
+      artifactFormat: "tgz",
+      npmIntegrity: "sha512-next",
+      npmShasum: "1".repeat(40),
+      npmTarballName: "demo-1.2.4.tgz",
       integrity: "sha256-next",
       clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       clawpackSpecVersion: 1,
       clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       clawpackSize: 4096,
     });
+  });
+
+  it("tries ClawHub beta for default ClawHub specs on beta channel without persisting the beta tag", async () => {
+    installPluginFromClawHubMock.mockResolvedValue(
+      createSuccessfulClawHubUpdateResult({
+        pluginId: "demo",
+        targetDir: "/tmp/demo",
+        version: "1.3.0-beta.1",
+        clawhubPackage: "demo",
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createClawHubInstallConfig({
+        pluginId: "demo",
+        installPath: "/tmp/demo",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+      }),
+      pluginIds: ["demo"],
+      updateChannel: "beta",
+    });
+
+    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:demo@beta",
+        baseUrl: "https://clawhub.ai",
+        expectedPluginId: "demo",
+      }),
+    );
+    expect(result.config.plugins?.installs?.demo).toMatchObject({
+      source: "clawhub",
+      spec: "clawhub:demo",
+      installPath: "/tmp/demo",
+      version: "1.3.0-beta.1",
+      clawhubPackage: "demo",
+    });
+  });
+
+  it("falls back to the default ClawHub spec when a beta release is unavailable", async () => {
+    installPluginFromClawHubMock
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "version_not_found",
+        error: "version not found: beta",
+      })
+      .mockResolvedValueOnce(
+        createSuccessfulClawHubUpdateResult({
+          pluginId: "demo",
+          targetDir: "/tmp/demo",
+          version: "1.2.4",
+          clawhubPackage: "demo",
+        }),
+      );
+
+    const warnMessages: string[] = [];
+    const result = await updateNpmInstalledPlugins({
+      config: createClawHubInstallConfig({
+        pluginId: "demo",
+        installPath: "/tmp/demo",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+      }),
+      pluginIds: ["demo"],
+      updateChannel: "beta",
+      logger: { warn: (msg) => warnMessages.push(msg) },
+    });
+
+    expect(installPluginFromClawHubMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        spec: "clawhub:demo@beta",
+      }),
+    );
+    expect(installPluginFromClawHubMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        spec: "clawhub:demo",
+      }),
+    );
+    expect(warnMessages).toEqual([expect.stringContaining("has no beta ClawHub release")]);
+    expect(result.config.plugins?.installs?.demo).toMatchObject({
+      source: "clawhub",
+      spec: "clawhub:demo",
+      installPath: "/tmp/demo",
+      version: "1.2.4",
+      clawhubPackage: "demo",
+    });
+  });
+
+  it("preserves explicit ClawHub tags when updating on the beta channel", async () => {
+    installPluginFromClawHubMock.mockResolvedValue(
+      createSuccessfulClawHubUpdateResult({
+        pluginId: "demo",
+        targetDir: "/tmp/demo",
+        version: "1.3.0-rc.1",
+        clawhubPackage: "demo",
+      }),
+    );
+
+    await updateNpmInstalledPlugins({
+      config: createClawHubInstallConfig({
+        pluginId: "demo",
+        installPath: "/tmp/demo",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+        spec: "clawhub:demo@rc",
+      }),
+      pluginIds: ["demo"],
+      updateChannel: "beta",
+      dryRun: true,
+    });
+
+    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:demo@rc",
+      }),
+    );
   });
 
   it("skips ClawHub plugin update when bundled version is newer", async () => {
@@ -1764,6 +2013,11 @@ describe("syncPluginsForUpdateChannel", () => {
       clawhubPackage: "legacy-chat",
       clawhubFamily: "code-plugin",
       clawhubChannel: "official",
+      artifactKind: "npm-pack",
+      artifactFormat: "tgz",
+      npmIntegrity: "sha512-clawpack",
+      npmShasum: "2".repeat(40),
+      npmTarballName: "legacy-chat-2026.5.1-beta.2.tgz",
       clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       clawpackSpecVersion: 1,
       clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

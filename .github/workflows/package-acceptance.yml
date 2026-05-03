@@ -70,7 +70,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list for published-upgrade-survivor/update-migration; use release-history or all-since-2026.4.23
+        description: Optional baseline list for published-upgrade-survivor/update-migration; use all-since-2026.4.23, release-history, or exact versions
         required: false
         default: ""
         type: string
@@ -150,7 +150,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list for published-upgrade-survivor/update-migration; use release-history or all-since-2026.4.23
+        description: Optional baseline list for published-upgrade-survivor/update-migration; use all-since-2026.4.23, release-history, or exact versions
         required: false
         default: ""
         type: string

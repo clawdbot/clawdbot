@@ -153,6 +153,54 @@ description: test skill
     expect(findings.some((f) => f.checkId === "plugins.code_safety.entry_escape")).toBe(true);
   });
 
+  it("ignores install backup and debris dirs when scanning installed plugin roots", async () => {
+    const scanSpy = vi
+      .spyOn(skillScanner, "scanDirectoryWithSummary")
+      .mockImplementation(async (dirPath) => ({
+        scannedFiles: 1,
+        critical: dirPath.includes(`${path.sep}demo`) ? 1 : 0,
+        warn: 0,
+        info: 0,
+        findings: dirPath.includes(`${path.sep}demo`)
+          ? [
+              {
+                ruleId: "dangerous-exec",
+                severity: "critical",
+                file: path.join(dirPath, "index.js"),
+                line: 1,
+                message: "dangerous exec",
+                evidence: "exec(...)",
+              },
+            ]
+          : [],
+      }));
+
+    try {
+      const tmpDir = await makeTmpDir("audit-scanner-install-debris");
+      for (const name of [
+        "demo",
+        ".openclaw-install-backups",
+        "node_modules",
+        "old-plugin.backup-20260502",
+        "old-plugin.disabled.20260502",
+        "old-plugin.bak",
+      ]) {
+        const pluginDir = path.join(tmpDir, "extensions", name);
+        await fs.mkdir(pluginDir, { recursive: true });
+        await fs.writeFile(path.join(pluginDir, "index.js"), "eval('1+1');");
+      }
+
+      const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
+
+      expect(scanSpy.mock.calls.map(([dirPath]) => path.basename(dirPath))).toEqual(["demo"]);
+      const codeSafetyFinding = findings.find((f) => f.checkId === "plugins.code_safety");
+      expect(codeSafetyFinding?.title).toContain('Plugin "demo"');
+      expect(findings.map((f) => f.title).join("\n")).not.toContain(".openclaw-install-backups");
+    } finally {
+      scanSpy.mockRestore();
+    }
+  });
+
   it("surfaces manifest_parse_error finding when plugin package.json is malformed JSON", async () => {
     const tmpDir = await makeTmpDir("audit-manifest-parse-error");
     const pluginDir = path.join(tmpDir, "extensions", "broken-plugin");

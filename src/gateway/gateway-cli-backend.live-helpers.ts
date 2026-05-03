@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveCliBackendLiveTest } from "../agents/cli-backends.js";
+import { migrateLegacyRuntimeModelRef } from "../agents/model-runtime-aliases.js";
+import { parseModelRef } from "../agents/model-selection.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -33,6 +35,14 @@ export type SystemPromptReport = {
   injectedWorkspaceFiles?: Array<{ name?: string }>;
 };
 
+export type CliBackendLiveModelSelection = {
+  providerId: string;
+  cliModelKey: string;
+  configModelKey: string;
+  configModelSwitchTarget: string | undefined;
+  agentRuntime: { id: string };
+};
+
 export type CliBackendLiveEnvSnapshot = {
   configPath?: string;
   stateDir?: string;
@@ -48,6 +58,41 @@ export type CliBackendLiveEnvSnapshot = {
   anthropicApiKey?: string;
   anthropicApiKeyOld?: string;
 };
+
+export function resolveCliBackendLiveModelSelection(params: {
+  rawModel: string;
+  defaultProvider: string;
+  modelSwitchTarget?: string;
+}): CliBackendLiveModelSelection {
+  const parsed = parseModelRef(params.rawModel, params.defaultProvider);
+  if (!parsed) {
+    throw new Error(
+      `OPENCLAW_LIVE_CLI_BACKEND_MODEL must resolve to a CLI backend model. Got: ${params.rawModel}`,
+    );
+  }
+
+  const migrated = migrateLegacyRuntimeModelRef(params.rawModel);
+  if (migrated?.cli) {
+    return {
+      providerId: migrated.runtime,
+      cliModelKey: `${migrated.runtime}/${migrated.model}`,
+      configModelKey: migrated.ref,
+      configModelSwitchTarget: params.modelSwitchTarget
+        ? (migrateLegacyRuntimeModelRef(params.modelSwitchTarget)?.ref ?? params.modelSwitchTarget)
+        : undefined,
+      agentRuntime: { id: migrated.runtime },
+    };
+  }
+
+  const modelKey = `${parsed.provider}/${parsed.model}`;
+  return {
+    providerId: parsed.provider,
+    cliModelKey: modelKey,
+    configModelKey: modelKey,
+    configModelSwitchTarget: params.modelSwitchTarget,
+    agentRuntime: { id: "pi" },
+  };
+}
 
 export function parseJsonStringArray(name: string, raw?: string): string[] | undefined {
   const trimmed = raw?.trim();

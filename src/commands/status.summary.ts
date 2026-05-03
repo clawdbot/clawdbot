@@ -11,24 +11,25 @@ import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
-let channelSummaryModulePromise: Promise<typeof import("../infra/channel-summary.js")> | undefined;
-let linkChannelModulePromise: Promise<typeof import("./status.link-channel.js")> | undefined;
-let taskRegistryMaintenanceModulePromise:
-  | Promise<typeof import("../tasks/task-registry.maintenance.js")>
-  | undefined;
+const channelSummaryModuleLoader = createLazyImportLoader(
+  () => import("../infra/channel-summary.js"),
+);
+const linkChannelModuleLoader = createLazyImportLoader(() => import("./status.link-channel.js"));
+const taskRegistryMaintenanceModuleLoader = createLazyImportLoader(
+  () => import("../tasks/task-registry.maintenance.js"),
+);
 
 function loadChannelSummaryModule() {
-  channelSummaryModulePromise ??= import("../infra/channel-summary.js");
-  return channelSummaryModulePromise;
+  return channelSummaryModuleLoader.load();
 }
 
 function loadLinkChannelModule() {
-  linkChannelModulePromise ??= import("./status.link-channel.js");
-  return linkChannelModulePromise;
+  return linkChannelModuleLoader.load();
 }
 
 const loadStatusSummaryRuntimeModule = createLazyRuntimeSurface(
@@ -37,8 +38,7 @@ const loadStatusSummaryRuntimeModule = createLazyRuntimeSurface(
 );
 
 function loadTaskRegistryMaintenanceModule() {
-  taskRegistryMaintenanceModulePromise ??= import("../tasks/task-registry.maintenance.js");
-  return taskRegistryMaintenanceModulePromise;
+  return taskRegistryMaintenanceModuleLoader.load();
 }
 
 const buildFlags = (entry?: SessionEntry): string[] => {

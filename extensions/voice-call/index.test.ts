@@ -6,6 +6,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "./api.js";
 import type { VoiceCallRuntime } from "./runtime-entry.js";
+import type { CallRecord } from "./src/types.js";
 
 let runtimeStub: VoiceCallRuntime;
 
@@ -52,8 +53,12 @@ function captureStdout() {
 }
 
 function createRuntimeStub(callId = "call-1"): VoiceCallRuntime {
+  const call = createCallRecord({ callId });
   return {
-    config: { toNumber: "+15550001234" } as VoiceCallRuntime["config"],
+    config: {
+      toNumber: "+15550001234",
+      realtime: { enabled: false },
+    } as VoiceCallRuntime["config"],
     provider: {} as VoiceCallRuntime["provider"],
     manager: {
       initiateCall: vi.fn(async () => ({ callId, success: true })),
@@ -64,14 +69,32 @@ function createRuntimeStub(callId = "call-1"): VoiceCallRuntime {
       speak: vi.fn(async () => ({ success: true })),
       sendDtmf: vi.fn(async () => ({ success: true })),
       endCall: vi.fn(async () => ({ success: true })),
-      getCall: vi.fn((id: string) => (id === callId ? { callId } : undefined)),
+      getCall: vi.fn((id: string) => (id === callId ? call : undefined)),
       getCallByProviderCallId: vi.fn(() => undefined),
-      getActiveCalls: vi.fn(() => [{ callId }]),
+      getActiveCalls: vi.fn(() => [call]),
+      getCallHistory: vi.fn(async () => []),
     } as unknown as VoiceCallRuntime["manager"],
-    webhookServer: {} as VoiceCallRuntime["webhookServer"],
+    webhookServer: {
+      speakRealtime: vi.fn(() => ({ success: false, error: "No active realtime bridge for call" })),
+    } as unknown as VoiceCallRuntime["webhookServer"],
     webhookUrl: "http://127.0.0.1:3334/voice/webhook",
     publicUrl: null,
     stop: vi.fn(async () => {}),
+  };
+}
+
+function createCallRecord(overrides: Partial<CallRecord> = {}): CallRecord {
+  return {
+    callId: "call-1",
+    provider: "mock",
+    direction: "outbound",
+    state: "active",
+    from: "+15550001111",
+    to: "+15550001234",
+    startedAt: Date.UTC(2026, 4, 2, 9, 0, 0),
+    transcript: [],
+    processedEventIds: [],
+    ...overrides,
   };
 }
 
@@ -395,6 +418,60 @@ describe("voice-call plugin", () => {
 
     expect(runtimeStub.manager.sendDtmf).toHaveBeenCalledWith("call-1", "ww123#");
     expect(respond.mock.calls[0]).toEqual([true, { success: true }]);
+  });
+
+  it("normalizes provider call ids before speaking", async () => {
+    runtimeStub.manager.getCall = vi.fn(() => undefined);
+    runtimeStub.manager.getCallByProviderCallId = vi.fn(() =>
+      createCallRecord({
+        callId: "call-1",
+        providerCallId: "CA123",
+      }),
+    );
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.speak") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: { callId: "CA123", message: "hello" }, respond });
+
+    expect(runtimeStub.manager.speak).toHaveBeenCalledWith("call-1", "hello");
+    expect(respond.mock.calls[0]).toEqual([true, { success: true }]);
+  });
+
+  it("reports ended call history when speaking to a stale call", async () => {
+    runtimeStub.manager.getCall = vi.fn(() => undefined);
+    runtimeStub.manager.getCallByProviderCallId = vi.fn(() => undefined);
+    runtimeStub.manager.getCallHistory = vi.fn(async () => [
+      createCallRecord({
+        callId: "call-1",
+        providerCallId: "CA123",
+        state: "completed",
+        endReason: "completed",
+        endedAt: Date.UTC(2026, 4, 2, 9, 18, 23),
+      }),
+    ]);
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.speak") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: { callId: "CA123", message: "hello" }, respond });
+
+    const [ok, , error] = respond.mock.calls[0] ?? [];
+    expect(ok).toBe(false);
+    expect(error.message).toContain("call is not active");
+    expect(error.message).toContain("last state=completed");
+    expect(error.message).toContain("endReason=completed");
+    expect(runtimeStub.manager.speak).not.toHaveBeenCalled();
   });
 
   it("normalizes legacy config through runtime creation and warns to run doctor", async () => {

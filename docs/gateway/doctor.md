@@ -122,6 +122,7 @@ cat ~/.openclaw/openclaw.json
   <Accordion title="Workspace and shell">
     - systemd linger check on Linux.
     - Workspace bootstrap file size check (truncation/near-limit warnings for context files).
+    - Skills readiness check for the default agent; reports allowed skills with missing bins, env, config, or OS requirements, and `--fix` can disable unavailable skills in `skills.entries`.
     - Shell completion status check and auto-install/upgrade.
     - Memory search embedding provider readiness check (local model, remote API key, or QMD binary).
     - Source install checks (pnpm workspace mismatch, missing UI assets, missing tsx binary).
@@ -344,7 +345,7 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="7b. Plugin install cleanup">
     Doctor removes legacy OpenClaw-generated plugin dependency staging state in `openclaw doctor --fix` / `openclaw doctor --repair` mode. This covers stale generated dependency roots, old install-stage directories, and package-local debris from earlier bundled-plugin dependency repair code.
 
-    Doctor can also reinstall configured downloadable plugins when the config references them but the local plugin registry cannot find them. Gateway startup and config reload do not run package managers; plugin installs remain explicit doctor/install/update work.
+    Doctor can also reinstall configured downloadable plugins when the config references them but the local plugin registry cannot find them. For the 2026.5.2 bundled-plugin externalization, doctor automatically installs downloadable plugins that the existing config already uses and then relies on `meta.lastTouchedVersion` to run that release pass only once. Gateway startup and config reload do not run package managers; plugin installs remain explicit doctor/install/update work.
 
   </Accordion>
   <Accordion title="8. Gateway service migrations and cleanup hints">
@@ -473,7 +474,7 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="17. Gateway runtime best practices">
     Doctor warns when the gateway service runs on Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). WhatsApp + Telegram channels require Node, and version-manager paths can break after upgrades because the service does not load your shell init. Doctor offers to migrate to a system Node install when available (Homebrew/apt/choco).
 
-    Newly installed or repaired services keep explicit environment roots (`NVM_DIR`, `FNM_DIR`, `VOLTA_HOME`, `ASDF_DATA_DIR`, `BUN_INSTALL`, `PNPM_HOME`) and stable user-bin directories, but guessed version-manager fallback directories are only written to the service PATH when those directories exist on disk. This keeps the generated supervisor PATH aligned with the same minimal-PATH audit doctor runs later.
+    Newly installed or repaired macOS LaunchAgents use a canonical system PATH (`/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`) instead of copying the interactive shell PATH, so Volta, asdf, fnm, pnpm, and other version-manager directories do not change which Node child processes resolve. Linux services still keep explicit environment roots (`NVM_DIR`, `FNM_DIR`, `VOLTA_HOME`, `ASDF_DATA_DIR`, `BUN_INSTALL`, `PNPM_HOME`) and stable user-bin directories, but guessed version-manager fallback directories are only written to the service PATH when those directories exist on disk.
 
   </Accordion>
   <Accordion title="18. Config write + wizard metadata">

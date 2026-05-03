@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "allow": ["discord", "telegram", "matrix"],
+  "entries": {
+    "discord": {
+      "enabled": true
+    },
+    "matrix": {
+      "enabled": true
+    },
+    "telegram": {
+      "enabled": true
+    }
+  }
+}

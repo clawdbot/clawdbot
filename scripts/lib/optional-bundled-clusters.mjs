@@ -3,7 +3,6 @@ const optionalBundledClusters = [
   "diagnostics-otel",
   "diffs",
   "googlechat",
-  "matrix",
   "memory-lancedb",
   "msteams",
   "nostr",
@@ -35,14 +34,7 @@ function hasReleasedBundledInstall(packageJson) {
   );
 }
 
-function isExplicitlyDownloadablePlugin(packageJson) {
-  return packageJson?.openclaw?.bundle?.includeInCore === false;
-}
-
 export function shouldBuildBundledCluster(cluster, env = process.env, options = {}) {
-  if (isExplicitlyDownloadablePlugin(options.packageJson)) {
-    return false;
-  }
   if (hasReleasedBundledInstall(options.packageJson)) {
     return true;
   }

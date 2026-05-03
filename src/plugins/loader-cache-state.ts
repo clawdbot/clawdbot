@@ -33,6 +33,11 @@ export class PluginLoaderCacheState<T> {
     this.#openAllowlistWarningCache.clear();
   }
 
+  clearCachedRegistries(): void {
+    this.#registryCache.clear();
+    this.#openAllowlistWarningCache.clear();
+  }
+
   get(cacheKey: string): T | undefined {
     return this.#registryCache.get(cacheKey);
   }

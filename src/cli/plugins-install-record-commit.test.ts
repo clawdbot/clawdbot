@@ -78,6 +78,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       },
       baseHash: "config-1",
       writeOptions: {
+        afterWrite: { mode: "restart", reason: "plugin source changed" },
         unsetPaths: [["plugins", "installs"]],
       },
     });
@@ -94,6 +95,33 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         ...pendingRecords,
       },
       movedInstallRecords: true,
+    });
+  });
+
+  it("does not add restart intent when pending records match the plugin index", async () => {
+    const existingRecords: Record<string, PluginInstallRecord> = {
+      demo: {
+        source: "npm",
+        spec: "demo@1.0.0",
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(existingRecords);
+
+    await commitConfigWithPendingPluginInstalls({
+      nextConfig: {
+        plugins: {
+          installs: existingRecords,
+        },
+      },
+      baseHash: "config-1",
+    });
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: {},
+      baseHash: "config-1",
+      writeOptions: {
+        unsetPaths: [["plugins", "installs"]],
+      },
     });
   });
 

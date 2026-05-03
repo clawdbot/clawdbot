@@ -94,6 +94,9 @@ runs:
               echo "lanes input is required for Docker E2E targeted planning." >&2
               exit 1
             fi
+            if [[ "$INCLUDE_RELEASE_PATH_SUITES" == "true" ]]; then
+              export OPENCLAW_DOCKER_ALL_PROFILE=release-path
+            fi
             export OPENCLAW_DOCKER_ALL_LANES="$LANES"
             plan_path=".artifacts/docker-tests/targeted-plan.json"
             ;;

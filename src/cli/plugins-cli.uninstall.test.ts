@@ -271,6 +271,173 @@ describe("plugins cli uninstall", () => {
     });
   });
 
+  it("cleans stale policy refs even when plugin is absent from the current registry", async () => {
+    const baseConfig = {
+      plugins: {
+        allow: ["alpha", "beta"],
+        deny: ["alpha"],
+      },
+    } as OpenClawConfig;
+    const nextConfig = {
+      plugins: {
+        allow: ["beta"],
+      },
+    } as OpenClawConfig;
+
+    loadConfig.mockReturnValue(baseConfig);
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    planPluginUninstall.mockReturnValue({
+      ok: true,
+      config: nextConfig,
+      actions: {
+        entry: false,
+        install: false,
+        allowlist: true,
+        denylist: true,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: false,
+        directory: false,
+      },
+      directoryRemoval: null,
+    });
+
+    await runPluginsCommand(["plugins", "uninstall", "alpha", "--force"]);
+
+    expect(planPluginUninstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "alpha",
+        deleteFiles: true,
+      }),
+    );
+    expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(runtimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
+  });
+
+  it("uninstalls stale enabled entries when plugin is absent from the current registry", async () => {
+    const baseConfig = {
+      plugins: {
+        entries: {
+          alpha: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    const nextConfig = {} as OpenClawConfig;
+
+    loadConfig.mockReturnValue(baseConfig);
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    planPluginUninstall.mockReturnValue({
+      ok: true,
+      config: nextConfig,
+      actions: {
+        entry: true,
+        install: false,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: false,
+        directory: false,
+      },
+      directoryRemoval: null,
+    });
+
+    await runPluginsCommand(["plugins", "uninstall", "alpha", "--force"]);
+
+    expect(planPluginUninstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "alpha",
+        deleteFiles: true,
+      }),
+    );
+    expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+      config: nextConfig,
+      installRecords: {},
+      reason: "source-changed",
+    });
+    expect(runtimeErrors).not.toContain("Plugin not found: alpha");
+    expect(runtimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
+  });
+
+  it("removes installed channel config when plugin code is absent from the current registry", async () => {
+    const installRecords = {
+      alpha: {
+        source: "npm",
+        spec: "alpha@1.0.0",
+        installPath: ALPHA_INSTALL_PATH,
+      },
+    } as const;
+    const baseConfig = {
+      plugins: {
+        entries: {
+          alpha: { enabled: true },
+        },
+        installs: installRecords,
+      },
+      channels: {
+        alpha: {
+          enabled: true,
+        },
+        discord: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+    const nextConfig = {
+      channels: {
+        discord: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    loadConfig.mockReturnValue(baseConfig);
+    setInstalledPluginIndexInstallRecords(installRecords);
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    planPluginUninstall.mockReturnValue({
+      ok: true,
+      config: nextConfig,
+      actions: {
+        entry: true,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: true,
+        directory: false,
+      },
+      directoryRemoval: null,
+    });
+
+    await runPluginsCommand(["plugins", "uninstall", "alpha", "--force", "--keep-files"]);
+
+    expect(planPluginUninstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "alpha",
+        channelIds: undefined,
+        deleteFiles: false,
+      }),
+    );
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({});
+    expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(runtimeLogs.some((line) => line.includes("channel config (channels.alpha)"))).toBe(true);
+    expect(runtimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
+  });
+
   it("exits when uninstall target is not managed by plugin install records", async () => {
     loadConfig.mockReturnValue({
       plugins: {
@@ -282,12 +449,16 @@ describe("plugins cli uninstall", () => {
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
+    planPluginUninstall.mockReturnValue({
+      ok: false,
+      error: "Plugin not found: alpha",
+    });
 
     await expect(runPluginsCommand(["plugins", "uninstall", "alpha", "--force"])).rejects.toThrow(
       "__exit__:1",
     );
 
     expect(runtimeErrors.at(-1)).toContain("is not managed by plugins config/install records");
-    expect(planPluginUninstall).not.toHaveBeenCalled();
+    expect(planPluginUninstall).toHaveBeenCalled();
   });
 });

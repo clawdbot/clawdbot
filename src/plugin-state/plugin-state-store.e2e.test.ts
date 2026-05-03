@@ -12,6 +12,7 @@ import {
 } from "./plugin-state-store.js";
 import { resolvePluginStateDir, resolvePluginStateSqlitePath } from "./plugin-state-store.paths.js";
 import { MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN } from "./plugin-state-store.sqlite.js";
+import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -198,21 +199,25 @@ describe("limits", () => {
       // namespace eviction never fires (each namespace has generous room).
       const nsCount = 10;
       const perNs = MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN / nsCount; // 100
-      const stores = Array.from({ length: nsCount }, (_, i) =>
-        createPluginStateKeyedStore("fixture-plugin", {
-          namespace: `ns-${i}`,
-          maxEntries: perNs + 1,
+      seedPluginStateEntriesForTests(
+        Array.from({ length: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN }, (_, index) => {
+          const ns = Math.floor(index / perNs);
+          const k = index % perNs;
+          return {
+            pluginId: "fixture-plugin",
+            namespace: `ns-${ns}`,
+            key: `k-${k}`,
+            value: { ns, k },
+          };
         }),
       );
-
-      for (let ns = 0; ns < nsCount; ns += 1) {
-        for (let k = 0; k < perNs; k += 1) {
-          await stores[ns].register(`k-${k}`, { ns, k });
-        }
-      }
+      const store = createPluginStateKeyedStore("fixture-plugin", {
+        namespace: "ns-0",
+        maxEntries: perNs + 1,
+      });
 
       // One more row tips over the plugin-wide limit.
-      await expect(stores[0].register("overflow", { boom: true })).rejects.toMatchObject({
+      await expect(store.register("overflow", { boom: true })).rejects.toMatchObject({
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
     });

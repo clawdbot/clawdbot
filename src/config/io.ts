@@ -5,7 +5,6 @@ import path from "node:path";
 import JSON5 from "json5";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
-import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -15,10 +14,6 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
-import {
-  collectRelevantDoctorPluginIds,
-  listPluginDoctorLegacyConfigRules,
-} from "../plugins/doctor-contract-registry.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
   resolveInstalledPluginIndexRecordsStorePath,
@@ -55,6 +50,10 @@ import {
   snapshotConfigAuditProcessInfo,
   type ConfigWriteAuditResult,
 } from "./io.audit.js";
+import {
+  persistBoundedClobberedConfigSnapshot,
+  persistBoundedClobberedConfigSnapshotSync,
+} from "./io.clobber-snapshot.js";
 import { throwInvalidConfig } from "./io.invalid-config.js";
 import {
   maybeRecoverSuspiciousConfigRead,
@@ -74,7 +73,6 @@ import {
   resolveManagedUnsetPathsForWrite,
   resolveWriteEnvSnapshotForPath,
 } from "./io.write-prepare.js";
-import { findLegacyConfigIssues } from "./legacy.js";
 import {
   asResolvedSourceConfig,
   asRuntimeConfig,
@@ -585,44 +583,6 @@ function formatConfigArtifactTimestamp(ts: string): string {
   return ts.replaceAll(":", "-").replaceAll(".", "-");
 }
 
-async function persistClobberedConfigSnapshot(params: {
-  deps: Required<ConfigIoDeps>;
-  configPath: string;
-  raw: string;
-  observedAt: string;
-}): Promise<string | null> {
-  const targetPath = `${params.configPath}.clobbered.${formatConfigArtifactTimestamp(params.observedAt)}`;
-  try {
-    await params.deps.fs.promises.writeFile(targetPath, params.raw, {
-      encoding: "utf-8",
-      mode: 0o600,
-      flag: "wx",
-    });
-    return targetPath;
-  } catch {
-    return null;
-  }
-}
-
-function persistClobberedConfigSnapshotSync(params: {
-  deps: Required<ConfigIoDeps>;
-  configPath: string;
-  raw: string;
-  observedAt: string;
-}): string | null {
-  const targetPath = `${params.configPath}.clobbered.${formatConfigArtifactTimestamp(params.observedAt)}`;
-  try {
-    params.deps.fs.writeFileSync(targetPath, params.raw, {
-      encoding: "utf-8",
-      mode: 0o600,
-      flag: "wx",
-    });
-    return targetPath;
-  } catch {
-    return null;
-  }
-}
-
 function sameFingerprint(
   left: ConfigHealthFingerprint | undefined,
   right: ConfigHealthFingerprint,
@@ -707,7 +667,7 @@ async function observeConfigSnapshot(
   const backup =
     (backupBaseline?.hash ? backupBaseline : null) ??
     (await readConfigFingerprintForPath(deps, `${snapshot.path}.bak`));
-  const clobberedPath = await persistClobberedConfigSnapshot({
+  const clobberedPath = await persistBoundedClobberedConfigSnapshot({
     deps,
     configPath: snapshot.path,
     raw: snapshot.raw,
@@ -839,7 +799,7 @@ function observeConfigSnapshotSync(
   const backup =
     (backupBaseline?.hash ? backupBaseline : null) ??
     readConfigFingerprintForPathSync(deps, `${snapshot.path}.bak`);
-  const clobberedPath = persistClobberedConfigSnapshotSync({
+  const clobberedPath = persistBoundedClobberedConfigSnapshotSync({
     deps,
     configPath: snapshot.path,
     raw: snapshot.raw,
@@ -1032,7 +992,7 @@ async function persistPrefixedConfigRecovery(params: {
   recoveredRaw: string;
 }): Promise<void> {
   const observedAt = new Date().toISOString();
-  const clobberedPath = await persistClobberedConfigSnapshot({
+  const clobberedPath = await persistBoundedClobberedConfigSnapshot({
     deps: params.deps,
     configPath: params.configPath,
     raw: params.originalRaw,
@@ -1069,14 +1029,11 @@ async function recoverConfigFromJsonRootSuffixWithDeps(params: {
     return false;
   }
   const readResolution = resolveConfigForRead(resolved, params.deps.env);
-  const legacyResolution = resolveLegacyConfigForRead(
-    readResolution.resolvedConfigRaw,
-    suffixRecovery.parsed,
-  );
   const validated = validateConfigObjectWithPlugins(
-    stripShippedPluginInstallConfigRecords(legacyResolution.effectiveConfigRaw),
+    stripShippedPluginInstallConfigRecords(readResolution.resolvedConfigRaw),
     {
       env: params.deps.env,
+      sourceRaw: suffixRecovery.parsed,
     },
   );
   if (!validated.ok) {
@@ -1098,10 +1055,70 @@ type ConfigReadResolution = {
   envWarnings: EnvSubstitutionWarning[];
 };
 
-type LegacyMigrationResolution = {
-  effectiveConfigRaw: unknown;
-  sourceLegacyIssues: LegacyConfigIssue[];
-};
+const TILDE_PATH_VALUE_RE = /^~(?=$|[\\/])/;
+const PATH_LIKE_CONFIG_KEY_RE = /(dir|path|paths|file|root|workspace)$/i;
+const PATH_LIKE_CONFIG_LIST_KEYS = new Set(["paths", "pathPrepend"]);
+
+function isPathLikeConfigKey(key: string | undefined): boolean {
+  return Boolean(key && (PATH_LIKE_CONFIG_KEY_RE.test(key) || PATH_LIKE_CONFIG_LIST_KEYS.has(key)));
+}
+
+function expandAuthoredTildePath(value: string, home: string): string {
+  const suffix = value.slice(1);
+  if (!suffix) {
+    return home;
+  }
+  if (suffix.startsWith("/") || suffix.startsWith("\\")) {
+    return path.join(home, suffix.slice(1));
+  }
+  return value;
+}
+
+function restoreAuthoredTildePathsForWrite(
+  next: unknown,
+  authored: unknown,
+  key: string | undefined,
+  home: string,
+): unknown {
+  if (
+    typeof next === "string" &&
+    typeof authored === "string" &&
+    isPathLikeConfigKey(key) &&
+    TILDE_PATH_VALUE_RE.test(authored.trim()) &&
+    path.normalize(next) === path.normalize(expandAuthoredTildePath(authored.trim(), home))
+  ) {
+    return authored;
+  }
+
+  if (Array.isArray(next) && Array.isArray(authored)) {
+    const normalizeChildren = isPathLikeConfigKey(key);
+    return next.map((entry, index) =>
+      restoreAuthoredTildePathsForWrite(
+        entry,
+        authored[index],
+        normalizeChildren ? key : undefined,
+        home,
+      ),
+    );
+  }
+
+  if (!isRecord(next) || !isRecord(authored)) {
+    return next;
+  }
+
+  const out: Record<string, unknown> = { ...next };
+  for (const [childKey, childValue] of Object.entries(out)) {
+    if (Object.prototype.hasOwnProperty.call(authored, childKey)) {
+      out[childKey] = restoreAuthoredTildePathsForWrite(
+        childValue,
+        authored[childKey],
+        childKey,
+        home,
+      );
+    }
+  }
+  return out;
+}
 
 function resolveConfigIncludesForRead(
   parsed: unknown,
@@ -1145,29 +1162,6 @@ function resolveConfigForRead(
     // Capture env snapshot after substitution for write-time ${VAR} restoration.
     envSnapshotForRestore: { ...env } as Record<string, string | undefined>,
     envWarnings,
-  };
-}
-
-function resolveLegacyConfigForRead(
-  resolvedConfigRaw: unknown,
-  sourceRaw: unknown,
-): LegacyMigrationResolution {
-  const pluginIds = collectRelevantDoctorPluginIds(resolvedConfigRaw);
-  const sourceLegacyIssues = findLegacyConfigIssues(
-    resolvedConfigRaw,
-    sourceRaw,
-    listPluginDoctorLegacyConfigRules({ pluginIds }),
-  );
-  if (!resolvedConfigRaw || typeof resolvedConfigRaw !== "object") {
-    return {
-      effectiveConfigRaw: resolvedConfigRaw,
-      sourceLegacyIssues,
-    };
-  }
-  const compat = applyRuntimeLegacyConfigMigrations(resolvedConfigRaw);
-  return {
-    effectiveConfigRaw: compat.next ?? resolvedConfigRaw,
-    sourceLegacyIssues,
   };
 }
 
@@ -1220,6 +1214,18 @@ async function finalizeReadConfigSnapshotInternalResult(
 ): Promise<ReadConfigFileSnapshotInternalResult> {
   await observeConfigSnapshot(deps, result.snapshot);
   return result;
+}
+
+async function collectInvalidConfigLegacyIssues(
+  raw: unknown,
+  sourceRaw: unknown,
+): Promise<LegacyConfigIssue[]> {
+  if (!raw || typeof raw !== "object") {
+    return [];
+  }
+  const { findDoctorLegacyConfigIssues } =
+    await import("../commands/doctor/shared/legacy-config-issues.js");
+  return findDoctorLegacyConfigIssues(raw, sourceRaw);
 }
 
 export function createConfigIO(
@@ -1527,11 +1533,9 @@ export function createConfigIO(
         deps.env,
       );
       const resolvedConfig = readResolution.resolvedConfigRaw;
-      const legacyResolution = resolveLegacyConfigForRead(resolvedConfig, effectiveParsed);
-      const installMigration = migrateAndStripShippedPluginInstallConfigRecords(
-        legacyResolution.effectiveConfigRaw,
-        { rootConfigRaw: effectiveParsed },
-      );
+      const installMigration = migrateAndStripShippedPluginInstallConfigRecords(resolvedConfig, {
+        rootConfigRaw: effectiveParsed,
+      });
       const effectiveConfigRaw = installMigration.config;
       const snapshotRaw = installMigration.persistedRootRaw ?? effectiveRaw;
       const snapshotParsed = installMigration.persistedRootParsed ?? effectiveParsed;
@@ -1555,7 +1559,7 @@ export function createConfigIO(
             hash,
             issues: [],
             warnings: [],
-            legacyIssues: legacyResolution.sourceLegacyIssues,
+            legacyIssues: [],
           }),
         });
         return {};
@@ -1567,9 +1571,24 @@ export function createConfigIO(
       if (preValidationDuplicates.length > 0) {
         throw new DuplicateAgentDirError(preValidationDuplicates);
       }
+      let pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
+      const loadValidationPluginMetadataSnapshot = (config: OpenClawConfig) => {
+        if (pluginMetadataSnapshot) {
+          return pluginMetadataSnapshot;
+        }
+        const defaultAgentId = resolveDefaultAgentId(config);
+        pluginMetadataSnapshot = loadPluginMetadataSnapshot({
+          config,
+          workspaceDir: resolveAgentWorkspaceDir(config, defaultAgentId),
+          env: deps.env,
+        });
+        return pluginMetadataSnapshot;
+      };
       const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, {
         env: deps.env,
         pluginValidation: overrides.pluginValidation,
+        loadPluginMetadataSnapshot: loadValidationPluginMetadataSnapshot,
+        sourceRaw: effectiveParsed,
       });
       if (!validated.ok) {
         observeLoadConfigSnapshot({
@@ -1584,7 +1603,7 @@ export function createConfigIO(
             hash,
             issues: validated.issues,
             warnings: validated.warnings,
-            legacyIssues: legacyResolution.sourceLegacyIssues,
+            legacyIssues: [],
           }),
         });
         throwInvalidConfig({
@@ -1604,7 +1623,9 @@ export function createConfigIO(
         deps.logger.warn(`Config warnings:\n${details}`);
       }
       warnIfConfigFromFuture(validated.config, deps.logger);
-      const cfg = materializeRuntimeConfig(validated.config, "load");
+      const cfg = materializeRuntimeConfig(validated.config, "load", {
+        manifestRegistry: pluginMetadataSnapshot?.manifestRegistry,
+      });
       observeLoadConfigSnapshot({
         ...createConfigFileSnapshot({
           path: configPath,
@@ -1617,7 +1638,7 @@ export function createConfigIO(
           hash,
           issues: [],
           warnings: validated.warnings,
-          legacyIssues: legacyResolution.sourceLegacyIssues,
+          legacyIssues: [],
         }),
       });
       return finalizeLoadedRuntimeConfig(cfg);
@@ -1637,7 +1658,9 @@ export function createConfigIO(
   }
 
   async function readConfigFileSnapshotInternal(
-    options: { persistShippedPluginInstallMigration?: boolean } = {},
+    options: {
+      persistShippedPluginInstallMigration?: boolean;
+    } = {},
   ): Promise<ReadConfigFileSnapshotInternalResult> {
     maybeLoadDotEnvForConfig(deps.env);
     const exists = deps.fs.existsSync(configPath);
@@ -1755,13 +1778,10 @@ export function createConfigIO(
       }));
 
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
-      const legacyResolution = await deps.measure("config.snapshot.read.legacy", () =>
-        resolveLegacyConfigForRead(resolvedConfigRaw, effectiveParsed),
-      );
       const installMigration = await deps.measure(
         "config.snapshot.read.plugin-install-migration",
         () =>
-          migrateAndStripShippedPluginInstallConfigRecords(legacyResolution.effectiveConfigRaw, {
+          migrateAndStripShippedPluginInstallConfigRecords(resolvedConfigRaw, {
             persist: options.persistShippedPluginInstallMigration !== false,
             rootConfigRaw: effectiveParsed,
           }),
@@ -1791,9 +1811,13 @@ export function createConfigIO(
           env: deps.env,
           pluginValidation: overrides.pluginValidation,
           loadPluginMetadataSnapshot: loadValidationPluginMetadataSnapshot,
+          sourceRaw: effectiveParsed,
         }),
       );
       if (!validated.ok) {
+        const legacyIssues = await deps.measure("config.snapshot.read.legacy-issues", () =>
+          collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed),
+        );
         return await finalizeReadConfigSnapshotInternalResult(deps, {
           snapshot: createConfigFileSnapshot({
             path: configPath,
@@ -1806,14 +1830,16 @@ export function createConfigIO(
             hash: snapshotHash,
             issues: validated.issues,
             warnings: [...validated.warnings, ...envVarWarnings],
-            legacyIssues: legacyResolution.sourceLegacyIssues,
+            legacyIssues,
           }),
         });
       }
 
       warnIfConfigFromFuture(validated.config, deps.logger);
       const snapshotConfig = await deps.measure("config.snapshot.read.materialize", () =>
-        materializeRuntimeConfig(validated.config, "snapshot"),
+        materializeRuntimeConfig(validated.config, "snapshot", {
+          manifestRegistry: pluginMetadataSnapshot?.manifestRegistry,
+        }),
       );
       return await deps.measure("config.snapshot.read.observe", () =>
         finalizeReadConfigSnapshotInternalResult(deps, {
@@ -1830,7 +1856,7 @@ export function createConfigIO(
             hash: snapshotHash,
             issues: [],
             warnings: [...validated.warnings, ...envVarWarnings],
-            legacyIssues: legacyResolution.sourceLegacyIssues,
+            legacyIssues: [],
           }),
           envSnapshotForRestore: readResolution.envSnapshotForRestore,
           pluginMetadataSnapshot,
@@ -1938,7 +1964,9 @@ export function createConfigIO(
       return result.snapshot.config;
     }
     return finalizeLoadedRuntimeConfig(
-      materializeRuntimeConfig(result.snapshot.sourceConfig, "load"),
+      materializeRuntimeConfig(result.snapshot.sourceConfig, "load", {
+        manifestRegistry: result.pluginMetadataSnapshot?.manifestRegistry,
+      }),
     );
   }
 
@@ -1971,13 +1999,7 @@ export function createConfigIO(
       }
 
       const readResolution = resolveConfigForRead(resolved, deps.env);
-      const legacyResolution = resolveLegacyConfigForRead(
-        readResolution.resolvedConfigRaw,
-        recovered.parsed,
-      );
-      return coerceConfig(
-        stripShippedPluginInstallConfigRecords(legacyResolution.effectiveConfigRaw),
-      );
+      return coerceConfig(stripShippedPluginInstallConfigRecords(readResolution.resolvedConfigRaw));
     } catch {
       return {};
     }
@@ -2098,7 +2120,13 @@ export function createConfigIO(
       envRefMap && changedPaths
         ? (restoreEnvRefsFromMap(cfgToWrite, "", envRefMap, changedPaths) as OpenClawConfig)
         : cfgToWrite;
-    const outputConfig = applyUnsetPathsForWrite(outputConfigBase, unsetPaths);
+    const tildeRestoredOutputConfig = restoreAuthoredTildePathsForWrite(
+      outputConfigBase,
+      snapshot.parsed,
+      undefined,
+      deps.homedir(),
+    ) as OpenClawConfig;
+    const outputConfig = applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths);
     // Do NOT apply runtime defaults when writing - user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
     const stampedOutputConfig = stampConfigVersion(outputConfig);

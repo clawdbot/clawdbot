@@ -7,6 +7,7 @@ import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.j
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -83,11 +84,12 @@ const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
 type BashToolsModule = typeof import("./bash-tools.js");
 
-let bashToolsModulePromise: Promise<BashToolsModule> | undefined;
+const bashToolsModuleLoader = createLazyImportLoader<BashToolsModule>(
+  () => import("./bash-tools.js"),
+);
 
 function loadBashToolsModule(): Promise<BashToolsModule> {
-  bashToolsModulePromise ??= import("./bash-tools.js");
-  return bashToolsModulePromise;
+  return bashToolsModuleLoader.load();
 }
 
 function createLazyExecTool(defaults?: ExecToolDefaults): AnyAgentTool {

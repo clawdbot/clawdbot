@@ -45,6 +45,35 @@ describe("loadGatewayModelCatalog", () => {
     await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(catalog);
 
     expect(loadModelCatalog).toHaveBeenCalledTimes(1);
+    expect(loadModelCatalog).toHaveBeenCalledWith({ config: getConfig(), readOnly: true });
+  });
+
+  it("keeps read-only and full catalog caches separate", async () => {
+    const readOnlyCatalog = [model("configured-only")];
+    const fullCatalog = [model("configured-only"), model("browse-only")];
+    const loadModelCatalog = vi.fn<LoadModelCatalogForTest>(async (params) =>
+      params.readOnly === false ? fullCatalog : readOnlyCatalog,
+    );
+
+    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
+      readOnlyCatalog,
+    );
+    await expect(
+      loadGatewayModelCatalog({ getConfig, loadModelCatalog, readOnly: false }),
+    ).resolves.toBe(fullCatalog);
+    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
+      readOnlyCatalog,
+    );
+
+    expect(loadModelCatalog).toHaveBeenCalledTimes(2);
+    expect(loadModelCatalog).toHaveBeenNthCalledWith(1, {
+      config: getConfig(),
+      readOnly: true,
+    });
+    expect(loadModelCatalog).toHaveBeenNthCalledWith(2, {
+      config: getConfig(),
+      readOnly: false,
+    });
   });
 
   it("does not cache an empty catalog so the next request retries", async () => {

@@ -55,7 +55,10 @@ tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
 node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$git_root"
 (
   cd "$git_root"
-  npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1
+  if ! npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
+    cat /tmp/openclaw-git-install.log >&2 || true
+    exit 1
+  fi
 )
 node scripts/e2e/lib/update-channel-switch/assertions.mjs write-control-ui "$git_root"
 

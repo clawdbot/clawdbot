@@ -224,34 +224,34 @@ export async function generateVoiceResponse(
   // Load or create session entry
   const sessionStore = agentRuntime.session.loadSessionStore(storePath);
   const now = Date.now();
-  let sessionEntry = sessionStore[resolvedSessionKey] as SessionEntry | undefined;
-  let sessionEntryUpdated = false;
-
-  if (!sessionEntry) {
-    sessionEntry = {
-      sessionId: crypto.randomUUID(),
-      updatedAt: now,
-    };
-    sessionStore[resolvedSessionKey] = sessionEntry;
-    sessionEntryUpdated = true;
-  }
-
-  const sessionId = sessionEntry.sessionId;
+  const existingSessionEntry = sessionStore[resolvedSessionKey] as SessionEntry | undefined;
 
   // Resolve model from config
   const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
-  if (voiceConfig.responseModel) {
-    sessionEntryUpdated =
-      applyModelOverrideToSessionEntry({
-        entry: sessionEntry,
-        selection: { provider, model },
-        selectionSource: "auto",
-      }).updated || sessionEntryUpdated;
-  }
 
-  if (sessionEntryUpdated) {
-    await agentRuntime.session.saveSessionStore(storePath, sessionStore);
+  let sessionEntry = existingSessionEntry;
+  if (!sessionEntry?.sessionId || voiceConfig.responseModel) {
+    sessionEntry = await agentRuntime.session.updateSessionStore(storePath, (store) => {
+      let entry = store[resolvedSessionKey] as SessionEntry | undefined;
+      if (!entry?.sessionId) {
+        entry = {
+          ...entry,
+          sessionId: crypto.randomUUID(),
+          updatedAt: now,
+        };
+        store[resolvedSessionKey] = entry;
+      }
+      if (voiceConfig.responseModel) {
+        applyModelOverrideToSessionEntry({
+          entry,
+          selection: { provider, model },
+          selectionSource: "auto",
+        });
+      }
+      return entry;
+    });
   }
+  const sessionId = sessionEntry.sessionId;
 
   const sessionFile = agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
     agentId,

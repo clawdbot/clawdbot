@@ -2,6 +2,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -17,13 +18,12 @@ import {
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { applyReplyThreading, isRenderablePayload } from "./reply-payloads-base.js";
 
-let replyPayloadsDedupeRuntimePromise: Promise<
-  typeof import("./reply-payloads-dedupe.runtime.js")
-> | null = null;
+const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
+  () => import("./reply-payloads-dedupe.runtime.js"),
+);
 
 function loadReplyPayloadsDedupeRuntime() {
-  replyPayloadsDedupeRuntimePromise ??= import("./reply-payloads-dedupe.runtime.js");
-  return replyPayloadsDedupeRuntimePromise;
+  return replyPayloadsDedupeRuntimeLoader.load();
 }
 
 async function normalizeReplyPayloadMedia(params: {

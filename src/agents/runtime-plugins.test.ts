@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
-  resolveRuntimePluginRegistry: vi.fn(),
+  ensureStandaloneRuntimePluginRegistryLoaded: vi.fn(),
   getActivePluginRuntimeSubagentMode: vi.fn<() => "default" | "explicit" | "gateway-bindable">(
     () => "default",
   ),
@@ -12,8 +12,8 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshot,
 }));
 
-vi.mock("../plugins/loader.js", () => ({
-  resolveRuntimePluginRegistry: hoisted.resolveRuntimePluginRegistry,
+vi.mock("../plugins/runtime/standalone-runtime-registry-loader.js", () => ({
+  ensureStandaloneRuntimePluginRegistryLoaded: hoisted.ensureStandaloneRuntimePluginRegistryLoaded,
 }));
 
 vi.mock("../plugins/runtime.js", () => ({
@@ -26,8 +26,8 @@ describe("ensureRuntimePluginsLoaded", () => {
   beforeEach(async () => {
     hoisted.getCurrentPluginMetadataSnapshot.mockReset();
     hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
-    hoisted.resolveRuntimePluginRegistry.mockReset();
-    hoisted.resolveRuntimePluginRegistry.mockReturnValue(undefined);
+    hoisted.ensureStandaloneRuntimePluginRegistryLoaded.mockReset();
+    hoisted.ensureStandaloneRuntimePluginRegistryLoaded.mockReturnValue(undefined);
     hoisted.getActivePluginRuntimeSubagentMode.mockReset();
     hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("default");
     vi.resetModules();
@@ -35,7 +35,7 @@ describe("ensureRuntimePluginsLoaded", () => {
   });
 
   it("does not reactivate plugins when a process already has an active registry", async () => {
-    hoisted.resolveRuntimePluginRegistry.mockReturnValue({});
+    hoisted.ensureStandaloneRuntimePluginRegistryLoaded.mockReturnValue({});
 
     ensureRuntimePluginsLoaded({
       config: {} as never,
@@ -43,7 +43,7 @@ describe("ensureRuntimePluginsLoaded", () => {
       allowGatewaySubagentBinding: true,
     });
 
-    expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
+    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledTimes(1);
   });
 
   it("resolves runtime plugins through the shared runtime helper", async () => {
@@ -53,11 +53,14 @@ describe("ensureRuntimePluginsLoaded", () => {
       allowGatewaySubagentBinding: true,
     });
 
-    expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
-      config: {} as never,
-      workspaceDir: "/tmp/workspace",
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
+    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
+      requiredPluginIds: undefined,
+      loadOptions: {
+        config: {} as never,
+        workspaceDir: "/tmp/workspace",
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
       },
     });
   });
@@ -80,12 +83,15 @@ describe("ensureRuntimePluginsLoaded", () => {
       config,
       workspaceDir: "/tmp/workspace",
     });
-    expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
-      config,
-      workspaceDir: "/tmp/workspace",
-      onlyPluginIds: ["telegram", "memory-core"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
+    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
+      requiredPluginIds: ["telegram", "memory-core"],
+      loadOptions: {
+        config,
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["telegram", "memory-core"],
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
       },
     });
   });
@@ -104,12 +110,15 @@ describe("ensureRuntimePluginsLoaded", () => {
       allowGatewaySubagentBinding: true,
     });
 
-    expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
-      config: {} as never,
-      onlyPluginIds: ["telegram"],
-      workspaceDir: "/tmp/workspace",
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
+    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
+      requiredPluginIds: ["telegram"],
+      loadOptions: {
+        config: {} as never,
+        onlyPluginIds: ["telegram"],
+        workspaceDir: "/tmp/workspace",
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
       },
     });
   });
@@ -137,12 +146,15 @@ describe("ensureRuntimePluginsLoaded", () => {
       allowGatewaySubagentBinding: true,
     });
 
-    expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
-      config,
-      onlyPluginIds: ["telegram"],
-      workspaceDir: "/tmp/workspace",
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
+    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
+      requiredPluginIds: ["telegram"],
+      loadOptions: {
+        config,
+        onlyPluginIds: ["telegram"],
+        workspaceDir: "/tmp/workspace",
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
       },
     });
   });
@@ -153,10 +165,13 @@ describe("ensureRuntimePluginsLoaded", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
-      config: {} as never,
-      workspaceDir: "/tmp/workspace",
-      runtimeOptions: undefined,
+    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
+      requiredPluginIds: undefined,
+      loadOptions: {
+        config: {} as never,
+        workspaceDir: "/tmp/workspace",
+        runtimeOptions: undefined,
+      },
     });
   });
 
@@ -168,11 +183,14 @@ describe("ensureRuntimePluginsLoaded", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
-      config: {} as never,
-      workspaceDir: "/tmp/workspace",
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
+    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
+      requiredPluginIds: undefined,
+      loadOptions: {
+        config: {} as never,
+        workspaceDir: "/tmp/workspace",
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
       },
     });
   });

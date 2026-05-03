@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import type { VoiceCallConfig } from "./config.js";
 import {
+  resolveVoiceCallEffectiveConfig,
   resolveVoiceCallSessionKey,
   resolveTwilioAuthToken,
   resolveVoiceCallConfig,
@@ -339,13 +340,21 @@ export async function createVoiceCallRuntime(params: {
           if (!call) {
             return { error: `Call "${callId}" not found` };
           }
-          const agentId = config.agentId ?? "main";
-          const sessionKey = resolveVoiceCallConsultSessionKey({ ...call, config });
+          const numberRouteKey =
+            typeof call.metadata?.numberRouteKey === "string"
+              ? call.metadata.numberRouteKey
+              : call.to;
+          const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
+          const agentId = effectiveConfig.agentId ?? "main";
+          const sessionKey = resolveVoiceCallConsultSessionKey({
+            ...call,
+            config: effectiveConfig,
+          });
           const fastContext = await resolveRealtimeFastContextConsult({
             cfg,
             agentId,
             sessionKey,
-            config: config.realtime.fastContext,
+            config: effectiveConfig.realtime.fastContext,
             args,
             logger: log,
           });
@@ -353,7 +362,7 @@ export async function createVoiceCallRuntime(params: {
             return fastContext.result;
           }
           const { provider: agentProvider, model } = resolveVoiceResponseModel({
-            voiceConfig: config,
+            voiceConfig: effectiveConfig,
             agentRuntime,
           });
           const thinkLevel = agentRuntime.resolveThinkingDefault({
@@ -379,8 +388,10 @@ export async function createVoiceCallRuntime(params: {
             provider: agentProvider,
             model,
             thinkLevel,
-            timeoutMs: config.responseTimeoutMs,
-            toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(config.realtime.toolPolicy),
+            timeoutMs: effectiveConfig.responseTimeoutMs,
+            toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(
+              effectiveConfig.realtime.toolPolicy,
+            ),
             extraSystemPrompt: REALTIME_VOICE_CONSULT_SYSTEM_PROMPT,
           });
         },

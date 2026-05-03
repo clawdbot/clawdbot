@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  BOUNDARY_CHECKS,
   formatCommand,
   resolveConcurrency,
   runChecks,
@@ -19,6 +20,14 @@ function createOutputBuffer() {
 }
 
 describe("run-additional-boundary-checks", () => {
+  it("runs prompt snapshot drift checks in CI", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "prompt:snapshots:check",
+      command: "pnpm",
+      args: ["prompt:snapshots:check"],
+    });
+  });
+
   it("normalizes concurrency input", () => {
     expect(resolveConcurrency("6")).toBe(6);
     expect(resolveConcurrency("0")).toBe(4);

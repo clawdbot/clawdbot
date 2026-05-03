@@ -1874,7 +1874,7 @@ lives on the [Models FAQ](/help/faq-models).
     to **inherit**. Also confirm you are not using a bot profile with `verboseDefault` set
     to `on` in config.
 
-    Docs: [Thinking and verbose](/tools/thinking), [Security](/gateway/security#reasoning-verbose-output-in-groups).
+    Docs: [Thinking and verbose](/tools/thinking), [Security](/gateway/security/index#reasoning-and-verbose-output-in-groups).
 
   </Accordion>
 

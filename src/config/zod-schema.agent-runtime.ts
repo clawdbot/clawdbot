@@ -813,7 +813,6 @@ const AgentRuntimeSchema = z
 export const AgentEmbeddedHarnessSchema = z
   .object({
     runtime: z.string().optional(),
-    fallback: z.enum(["pi", "none"]).optional(),
   })
   .strict()
   .optional();
@@ -821,7 +820,6 @@ export const AgentEmbeddedHarnessSchema = z
 export const AgentRuntimePolicySchema = z
   .object({
     id: z.string().optional(),
-    fallback: z.enum(["pi", "none"]).optional(),
   })
   .strict()
   .optional();

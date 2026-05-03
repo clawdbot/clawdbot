@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
 
 /** @internal */
@@ -66,7 +67,7 @@ const AUDIO_FILE_EXTENSIONS = new Set([
   ".wav",
 ]);
 
-let fileTypeModulePromise: Promise<typeof import("file-type")> | undefined;
+const fileTypeModuleLoader = createLazyImportLoader(() => import("file-type"));
 
 export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
@@ -89,8 +90,7 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
     return undefined;
   }
   try {
-    fileTypeModulePromise ??= import("file-type");
-    const { fileTypeFromBuffer } = await fileTypeModulePromise;
+    const { fileTypeFromBuffer } = await fileTypeModuleLoader.load();
     const type = await fileTypeFromBuffer(sliceMimeSniffBuffer(buffer));
     if (type?.mime) {
       return type.mime;

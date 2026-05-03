@@ -18,6 +18,11 @@ import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
+  DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+  DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+  evaluateChannelHealth,
+} from "../channel-health-policy.js";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -277,6 +282,15 @@ export const channelsHandlers: GatewayRequestHandlers = {
       if (snapshot.lastOutboundAt == null) {
         snapshot.lastOutboundAt = activity.outboundAt;
       }
+      const health = evaluateChannelHealth(snapshot, {
+        channelId,
+        now: Date.now(),
+        staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+        channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+      });
+      if (!health.healthy) {
+        snapshot.healthState = health.reason;
+      }
       return { accountId: accountId, account, snapshot };
     };
 
@@ -324,6 +338,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       channelDetailLabels: uiCatalog.detailLabels,
       channelSystemImages: uiCatalog.systemImages,
       channelMeta: uiCatalog.entries,
+      ...(context.getEventLoopHealth ? { eventLoop: context.getEventLoopHealth() } : {}),
       channels: {} as Record<string, unknown>,
       channelAccounts: {} as Record<string, unknown>,
       channelDefaultAccountId: {} as Record<string, unknown>,

@@ -220,6 +220,7 @@ export class CodexAppServerEventProjector {
       timedOut: false,
       idleTimedOut: false,
       timedOutDuringCompaction: false,
+      timedOutDuringToolExecution: false,
       promptError,
       promptErrorSource: promptError ? this.promptErrorSource || "prompt" : null,
       sessionIdUsed: this.params.sessionId,

@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_OUTPUT_NAME = "openclaw-current.tgz";
 export const OPENCLAW_PACKAGE_SPEC_RE =
-  /^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$/u;
+  /^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
 
 function usage() {
   return `Usage: node scripts/resolve-openclaw-package-candidate.mjs --source <ref|npm|url|artifact> --output-dir <dir> [options]
@@ -82,7 +82,7 @@ export function parseArgs(argv) {
 export function validateOpenClawPackageSpec(spec) {
   if (!OPENCLAW_PACKAGE_SPEC_RE.test(spec)) {
     throw new Error(
-      `package_spec must be openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
+      `package_spec must be openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
     );
   }
 }
@@ -187,6 +187,24 @@ async function findSingleTarball(dir) {
     );
   }
   return files[0];
+}
+
+export async function readArtifactPackageCandidateMetadata(dir) {
+  const metadataPath = path.join(path.resolve(ROOT_DIR, dir), "package-candidate.json");
+  let raw = "";
+  try {
+    raw = await fs.readFile(metadataPath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return {};
+    }
+    throw error;
+  }
+  const parsed = JSON.parse(raw);
+  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`artifact package-candidate.json must contain a JSON object`);
+  }
+  return parsed;
 }
 
 async function revParseTrustedInputRef(ref) {
@@ -362,6 +380,7 @@ async function resolveCandidate(options) {
   let packageSourceSha = "";
   let packageTrustedReason = "";
   let packageWorktreeDir = "";
+  let artifactMetadata = {};
 
   try {
     if (options.source === "ref") {
@@ -411,6 +430,17 @@ async function resolveCandidate(options) {
       if (!options.artifactDir) {
         throw new Error("source=artifact requires --artifact-dir");
       }
+      artifactMetadata = await readArtifactPackageCandidateMetadata(options.artifactDir);
+      packageRef =
+        typeof artifactMetadata.packageRef === "string" ? artifactMetadata.packageRef : "";
+      packageSourceSha =
+        typeof artifactMetadata.packageSourceSha === "string"
+          ? artifactMetadata.packageSourceSha
+          : "";
+      packageTrustedReason =
+        typeof artifactMetadata.packageTrustedReason === "string"
+          ? artifactMetadata.packageTrustedReason
+          : "";
       const input = await findSingleTarball(options.artifactDir);
       await fs.copyFile(input, target);
     } else {
@@ -422,7 +452,8 @@ async function resolveCandidate(options) {
     }
   }
 
-  const digest = await assertExpectedSha256(target, options.packageSha256);
+  const artifactSha256 = typeof artifactMetadata.sha256 === "string" ? artifactMetadata.sha256 : "";
+  const digest = await assertExpectedSha256(target, options.packageSha256 || artifactSha256);
   console.error(`Checking OpenClaw package tarball: ${target}`);
   const checkStartedAt = Date.now();
   await run("node", ["scripts/check-openclaw-package-tarball.mjs", target], {

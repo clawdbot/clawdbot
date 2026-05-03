@@ -258,6 +258,7 @@ export type DiscordChannel = APIChannel & {
   guild?: Guild;
   name?: string;
   parentId?: string | null;
+  ownerId?: string | null;
 };
 
 export function channelFactory(
@@ -274,5 +275,6 @@ export function channelFactory(
         ? new Guild<true>(_client, channelData.guild_id)
         : undefined,
     parentId: "parent_id" in channelData ? channelData.parent_id : undefined,
+    ownerId: "owner_id" in channelData ? channelData.owner_id : undefined,
   } as DiscordChannel;
 }

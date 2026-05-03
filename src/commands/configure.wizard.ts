@@ -12,6 +12,7 @@ import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { isPlainObject, resolveUserPath } from "../utils.js";
@@ -56,11 +57,12 @@ type SetupPluginConfigModule = typeof import("../wizard/setup.plugin-config.js")
 
 const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
 
-let setupPluginConfigModulePromise: Promise<SetupPluginConfigModule> | undefined;
+const setupPluginConfigModuleLoader = createLazyImportLoader<SetupPluginConfigModule>(
+  () => import("../wizard/setup.plugin-config.js"),
+);
 
 function loadSetupPluginConfigModule(): Promise<SetupPluginConfigModule> {
-  setupPluginConfigModulePromise ??= import("../wizard/setup.plugin-config.js");
-  return setupPluginConfigModulePromise;
+  return setupPluginConfigModuleLoader.load();
 }
 
 function mergeWizardConfigOntoLatest(current: unknown, base: unknown, next: unknown): unknown {

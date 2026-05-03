@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { saveJsonFile } from "../../infra/json-file.js";
+import { cloneAuthProfileStore } from "./clone.js";
 import {
   AUTH_STORE_LOCK_OPTIONS,
   AUTH_STORE_VERSION,
@@ -67,10 +68,6 @@ const loadedAuthStoreCache = new Map<
     store: AuthProfileStore;
   }
 >();
-
-function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
-  return structuredClone(store);
-}
 
 function isInheritedMainOAuthCredential(params: {
   agentDir?: string;

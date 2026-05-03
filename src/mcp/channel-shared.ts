@@ -46,6 +46,10 @@ export type SessionListResult = {
   sessions?: SessionRow[];
 };
 
+export type SessionDescribeResult = {
+  session?: SessionRow | null;
+};
+
 export type ChatHistoryResult = {
   messages?: Array<{ id?: string; role?: string; content?: unknown; [key: string]: unknown }>;
 };

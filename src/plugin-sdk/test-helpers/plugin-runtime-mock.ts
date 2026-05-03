@@ -353,6 +353,16 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           .mockResolvedValue(
             undefined,
           ) as unknown as PluginRuntime["agent"]["session"]["saveSessionStore"],
+        updateSessionStore: vi
+          .fn()
+          .mockResolvedValue(
+            undefined,
+          ) as unknown as PluginRuntime["agent"]["session"]["updateSessionStore"],
+        updateSessionStoreEntry: vi
+          .fn()
+          .mockResolvedValue(
+            null,
+          ) as unknown as PluginRuntime["agent"]["session"]["updateSessionStoreEntry"],
         resolveSessionFilePath: vi.fn(
           (sessionId: string) => `/tmp/${sessionId}.json`,
         ) as unknown as PluginRuntime["agent"]["session"]["resolveSessionFilePath"],
@@ -360,6 +370,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     system: {
       enqueueSystemEvent: vi.fn() as unknown as PluginRuntime["system"]["enqueueSystemEvent"],
+      requestHeartbeat: vi.fn() as unknown as PluginRuntime["system"]["requestHeartbeat"],
       requestHeartbeatNow: vi.fn() as unknown as PluginRuntime["system"]["requestHeartbeatNow"],
       runHeartbeatOnce: vi.fn(async () => ({
         status: "ran" as const,

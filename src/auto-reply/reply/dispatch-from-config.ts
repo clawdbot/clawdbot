@@ -59,6 +59,7 @@ import {
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -96,44 +97,39 @@ import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
-let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
-let getReplyFromConfigRuntimePromise: Promise<
-  typeof import("./get-reply-from-config.runtime.js")
-> | null = null;
-let abortRuntimePromise: Promise<typeof import("./abort.runtime.js")> | null = null;
-let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
-let runtimePluginsPromise: Promise<typeof import("./runtime-plugins.runtime.js")> | null = null;
-let replyMediaPathsRuntimePromise: Promise<typeof import("./reply-media-paths.runtime.js")> | null =
-  null;
+const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
+const getReplyFromConfigRuntimeLoader = createLazyImportLoader(
+  () => import("./get-reply-from-config.runtime.js"),
+);
+const abortRuntimeLoader = createLazyImportLoader(() => import("./abort.runtime.js"));
+const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
+const runtimePluginsLoader = createLazyImportLoader(() => import("./runtime-plugins.runtime.js"));
+const replyMediaPathsRuntimeLoader = createLazyImportLoader(
+  () => import("./reply-media-paths.runtime.js"),
+);
 
 function loadRouteReplyRuntime() {
-  routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
-  return routeReplyRuntimePromise;
+  return routeReplyRuntimeLoader.load();
 }
 
 function loadGetReplyFromConfigRuntime() {
-  getReplyFromConfigRuntimePromise ??= import("./get-reply-from-config.runtime.js");
-  return getReplyFromConfigRuntimePromise;
+  return getReplyFromConfigRuntimeLoader.load();
 }
 
 function loadAbortRuntime() {
-  abortRuntimePromise ??= import("./abort.runtime.js");
-  return abortRuntimePromise;
+  return abortRuntimeLoader.load();
 }
 
 function loadTtsRuntime() {
-  ttsRuntimePromise ??= import("../../tts/tts.runtime.js");
-  return ttsRuntimePromise;
+  return ttsRuntimeLoader.load();
 }
 
 function loadRuntimePlugins() {
-  runtimePluginsPromise ??= import("./runtime-plugins.runtime.js");
-  return runtimePluginsPromise;
+  return runtimePluginsLoader.load();
 }
 
 function loadReplyMediaPathsRuntime() {
-  replyMediaPathsRuntimePromise ??= import("./reply-media-paths.runtime.js");
-  return replyMediaPathsRuntimePromise;
+  return replyMediaPathsRuntimeLoader.load();
 }
 
 async function maybeApplyTtsToReplyPayload(

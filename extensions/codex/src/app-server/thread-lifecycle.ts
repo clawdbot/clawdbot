@@ -97,25 +97,19 @@ export async function startOrResumeThread(params: {
     }
   }
 
-  const modelProvider = resolveCodexAppServerModelProvider(params.params.provider);
   const response = assertCodexThreadStartResponse(
-    await params.client.request("thread/start", {
-      model: params.params.modelId,
-      ...(modelProvider ? { modelProvider } : {}),
-      cwd: params.cwd,
-      approvalPolicy: params.appServer.approvalPolicy,
-      approvalsReviewer: params.appServer.approvalsReviewer,
-      sandbox: params.appServer.sandbox,
-      ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
-      serviceName: "OpenClaw",
-      ...(params.config ? { config: params.config } : {}),
-      developerInstructions:
-        params.developerInstructions ?? buildDeveloperInstructions(params.params),
-      dynamicTools: params.dynamicTools,
-      experimentalRawEvents: true,
-      persistExtendedHistory: true,
-    } satisfies CodexThreadStartParams),
+    await params.client.request(
+      "thread/start",
+      buildThreadStartParams(params.params, {
+        cwd: params.cwd,
+        dynamicTools: params.dynamicTools,
+        appServer: params.appServer,
+        developerInstructions: params.developerInstructions,
+        config: params.config,
+      }),
+    ),
   );
+  const modelProvider = resolveCodexAppServerModelProvider(params.params.provider);
   const createdAt = new Date().toISOString();
   await writeCodexAppServerBinding(params.params.sessionFile, {
     threadId: response.thread.id,
@@ -137,6 +131,34 @@ export async function startOrResumeThread(params: {
     dynamicToolsFingerprint,
     createdAt,
     updatedAt: createdAt,
+  };
+}
+
+export function buildThreadStartParams(
+  params: EmbeddedRunAttemptParams,
+  options: {
+    cwd: string;
+    dynamicTools: CodexDynamicToolSpec[];
+    appServer: CodexAppServerRuntimeOptions;
+    developerInstructions?: string;
+    config?: JsonObject;
+  },
+): CodexThreadStartParams {
+  const modelProvider = resolveCodexAppServerModelProvider(params.provider);
+  return {
+    model: params.modelId,
+    ...(modelProvider ? { modelProvider } : {}),
+    cwd: options.cwd,
+    approvalPolicy: options.appServer.approvalPolicy,
+    approvalsReviewer: options.appServer.approvalsReviewer,
+    sandbox: options.appServer.sandbox,
+    ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    serviceName: "OpenClaw",
+    ...(options.config ? { config: options.config } : {}),
+    developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
+    dynamicTools: options.dynamicTools,
+    experimentalRawEvents: true,
+    persistExtendedHistory: true,
   };
 }
 

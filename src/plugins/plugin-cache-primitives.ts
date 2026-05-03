@@ -68,6 +68,11 @@ export class PluginLruCache<T> {
 
 export type ConfigScopedRuntimeCache<T> = WeakMap<OpenClawConfig, Map<string, T>>;
 
+export type ConfigScopedPromiseLoader<T> = {
+  load(config?: OpenClawConfig): Promise<T>;
+  clear(): void;
+};
+
 export function resolveConfigScopedRuntimeCacheValue<T>(params: {
   cache: ConfigScopedRuntimeCache<T>;
   config?: OpenClawConfig;
@@ -92,6 +97,45 @@ export function resolveConfigScopedRuntimeCacheValue<T>(params: {
 
 export function createPluginCacheKey(parts: readonly unknown[]): string {
   return JSON.stringify(parts);
+}
+
+export function createConfigScopedPromiseLoader<T>(
+  load: (config?: OpenClawConfig) => T | Promise<T>,
+): ConfigScopedPromiseLoader<T> {
+  let defaultPromise: Promise<T> | undefined;
+  let promisesByConfig = new WeakMap<OpenClawConfig, Promise<T>>();
+
+  const createPromise = (config?: OpenClawConfig): Promise<T> => {
+    const promise = Promise.resolve().then(() => load(config));
+    void promise.catch(() => {
+      if (config) {
+        promisesByConfig.delete(config);
+      } else if (defaultPromise === promise) {
+        defaultPromise = undefined;
+      }
+    });
+    return promise;
+  };
+
+  return {
+    async load(config?: OpenClawConfig): Promise<T> {
+      if (!config) {
+        defaultPromise ??= createPromise();
+        return await defaultPromise;
+      }
+      const cached = promisesByConfig.get(config);
+      if (cached) {
+        return await cached;
+      }
+      const promise = createPromise(config);
+      promisesByConfig.set(config, promise);
+      return await promise;
+    },
+    clear(): void {
+      defaultPromise = undefined;
+      promisesByConfig = new WeakMap<OpenClawConfig, Promise<T>>();
+    },
+  };
 }
 
 function normalizeMaxEntries(value: number, fallback: number): number {

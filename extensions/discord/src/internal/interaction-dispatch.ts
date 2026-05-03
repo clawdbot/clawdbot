@@ -30,6 +30,12 @@ type DispatchClient = Parameters<typeof createInteraction>[0] & {
   commands: BaseCommand[];
   componentHandler: {
     resolve(customId: string, options?: { componentType?: number }): DispatchComponent | undefined;
+    resolveOneOffComponent(params: {
+      channelId?: string;
+      customId: string;
+      messageId?: string;
+      values?: string[];
+    }): boolean;
   };
   modalHandler: { resolve(customId: string): DispatchModal | undefined };
 };
@@ -75,11 +81,22 @@ export async function dispatchInteraction(
     if (!customId) {
       return;
     }
+    const componentInteraction = interaction as BaseComponentInteraction;
+    if (
+      client.componentHandler.resolveOneOffComponent({
+        channelId: readMessageChannelId(rawData),
+        customId,
+        messageId: readMessageId(rawData),
+        values: readComponentValues(rawData),
+      })
+    ) {
+      await componentInteraction.acknowledge();
+      return;
+    }
     const component = client.componentHandler.resolve(customId, {
       componentType: (rawData as { data?: { component_type?: number } }).data?.component_type,
     });
     if (component) {
-      const componentInteraction = interaction as BaseComponentInteraction;
       await deferComponentInteractionIfNeeded(component, componentInteraction);
       await component.run(componentInteraction, parseComponentInteractionData(component, customId));
     }
@@ -127,4 +144,19 @@ function readInteractionName(rawData: APIInteraction): string | undefined {
 
 function readCustomId(rawData: APIInteraction): string | undefined {
   return (rawData as { data?: { custom_id?: string } }).data?.custom_id;
+}
+
+function readComponentValues(rawData: APIInteraction): string[] | undefined {
+  const values = (rawData as { data?: { values?: unknown } }).data?.values;
+  return Array.isArray(values) ? values.map(String) : undefined;
+}
+
+function readMessageId(rawData: APIInteraction): string | undefined {
+  const messageId = (rawData as { message?: { id?: unknown } }).message?.id;
+  return typeof messageId === "string" ? messageId : undefined;
+}
+
+function readMessageChannelId(rawData: APIInteraction): string | undefined {
+  const channelId = (rawData as { message?: { channel_id?: unknown } }).message?.channel_id;
+  return typeof channelId === "string" ? channelId : undefined;
 }

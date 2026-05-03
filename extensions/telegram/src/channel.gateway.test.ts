@@ -81,6 +81,15 @@ afterEach(() => {
 });
 
 describe("telegramPlugin gateway startup", () => {
+  it("routes message actions through the gateway", () => {
+    expect(telegramPlugin.actions?.resolveExecutionMode?.({ action: "send" as never })).toBe(
+      "gateway",
+    );
+    expect(telegramPlugin.actions?.resolveExecutionMode?.({ action: "read" as never })).toBe(
+      "gateway",
+    );
+  });
+
   it("stops before monitor startup when getMe rejects the token", async () => {
     installTelegramRuntime();
     probeTelegram.mockResolvedValue({

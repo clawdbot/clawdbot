@@ -3,6 +3,10 @@ import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-pla
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
+import {
+  gatewayStartupUnavailableDetails,
+  GATEWAY_STARTUP_RETRY_AFTER_MS,
+} from "./protocol/startup-unavailable.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
@@ -128,8 +132,8 @@ export async function handleGatewayRequest(
       undefined,
       errorShape(ErrorCodes.UNAVAILABLE, `${req.method} unavailable during gateway startup`, {
         retryable: true,
-        retryAfterMs: 500,
-        details: { method: req.method },
+        retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+        details: { ...gatewayStartupUnavailableDetails(), method: req.method },
       }),
     );
     return;

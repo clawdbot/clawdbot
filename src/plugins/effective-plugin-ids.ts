@@ -13,6 +13,7 @@ import {
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
+import { defaultSlotIdForKey } from "./slots.js";
 
 function collectConfiguredChannelIds(
   config: OpenClawConfig,
@@ -120,6 +121,24 @@ function collectExplicitEffectivePluginIds(config: OpenClawConfig): string[] {
   return [...ids].toSorted((left, right) => left.localeCompare(right));
 }
 
+function collectSelectedContextEnginePluginIds(config: OpenClawConfig): string[] {
+  const plugins = normalizePluginsConfig(config.plugins);
+  if (!plugins.enabled) {
+    return [];
+  }
+  const pluginId = plugins.slots.contextEngine;
+  if (!pluginId || pluginId === defaultSlotIdForKey("contextEngine")) {
+    return [];
+  }
+  if (plugins.deny.includes(pluginId)) {
+    return [];
+  }
+  if (plugins.entries[pluginId]?.enabled === false) {
+    return [];
+  }
+  return [pluginId];
+}
+
 export function resolveEffectivePluginIds(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -132,6 +151,9 @@ export function resolveEffectivePluginIds(params: {
   });
   const effectiveConfig = autoEnabled.config;
   const ids = new Set(collectExplicitEffectivePluginIds(effectiveConfig));
+  for (const pluginId of collectSelectedContextEnginePluginIds(effectiveConfig)) {
+    ids.add(pluginId);
+  }
   const configuredChannelIds = collectConfiguredChannelIds(
     effectiveConfig,
     params.config,

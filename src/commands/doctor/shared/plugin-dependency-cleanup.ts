@@ -34,14 +34,19 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
-function isLegacyDependencyDebrisName(name: string): boolean {
+function isRuntimeDependencyMarkerName(name: string): boolean {
   return (
-    name === "node_modules" ||
     name === ".openclaw-runtime-deps.json" ||
     name === ".openclaw-runtime-deps-stamp.json" ||
+    name.startsWith(".openclaw-runtime-deps-")
+  );
+}
+
+function isLegacyDependencyDebrisName(name: string): boolean {
+  return (
+    isRuntimeDependencyMarkerName(name) ||
     name === ".openclaw-pnpm-store" ||
     name === ".openclaw-install-backups" ||
-    name.startsWith(".openclaw-runtime-deps-") ||
     name.startsWith(".openclaw-install-stage-")
   );
 }
@@ -59,8 +64,17 @@ async function collectLegacyExtensionDebris(extensionsRoot: string): Promise<str
       continue;
     }
     const pluginRoot = path.join(extensionsRoot, entry.name);
-    for (const childPath of await collectDirectChildren(pluginRoot)) {
-      if (isLegacyDependencyDebrisName(path.basename(childPath))) {
+    const children = await collectDirectChildren(pluginRoot);
+    const hasRuntimeDepsMarker = children.some((childPath) =>
+      isRuntimeDependencyMarkerName(path.basename(childPath)),
+    );
+    for (const childPath of children) {
+      const basename = path.basename(childPath);
+      if (basename === "node_modules" && hasRuntimeDepsMarker) {
+        targets.push(childPath);
+        continue;
+      }
+      if (isLegacyDependencyDebrisName(basename)) {
         targets.push(childPath);
       }
     }

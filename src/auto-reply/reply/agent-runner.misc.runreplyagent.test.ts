@@ -17,7 +17,8 @@ import {
 } from "../../infra/diagnostic-events.js";
 import {
   clearMemoryPluginState,
-  registerMemoryFlushPlanResolver,
+  registerMemoryCapability,
+  type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -35,6 +36,10 @@ function createCliBackendTestConfig() {
       },
     },
   };
+}
+
+function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
+  registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
 }
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -2140,7 +2145,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
   });
 
   it("enforces <final> during memory flush on fallback providers", async () => {
-    registerMemoryFlushPlanResolver(() => ({
+    registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 1_000,
       forceFlushTranscriptBytes: 1_000_000_000,
       reserveTokensFloor: 20_000,

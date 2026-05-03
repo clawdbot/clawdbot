@@ -12,7 +12,7 @@ import {
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
-import { inspectFeishuCredentials, resolveDefaultFeishuAccountId } from "./accounts.js";
+import { resolveDefaultFeishuAccountId, resolveFeishuAccount } from "./accounts.js";
 import type { AppRegistrationResult } from "./app-registration.js";
 import type { FeishuConfig, FeishuDomain } from "./types.js";
 
@@ -515,14 +515,13 @@ export const feishuSetupWizard: ChannelSetupWizard = {
     configuredScore: 2,
     unconfiguredScore: 0,
     resolveConfigured: ({ cfg }) => isFeishuConfigured(cfg),
-    resolveStatusLines: async ({ cfg, configured }) => {
-      const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-      const resolvedCredentials = inspectFeishuCredentials(feishuCfg);
+    resolveStatusLines: async ({ cfg, accountId, configured }) => {
+      const account = resolveFeishuAccount({ cfg, accountId });
       let probeResult = null;
-      if (configured && resolvedCredentials) {
+      if (configured && account.configured) {
         try {
           const { probeFeishu } = await import("./probe.js");
-          probeResult = await probeFeishu(resolvedCredentials);
+          probeResult = await probeFeishu(account);
         } catch {}
       }
       if (!configured) {

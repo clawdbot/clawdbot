@@ -66,15 +66,15 @@ Site: [clawhub.ai](https://clawhub.ai)
     ```
 
     `plugins search` queries the ClawHub plugin catalog and prints install-ready
-    package names. Bare npm-safe plugin specs are also tried against ClawHub
-    before npm:
+    package names. Use `clawhub:<package>` when you want ClawHub resolution.
+    Bare npm-safe plugin specs install from npm during the launch cutover:
 
     ```bash
     openclaw plugins install openclaw-codex-app-server
     ```
 
-    Use `npm:<package>` when you want npm-only resolution without a
-    ClawHub lookup:
+    `npm:<package>` is also npm-only and is useful when a spec could otherwise
+    be ambiguous:
 
     ```bash
     openclaw plugins install npm:openclaw-codex-app-server
@@ -84,8 +84,9 @@ Site: [clawhub.ai](https://clawhub.ai)
     `minGatewayVersion` compatibility before archive install runs, so
     incompatible hosts fail closed early instead of partially installing
     the package. When a package version publishes a ClawPack artifact,
-    OpenClaw prefers that artifact, verifies the ClawHub digest header and
-    downloaded bytes, and records the ClawPack digest metadata for later
+    OpenClaw prefers the exact uploaded npm-pack `.tgz`, verifies the ClawHub
+    digest header and downloaded bytes, and records the artifact kind, npm
+    integrity, npm shasum, tarball name, and ClawPack digest metadata for later
     updates. Older package versions without ClawPack metadata still use the
     legacy package archive verification path.
 

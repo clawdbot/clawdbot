@@ -74,7 +74,251 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(check).toEqual({ path: "channels.discord.token", satisfied: true });
     expect(check && "value" in check).toBe(false);
   });
+
+  it("reports prompt and command visibility separately from eligibility", () => {
+    const entry: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "background-only",
+        description: "test",
+        filePath: "/tmp/background-only/SKILL.md",
+        baseDir: "/tmp/background-only",
+        source: "test",
+      }),
+      frontmatter: {},
+      invocation: {
+        userInvocable: false,
+        disableModelInvocation: true,
+      },
+    };
+
+    const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
+    const skill = report.skills[0];
+    expect(skill?.eligible).toBe(true);
+    expect(skill?.modelVisible).toBe(false);
+    expect(skill?.userInvocable).toBe(false);
+    expect(skill?.commandVisible).toBe(false);
+  });
+
+  it("uses default-visible exposure semantics when older entries omit exposure fields", () => {
+    const entry: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "legacy-exposure",
+        description: "test",
+        filePath: "/tmp/legacy-exposure/SKILL.md",
+        baseDir: "/tmp/legacy-exposure",
+        source: "test",
+      }),
+      frontmatter: {},
+      exposure: {
+        includeInRuntimeRegistry: true,
+      } as SkillEntry["exposure"],
+    };
+
+    const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
+    const skill = report.skills[0];
+    expect(skill?.eligible).toBe(true);
+    expect(skill?.modelVisible).toBe(true);
+    expect(skill?.userInvocable).toBe(true);
+    expect(skill?.commandVisible).toBe(true);
+  });
+
+  it("reports skills blocked by an agent skill filter", () => {
+    const alpha: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "alpha",
+        description: "test",
+        filePath: "/tmp/alpha/SKILL.md",
+        baseDir: "/tmp/alpha",
+        source: "test",
+      }),
+      frontmatter: {},
+    };
+    const beta: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "beta",
+        description: "test",
+        filePath: "/tmp/beta/SKILL.md",
+        baseDir: "/tmp/beta",
+        source: "test",
+      }),
+      frontmatter: {},
+    };
+
+    const report = buildWorkspaceSkillStatus("/tmp/ws", {
+      entries: [alpha, beta],
+      agentId: "specialist",
+      config: {
+        agents: {
+          list: [{ id: "specialist", skills: ["alpha"] }],
+        },
+      },
+    });
+
+    expect(report.agentId).toBe("specialist");
+    expect(report.agentSkillFilter).toEqual(["alpha"]);
+    expect(report.skills.find((skill) => skill.name === "alpha")?.blockedByAgentFilter).toBe(false);
+    expect(report.skills.find((skill) => skill.name === "alpha")?.modelVisible).toBe(true);
+    expect(report.skills.find((skill) => skill.name === "beta")?.blockedByAgentFilter).toBe(true);
+    expect(report.skills.find((skill) => skill.name === "beta")?.modelVisible).toBe(false);
+  });
+
+  it("classifies a mixed broken skill pack without flattening visibility reasons", () => {
+    const missingBin = "openclaw-test-definitely-missing-skill-bin";
+    const report = buildWorkspaceSkillStatus("/tmp/ws", {
+      agentId: "specialist",
+      config: {
+        agents: {
+          list: [
+            {
+              id: "specialist",
+              skills: [
+                "ready",
+                "needs-bin",
+                "needs-env",
+                "prompt-hidden",
+                "slash-hidden",
+                "disabled",
+                "bundled-blocked",
+              ],
+            },
+          ],
+        },
+        skills: {
+          allowBundled: ["some-other-bundled-skill"],
+          entries: {
+            disabled: { enabled: false },
+          },
+          install: {
+            nodeManager: "pnpm",
+          },
+        },
+      },
+      entries: [
+        createEntry("ready"),
+        createEntry("needs-bin", {
+          metadata: {
+            requires: { bins: [missingBin] },
+            install: [
+              {
+                kind: "node",
+                package: "@openclaw/missing-skill-bin",
+                bins: [missingBin],
+              },
+            ],
+          },
+        }),
+        createEntry("needs-env", {
+          metadata: {
+            primaryEnv: "OPENCLAW_TEST_MISSING_SKILL_KEY",
+            requires: { env: ["OPENCLAW_TEST_MISSING_SKILL_KEY"] },
+          },
+        }),
+        createEntry("prompt-hidden", {
+          invocation: {
+            userInvocable: true,
+            disableModelInvocation: true,
+          },
+        }),
+        createEntry("slash-hidden", {
+          invocation: {
+            userInvocable: false,
+            disableModelInvocation: false,
+          },
+        }),
+        createEntry("agent-filtered"),
+        createEntry("disabled"),
+        createEntry("bundled-blocked", { source: "openclaw-bundled" }),
+      ],
+    });
+
+    const byName = new Map(report.skills.map((skill) => [skill.name, skill]));
+    expect(report.agentSkillFilter).toEqual([
+      "ready",
+      "needs-bin",
+      "needs-env",
+      "prompt-hidden",
+      "slash-hidden",
+      "disabled",
+      "bundled-blocked",
+    ]);
+    expect(byName.get("ready")).toMatchObject({
+      eligible: true,
+      modelVisible: true,
+      commandVisible: true,
+    });
+    expect(byName.get("needs-bin")).toMatchObject({
+      eligible: false,
+      modelVisible: false,
+      commandVisible: false,
+      missing: { bins: [missingBin] },
+      install: [
+        {
+          kind: "node",
+          label: "Install @openclaw/missing-skill-bin (pnpm)",
+          bins: [missingBin],
+        },
+      ],
+    });
+    expect(byName.get("needs-env")).toMatchObject({
+      eligible: false,
+      primaryEnv: "OPENCLAW_TEST_MISSING_SKILL_KEY",
+      missing: { env: ["OPENCLAW_TEST_MISSING_SKILL_KEY"] },
+    });
+    expect(byName.get("prompt-hidden")).toMatchObject({
+      eligible: true,
+      modelVisible: false,
+      commandVisible: true,
+    });
+    expect(byName.get("slash-hidden")).toMatchObject({
+      eligible: true,
+      modelVisible: true,
+      userInvocable: false,
+      commandVisible: false,
+    });
+    expect(byName.get("agent-filtered")).toMatchObject({
+      eligible: true,
+      blockedByAgentFilter: true,
+      modelVisible: false,
+      commandVisible: false,
+    });
+    expect(byName.get("disabled")).toMatchObject({
+      eligible: false,
+      disabled: true,
+      modelVisible: false,
+      commandVisible: false,
+    });
+    expect(byName.get("bundled-blocked")).toMatchObject({
+      eligible: false,
+      blockedByAllowlist: true,
+      modelVisible: false,
+      commandVisible: false,
+    });
+  });
 });
+
+function createEntry(
+  name: string,
+  params: {
+    description?: string;
+    source?: string;
+    metadata?: SkillEntry["metadata"];
+    invocation?: SkillEntry["invocation"];
+  } = {},
+): SkillEntry {
+  const baseDir = `/tmp/${name}`;
+  return {
+    skill: createFixtureSkill({
+      name,
+      description: params.description ?? `${name} skill`,
+      filePath: `${baseDir}/SKILL.md`,
+      baseDir,
+      source: params.source ?? "test",
+    }),
+    frontmatter: {},
+    metadata: params.metadata,
+    invocation: params.invocation,
+  };
+}
 
 function createFixtureSkill(params: {
   name: string;

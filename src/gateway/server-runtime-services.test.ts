@@ -5,11 +5,13 @@ const hoisted = vi.hoisted(() => {
     stop: vi.fn(),
     updateConfig: vi.fn(),
   };
+  const stopModelPricingRefresh = vi.fn();
   return {
     heartbeatRunner,
     startHeartbeatRunner: vi.fn(() => heartbeatRunner),
     startChannelHealthMonitor: vi.fn(() => ({ stop: vi.fn() })),
-    startGatewayModelPricingRefresh: vi.fn(() => vi.fn()),
+    stopModelPricingRefresh,
+    startGatewayModelPricingRefresh: vi.fn(() => stopModelPricingRefresh),
     loadModelPricingCacheModule: vi.fn(),
     isVitestRuntimeEnv: vi.fn(() => false),
     recoverPendingDeliveries: vi.fn(async () => undefined),
@@ -61,6 +63,7 @@ describe("server-runtime-services", () => {
     hoisted.startHeartbeatRunner.mockClear();
     hoisted.startChannelHealthMonitor.mockClear();
     hoisted.startGatewayModelPricingRefresh.mockClear();
+    hoisted.stopModelPricingRefresh.mockClear();
     hoisted.loadModelPricingCacheModule.mockClear();
     hoisted.isVitestRuntimeEnv.mockReset().mockReturnValue(false);
     hoisted.recoverPendingDeliveries.mockClear();
@@ -69,14 +72,13 @@ describe("server-runtime-services", () => {
   });
 
   it("skips model pricing bootstrap import when pricing is disabled", async () => {
-    startGatewayRuntimeServices({
+    activateGatewayScheduledServices({
       minimalTestGateway: false,
       cfgAtStart: { models: { pricing: { enabled: false } } } as never,
-      channelManager: {
-        getRuntimeSnapshot: vi.fn(),
-        isHealthMonitorEnabled: vi.fn(),
-        isManuallyStopped: vi.fn(),
-      } as never,
+      deps: {} as never,
+      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+      cron: { start: vi.fn(async () => undefined) },
+      logCron: { error: vi.fn() },
       log: createLog(),
     });
 
@@ -86,7 +88,7 @@ describe("server-runtime-services", () => {
     expect(hoisted.startGatewayModelPricingRefresh).not.toHaveBeenCalled();
   });
 
-  it("keeps scheduled services inert during initial runtime setup", async () => {
+  it("keeps scheduled services and pricing refresh inert during initial runtime setup", async () => {
     const services = startGatewayRuntimeServices({
       minimalTestGateway: false,
       cfgAtStart: {} as never,
@@ -100,7 +102,8 @@ describe("server-runtime-services", () => {
 
     expect(hoisted.startChannelHealthMonitor).toHaveBeenCalledTimes(1);
     await vi.dynamicImportSettled();
-    expect(hoisted.startGatewayModelPricingRefresh).toHaveBeenCalledWith({ config: {} });
+    expect(hoisted.loadModelPricingCacheModule).not.toHaveBeenCalled();
+    expect(hoisted.startGatewayModelPricingRefresh).not.toHaveBeenCalled();
     expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
     expect(hoisted.recoverPendingDeliveries).not.toHaveBeenCalled();
 
@@ -108,40 +111,45 @@ describe("server-runtime-services", () => {
     expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
   });
 
-  it("passes startup plugin lookup metadata to the initial pricing refresh", async () => {
+  it("starts model pricing refresh after scheduled services activate", async () => {
     const pluginLookUpTable = {
       index: { plugins: [] },
       manifestRegistry: { plugins: [], diagnostics: [] },
     };
+    const cron = { start: vi.fn(async () => undefined) };
+    const log = createLog();
 
-    startGatewayRuntimeServices({
+    const services = activateGatewayScheduledServices({
       minimalTestGateway: false,
       cfgAtStart: {} as never,
-      channelManager: {
-        getRuntimeSnapshot: vi.fn(),
-        isHealthMonitorEnabled: vi.fn(),
-        isManuallyStopped: vi.fn(),
-      } as never,
-      log: createLog(),
+      deps: {} as never,
+      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+      cron,
+      logCron: { error: vi.fn() },
+      log,
       pluginLookUpTable: pluginLookUpTable as never,
     });
 
+    expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
+    expect(cron.start).toHaveBeenCalledTimes(1);
     await vi.dynamicImportSettled();
     expect(hoisted.startGatewayModelPricingRefresh).toHaveBeenCalledWith({
       config: {},
       pluginLookUpTable,
     });
+    services.stopModelPricingRefresh();
+    expect(hoisted.stopModelPricingRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it("does not start model pricing refresh after early stop", async () => {
-    const services = startGatewayRuntimeServices({
+  it("does not start model pricing refresh after scheduled services stop before import settles", async () => {
+    const cron = { start: vi.fn(async () => undefined) };
+    const services = activateGatewayScheduledServices({
       minimalTestGateway: false,
       cfgAtStart: {} as never,
-      channelManager: {
-        getRuntimeSnapshot: vi.fn(),
-        isHealthMonitorEnabled: vi.fn(),
-        isManuallyStopped: vi.fn(),
-      } as never,
+      deps: {} as never,
+      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+      cron,
+      logCron: { error: vi.fn() },
       log: createLog(),
     });
 
@@ -149,6 +157,7 @@ describe("server-runtime-services", () => {
     await vi.dynamicImportSettled();
 
     expect(hoisted.startGatewayModelPricingRefresh).not.toHaveBeenCalled();
+    expect(hoisted.stopModelPricingRefresh).not.toHaveBeenCalled();
   });
 
   it("activates heartbeat, cron, and delivery recovery after sidecars are ready", async () => {

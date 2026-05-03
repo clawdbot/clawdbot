@@ -1299,6 +1299,7 @@ async function deliverOutboundPayloadsCore(
         sessionKey: params.mirror.sessionKey,
         text: mirrorText,
         idempotencyKey: params.mirror.idempotencyKey,
+        config: params.cfg,
       });
     }
   }

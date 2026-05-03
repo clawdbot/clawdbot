@@ -1,25 +1,22 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
-import {
-  resolveConfigScopedRuntimeCacheValue,
-  type ConfigScopedRuntimeCache,
-} from "./plugin-cache-primitives.js";
-import {
-  resolvePluginRegistryLoadCacheKey,
-  resolveRuntimePluginRegistry,
-  type PluginLoadOptions,
-} from "./loader.js";
+import { resolvePluginRegistryLoadCacheKey, type PluginLoadOptions } from "./loader.js";
 import {
   hasManifestContractValue,
   isManifestPluginAvailableForControlPlane,
   loadManifestContractSnapshot,
   listAvailableManifestContractValues,
 } from "./manifest-contract-eligibility.js";
+import {
+  resolveConfigScopedRuntimeCacheValue,
+  type ConfigScopedRuntimeCache,
+} from "./plugin-cache-primitives.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "./registry-types.js";
 
@@ -417,7 +414,12 @@ function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
   loadOptions: PluginLoadOptions;
   requested?: Set<string>;
 }): PluginRegistry[K] {
-  const registry = resolveRuntimePluginRegistry(params.loadOptions);
+  const registry = getLoadedRuntimePluginRegistry({
+    env: params.loadOptions.env,
+    loadOptions: params.loadOptions,
+    workspaceDir: params.loadOptions.workspaceDir,
+    requiredPluginIds: params.loadOptions.onlyPluginIds,
+  });
   const entries = registry?.[params.key] ?? [];
   const missingRequested =
     params.key === "speechProviders" && params.requested && params.requested.size > 0
@@ -449,7 +451,7 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
     return undefined;
   }
 
-  const activeRegistry = resolveRuntimePluginRegistry();
+  const activeRegistry = getLoadedRuntimePluginRegistry();
   const activeProvider = findProviderById(activeRegistry?.[params.key] ?? [], params.providerId);
   if (activeProvider) {
     return activeProvider;
@@ -520,7 +522,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     return [];
   }
 
-  const activeRegistry = resolveRuntimePluginRegistry();
+  const activeRegistry = getLoadedRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
   const missingRequestedProviders =
     activeProviders.length > 0

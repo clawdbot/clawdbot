@@ -16,7 +16,7 @@ type SessionsJsonPayload = {
     key: string;
     modelProvider?: string | null;
     model?: string | null;
-    agentRuntime?: { id: string; fallback?: string; source: string };
+    agentRuntime?: { id: string; source: string };
   }>;
 };
 
@@ -74,7 +74,7 @@ describe("sessionsCommand model resolution", () => {
     setMockSessionsConfig(() => ({
       agents: {
         defaults: {
-          agentRuntime: { id: "claude-cli", fallback: "none" },
+          agentRuntime: { id: "claude-cli" },
           model: { primary: "anthropic/claude-opus-4-7" },
           models: { "anthropic/claude-opus-4-7": {} },
           contextTokens: 200_000,
@@ -100,7 +100,6 @@ describe("sessionsCommand model resolution", () => {
     expect(session?.model).toBe("claude-opus-4-7");
     expect(session?.agentRuntime).toEqual({
       id: "claude-cli",
-      fallback: "none",
       source: "defaults",
     });
   });
@@ -109,7 +108,7 @@ describe("sessionsCommand model resolution", () => {
     setMockSessionsConfig(() => ({
       agents: {
         defaults: {
-          agentRuntime: { id: "claude-cli", fallback: "none" },
+          agentRuntime: { id: "claude-cli" },
           model: { primary: "openai/gpt-5.4" },
           models: { "anthropic/claude-opus-4-7": {} },
           contextTokens: 200_000,

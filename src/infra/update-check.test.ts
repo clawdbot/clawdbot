@@ -9,6 +9,7 @@ import {
   compareSemverStrings,
   fetchNpmLatestVersion,
   fetchNpmPackageTargetStatus,
+  fetchNpmRegistryVersionForChannel,
   fetchNpmTagVersion,
   formatGitInstallLabel,
   resolveNpmChannelTag,
@@ -116,8 +117,20 @@ describe("resolveNpmChannelTag", () => {
       latestVersion: "1.0.4",
       error: undefined,
     });
+    versionByTag.beta = "1.0.5-beta.1";
+    await expect(
+      fetchNpmRegistryVersionForChannel({ channel: "beta", timeoutMs: 1000 }),
+    ).resolves.toEqual({
+      latestVersion: "1.0.5-beta.1",
+      tag: "beta",
+    });
     await expect(fetchNpmTagVersion({ tag: "beta", timeoutMs: 1000 })).resolves.toEqual({
       tag: "beta",
+      version: "1.0.5-beta.1",
+      error: undefined,
+    });
+    await expect(fetchNpmTagVersion({ tag: "missing", timeoutMs: 1000 })).resolves.toEqual({
+      tag: "missing",
       version: null,
       error: "HTTP 404",
     });

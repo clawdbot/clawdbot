@@ -326,6 +326,27 @@ describe("runServiceRestart token drift", () => {
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
+  it("writes restart force and wait options into the service-manager intent", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
+
+    await runServiceRestart({
+      ...createServiceRunArgs(),
+      opts: {
+        json: true,
+        restartIntent: {
+          waitMs: 2_500,
+        },
+      },
+    });
+
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
+      targetPid: 1234,
+      intent: {
+        waitMs: 2_500,
+      },
+    });
+  });
+
   it("clears restart intent when service-manager restart fails before signaling", async () => {
     service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
     writeGatewayRestartIntentSync.mockReturnValueOnce(true);
@@ -351,6 +372,55 @@ describe("runServiceRestart token drift", () => {
     const payload = readJsonLog<{ result?: string; message?: string }>();
     expect(payload.result).toBe("scheduled");
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
+  });
+
+  it("repairs stale loaded services during start before reporting success", async () => {
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway"],
+      environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
+    });
+    const repairLoadedService = vi.fn(async () => ({
+      result: "started" as const,
+      message: "Gateway service definition repaired and started.",
+      warnings: ["service was installed by OpenClaw 2026.4.24, current CLI is 2026.5.2"],
+      loaded: true,
+    }));
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      repairLoadedService,
+    });
+
+    expect(repairLoadedService).toHaveBeenCalledTimes(1);
+    expect(service.restart).not.toHaveBeenCalled();
+    const payload = readJsonLog<{
+      result?: string;
+      message?: string;
+      warnings?: string[];
+      service?: { loaded?: boolean };
+    }>();
+    expect(payload.result).toBe("started");
+    expect(payload.message).toBe("Gateway service definition repaired and started.");
+    expect(payload.warnings?.[0]).toContain("service was installed by OpenClaw");
+    expect(payload.service?.loaded).toBe(true);
+  });
+
+  it("fails start with an install hint when a stale loaded service has no repair callback", async () => {
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway"],
+      environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
+    });
+
+    await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+
+    const payload = readJsonLog<{ ok?: boolean; error?: string; hints?: string[] }>();
+    expect(payload.ok).toBe(false);
+    expect(payload.error).toContain("service needs repair");
+    expect(payload.hints).toEqual(["openclaw gateway install --force"]);
+    expect(service.restart).not.toHaveBeenCalled();
   });
 
   it("fails start when restarting a stopped installed service errors", async () => {

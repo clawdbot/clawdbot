@@ -299,20 +299,26 @@ describe("loadDotEnv", () => {
     });
   });
 
-  it("blocks OPENCLAW_STATE_DIR from workspace .env even when unset in process env", async () => {
+  it("blocks state-directory controls from workspace .env even when unset in process env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
-          "OPENCLAW_STATE_DIR=./evil-state\nOPENCLAW_CONFIG_PATH=./evil-config.json\n",
+          [
+            "OPENCLAW_STATE_DIR=./evil-state",
+            "STATE_DIRECTORY=./evil-systemd-state",
+            "OPENCLAW_CONFIG_PATH=./evil-config.json",
+          ].join("\n"),
         );
 
         delete process.env.OPENCLAW_STATE_DIR;
+        delete process.env.STATE_DIRECTORY;
         delete process.env.OPENCLAW_CONFIG_PATH;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
+        expect(process.env.STATE_DIRECTORY).toBeUndefined();
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
       });
     });
@@ -732,6 +738,7 @@ describe("workspace .env blocklist completeness", () => {
           "ProgramFiles",
           "ProgramFiles(x86)",
           "ProgramW6432",
+          "STATE_DIRECTORY",
           "SYNOLOGY_CHAT_INCOMING_URL",
           "SYNOLOGY_NAS_HOST",
         ];

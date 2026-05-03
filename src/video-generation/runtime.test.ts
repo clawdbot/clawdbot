@@ -106,6 +106,43 @@ describe("video-generation runtime", () => {
     ]);
   });
 
+  it("does not list providers when explicit config disables auto provider fallback", async () => {
+    const provider: VideoGenerationProvider = {
+      id: "video-plugin",
+      capabilities: {},
+      async generateVideo() {
+        return {
+          videos: [
+            {
+              buffer: Buffer.from("mp4-bytes"),
+              mimeType: "video/mp4",
+              fileName: "sample.mp4",
+            },
+          ],
+          model: "vid-v1",
+        };
+      },
+    };
+    providers = [provider];
+
+    const params: GenerateVideoParams = {
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "video-plugin/vid-v1" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+      autoProviderFallback: false,
+    };
+
+    const result = await runGenerateVideo(params);
+
+    expect(result.provider).toBe("video-plugin");
+    expect(listedConfigs).toEqual([]);
+  });
+
   it("auto-detects and falls through to another configured video-generation provider by default", async () => {
     providers = [
       {

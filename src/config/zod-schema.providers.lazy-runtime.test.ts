@@ -33,8 +33,8 @@ describe("ChannelsSchema bundled runtime loading", () => {
       }),
     }));
     vi.doMock("../plugins/plugin-metadata-snapshot.js", () => ({
-      loadPluginMetadataSnapshot: () => ({
-        manifestRegistry: loadPluginManifestRegistryMock({ includeDisabled: true }),
+      loadPluginMetadataSnapshot: (options?: Record<string, unknown>) => ({
+        manifestRegistry: loadPluginManifestRegistryMock(options),
       }),
     }));
     vi.doMock("../plugins/bundled-channel-config-metadata.js", () => ({
@@ -97,7 +97,7 @@ describe("ChannelsSchema bundled runtime loading", () => {
 
     expect(loadPluginManifestRegistryMock.mock.calls).toContainEqual([
       expect.objectContaining({
-        includeDisabled: true,
+        config: {},
       }),
     ]);
     expect(collectBundledChannelConfigsMock).not.toHaveBeenCalled();
@@ -136,7 +136,7 @@ describe("ChannelsSchema bundled runtime loading", () => {
 
     expect(loadPluginManifestRegistryMock.mock.calls).toContainEqual([
       expect.objectContaining({
-        includeDisabled: true,
+        config: {},
       }),
     ]);
     expect(collectBundledChannelConfigsMock).toHaveBeenCalledTimes(1);

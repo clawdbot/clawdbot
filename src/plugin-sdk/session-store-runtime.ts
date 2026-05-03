@@ -2,7 +2,8 @@
 
 export { loadSessionStore } from "../config/sessions/store-load.js";
 export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
-export { resolveStorePath } from "../config/sessions/paths.js";
+export { resolveSessionTranscriptPathInDir, resolveStorePath } from "../config/sessions/paths.js";
+export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
@@ -13,6 +14,7 @@ export {
   saveSessionStore,
   updateLastRoute,
   updateSessionStore,
+  updateSessionStoreEntry,
 } from "../config/sessions/store.js";
 export {
   evaluateSessionFreshness,

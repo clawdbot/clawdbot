@@ -51,6 +51,8 @@ describe("splitMediaFromOutput", () => {
     ["./screenshots/image.png", "MEDIA:./screenshots/image.png"],
     ["media/inbound/image.png", "MEDIA:media/inbound/image.png"],
     ["./screenshot.png", "  MEDIA:./screenshot.png"],
+    ["~/Pictures/My File.png", "MEDIA:~/Pictures/My File.png"],
+    ["~/.openclaw/media/browser/snap.png", "MEDIA:~/.openclaw/media/browser/snap.png"],
     ["C:\\Users\\pete\\Pictures\\snap.png", "MEDIA:C:\\Users\\pete\\Pictures\\snap.png"],
     ["/tmp/tts-fAJy8C/voice-1770246885083.opus", "MEDIA:/tmp/tts-fAJy8C/voice-1770246885083.opus"],
     ["image.png", "MEDIA:image.png"],
@@ -70,10 +72,10 @@ describe("splitMediaFromOutput", () => {
   it.each([
     "MEDIA:../../../etc/passwd",
     "MEDIA:../../.env",
-    "MEDIA:~/.ssh/id_rsa",
-    "MEDIA:~/Pictures/My File.png",
+    "MEDIA:~user/Pictures/My File.png",
+    "MEDIA:~/Pictures/../../.ssh/id_rsa",
     "MEDIA:./foo/../../../etc/shadow",
-  ] as const)("rejects traversal and home-dir path: %s", (input) => {
+  ] as const)("rejects traversal and unsupported home-dir path: %s", (input) => {
     expectRejectedMediaPathCase(input);
   });
 

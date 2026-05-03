@@ -1,0 +1,1471 @@
+[
+  {
+    "description": "Control node canvases (present/hide/navigate/eval/snapshot/A2UI). Use snapshot to capture the rendered UI.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": ["present", "hide", "navigate", "eval", "snapshot", "a2ui_push", "a2ui_reset"],
+          "type": "string"
+        },
+        "delayMs": {
+          "type": "number"
+        },
+        "gatewayToken": {
+          "type": "string"
+        },
+        "gatewayUrl": {
+          "type": "string"
+        },
+        "height": {
+          "type": "number"
+        },
+        "javaScript": {
+          "type": "string"
+        },
+        "jsonl": {
+          "type": "string"
+        },
+        "jsonlPath": {
+          "type": "string"
+        },
+        "maxWidth": {
+          "type": "number"
+        },
+        "node": {
+          "type": "string"
+        },
+        "outputFormat": {
+          "enum": ["png", "jpg", "jpeg"],
+          "type": "string"
+        },
+        "quality": {
+          "type": "number"
+        },
+        "target": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "type": "number"
+        },
+        "url": {
+          "type": "string"
+        },
+        "width": {
+          "type": "number"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      },
+      "required": ["action"],
+      "type": "object"
+    },
+    "name": "canvas"
+  },
+  {
+    "description": "Discover and control paired nodes (status/describe/pairing/notify/camera/photos/screen/location/notifications/invoke). For file retrieval, use the dedicated file_fetch tool.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "status",
+            "describe",
+            "pending",
+            "approve",
+            "reject",
+            "notify",
+            "camera_snap",
+            "camera_list",
+            "camera_clip",
+            "photos_latest",
+            "screen_record",
+            "location_get",
+            "notifications_list",
+            "notifications_action",
+            "device_status",
+            "device_info",
+            "device_permissions",
+            "device_health",
+            "invoke"
+          ],
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "delayMs": {
+          "type": "number"
+        },
+        "delivery": {
+          "enum": ["system", "overlay", "auto"],
+          "type": "string"
+        },
+        "desiredAccuracy": {
+          "enum": ["coarse", "balanced", "precise"],
+          "type": "string"
+        },
+        "deviceId": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "string"
+        },
+        "durationMs": {
+          "maximum": 300000,
+          "type": "number"
+        },
+        "facing": {
+          "description": "camera_snap: front/back/both; camera_clip: front/back only.",
+          "enum": ["front", "back", "both"],
+          "type": "string"
+        },
+        "fps": {
+          "type": "number"
+        },
+        "gatewayToken": {
+          "type": "string"
+        },
+        "gatewayUrl": {
+          "type": "string"
+        },
+        "includeAudio": {
+          "type": "boolean"
+        },
+        "invokeCommand": {
+          "type": "string"
+        },
+        "invokeParamsJson": {
+          "type": "string"
+        },
+        "invokeTimeoutMs": {
+          "type": "number"
+        },
+        "limit": {
+          "type": "number"
+        },
+        "locationTimeoutMs": {
+          "type": "number"
+        },
+        "maxAgeMs": {
+          "type": "number"
+        },
+        "maxWidth": {
+          "type": "number"
+        },
+        "node": {
+          "type": "string"
+        },
+        "notificationAction": {
+          "enum": ["open", "dismiss", "reply"],
+          "type": "string"
+        },
+        "notificationKey": {
+          "type": "string"
+        },
+        "notificationReplyText": {
+          "type": "string"
+        },
+        "outPath": {
+          "type": "string"
+        },
+        "priority": {
+          "enum": ["passive", "active", "timeSensitive"],
+          "type": "string"
+        },
+        "quality": {
+          "type": "number"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "screenIndex": {
+          "type": "number"
+        },
+        "sound": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "type": "number"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": ["action"],
+      "type": "object"
+    },
+    "name": "nodes"
+  },
+  {
+    "description": "Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, \"check back later\" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.\n\nMain-session cron jobs enqueue system events for heartbeat handling. Isolated cron jobs create background task runs that appear in `openclaw tasks`.\n\nACTIONS:\n- status: Check cron scheduler status\n- list: List jobs (use includeDisabled:true to include disabled)\n- add: Create job (requires job object, see schema below)\n- update: Modify job (requires jobId + patch object)\n- remove: Delete job (requires jobId)\n- run: Trigger job immediately (requires jobId)\n- runs: Get job run history (requires jobId)\n- wake: Send wake event (requires text, optional mode)\n\nJOB SCHEMA (for add action):\n{\n  \"name\": \"string (optional)\",\n  \"schedule\": { ... },      // Required: when to run\n  \"payload\": { ... },       // Required: what to execute\n  \"delivery\": { ... },      // Optional: announce summary (isolated/current/session:xxx only) or webhook POST\n  \"sessionTarget\": \"main\" | \"isolated\" | \"current\" | \"session:<custom-id>\",  // Optional, defaults based on context\n  \"enabled\": true | false   // Optional, default true\n}\n\nSESSION TARGET OPTIONS:\n- \"main\": Run in the main session (requires payload.kind=\"systemEvent\")\n- \"isolated\": Run in an ephemeral isolated session (requires payload.kind=\"agentTurn\")\n- \"current\": Bind to the current session where the cron is created (resolved at creation time)\n- \"session:<custom-id>\": Run in a persistent named session (e.g., \"session:project-alpha-daily\")\n\nDEFAULT BEHAVIOR (unchanged for backward compatibility):\n- payload.kind=\"systemEvent\" → defaults to \"main\"\n- payload.kind=\"agentTurn\" → defaults to \"isolated\"\nTo use current session binding, explicitly set sessionTarget=\"current\".\n\nSCHEDULE TYPES (schedule.kind):\n- \"at\": One-shot at absolute time\n  { \"kind\": \"at\", \"at\": \"<ISO-8601 timestamp>\" }\n- \"every\": Recurring interval\n  { \"kind\": \"every\", \"everyMs\": <interval-ms>, \"anchorMs\": <optional-start-ms> }\n- \"cron\": Cron expression evaluated in the supplied timezone, or the Gateway host local timezone when tz is omitted\n  { \"kind\": \"cron\", \"expr\": \"<cron-expression>\", \"tz\": \"<optional-IANA-timezone>\" }\n  Write expr in the selected timezone's local wall-clock time; do not convert the requested local time to UTC first.\n  If tz is omitted, do not assume UTC; the Gateway host local timezone is used.\n  Example: \"Remind me every day at 6pm Shanghai time\" -> { \"kind\": \"cron\", \"expr\": \"0 18 * * *\", \"tz\": \"Asia/Shanghai\" }\n\nFor schedule.kind=\"at\", ISO timestamps without an explicit timezone are treated as UTC.\n\nPAYLOAD TYPES (payload.kind):\n- \"systemEvent\": Injects text as system event into session\n  { \"kind\": \"systemEvent\", \"text\": \"<message>\" }\n- \"agentTurn\": Runs agent with message (isolated sessions only)\n  { \"kind\": \"agentTurn\", \"message\": \"<prompt>\", \"model\": \"<optional>\", \"thinking\": \"<optional>\", \"timeoutSeconds\": <optional, 0 means no timeout> }\n\nDELIVERY (top-level):\n  { \"mode\": \"none|announce|webhook\", \"channel\": \"<optional>\", \"to\": \"<optional>\", \"threadId\": \"<optional>\", \"bestEffort\": <optional-bool> }\n  - Default for isolated agentTurn jobs (when delivery omitted): \"announce\"\n  - announce: send to chat channel (optional channel/to target)\n  - threadId: chat thread/topic id for channels that support threaded delivery\n  - webhook: send finished-run event as HTTP POST to delivery.to (URL required)\n  - If the task needs to send to a specific chat/recipient, set announce delivery.channel/to; do not call messaging tools inside the run.\n\nCRITICAL CONSTRAINTS:\n- sessionTarget=\"main\" REQUIRES payload.kind=\"systemEvent\"\n- sessionTarget=\"isolated\" | \"current\" | \"session:xxx\" REQUIRES payload.kind=\"agentTurn\"\n- For webhook callbacks, use delivery.mode=\"webhook\" with delivery.to set to a URL.\nDefault: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.\n\nWAKE MODES (for wake action):\n- \"next-heartbeat\" (default): Wake on next heartbeat\n- \"now\": Wake immediately\n\nUse jobId as the canonical identifier; id is accepted for compatibility. Use contextMessages (0-10) to add previous messages as context to the job text.",
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "action": {
+          "enum": ["status", "list", "add", "update", "remove", "run", "runs", "wake"],
+          "type": "string"
+        },
+        "contextMessages": {
+          "maximum": 10,
+          "minimum": 0,
+          "type": "number"
+        },
+        "gatewayToken": {
+          "type": "string"
+        },
+        "gatewayUrl": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "includeDisabled": {
+          "type": "boolean"
+        },
+        "job": {
+          "additionalProperties": true,
+          "properties": {
+            "agentId": {
+              "description": "Agent id, or null to keep it unset",
+              "type": "string"
+            },
+            "deleteAfterRun": {
+              "description": "Delete after first execution",
+              "type": "boolean"
+            },
+            "delivery": {
+              "additionalProperties": true,
+              "properties": {
+                "accountId": {
+                  "description": "Account target for delivery",
+                  "type": "string"
+                },
+                "bestEffort": {
+                  "type": "boolean"
+                },
+                "channel": {
+                  "description": "Delivery channel",
+                  "type": "string"
+                },
+                "failureDestination": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "accountId": {
+                      "type": "string"
+                    },
+                    "channel": {
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": ["announce", "webhook"],
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "mode": {
+                  "description": "Delivery mode",
+                  "enum": ["none", "announce", "webhook"],
+                  "type": "string"
+                },
+                "threadId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "description": "Thread/topic id for channels that support threaded delivery"
+                },
+                "to": {
+                  "description": "Delivery target",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "description": {
+              "description": "Human-readable description",
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "failureAlert": {
+              "additionalProperties": true,
+              "description": "Failure alert config object, or the boolean value false to disable alerts for this job",
+              "properties": {
+                "accountId": {
+                  "type": "string"
+                },
+                "after": {
+                  "description": "Failures before alerting",
+                  "type": "number"
+                },
+                "channel": {
+                  "description": "Alert channel",
+                  "type": "string"
+                },
+                "cooldownMs": {
+                  "description": "Cooldown between alerts in ms",
+                  "type": "number"
+                },
+                "includeSkipped": {
+                  "description": "Count consecutive skipped runs toward alerting",
+                  "type": "boolean"
+                },
+                "mode": {
+                  "enum": ["announce", "webhook"],
+                  "type": "string"
+                },
+                "to": {
+                  "description": "Alert target",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "name": {
+              "description": "Job name",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "properties": {
+                "allowUnsafeExternalContent": {
+                  "type": "boolean"
+                },
+                "fallbacks": {
+                  "description": "Fallback model ids",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "kind": {
+                  "description": "Payload type",
+                  "enum": ["systemEvent", "agentTurn"],
+                  "type": "string"
+                },
+                "lightContext": {
+                  "type": "boolean"
+                },
+                "message": {
+                  "description": "Agent prompt (kind=agentTurn)",
+                  "type": "string"
+                },
+                "model": {
+                  "description": "Model override",
+                  "type": "string"
+                },
+                "text": {
+                  "description": "Message text (kind=systemEvent)",
+                  "type": "string"
+                },
+                "thinking": {
+                  "description": "Thinking level override",
+                  "type": "string"
+                },
+                "timeoutSeconds": {
+                  "type": "number"
+                },
+                "toolsAllow": {
+                  "description": "Allowed tool ids",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "schedule": {
+              "additionalProperties": true,
+              "properties": {
+                "anchorMs": {
+                  "description": "Optional start anchor in milliseconds (kind=every)",
+                  "type": "number"
+                },
+                "at": {
+                  "description": "ISO-8601 timestamp (kind=at)",
+                  "type": "string"
+                },
+                "everyMs": {
+                  "description": "Interval in milliseconds (kind=every)",
+                  "type": "number"
+                },
+                "expr": {
+                  "description": "Cron expression (kind=cron) written in the supplied tz's local wall-clock time, or the Gateway host local timezone when tz is omitted; do not convert the requested local time to UTC first. Example: 6pm Shanghai daily is \"0 18 * * *\" with tz \"Asia/Shanghai\".",
+                  "type": "string"
+                },
+                "kind": {
+                  "description": "Schedule type",
+                  "enum": ["at", "every", "cron"],
+                  "type": "string"
+                },
+                "staggerMs": {
+                  "description": "Random jitter in ms (kind=cron)",
+                  "type": "number"
+                },
+                "tz": {
+                  "description": "IANA timezone for interpreting cron wall-clock fields (kind=cron), e.g. \"Asia/Shanghai\"; if omitted, cron uses the Gateway host local timezone.",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "sessionKey": {
+              "description": "Explicit session key, or null to clear it",
+              "type": "string"
+            },
+            "sessionTarget": {
+              "description": "Session target: \"main\", \"isolated\", \"current\", or \"session:<id>\"",
+              "type": "string"
+            },
+            "wakeMode": {
+              "description": "When to wake the session",
+              "enum": ["now", "next-heartbeat"],
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": ["now", "next-heartbeat"],
+          "type": "string"
+        },
+        "patch": {
+          "additionalProperties": true,
+          "properties": {
+            "agentId": {
+              "description": "Agent id, or null to clear it",
+              "type": "string"
+            },
+            "deleteAfterRun": {
+              "type": "boolean"
+            },
+            "delivery": {
+              "additionalProperties": true,
+              "properties": {
+                "accountId": {
+                  "description": "Account target for delivery",
+                  "type": "string"
+                },
+                "bestEffort": {
+                  "type": "boolean"
+                },
+                "channel": {
+                  "description": "Delivery channel",
+                  "type": "string"
+                },
+                "failureDestination": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "accountId": {
+                      "type": "string"
+                    },
+                    "channel": {
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": ["announce", "webhook"],
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "mode": {
+                  "description": "Delivery mode",
+                  "enum": ["none", "announce", "webhook"],
+                  "type": "string"
+                },
+                "threadId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "description": "Thread/topic id for channels that support threaded delivery"
+                },
+                "to": {
+                  "description": "Delivery target",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "description": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "failureAlert": {
+              "additionalProperties": true,
+              "description": "Failure alert config object, or the boolean value false to disable alerts for this job",
+              "properties": {
+                "accountId": {
+                  "type": "string"
+                },
+                "after": {
+                  "description": "Failures before alerting",
+                  "type": "number"
+                },
+                "channel": {
+                  "description": "Alert channel",
+                  "type": "string"
+                },
+                "cooldownMs": {
+                  "description": "Cooldown between alerts in ms",
+                  "type": "number"
+                },
+                "includeSkipped": {
+                  "description": "Count consecutive skipped runs toward alerting",
+                  "type": "boolean"
+                },
+                "mode": {
+                  "enum": ["announce", "webhook"],
+                  "type": "string"
+                },
+                "to": {
+                  "description": "Alert target",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "name": {
+              "description": "Job name",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "properties": {
+                "allowUnsafeExternalContent": {
+                  "type": "boolean"
+                },
+                "fallbacks": {
+                  "description": "Fallback model ids",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "kind": {
+                  "description": "Payload type",
+                  "enum": ["systemEvent", "agentTurn"],
+                  "type": "string"
+                },
+                "lightContext": {
+                  "type": "boolean"
+                },
+                "message": {
+                  "description": "Agent prompt (kind=agentTurn)",
+                  "type": "string"
+                },
+                "model": {
+                  "description": "Model override",
+                  "type": "string"
+                },
+                "text": {
+                  "description": "Message text (kind=systemEvent)",
+                  "type": "string"
+                },
+                "thinking": {
+                  "description": "Thinking level override",
+                  "type": "string"
+                },
+                "timeoutSeconds": {
+                  "type": "number"
+                },
+                "toolsAllow": {
+                  "description": "Allowed tool ids, or null to clear",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "schedule": {
+              "additionalProperties": true,
+              "properties": {
+                "anchorMs": {
+                  "description": "Optional start anchor in milliseconds (kind=every)",
+                  "type": "number"
+                },
+                "at": {
+                  "description": "ISO-8601 timestamp (kind=at)",
+                  "type": "string"
+                },
+                "everyMs": {
+                  "description": "Interval in milliseconds (kind=every)",
+                  "type": "number"
+                },
+                "expr": {
+                  "description": "Cron expression (kind=cron) written in the supplied tz's local wall-clock time, or the Gateway host local timezone when tz is omitted; do not convert the requested local time to UTC first. Example: 6pm Shanghai daily is \"0 18 * * *\" with tz \"Asia/Shanghai\".",
+                  "type": "string"
+                },
+                "kind": {
+                  "description": "Schedule type",
+                  "enum": ["at", "every", "cron"],
+                  "type": "string"
+                },
+                "staggerMs": {
+                  "description": "Random jitter in ms (kind=cron)",
+                  "type": "number"
+                },
+                "tz": {
+                  "description": "IANA timezone for interpreting cron wall-clock fields (kind=cron), e.g. \"Asia/Shanghai\"; if omitted, cron uses the Gateway host local timezone.",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "sessionKey": {
+              "description": "Explicit session key, or null to clear it",
+              "type": "string"
+            },
+            "sessionTarget": {
+              "description": "Session target",
+              "type": "string"
+            },
+            "wakeMode": {
+              "enum": ["now", "next-heartbeat"],
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "runMode": {
+          "enum": ["due", "force"],
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "type": "number"
+        }
+      },
+      "required": ["action"],
+      "type": "object"
+    },
+    "name": "cron"
+  },
+  {
+    "description": "Send, delete, and manage messages via channel plugins. Supports actions: send.",
+    "inputSchema": {
+      "properties": {
+        "accountId": {
+          "type": "string"
+        },
+        "action": {
+          "enum": ["send"],
+          "type": "string"
+        },
+        "activityName": {
+          "description": "Activity name shown in sidebar (e.g. 'with fire'). Ignored for custom type.",
+          "type": "string"
+        },
+        "activityState": {
+          "description": "State text. For custom type this is the status text; for others it shows in the flyout.",
+          "type": "string"
+        },
+        "activityType": {
+          "description": "Activity type: playing, streaming, listening, watching, competing, custom.",
+          "type": "string"
+        },
+        "activityUrl": {
+          "description": "Streaming URL (Twitch or YouTube). Only used with streaming type; may not render for bots.",
+          "type": "string"
+        },
+        "after": {
+          "type": "string"
+        },
+        "appliedTags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "around": {
+          "type": "string"
+        },
+        "asDocument": {
+          "description": "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
+          "type": "boolean"
+        },
+        "asVoice": {
+          "type": "boolean"
+        },
+        "authorId": {
+          "type": "string"
+        },
+        "authorIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "autoArchiveMin": {
+          "type": "number"
+        },
+        "before": {
+          "type": "string"
+        },
+        "bestEffort": {
+          "type": "boolean"
+        },
+        "buffer": {
+          "description": "Base64 payload for attachments (optionally a data: URL).",
+          "type": "string"
+        },
+        "caption": {
+          "type": "string"
+        },
+        "categoryId": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "string"
+        },
+        "channelId": {
+          "description": "Channel id filter (search/thread list/event create).",
+          "type": "string"
+        },
+        "channelIds": {
+          "items": {
+            "description": "Channel id filter (repeatable).",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "chatId": {
+          "description": "Chat id for chat-scoped metadata actions.",
+          "type": "string"
+        },
+        "clearParent": {
+          "description": "Clear the parent/category when supported by the provider.",
+          "type": "boolean"
+        },
+        "contentType": {
+          "type": "string"
+        },
+        "deleteDays": {
+          "type": "number"
+        },
+        "desc": {
+          "type": "string"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "durationMin": {
+          "type": "number"
+        },
+        "effect": {
+          "description": "Alias for effectId (e.g., invisible-ink, balloons).",
+          "type": "string"
+        },
+        "effectId": {
+          "description": "Message effect name/id for sendWithEffect (e.g., invisible ink).",
+          "type": "string"
+        },
+        "emoji": {
+          "type": "string"
+        },
+        "emojiName": {
+          "type": "string"
+        },
+        "endTime": {
+          "type": "string"
+        },
+        "eventName": {
+          "type": "string"
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "fileId": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "filePath": {
+          "type": "string"
+        },
+        "forceDocument": {
+          "description": "Send image/GIF as document to avoid Telegram compression (Telegram only).",
+          "type": "boolean"
+        },
+        "fromMe": {
+          "type": "boolean"
+        },
+        "gatewayToken": {
+          "type": "string"
+        },
+        "gatewayUrl": {
+          "type": "string"
+        },
+        "gifPlayback": {
+          "type": "boolean"
+        },
+        "groupId": {
+          "type": "string"
+        },
+        "guildId": {
+          "type": "string"
+        },
+        "image": {
+          "description": "Cover image URL or local file path for the event.",
+          "type": "string"
+        },
+        "includeArchived": {
+          "type": "boolean"
+        },
+        "includeMembers": {
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "number"
+        },
+        "location": {
+          "type": "string"
+        },
+        "media": {
+          "description": "Media URL or local path. data: URLs are not supported here, use buffer.",
+          "type": "string"
+        },
+        "memberId": {
+          "type": "string"
+        },
+        "memberIdType": {
+          "type": "string"
+        },
+        "members": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        },
+        "message_id": {
+          "description": "snake_case alias of messageId. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
+          "type": "string"
+        },
+        "messageId": {
+          "description": "Target message id for read, reaction, edit, delete, pin, or unpin. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nsfw": {
+          "type": "boolean"
+        },
+        "openId": {
+          "type": "string"
+        },
+        "pageSize": {
+          "type": "number"
+        },
+        "pageToken": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": "string"
+        },
+        "participant": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "pollDurationHours": {
+          "type": "number"
+        },
+        "pollId": {
+          "type": "string"
+        },
+        "pollMulti": {
+          "type": "boolean"
+        },
+        "pollOption": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pollOptionId": {
+          "description": "Poll answer id to vote for. Use when the channel exposes stable answer ids.",
+          "type": "string"
+        },
+        "pollOptionIds": {
+          "items": {
+            "description": "Poll answer ids to vote for in a multiselect poll. Use when the channel exposes stable answer ids.",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pollOptionIndex": {
+          "description": "1-based poll option number to vote for, matching the rendered numbered poll choices.",
+          "type": "number"
+        },
+        "pollOptionIndexes": {
+          "items": {
+            "description": "1-based poll option numbers to vote for in a multiselect poll, matching the rendered numbered poll choices.",
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "pollQuestion": {
+          "type": "string"
+        },
+        "position": {
+          "type": "number"
+        },
+        "query": {
+          "type": "string"
+        },
+        "quoteText": {
+          "description": "Quote text for Telegram reply_parameters",
+          "type": "string"
+        },
+        "rateLimitPerUser": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "remove": {
+          "type": "boolean"
+        },
+        "replyTo": {
+          "type": "string"
+        },
+        "roleId": {
+          "type": "string"
+        },
+        "roleIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "silent": {
+          "type": "boolean"
+        },
+        "startTime": {
+          "type": "string"
+        },
+        "status": {
+          "description": "Bot status: online, dnd, idle, invisible.",
+          "type": "string"
+        },
+        "stickerDesc": {
+          "type": "string"
+        },
+        "stickerId": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stickerName": {
+          "type": "string"
+        },
+        "stickerTags": {
+          "type": "string"
+        },
+        "target": {
+          "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
+          "type": "string"
+        },
+        "targetAuthor": {
+          "type": "string"
+        },
+        "targetAuthorUuid": {
+          "type": "string"
+        },
+        "targets": {
+          "items": {
+            "description": "Recipient/channel targets (same format as --target); accepts ids or names when the directory is available.",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "threadName": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "type": "number"
+        },
+        "topic": {
+          "type": "string"
+        },
+        "type": {
+          "type": "number"
+        },
+        "unionId": {
+          "type": "string"
+        },
+        "until": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        }
+      },
+      "required": ["action"],
+      "type": "object"
+    },
+    "name": "message"
+  },
+  {
+    "description": "Use only for explicit audio intent (audio, voice, speech, TTS) or active TTS config. Never use for ordinary text replies. Audio is delivered automatically from the tool result. After a successful call, follow the current conversation's reply instructions and avoid sending a duplicate text/audio response.",
+    "inputSchema": {
+      "properties": {
+        "channel": {
+          "description": "Optional channel id to pick output format.",
+          "type": "string"
+        },
+        "text": {
+          "description": "Text to convert to speech.",
+          "type": "string"
+        },
+        "timeoutMs": {
+          "description": "Optional provider request timeout in milliseconds.",
+          "minimum": 1,
+          "type": "number"
+        }
+      },
+      "required": ["text"],
+      "type": "object"
+    },
+    "name": "tts"
+  },
+  {
+    "description": "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Config writes hot-reload when possible and restart when required. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart. If restarting during a user task and you still owe the user a reply, pass a specific one-shot `continuationMessage` for what to verify or report after boot; do not write restart sentinel files directly.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "restart",
+            "config.get",
+            "config.schema.lookup",
+            "config.apply",
+            "config.patch",
+            "update.run"
+          ],
+          "type": "string"
+        },
+        "baseHash": {
+          "type": "string"
+        },
+        "continuationMessage": {
+          "type": "string"
+        },
+        "delayMs": {
+          "type": "number"
+        },
+        "gatewayToken": {
+          "type": "string"
+        },
+        "gatewayUrl": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "raw": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "restartDelayMs": {
+          "type": "number"
+        },
+        "sessionKey": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "type": "number"
+        }
+      },
+      "required": ["action"],
+      "type": "object"
+    },
+    "name": "gateway"
+  },
+  {
+    "description": "List OpenClaw agent ids you can target with `sessions_spawn` when `runtime=\"subagent\"` (based on subagent allowlists).",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "agents_list"
+  },
+  {
+    "description": "List visible sessions with optional filters for kind, label, agentId, search, recent activity, derived titles, and last-message previews. Use this to discover a target session before calling sessions_history or sessions_send.",
+    "inputSchema": {
+      "properties": {
+        "activeMinutes": {
+          "minimum": 1,
+          "type": "number"
+        },
+        "agentId": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "includeDerivedTitles": {
+          "type": "boolean"
+        },
+        "includeLastMessage": {
+          "type": "boolean"
+        },
+        "kinds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "label": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "limit": {
+          "minimum": 1,
+          "type": "number"
+        },
+        "messageLimit": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "search": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "sessions_list"
+  },
+  {
+    "description": "Fetch sanitized message history for a visible session. Supports limits and optional tool messages; use this to inspect another session before replying, debugging, or resuming work.",
+    "inputSchema": {
+      "properties": {
+        "includeTools": {
+          "type": "boolean"
+        },
+        "limit": {
+          "minimum": 1,
+          "type": "number"
+        },
+        "sessionKey": {
+          "type": "string"
+        }
+      },
+      "required": ["sessionKey"],
+      "type": "object"
+    },
+    "name": "sessions_history"
+  },
+  {
+    "description": "Send a message into another visible session by sessionKey or label. Thread-scoped chat sessions are rejected; target the parent channel session for inter-agent coordination. Use this to delegate follow-up work to an existing session; waits for the target run and returns the updated assistant reply when available.",
+    "inputSchema": {
+      "properties": {
+        "agentId": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "sessionKey": {
+          "type": "string"
+        },
+        "timeoutSeconds": {
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": ["message"],
+      "type": "object"
+    },
+    "name": "sessions_send"
+  },
+  {
+    "description": "Spawn a clean isolated session by default with the native subagent runtime. `mode=\"run\"` is one-shot background work. Subagents inherit the parent workspace directory automatically. For native subagents only, set `context=\"fork\"` when the child needs the current transcript context; otherwise omit it or use `context=\"isolated\"`. Use this when the work should happen in a fresh child session instead of the current one.",
+    "inputSchema": {
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "attachAs": {
+          "properties": {
+            "mountPath": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "attachments": {
+          "items": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "encoding": {
+                "enum": ["utf8", "base64"],
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": ["name", "content"],
+            "type": "object"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "cleanup": {
+          "enum": ["delete", "keep"],
+          "type": "string"
+        },
+        "context": {
+          "description": "Native subagent context mode. Omit or use \"isolated\" for a clean child session; use \"fork\" only when the child needs the requester transcript context.",
+          "enum": ["isolated", "fork"],
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "lightContext": {
+          "description": "When true, spawned subagent runs use lightweight bootstrap context. Only applies to runtime='subagent'.",
+          "type": "boolean"
+        },
+        "mode": {
+          "enum": ["run"],
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "runtime": {
+          "enum": ["subagent"],
+          "type": "string"
+        },
+        "runTimeoutSeconds": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "sandbox": {
+          "enum": ["inherit", "require"],
+          "type": "string"
+        },
+        "task": {
+          "type": "string"
+        },
+        "thinking": {
+          "type": "string"
+        },
+        "timeoutSeconds": {
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": ["task"],
+      "type": "object"
+    },
+    "name": "sessions_spawn"
+  },
+  {
+    "description": "End your current turn. Use after spawning subagents to receive their results as the next message.",
+    "inputSchema": {
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "sessions_yield"
+  },
+  {
+    "description": "List, kill, or steer spawned sub-agents for this requester session. Use this for sub-agent orchestration.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": ["list", "kill", "steer"],
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "recentMinutes": {
+          "minimum": 1,
+          "type": "number"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "subagents"
+  },
+  {
+    "description": "Show a /status-equivalent session status card for the current or another visible session, including usage, time, cost when available, and linked background task context. Use `sessionKey=\"current\"` for the current session; do not use UI/client labels such as `openclaw-tui` as session keys. Optional `model` sets a per-session model override; `model=default` resets overrides. Use this for questions like what model is active or how a session is configured.",
+    "inputSchema": {
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "sessionKey": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "session_status"
+  },
+  {
+    "description": "Search the web. Returns provider-normalized results for current information lookup.",
+    "inputSchema": {
+      "properties": {
+        "count": {
+          "description": "Number of results to return.",
+          "maximum": 10,
+          "minimum": 1,
+          "type": "number"
+        },
+        "country": {
+          "description": "2-letter country code for region-specific results.",
+          "type": "string"
+        },
+        "date_after": {
+          "description": "Only results published after this date (YYYY-MM-DD).",
+          "type": "string"
+        },
+        "date_before": {
+          "description": "Only results published before this date (YYYY-MM-DD).",
+          "type": "string"
+        },
+        "domain_filter": {
+          "description": "Perplexity native Search API domain filter.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "freshness": {
+          "description": "Filter by time: day, week, month, or year.",
+          "type": "string"
+        },
+        "language": {
+          "description": "ISO 639-1 language code for results.",
+          "type": "string"
+        },
+        "max_tokens": {
+          "description": "Perplexity native Search API total content budget.",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "number"
+        },
+        "max_tokens_per_page": {
+          "description": "Perplexity native Search API max tokens extracted per page.",
+          "minimum": 1,
+          "type": "number"
+        },
+        "query": {
+          "description": "Search query string.",
+          "type": "string"
+        },
+        "search_lang": {
+          "description": "Brave search result language code.",
+          "type": "string"
+        },
+        "ui_lang": {
+          "description": "Brave UI locale code in language-region format.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "web_search"
+  },
+  {
+    "description": "Fetch and extract readable content from a URL (HTML → markdown/text). Use for lightweight page access without browser automation.",
+    "inputSchema": {
+      "properties": {
+        "extractMode": {
+          "default": "markdown",
+          "description": "Extraction mode (\"markdown\" or \"text\").",
+          "enum": ["markdown", "text"],
+          "type": "string"
+        },
+        "maxChars": {
+          "description": "Maximum characters to return (truncates when exceeded).",
+          "minimum": 100,
+          "type": "number"
+        },
+        "url": {
+          "description": "HTTP or HTTPS URL to fetch.",
+          "type": "string"
+        }
+      },
+      "required": ["url"],
+      "type": "object"
+    },
+    "name": "web_fetch"
+  }
+]

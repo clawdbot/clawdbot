@@ -150,6 +150,8 @@
   "direct-dm-access",
   "direct-dm-guard-policy",
   "discord",
+  "mattermost",
+  "matrix",
   "device-bootstrap",
   "diagnostic-runtime",
   "error-runtime",

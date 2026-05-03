@@ -33,7 +33,7 @@ const NON_CHANNEL_DEP_KEYS = new Set([
   "migrateOrphanedSessionKeys",
   "nowMs",
   "onEvent",
-  "requestHeartbeatNow",
+  "requestHeartbeat",
   "resolveSessionStorePath",
   "runHeartbeatOnce",
   "runIsolatedAgentJob",

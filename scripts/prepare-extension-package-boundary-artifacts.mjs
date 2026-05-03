@@ -20,6 +20,9 @@ const PLUGIN_SDK_TYPE_INPUTS = [
 const ROOT_DTS_INPUTS = ["tsconfig.plugin-sdk.dts.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const ROOT_DTS_STAMP = "dist/plugin-sdk/.boundary-dts.stamp";
 const ROOT_DTS_REQUIRED_OUTPUTS = [
+  "dist/plugin-sdk/packages/memory-host-sdk/src/engine-embeddings.d.ts",
+  "dist/plugin-sdk/packages/memory-host-sdk/src/secret.d.ts",
+  "dist/plugin-sdk/packages/memory-host-sdk/src/status.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/error-runtime.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/plugin-entry.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/provider-auth.d.ts",

@@ -143,7 +143,7 @@ describe("noteClaudeCliHealth", () => {
               {
                 id: "xiaoao",
                 workspace: claudeWorkspace,
-                agentRuntime: { id: "claude-cli", fallback: "none" },
+                agentRuntime: { id: "claude-cli" },
                 model: "anthropic/claude-opus-4-7",
               },
             ],

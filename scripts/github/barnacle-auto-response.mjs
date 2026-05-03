@@ -1,6 +1,6 @@
 // Barnacle owns deterministic GitHub triage and auto-response behavior.
 
-const activePrLimit = 10;
+const activePrLimit = 20;
 
 const thirdPartyExtensionMessage =
   "Please publish this as a third-party plugin on [ClawHub](https://clawhub.ai) instead of adding it to the core repo. Docs: https://docs.openclaw.ai/plugin and https://docs.openclaw.ai/tools/clawhub";
@@ -80,7 +80,7 @@ export const managedLabelSpecs = {
   },
   "r: too-many-prs": {
     color: "D93F0B",
-    description: "Auto-close: author has more than ten active PRs.",
+    description: "Auto-close: author has more than twenty active PRs.",
   },
   "r: too-many-prs-override": {
     color: "C2E0C6",

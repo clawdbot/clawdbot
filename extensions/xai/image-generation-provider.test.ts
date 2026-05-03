@@ -127,6 +127,7 @@ describe("xai image generation provider", () => {
     expect(postJsonRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: expect.stringContaining("/images/generations"),
+        timeoutMs: 180_000,
         body: expect.objectContaining({
           aspect_ratio: "2:3",
           resolution: "2k",

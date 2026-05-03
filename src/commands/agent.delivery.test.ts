@@ -200,6 +200,21 @@ describe("deliverAgentCommandResult", () => {
     );
   });
 
+  it("stays silent for intentional empty payloads", async () => {
+    const runtime = createRuntime();
+
+    await runDelivery({
+      opts: {
+        message: "hello",
+      },
+      runtime,
+      payloads: [],
+    });
+
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
   it("uses runContext turn source over stale session last route", async () => {
     await runDelivery({
       opts: {

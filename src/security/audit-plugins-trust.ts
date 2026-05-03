@@ -15,6 +15,7 @@ import {
 } from "../plugins/plugin-registry.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
+import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
 
 type SandboxToolPolicy = import("../agents/sandbox/types.js").SandboxToolPolicy;
 
@@ -143,6 +144,7 @@ async function listInstalledPluginDirs(params: {
   const pluginDirs = entries
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
+    .filter((name) => !shouldIgnoreInstalledPluginDirName(name))
     .filter(Boolean);
   return { extensionsDir, pluginDirs };
 }

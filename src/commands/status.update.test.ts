@@ -140,6 +140,24 @@ describe("formatUpdateOneLiner", () => {
     );
   });
 
+  it("renders beta registry tags instead of calling them npm latest", () => {
+    const update = buildUpdate({
+      installKind: "package",
+      packageManager: "npm",
+      registry: { latestVersion: VERSION, tag: "beta" },
+      deps: {
+        manager: "npm",
+        status: "ok",
+        lockfilePath: "package-lock.json",
+        markerPath: "node_modules",
+      },
+    });
+
+    expect(formatUpdateOneLiner(update)).toBe(
+      `Update: npm · up to date · npm beta ${VERSION} · deps ok`,
+    );
+  });
+
   it("renders package-manager mode with registry error", () => {
     const update = buildUpdate({
       installKind: "package",

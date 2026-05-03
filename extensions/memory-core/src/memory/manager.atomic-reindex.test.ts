@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { moveMemoryIndexFiles, runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
 
 describe("memory manager atomic reindex", () => {
   let fixtureRoot = "";
@@ -56,6 +56,76 @@ describe("memory manager atomic reindex", () => {
 
     expect(readChunkMarker(indexPath)).toBe("after");
     await expect(fs.access(tempIndexPath)).rejects.toThrow();
+  });
+
+  it("retries transient rename failures during index swaps", async () => {
+    const rename = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "EBUSY" }))
+      .mockResolvedValue(undefined);
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
+      fileOps: { rename, rm: fs.rm, wait },
+      maxRenameAttempts: 3,
+      renameRetryDelayMs: 10,
+    });
+
+    expect(rename).toHaveBeenCalledTimes(4);
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(wait).toHaveBeenCalledWith(10);
+  });
+
+  it("throws after retrying transient rename failures up to the attempt limit", async () => {
+    const rename = vi.fn().mockRejectedValue(Object.assign(new Error("busy"), { code: "EBUSY" }));
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
+        fileOps: { rename, rm: fs.rm, wait },
+        maxRenameAttempts: 3,
+        renameRetryDelayMs: 10,
+      }),
+    ).rejects.toMatchObject({ code: "EBUSY" });
+
+    expect(rename).toHaveBeenCalledTimes(3);
+    expect(wait).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenNthCalledWith(1, 10);
+    expect(wait).toHaveBeenNthCalledWith(2, 20);
+  });
+
+  it("does not retry missing optional sqlite sidecar files", async () => {
+    const rename = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(Object.assign(new Error("missing wal"), { code: "ENOENT" }))
+      .mockRejectedValueOnce(Object.assign(new Error("missing shm"), { code: "ENOENT" }));
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
+      fileOps: { rename, rm: fs.rm, wait },
+      maxRenameAttempts: 3,
+      renameRetryDelayMs: 10,
+    });
+
+    expect(rename).toHaveBeenCalledTimes(3);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("does not retry non-transient rename failures", async () => {
+    const rename = vi.fn().mockRejectedValue(Object.assign(new Error("invalid"), { code: "EINVAL" }));
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
+        fileOps: { rename, rm: fs.rm, wait },
+        maxRenameAttempts: 3,
+        renameRetryDelayMs: 10,
+      }),
+    ).rejects.toMatchObject({ code: "EINVAL" });
+
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(wait).not.toHaveBeenCalled();
   });
 });
 

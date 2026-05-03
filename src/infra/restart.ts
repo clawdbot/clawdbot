@@ -91,6 +91,13 @@ type GatewayRestartIntentPayload = {
   kind: "gateway-restart";
   pid: number;
   createdAt: number;
+  force?: boolean;
+  waitMs?: number;
+};
+
+export type GatewayRestartIntent = {
+  force?: boolean;
+  waitMs?: number;
 };
 
 function resolveGatewayRestartIntentPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -117,6 +124,7 @@ function normalizeRestartIntentPid(pid: number | undefined): number | null {
 export function writeGatewayRestartIntentSync(opts: {
   env?: NodeJS.ProcessEnv;
   targetPid?: number;
+  intent?: GatewayRestartIntent;
 }): boolean {
   const targetPid = normalizeRestartIntentPid(opts.targetPid);
   if (targetPid === null) {
@@ -131,6 +139,12 @@ export function writeGatewayRestartIntentSync(opts: {
       kind: "gateway-restart",
       pid: targetPid,
       createdAt: Date.now(),
+      ...(opts.intent?.force ? { force: true } : {}),
+      ...(typeof opts.intent?.waitMs === "number" &&
+      Number.isFinite(opts.intent.waitMs) &&
+      opts.intent.waitMs >= 0
+        ? { waitMs: Math.floor(opts.intent.waitMs) }
+        : {}),
     };
     tmpPath = path.join(
       path.dirname(intentPath),
@@ -168,9 +182,18 @@ function parseGatewayRestartIntent(raw: string): GatewayRestartIntentPayload | n
       typeof parsed.pid === "number" &&
       Number.isFinite(parsed.pid) &&
       typeof parsed.createdAt === "number" &&
-      Number.isFinite(parsed.createdAt)
+      Number.isFinite(parsed.createdAt) &&
+      (parsed.force === undefined || typeof parsed.force === "boolean") &&
+      (parsed.waitMs === undefined ||
+        (typeof parsed.waitMs === "number" && Number.isFinite(parsed.waitMs) && parsed.waitMs >= 0))
     ) {
-      return parsed as GatewayRestartIntentPayload;
+      return {
+        kind: "gateway-restart",
+        pid: parsed.pid,
+        createdAt: parsed.createdAt,
+        ...(parsed.force ? { force: true } : {}),
+        ...(typeof parsed.waitMs === "number" ? { waitMs: Math.floor(parsed.waitMs) } : {}),
+      };
     }
   } catch {
     return null;
@@ -178,32 +201,45 @@ function parseGatewayRestartIntent(raw: string): GatewayRestartIntentPayload | n
   return null;
 }
 
-export function consumeGatewayRestartIntentSync(
+export function consumeGatewayRestartIntentPayloadSync(
   env: NodeJS.ProcessEnv = process.env,
   now = Date.now(),
-): boolean {
+): GatewayRestartIntent | null {
   const intentPath = resolveGatewayRestartIntentPath(env);
   let raw: string;
   try {
     const stat = fs.lstatSync(intentPath);
     if (!stat.isFile() || stat.size > GATEWAY_RESTART_INTENT_MAX_BYTES) {
-      return false;
+      return null;
     }
     raw = fs.readFileSync(intentPath, "utf8");
   } catch {
-    return false;
+    return null;
   } finally {
     clearGatewayRestartIntentSync(env);
   }
   const payload = parseGatewayRestartIntent(raw);
   if (!payload) {
-    return false;
+    return null;
   }
   if (payload.pid !== process.pid) {
-    return false;
+    return null;
   }
   const ageMs = now - payload.createdAt;
-  return ageMs >= 0 && ageMs <= GATEWAY_RESTART_INTENT_TTL_MS;
+  if (ageMs < 0 || ageMs > GATEWAY_RESTART_INTENT_TTL_MS) {
+    return null;
+  }
+  return {
+    ...(payload.force ? { force: true } : {}),
+    ...(typeof payload.waitMs === "number" ? { waitMs: payload.waitMs } : {}),
+  };
+}
+
+export function consumeGatewayRestartIntentSync(
+  env: NodeJS.ProcessEnv = process.env,
+  now = Date.now(),
+): boolean {
+  return consumeGatewayRestartIntentPayloadSync(env, now) !== null;
 }
 
 function summarizeChangedPaths(paths: string[] | undefined, maxPaths = 6): string | null {

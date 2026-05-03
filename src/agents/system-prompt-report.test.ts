@@ -123,4 +123,25 @@ describe("buildSystemPromptReport", () => {
 
     expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
   });
+
+  it("does not count injected files as project context when the rendered prompt omits them", () => {
+    const file = makeBootstrapFile({
+      path: "/tmp/workspace/AGENTS.md",
+      content: "raw bootstrap context",
+    });
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "custom override",
+      bootstrapFiles: [file],
+      injectedFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "rendered context" }],
+      skillsPrompt: "",
+      tools: [],
+    });
+
+    expect(report.systemPrompt.chars).toBe("custom override".length);
+    expect(report.systemPrompt.projectContextChars).toBe(0);
+    expect(report.systemPrompt.nonProjectContextChars).toBe("custom override".length);
+  });
 });

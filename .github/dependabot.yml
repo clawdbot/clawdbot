@@ -29,7 +29,7 @@ updates:
         update-types:
           - minor
           - patch
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 20
     registries:
       - npm-npmjs
 

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 import {
   clearSessionStoreCacheForTest,
-  drainSessionStoreLockQueuesForTest,
+  drainSessionStoreWriterQueuesForTest,
 } from "../config/sessions/store.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
@@ -207,7 +207,7 @@ describe("subagent registry persistence", () => {
     announceSpy.mockClear();
     __testing.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
-    await drainSessionStoreLockQueuesForTest();
+    await drainSessionStoreWriterQueuesForTest();
     clearSessionStoreCacheForTest();
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });

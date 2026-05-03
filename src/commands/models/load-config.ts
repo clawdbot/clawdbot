@@ -2,7 +2,7 @@ import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolu
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   getRuntimeConfig,
-  readSourceConfigSnapshotForWrite,
+  getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
   getModelsCommandSecretTargetIds,
@@ -14,31 +14,24 @@ export type LoadedModelsConfig = {
   diagnostics: string[];
 };
 
-async function loadSourceConfigSnapshot(fallback: OpenClawConfig): Promise<OpenClawConfig> {
-  try {
-    const { snapshot } = await readSourceConfigSnapshotForWrite();
-    if (snapshot.valid) {
-      return snapshot.sourceConfig;
-    }
-  } catch {
-    // Fall back to runtime-loaded config if source snapshot cannot be read.
-  }
-  return fallback;
-}
-
 export async function loadModelsConfigWithSource(params: {
   commandName: string;
   runtime?: RuntimeEnv;
 }): Promise<LoadedModelsConfig> {
   const runtimeConfig = getRuntimeConfig();
-  const sourceConfig = await loadSourceConfigSnapshot(runtimeConfig);
+  const pinnedSourceConfig = getRuntimeConfigSourceSnapshot();
+  const sourceConfig = pinnedSourceConfig ?? runtimeConfig;
   const { resolvedConfig, diagnostics } = await resolveCommandConfigWithSecrets({
     config: runtimeConfig,
     commandName: params.commandName,
     targetIds: getModelsCommandSecretTargetIds(),
     runtime: params.runtime,
   });
-  setRuntimeConfigSnapshot(resolvedConfig, sourceConfig);
+  if (pinnedSourceConfig) {
+    setRuntimeConfigSnapshot(resolvedConfig, sourceConfig);
+  } else {
+    setRuntimeConfigSnapshot(resolvedConfig);
+  }
   return {
     sourceConfig,
     resolvedConfig,

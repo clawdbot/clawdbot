@@ -539,7 +539,7 @@ describe("runAgentTurnWithFallback", () => {
     followupRun.run.config = {
       agents: {
         defaults: {
-          agentRuntime: { id: "claude-cli", fallback: "none" },
+          agentRuntime: { id: "claude-cli" },
         },
       },
     };

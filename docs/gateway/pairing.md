@@ -69,6 +69,8 @@ Notes:
   metadata and the latest allowlisted declared command snapshot for operator visibility.
 - Approval **always** generates a fresh token; no token is ever returned from
   `node.pair.request`.
+- Operator scope levels and approval-time checks are summarized in
+  [Operator scopes](/gateway/operator-scopes).
 - Requests may include `silent: true` as a hint for auto-approval flows.
 - `node.pair.approve` uses the pending request's declared commands to enforce
   extra approval scopes:

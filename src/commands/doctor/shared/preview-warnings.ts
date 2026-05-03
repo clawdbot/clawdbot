@@ -3,14 +3,16 @@ import { isToolAllowedByPolicies } from "../../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
+import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
 
-let channelDoctorModulePromise: Promise<ChannelDoctorModule> | undefined;
+const channelDoctorModuleLoader = createLazyImportLoader<ChannelDoctorModule>(
+  () => import("./channel-doctor.js"),
+);
 
 function loadChannelDoctorModule(): Promise<ChannelDoctorModule> {
-  channelDoctorModulePromise ??= import("./channel-doctor.js");
-  return channelDoctorModulePromise;
+  return channelDoctorModuleLoader.load();
 }
 
 function hasRecord(value: unknown): value is Record<string, unknown> {

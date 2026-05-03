@@ -105,7 +105,12 @@ openclaw_e2e_install_package /tmp/openclaw-install.log
 
 command -v openclaw >/dev/null
 package_root="$(openclaw_e2e_package_root)"
-openclaw_e2e_assert_package_extensions "$package_root" telegram discord
+if [ -d "$package_root/dist/extensions/$CHANNEL" ]; then
+  CHANNEL_PACKAGE_MODE="bundled"
+else
+  CHANNEL_PACKAGE_MODE="external"
+  echo "$CHANNEL is not packaged with core OpenClaw; expecting channel selection to install it on demand."
+fi
 
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-mock-openai.log)"
 openclaw_e2e_wait_mock_openai "$MOCK_PORT"
@@ -126,7 +131,7 @@ openclaw onboard --non-interactive --accept-risk \
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-onboard-state "$HOME"
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs configure-mock-model "$MOCK_PORT"
 
-openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$package_root" "$HOME/.openclaw"
+openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
 
 echo "Configuring $CHANNEL..."
 openclaw channels add --channel "$CHANNEL" --token "$CHANNEL_TOKEN" >/tmp/openclaw-channel-add.log 2>&1
@@ -134,7 +139,11 @@ node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-channel-con
 
 echo "Running doctor after channel activation..."
 openclaw doctor --repair --non-interactive >/tmp/openclaw-doctor.log 2>&1
-openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$package_root" "$HOME/.openclaw"
+if [ "$CHANNEL_PACKAGE_MODE" = "external" ]; then
+  openclaw_e2e_assert_dep_present "$DEP_SENTINEL" "$HOME/.openclaw"
+else
+  openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
+fi
 
 echo "Running local agent turn against mocked OpenAI..."
 openclaw agent --local \

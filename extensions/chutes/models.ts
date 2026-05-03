@@ -1,9 +1,14 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
+import { isChutesModelDiscoveryTestEnvironment } from "./model-discovery-env.js";
 
 const log = createSubsystemLogger("chutes-models");
 
@@ -518,7 +523,7 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
     return cached.models;
   }
 
-  if (process.env.NODE_ENV === "test" || process.env.VITEST === "true") {
+  if (isChutesModelDiscoveryTestEnvironment()) {
     return CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition);
   }
 
@@ -532,77 +537,94 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
   }
 
   try {
-    let response = await fetch(`${CHUTES_BASE_URL}/models`, {
-      signal: AbortSignal.timeout(10_000),
-      headers,
+    let guardedFetch = await fetchWithSsrFGuard({
+      url: `${CHUTES_BASE_URL}/models`,
+      init: {
+        signal: AbortSignal.timeout(10_000),
+        headers,
+      },
+      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(CHUTES_BASE_URL),
+      auditContext: "chutes-model-discovery",
     });
+    let response = guardedFetch.response;
 
     if (response.status === 401 && trimmedKey) {
+      await guardedFetch.release();
       effectiveKey = "";
-      response = await fetch(`${CHUTES_BASE_URL}/models`, {
-        signal: AbortSignal.timeout(10_000),
+      guardedFetch = await fetchWithSsrFGuard({
+        url: `${CHUTES_BASE_URL}/models`,
+        init: {
+          signal: AbortSignal.timeout(10_000),
+        },
+        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(CHUTES_BASE_URL),
+        auditContext: "chutes-model-discovery",
       });
+      response = guardedFetch.response;
     }
 
-    if (!response.ok) {
-      if (response.status !== 401 && response.status !== 503) {
-        log.warn(`GET /v1/models failed: HTTP ${response.status}, using static catalog`);
+    try {
+      if (!response.ok) {
+        if (response.status !== 401 && response.status !== 503) {
+          log.warn(`GET /v1/models failed: HTTP ${response.status}, using static catalog`);
+        }
+        return staticCatalog();
       }
-      return staticCatalog();
-    }
 
-    const body = (await response.json()) as OpenAIListModelsResponse;
-    const data = body?.data;
-    if (!Array.isArray(data) || data.length === 0) {
-      log.warn("No models in response, using static catalog");
-      return staticCatalog();
-    }
-
-    const seen = new Set<string>();
-    const models: ModelDefinitionConfig[] = [];
-
-    for (const entry of data) {
-      const id = normalizeOptionalString(entry?.id) ?? "";
-      if (!id || seen.has(id)) {
-        continue;
+      const body = (await response.json()) as OpenAIListModelsResponse;
+      const data = body?.data;
+      if (!Array.isArray(data) || data.length === 0) {
+        log.warn("No models in response, using static catalog");
+        return staticCatalog();
       }
-      seen.add(id);
 
-      const lowerId = normalizeLowercaseStringOrEmpty(id);
-      const isReasoning =
-        entry.supported_features?.includes("reasoning") ||
-        lowerId.includes("r1") ||
-        lowerId.includes("thinking") ||
-        lowerId.includes("reason") ||
-        lowerId.includes("tee");
+      const seen = new Set<string>();
+      const models: ModelDefinitionConfig[] = [];
 
-      const input: Array<"text" | "image"> = (entry.input_modalities || ["text"]).filter(
-        (i): i is "text" | "image" => i === "text" || i === "image",
+      for (const entry of data) {
+        const id = normalizeOptionalString(entry?.id) ?? "";
+        if (!id || seen.has(id)) {
+          continue;
+        }
+        seen.add(id);
+
+        const lowerId = normalizeLowercaseStringOrEmpty(id);
+        const isReasoning =
+          entry.supported_features?.includes("reasoning") ||
+          lowerId.includes("r1") ||
+          lowerId.includes("thinking") ||
+          lowerId.includes("reason") ||
+          lowerId.includes("tee");
+
+        const input: Array<"text" | "image"> = (entry.input_modalities || ["text"]).filter(
+          (i): i is "text" | "image" => i === "text" || i === "image",
+        );
+
+        models.push({
+          id,
+          name: id,
+          reasoning: isReasoning,
+          input,
+          cost: {
+            input: entry.pricing?.prompt || 0,
+            output: entry.pricing?.completion || 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+          },
+          contextWindow: entry.context_length || CHUTES_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: entry.max_output_length || CHUTES_DEFAULT_MAX_TOKENS,
+          compat: {
+            supportsUsageInStreaming: false,
+          },
+        });
+      }
+
+      return cacheAndReturn(
+        effectiveKey,
+        models.length > 0 ? models : CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition),
       );
-
-      models.push({
-        id,
-        name: id,
-        reasoning: isReasoning,
-        input,
-        cost: {
-          input: entry.pricing?.prompt || 0,
-          output: entry.pricing?.completion || 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-        },
-        contextWindow: entry.context_length || CHUTES_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: entry.max_output_length || CHUTES_DEFAULT_MAX_TOKENS,
-        compat: {
-          supportsUsageInStreaming: false,
-        },
-      });
+    } finally {
+      await guardedFetch.release();
     }
-
-    return cacheAndReturn(
-      effectiveKey,
-      models.length > 0 ? models : CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition),
-    );
   } catch (error) {
     log.warn(`Discovery failed: ${String(error)}, using static catalog`);
     return staticCatalog();

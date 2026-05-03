@@ -41,6 +41,7 @@ vi.mock("../../config/runtime-schema.js", () => ({
 }));
 
 vi.mock("../../secrets/runtime.js", () => ({
+  getActiveSecretsRuntimeSnapshot: () => null,
   prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotMock,
 }));
 
@@ -69,7 +70,11 @@ beforeEach(() => {
     ok: true,
     config,
   }));
-  prepareSecretsRuntimeSnapshotMock.mockResolvedValue(undefined);
+  prepareSecretsRuntimeSnapshotMock.mockImplementation(
+    async ({ config }: { config: OpenClawConfig }) => ({
+      config,
+    }),
+  );
   restartSentinelMocks.writeRestartSentinel.mockClear();
 });
 

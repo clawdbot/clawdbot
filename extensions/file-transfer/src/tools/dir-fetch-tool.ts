@@ -10,7 +10,6 @@ import {
   type NodeListNode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
-import { Type } from "typebox";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { throwFromNodePayload } from "../shared/errors.js";
 import { IMAGE_MIME_INLINE_SET, mimeFromExtension } from "../shared/mime.js";
@@ -21,10 +20,12 @@ import {
   readGatewayCallOptions,
   readTrimmedString,
 } from "../shared/params.js";
-
-const DIR_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
-const DIR_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
-const FILE_TRANSFER_SUBDIR = "file-transfer";
+import {
+  DIR_FETCH_DEFAULT_MAX_BYTES,
+  DIR_FETCH_HARD_MAX_BYTES,
+  DIR_FETCH_TOOL_DESCRIPTOR,
+  FILE_TRANSFER_SUBDIR,
+} from "./descriptors.js";
 
 // Cap how many local file paths we surface in details.media.mediaUrls.
 // Larger trees still land on disk but we don't spam the channel adapter
@@ -46,29 +47,6 @@ const TAR_UNPACK_MAX_ENTRIES = 5000;
 // and per-file size to bound any single fs.stat / hash operation.
 const DIR_FETCH_MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
 const DIR_FETCH_MAX_SINGLE_FILE_BYTES = 16 * 1024 * 1024;
-
-const DirFetchToolSchema = Type.Object({
-  node: Type.String({
-    description: "Node id, name, or IP. Resolves the same way as the nodes tool.",
-  }),
-  path: Type.String({
-    description: "Absolute path to the directory on the node to fetch. Canonicalized server-side.",
-  }),
-  maxBytes: Type.Optional(
-    Type.Number({
-      description:
-        "Max gzipped tarball bytes to fetch. Default 8 MB, hard ceiling 16 MB (single round-trip).",
-    }),
-  ),
-  includeDotfiles: Type.Optional(
-    Type.Boolean({
-      description: "Reserved for v2; currently always includes dotfiles (v1 quirk in BSD tar).",
-    }),
-  ),
-  gatewayUrl: Type.Optional(Type.String()),
-  gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
-});
 
 async function computeFileSha256(filePath: string): Promise<string> {
   // Stream the hash so we never pull a whole large file into memory.
@@ -462,11 +440,7 @@ async function walkDir(
 
 export function createDirFetchTool(): AnyAgentTool {
   return {
-    label: "Directory Fetch",
-    name: "dir_fetch",
-    description:
-      "Retrieve a directory tree from a paired node as a gzipped tarball, unpack it on the gateway, and return a manifest of saved paths. Use to pull source trees, asset folders, or log directories in a single round-trip. The unpacked files live on the GATEWAY (not your local machine); pass localPath into other tools or use file_fetch on individual entries to ship them elsewhere. Rejects trees larger than 16 MB compressed. Requires operator opt-in: gateway.nodes.allowCommands must include 'dir.fetch' AND plugins.entries.file-transfer.config.nodes.<node>.allowReadPaths must match the directory path.",
-    parameters: DirFetchToolSchema,
+    ...DIR_FETCH_TOOL_DESCRIPTOR,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const node = readTrimmedString(params, "node");

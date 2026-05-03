@@ -67,6 +67,7 @@ type StatusScanCoreBootstrapParams<TAgentStatus> = {
     timeoutMs: number;
     fetchGit: boolean;
     includeRegistry: boolean;
+    updateConfigChannel?: string | null;
   }) => Promise<UpdateCheckResult>;
   getAgentLocalStatuses: (cfg: OpenClawConfig) => Promise<TAgentStatus>;
 };
@@ -95,6 +96,7 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
         timeoutMs: updateTimeoutMs,
         fetchGit: true,
         includeRegistry: true,
+        updateConfigChannel: params.cfg.update?.channel ?? null,
       });
   const agentStatusPromise = skipColdStartNetworkChecks
     ? Promise.resolve(buildColdStartAgentLocalStatuses() as TAgentStatus)

@@ -237,6 +237,10 @@ When enabled, the Gateway **Dreams** tab shows:
 - a distinct grounded Scene lane for staged historical replay entries
 - an expandable Dream Diary reader backed by `doctor.memory.dreamDiary`
 
+## Dreaming never runs: status shows blocked
+
+If `openclaw memory status` reports `Dreaming status: blocked`, the managed cron exists but the default agent heartbeat is not firing. Check that heartbeat is enabled for the default agent and that its target is not `none`, then run `openclaw memory status --deep` again after the next heartbeat interval.
+
 ## Related
 
 - [Memory](/concepts/memory)

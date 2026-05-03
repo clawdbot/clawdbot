@@ -42,6 +42,7 @@ import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sende
 import { getChatInfo } from "./chat.js";
 import { createFeishuClient } from "./client.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
+import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
 import {
@@ -409,9 +410,10 @@ export async function handleFeishuMessage(params: {
   const error = runtime?.error ?? console.error;
 
   const messageId = event.message.message_id;
+  const messageDedupeKey = resolveFeishuMessageDedupeKey(event);
   if (
     !(await finalizeFeishuMessageProcessing({
-      messageId,
+      messageId: messageDedupeKey,
       namespace: account.accountId,
       log,
       claimHeld: processingClaimHeld,
@@ -1251,7 +1253,9 @@ export async function handleFeishuMessage(params: {
       // broadcast dispatch to avoid duplicate agent sessions and race conditions.
       // Uses a shared "broadcast" namespace (not per-account) so the first handler
       // to reach this point claims the message; subsequent accounts skip.
-      if (!(await tryRecordMessagePersistent(ctx.messageId, "broadcast", log))) {
+      if (
+        !(await tryRecordMessagePersistent(messageDedupeKey ?? ctx.messageId, "broadcast", log))
+      ) {
         log(
           `feishu[${account.accountId}]: broadcast already claimed by another account for message ${ctx.messageId}; skipping`,
         );

@@ -5,8 +5,11 @@ import {
   setupRunCronIsolatedAgentTurnSuite,
 } from "./run.suite-helpers.js";
 import {
+  isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
+  resolveConfiguredModelRefMock,
   resolveAgentModelFallbacksOverrideMock,
+  runCliAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -53,5 +56,54 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     expect(result.status).toBe("ok");
     expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
     expect(runWithModelFallbackMock.mock.calls[0][0].fallbacksOverride).toEqual(expectedFallbacks);
+  });
+
+  it("plans Anthropic fallbacks canonically while executing compatible attempts through Claude CLI", async () => {
+    isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
+    resolveConfiguredModelRefMock.mockReturnValue({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "fallback ok" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+      const firstResult = await run(provider, model);
+      const secondResult = await run("anthropic", "claude-sonnet-4-6");
+      return {
+        result: secondResult ?? firstResult,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        attempts: [],
+      };
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        cfg: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "claude-cli" },
+              model: {
+                primary: "anthropic/claude-opus-4-6",
+                fallbacks: ["anthropic/claude-sonnet-4-6"],
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+    expect(runWithModelFallbackMock.mock.calls[0][0]).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+    expect(runCliAgentMock.mock.calls.map((call) => [call[0].provider, call[0].model])).toEqual([
+      ["claude-cli", "claude-opus-4-6"],
+      ["claude-cli", "claude-sonnet-4-6"],
+    ]);
   });
 });

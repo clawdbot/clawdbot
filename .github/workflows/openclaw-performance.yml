@@ -1,0 +1,486 @@
+name: OpenClaw Performance
+
+on:
+  schedule:
+    - cron: "11 5 * * *"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Kova profile to run
+        required: false
+        default: diagnostic
+        type: choice
+        options:
+          - smoke
+          - diagnostic
+          - soak
+          - release
+      repeat:
+        description: Repeat count for non-profiled Kova runs
+        required: false
+        default: "3"
+        type: string
+      deep_profile:
+        description: Run the deep-profile lane with CPU/heap/trace artifacts
+        required: false
+        default: false
+        type: boolean
+      live_gpt54:
+        description: Run the live OpenAI GPT 5.4 agent-turn lane
+        required: false
+        default: false
+        type: boolean
+      fail_on_regression:
+        description: Fail the workflow when Kova exits non-zero
+        required: false
+        default: false
+        type: boolean
+      kova_ref:
+        description: Kova Git ref to install
+        required: false
+        default: 51947110f5cacb6ab2c0947594ea9628031c9fcf
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  OCM_VERSION: v0.2.15
+  PERFORMANCE_MODEL_ID: gpt-5.4
+
+jobs:
+  kova:
+    name: ${{ matrix.title }}
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: mock-provider
+            title: Kova mock provider performance
+            auth: mock
+            repeat: input
+            deep_profile: "false"
+            live: "false"
+            include_filters: "scenario:fresh-install scenario:gateway-performance scenario:bundled-plugin-startup scenario:bundled-runtime-deps scenario:agent-cold-warm-message"
+          - lane: mock-deep-profile
+            title: Kova mock provider deep profile
+            auth: mock
+            repeat: "1"
+            deep_profile: "true"
+            live: "false"
+            include_filters: "scenario:fresh-install scenario:gateway-performance scenario:agent-cold-warm-message"
+          - lane: live-gpt54
+            title: Kova live OpenAI GPT 5.4 agent turn
+            auth: live
+            repeat: "1"
+            deep_profile: "false"
+            live: "true"
+            include_filters: "scenario:agent-cold-warm-message"
+    env:
+      KOVA_REF: ${{ inputs.kova_ref || '51947110f5cacb6ab2c0947594ea9628031c9fcf' }}
+      KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
+      REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
+      BUNDLE_DIR: ${{ github.workspace }}/.artifacts/kova/bundles/${{ matrix.lane }}
+      SUMMARY_DIR: ${{ github.workspace }}/.artifacts/kova/summaries
+      SOURCE_PERF_DIR: ${{ github.workspace }}/.artifacts/openclaw-performance/source/${{ matrix.lane }}
+      LANE_ID: ${{ matrix.lane }}
+      PROFILE: ${{ inputs.profile || 'diagnostic' }}
+      REQUESTED_REPEAT: ${{ inputs.repeat || '3' }}
+      FAIL_ON_REGRESSION: ${{ inputs.fail_on_regression || 'false' }}
+      INCLUDE_FILTERS: ${{ matrix.include_filters }}
+      AUTH_MODE: ${{ matrix.auth }}
+      MATRIX_REPEAT: ${{ matrix.repeat }}
+      MATRIX_DEEP_PROFILE: ${{ matrix.deep_profile }}
+      MATRIX_LIVE: ${{ matrix.live }}
+    steps:
+      - name: Decide lane
+        id: lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_lane=true
+          reason=""
+          if [[ "$LANE_ID" == "mock-deep-profile" && "${{ github.event_name }}" != "schedule" && "${{ inputs.deep_profile || 'false' }}" != "true" ]]; then
+            run_lane=false
+            reason="deep_profile input is false"
+          fi
+          if [[ "$LANE_ID" == "live-gpt54" && "${{ github.event_name }}" != "schedule" && "${{ inputs.live_gpt54 || 'false' }}" != "true" ]]; then
+            run_lane=false
+            reason="live_gpt54 input is false"
+          fi
+          echo "run=$run_lane" >> "$GITHUB_OUTPUT"
+          if [[ "$run_lane" != "true" ]]; then
+            echo "Skipping ${LANE_ID}: ${reason}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Detect clawgrit report token
+        id: clawgrit
+        if: steps.lane.outputs.run == 'true'
+        env:
+          CLAWGRIT_REPORTS_TOKEN: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${CLAWGRIT_REPORTS_TOKEN:-}" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout OpenClaw
+        if: steps.lane.outputs.run == 'true'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node environment
+        if: steps.lane.outputs.run == 'true'
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Install OCM and Kova
+        if: steps.lane.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          KOVA_SRC="${RUNNER_TEMP}/kova-src"
+          echo "KOVA_SRC=$KOVA_SRC" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/.local/bin" "$(dirname "$KOVA_SRC")"
+          curl -fsSL https://raw.githubusercontent.com/shakkernerd/ocm/main/install.sh \
+            | bash -s -- --version "$OCM_VERSION" --prefix "$HOME/.local" --force
+          git clone --filter=blob:none https://github.com/shakkernerd/Kova.git "$KOVA_SRC"
+          git -C "$KOVA_SRC" checkout "$KOVA_REF"
+          cat > "$HOME/.local/bin/kova" <<EOF
+          #!/usr/bin/env bash
+          export KOVA_HOME="${KOVA_HOME}"
+          exec node "${KOVA_SRC}/bin/kova.mjs" "\$@"
+          EOF
+          chmod 0755 "$HOME/.local/bin/kova"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Pin Kova OpenAI model to GPT 5.4
+        if: steps.lane.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const root = process.env.KOVA_SRC;
+          const files = [
+            "support/configure-openclaw-mock-auth.mjs",
+            "support/configure-openclaw-live-auth.mjs",
+            "support/mock-openai-server.mjs",
+            "states/mock-openai-provider.json"
+          ];
+          for (const rel of files) {
+            const file = path.join(root, rel);
+            const before = fs.readFileSync(file, "utf8");
+            const after = before.replaceAll("gpt-5.5", process.env.PERFORMANCE_MODEL_ID);
+            fs.writeFileSync(file, after, "utf8");
+          }
+          NODE
+
+      - name: Kova version and plan sanity
+        if: steps.lane.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          kova version --json
+          kova matrix plan \
+            --profile "$PROFILE" \
+            --target "local-build:${GITHUB_WORKSPACE}" \
+            --include scenario:fresh-install \
+            --json >/tmp/kova-plan.json
+
+      - name: Configure live OpenAI auth
+        if: ${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "OPENAI_API_KEY is not configured; live GPT 5.4 lane will be skipped." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          kova setup --ci --json
+          kova setup --non-interactive --auth env-only --provider openai --env-var OPENAI_API_KEY --json
+
+      - name: Run Kova
+        id: kova
+        if: steps.lane.outputs.run == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          CLAWGRIT_REPORTS_TOKEN_PRESENT: ${{ steps.clawgrit.outputs.present || 'false' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPORT_DIR" "$BUNDLE_DIR" "$SUMMARY_DIR"
+
+          if [[ "$MATRIX_LIVE" == "true" && -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          repeat="$REQUESTED_REPEAT"
+          if [[ "$MATRIX_REPEAT" != "input" ]]; then
+            repeat="$MATRIX_REPEAT"
+          fi
+
+          args=(
+            matrix run
+            --profile "$PROFILE"
+            --target "local-build:${GITHUB_WORKSPACE}"
+            --auth "$AUTH_MODE"
+            --parallel 1
+            --repeat "$repeat"
+            --report-dir "$REPORT_DIR"
+            --execute
+            --json
+          )
+
+          for filter in $INCLUDE_FILTERS; do
+            args+=(--include "$filter")
+          done
+
+          if [[ "$MATRIX_DEEP_PROFILE" == "true" ]]; then
+            args+=(--deep-profile)
+          fi
+          if [[ "$FAIL_ON_REGRESSION" == "true" ]]; then
+            args+=(--gate)
+          fi
+
+          log_path="$REPORT_DIR/${LANE_ID}.log"
+          set +e
+          kova "${args[@]}" 2>&1 | tee "$log_path"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          report_json="$(find "$REPORT_DIR" -maxdepth 1 -type f -name '*.json' -print | sort | tail -n 1)"
+          if [[ -z "$report_json" ]]; then
+            echo "Kova did not write a JSON report." >&2
+            exit 1
+          fi
+          report_md="${report_json%.json}.md"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "report_json=$report_json" >> "$GITHUB_OUTPUT"
+          echo "report_md=$report_md" >> "$GITHUB_OUTPUT"
+
+          kova report bundle "$report_json" --output-dir "$BUNDLE_DIR" --json | tee "$BUNDLE_DIR/bundle.json"
+
+          ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
+          run_slug="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          report_url=""
+          if [[ "${CLAWGRIT_REPORTS_TOKEN_PRESENT:-false}" == "true" ]]; then
+            report_url="https://github.com/openclaw/clawgrit-reports/tree/main/openclaw-performance/${ref_slug}/${run_slug}/${LANE_ID}"
+          fi
+          summary_path="$SUMMARY_DIR/${LANE_ID}.md"
+          summary_args=(node scripts/kova-ci-summary.mjs --report "$report_json" --output "$summary_path" --lane "$LANE_ID")
+          if [[ -n "$report_url" ]]; then
+            summary_args+=(--report-url "$report_url")
+          fi
+          "${summary_args[@]}"
+          cat "$summary_path" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$FAIL_ON_REGRESSION" == "true" && "$status" != "0" ]]; then
+            exit "$status"
+          fi
+
+      - name: Run OpenClaw source performance probes
+        if: ${{ steps.lane.outputs.run == 'true' && matrix.lane == 'mock-provider' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_runs="$REQUESTED_REPEAT"
+          if ! [[ "$source_runs" =~ ^[0-9]+$ ]] || [[ "$source_runs" -lt 1 ]]; then
+            source_runs=3
+          fi
+
+          mkdir -p "$SOURCE_PERF_DIR/mock-hello"
+          pnpm build
+
+          pnpm test:gateway:cpu-scenarios \
+            --output-dir "$SOURCE_PERF_DIR/gateway-cpu" \
+            --runs "$source_runs" \
+            --warmup 1 \
+            --skip-qa \
+            --startup-case default \
+            --startup-case skipChannels \
+            --startup-case oneInternalHook \
+            --startup-case allInternalHooks \
+            --startup-case fiftyPlugins \
+            --startup-case fiftyStartupLazyPlugins
+
+          for run_index in $(seq 1 "$source_runs"); do
+            run_dir="$SOURCE_PERF_DIR/mock-hello/run-$(printf '%03d' "$run_index")"
+            pnpm openclaw qa suite \
+              --provider-mode mock-openai \
+              --model "mock-openai/${PERFORMANCE_MODEL_ID}" \
+              --concurrency 1 \
+              --output-dir "$(realpath --relative-to="$GITHUB_WORKSPACE" "$run_dir")" \
+              --scenario channel-chat-baseline
+          done
+
+          gateway_home="$(mktemp -d)"
+          gateway_port="$(node -e "const net=require('node:net'); const s=net.createServer(); s.listen(0,'127.0.0.1',()=>{ console.log(s.address().port); s.close(); });")"
+          gateway_state="$gateway_home/.openclaw"
+          gateway_config="$gateway_state/openclaw.json"
+          gateway_log="$SOURCE_PERF_DIR/cli-gateway.log"
+          gateway_pid=""
+          mkdir -p "$gateway_state"
+          cat > "$gateway_config" <<EOF
+          {
+            "browser": { "enabled": false },
+            "gateway": {
+              "mode": "local",
+              "port": ${gateway_port},
+              "bind": "loopback",
+              "auth": { "mode": "none" },
+              "controlUi": { "enabled": false },
+              "tailscale": { "mode": "off" }
+            },
+            "plugins": {
+              "enabled": true,
+              "entries": { "browser": { "enabled": false } }
+            }
+          }
+          EOF
+          cleanup_gateway() {
+            if [[ -n "${gateway_pid:-}" ]] && kill -0 "$gateway_pid" 2>/dev/null; then
+              kill "$gateway_pid" 2>/dev/null || true
+              wait "$gateway_pid" 2>/dev/null || true
+            fi
+            rm -rf "$gateway_home"
+          }
+          trap cleanup_gateway EXIT
+          OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" OPENCLAW_SKIP_CHANNELS=1 \
+            node dist/entry.js gateway run --bind loopback --port "$gateway_port" --auth none --allow-unconfigured --force \
+            >"$gateway_log" 2>&1 &
+          gateway_pid="$!"
+
+          for _ in $(seq 1 120); do
+            if curl -fsS "http://127.0.0.1:${gateway_port}/healthz" >/dev/null; then
+              break
+            fi
+            if ! kill -0 "$gateway_pid" 2>/dev/null; then
+              cat "$gateway_log" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          curl -fsS "http://127.0.0.1:${gateway_port}/healthz" >/dev/null
+
+          OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" \
+            node --import tsx scripts/bench-cli-startup.ts \
+            --case gatewayHealthJson \
+            --case configGetGatewayPort \
+            --runs "$source_runs" \
+            --warmup 1 \
+            --output "$SOURCE_PERF_DIR/cli-startup.json"
+          cleanup_gateway
+          trap - EXIT
+
+          pnpm perf:source:summary \
+            --source-dir "$SOURCE_PERF_DIR" \
+            --output "$SOURCE_PERF_DIR/index.md"
+
+          cat "$SOURCE_PERF_DIR/index.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Kova artifacts
+        if: ${{ always() && steps.lane.outputs.run == 'true' }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: openclaw-performance-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/kova/reports/${{ matrix.lane }}
+            .artifacts/kova/bundles/${{ matrix.lane }}
+            .artifacts/kova/summaries/${{ matrix.lane }}.md
+            .artifacts/openclaw-performance/source/${{ matrix.lane }}
+          if-no-files-found: ignore
+          retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
+
+      - name: Prepare clawgrit reports checkout
+        if: ${{ steps.kova.outputs.report_json != '' && steps.clawgrit.outputs.present == 'true' }}
+        env:
+          CLAWGRIT_REPORTS_TOKEN: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          reports_root=".artifacts/clawgrit-reports"
+          mkdir -p "$reports_root"
+          git -C "$reports_root" init -b main
+          git -C "$reports_root" remote add origin https://github.com/openclaw/clawgrit-reports.git
+          auth_header="$(printf 'x-access-token:%s' "$CLAWGRIT_REPORTS_TOKEN" | base64 -w0)"
+          git -C "$reports_root" config http.https://github.com/.extraheader "AUTHORIZATION: basic ${auth_header}"
+          if git -C "$reports_root" ls-remote --exit-code --heads origin main >/dev/null 2>&1; then
+            git -C "$reports_root" fetch --depth=1 origin main
+            git -C "$reports_root" checkout -B main FETCH_HEAD
+          else
+            git -C "$reports_root" checkout -B main
+          fi
+
+      - name: Publish to clawgrit reports
+        if: ${{ steps.kova.outputs.report_json != '' && steps.clawgrit.outputs.present == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          reports_root=".artifacts/clawgrit-reports"
+          ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
+          run_slug="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          dest="${reports_root}/openclaw-performance/${ref_slug}/${run_slug}/${LANE_ID}"
+          mkdir -p "$dest"
+          cp "${{ steps.kova.outputs.report_json }}" "$dest/report.json"
+          if [[ -f "${{ steps.kova.outputs.report_md }}" ]]; then
+            cp "${{ steps.kova.outputs.report_md }}" "$dest/report.md"
+          fi
+          cp "$SUMMARY_DIR/${LANE_ID}.md" "$dest/index.md"
+          if [[ -d "$BUNDLE_DIR" ]]; then
+            mkdir -p "$dest/bundles"
+            cp -R "$BUNDLE_DIR"/. "$dest/bundles/"
+          fi
+          if [[ -d "$SOURCE_PERF_DIR" ]]; then
+            mkdir -p "$dest/source"
+            cp -R "$SOURCE_PERF_DIR"/. "$dest/source/"
+            if [[ -f "$SOURCE_PERF_DIR/index.md" ]]; then
+              cat >> "$dest/index.md" <<'EOF'
+
+          ## Source probes
+
+          Additional gateway boot, memory, plugin pressure, mock hello-loop, and CLI startup numbers are in [source/index.md](source/index.md).
+          EOF
+            fi
+          fi
+          cat > "${reports_root}/openclaw-performance/${ref_slug}/latest-${LANE_ID}.json" <<EOF
+          {
+            "repository": "${GITHUB_REPOSITORY}",
+            "ref": "${GITHUB_REF_NAME}",
+            "sha": "${GITHUB_SHA}",
+            "workflow": "${GITHUB_WORKFLOW}",
+            "run_id": "${GITHUB_RUN_ID}",
+            "run_attempt": "${GITHUB_RUN_ATTEMPT}",
+            "lane": "${LANE_ID}",
+            "path": "openclaw-performance/${ref_slug}/${run_slug}/${LANE_ID}"
+          }
+          EOF
+
+          git -C "$reports_root" config user.name "openclaw-performance[bot]"
+          git -C "$reports_root" config user.email "openclaw-performance[bot]@users.noreply.github.com"
+          git -C "$reports_root" add openclaw-performance
+          if git -C "$reports_root" diff --cached --quiet; then
+            echo "No clawgrit report changes to publish."
+            exit 0
+          fi
+          git -C "$reports_root" commit -m "perf: add OpenClaw ${LANE_ID} report ${GITHUB_SHA::12}"
+          git -C "$reports_root" push origin HEAD:main

@@ -174,6 +174,13 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     return final answer text in reasoning fields for that retired route.
   </Accordion>
 
+  <Accordion title="DeepSeek V4 reasoning replay">
+    On verified OpenRouter routes, `openrouter/deepseek/deepseek-v4-flash` and
+    `openrouter/deepseek/deepseek-v4-pro` fill missing `reasoning_content` on
+    replayed assistant turns so thinking/tool conversations keep DeepSeek V4's
+    required follow-up shape.
+  </Accordion>
+
   <Accordion title="OpenAI-only request shaping">
     OpenRouter still runs through the proxy-style OpenAI-compatible path, so
     native OpenAI-only request shaping such as `serviceTier`, Responses `store`,

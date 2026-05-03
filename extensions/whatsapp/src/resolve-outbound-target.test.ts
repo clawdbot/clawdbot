@@ -130,6 +130,29 @@ describe("resolveWhatsAppOutboundTarget", () => {
     });
   });
 
+  describe("newsletter JID handling", () => {
+    it("returns success for valid newsletter JID without applying DM allowFrom", () => {
+      vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce(
+        "120363123456789@newsletter",
+      );
+      vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
+      vi.mocked(normalize.isWhatsAppNewsletterJid).mockReturnValueOnce(true);
+
+      expectResolutionOk(
+        {
+          to: "120363123456789@newsletter",
+          allowFrom: [SECONDARY_TARGET],
+          mode: "implicit",
+        },
+        "120363123456789@newsletter",
+      );
+      expect(vi.mocked(normalize.normalizeWhatsAppTarget)).toHaveBeenCalledOnce();
+      expect(vi.mocked(normalize.normalizeWhatsAppTarget)).toHaveBeenCalledWith(
+        "120363123456789@newsletter",
+      );
+    });
+  });
+
   describe("implicit/heartbeat mode with allowList", () => {
     it("allows message when wildcard is present", () => {
       mockNormalizedDirectMessage(PRIMARY_TARGET, PRIMARY_TARGET);
@@ -154,14 +177,14 @@ describe("resolveWhatsAppOutboundTarget", () => {
           allowFrom: [SECONDARY_TARGET],
           mode: "implicit",
         },
-        `Target "${SECONDARY_TARGET}" is not listed in the configured WhatsApp allowFrom policy.`,
+        `Target "${PRIMARY_TARGET}" is not listed in the configured WhatsApp allowFrom policy.`,
       );
     });
 
     it("uses the normalized target in the allowFrom error message", () => {
       vi.mocked(normalize.normalizeWhatsAppTarget)
-        .mockReturnValueOnce(SECONDARY_TARGET)
-        .mockReturnValueOnce(PRIMARY_TARGET);
+        .mockReturnValueOnce(PRIMARY_TARGET)
+        .mockReturnValueOnce(SECONDARY_TARGET);
       vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
 
       expectResolutionErrorMessage(
@@ -189,8 +212,8 @@ describe("resolveWhatsAppOutboundTarget", () => {
 
     it("filters out invalid normalized entries from allowList", () => {
       vi.mocked(normalize.normalizeWhatsAppTarget)
-        .mockReturnValueOnce(null)
         .mockReturnValueOnce("+11234567890")
+        .mockReturnValueOnce(null)
         .mockReturnValueOnce("+11234567890");
       vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
 

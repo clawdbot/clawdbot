@@ -1,14 +1,14 @@
 import type QRCode from "qrcode";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 
 type QrCodeRuntime = typeof QRCode;
 
-let qrCodeRuntimePromise: Promise<QrCodeRuntime> | null = null;
+const qrCodeRuntimeLoader = createLazyImportLoader<QrCodeRuntime>(() =>
+  import("qrcode").then((mod) => mod.default ?? mod),
+);
 
 export async function loadQrCodeRuntime(): Promise<QrCodeRuntime> {
-  if (!qrCodeRuntimePromise) {
-    qrCodeRuntimePromise = import("qrcode").then((mod) => mod.default ?? mod);
-  }
-  return await qrCodeRuntimePromise;
+  return await qrCodeRuntimeLoader.load();
 }
 
 export function normalizeQrText(text: string): string {

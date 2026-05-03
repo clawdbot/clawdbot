@@ -77,6 +77,24 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     plugins: mediaMetadataPlugins,
     diagnostics: [],
   }),
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
+}));
+
+vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot: () => ({
+    index: { plugins: [] },
+    plugins: mediaMetadataPlugins,
+  }),
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => ({
+    plugins: mediaMetadataPlugins,
+  }),
 }));
 
 import {

@@ -22,6 +22,7 @@ type PluginSdkPackageJson = {
 };
 
 const STARTUP_ARGV1 = process.argv[1];
+const pluginSdkPackageJsonByRoot = new Map<string, PluginSdkPackageJson | null>();
 
 export function normalizeJitiAliasTargetPath(targetPath: string): string {
   return process.platform === "win32" ? targetPath.replace(/\\/g, "/") : targetPath;
@@ -32,10 +33,17 @@ function resolveLoaderModulePath(params: LoaderModuleResolveParams = {}): string
 }
 
 function readPluginSdkPackageJson(packageRoot: string): PluginSdkPackageJson | null {
+  const cacheKey = path.resolve(packageRoot);
+  if (pluginSdkPackageJsonByRoot.has(cacheKey)) {
+    return pluginSdkPackageJsonByRoot.get(cacheKey) ?? null;
+  }
   try {
     const pkgRaw = fs.readFileSync(path.join(packageRoot, "package.json"), "utf-8");
-    return JSON.parse(pkgRaw) as PluginSdkPackageJson;
+    const parsed = JSON.parse(pkgRaw) as PluginSdkPackageJson;
+    pluginSdkPackageJsonByRoot.set(cacheKey, parsed);
+    return parsed;
   } catch {
+    pluginSdkPackageJsonByRoot.set(cacheKey, null);
     return null;
   }
 }

@@ -125,7 +125,7 @@ describe("CronService - timer re-arm when running (#12025)", () => {
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => await deferredRun.promise),
     });
 

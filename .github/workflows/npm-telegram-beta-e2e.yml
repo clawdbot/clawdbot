@@ -152,8 +152,8 @@ jobs:
           set -euo pipefail
 
           if [[ -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then
-            if [[ ! "${PACKAGE_SPEC}" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$ ]]; then
-              echo "package_spec must be openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${PACKAGE_SPEC}" >&2
+            if [[ ! "${PACKAGE_SPEC}" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
+              echo "package_spec must be openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${PACKAGE_SPEC}" >&2
               exit 1
             fi
           fi

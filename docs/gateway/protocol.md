@@ -211,6 +211,9 @@ Side-effecting methods require **idempotency keys** (see schema).
 
 ## Roles + scopes
 
+For the full operator scope model, approval-time checks, and shared-secret
+semantics, see [Operator scopes](/gateway/operator-scopes).
+
 ### Roles
 
 - `operator` = control plane client (CLI/UI/automation).
@@ -399,6 +402,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `sessions.subscribe` and `sessions.unsubscribe` toggle session change event subscriptions for the current WS client.
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
+    - `sessions.describe` returns one Gateway session row for an exact session key.
     - `sessions.resolve` resolves or canonicalizes a session target.
     - `sessions.create` creates a new session entry.
     - `sessions.send` sends a message into an existing session.

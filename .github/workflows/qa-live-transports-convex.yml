@@ -141,7 +141,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   run_mock_parity:
-    name: Run QA Lab parity gate
+    name: Run QA Lab mock parity lane
     needs: [validate_selected_ref]
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30

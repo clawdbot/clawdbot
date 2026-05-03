@@ -54,6 +54,7 @@ type GeminiInlinePart = {
   inlineData: { mimeType: string; data: string };
 };
 type GeminiPart = GeminiTextPart | GeminiInlinePart;
+type GeminiEmbeddingInputPart = NonNullable<EmbeddingInput["parts"]>[number];
 type GeminiEmbeddingRequest = {
   content: { parts: GeminiPart[] };
   taskType: GeminiTaskType;
@@ -85,7 +86,7 @@ export function buildGeminiEmbeddingRequest(params: {
 }): GeminiEmbeddingRequest {
   const request: GeminiEmbeddingRequest = {
     content: {
-      parts: params.input.parts?.map((part) =>
+      parts: params.input.parts?.map((part: GeminiEmbeddingInputPart) =>
         part.type === "text"
           ? ({ text: part.text } satisfies GeminiTextPart)
           : ({

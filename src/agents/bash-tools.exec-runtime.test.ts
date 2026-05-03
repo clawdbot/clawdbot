@@ -1,13 +1,13 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
+const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
 
 vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: requestHeartbeatNowMock,
+  requestHeartbeat: requestHeartbeatMock,
 }));
 
 vi.mock("../infra/system-events.js", () => ({
@@ -43,7 +43,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  requestHeartbeatNowMock.mockClear();
+  requestHeartbeatMock.mockClear();
   enqueueSystemEventMock.mockClear();
   supervisorMock.spawn.mockReset();
 });
@@ -392,7 +392,7 @@ describe("exec notifyOnExit suppression", () => {
 
     expect(outcome.status).toBe("failed");
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 
   it("notifies for manual-cancelled background execs with output", async () => {
@@ -402,7 +402,7 @@ describe("exec notifyOnExit suppression", () => {
       expect.stringContaining("partial output"),
       expect.objectContaining({ sessionKey: "agent:main:main" }),
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalled();
+    expect(requestHeartbeatMock).toHaveBeenCalled();
   });
 
   it("still notifies for no-output background exec timeouts", async () => {
@@ -412,13 +412,13 @@ describe("exec notifyOnExit suppression", () => {
       expect.stringContaining("Exec failed"),
       expect.objectContaining({ sessionKey: "agent:main:main" }),
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalled();
+    expect(requestHeartbeatMock).toHaveBeenCalled();
   });
 });
 
 describe("emitExecSystemEvent", () => {
   beforeEach(() => {
-    requestHeartbeatNowMock.mockClear();
+    requestHeartbeatMock.mockClear();
     enqueueSystemEventMock.mockClear();
   });
 
@@ -441,8 +441,9 @@ describe("emitExecSystemEvent", () => {
         to: "telegram:-100123:topic:47",
         threadId: 47,
       },
+      trusted: false,
     });
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(
       expect.objectContaining({
         coalesceMs: 0,
         reason: "exec-event",
@@ -460,8 +461,9 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "global",
       contextKey: "exec:run-global",
+      trusted: false,
     });
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(
       expect.objectContaining({
         coalesceMs: 0,
         reason: "exec-event",
@@ -476,7 +478,7 @@ describe("emitExecSystemEvent", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 });
 

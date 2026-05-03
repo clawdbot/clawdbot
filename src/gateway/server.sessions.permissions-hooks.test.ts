@@ -280,7 +280,7 @@ test("session:patch hook mutations cannot change the response path", async () =>
     resolved: {
       modelProvider: string;
       model: string;
-      agentRuntime: { id: string; fallback?: string; source: string };
+      agentRuntime: { id: string; source: string };
     };
   }>(ws, "sessions.patch", {
     key: "agent:main:main",

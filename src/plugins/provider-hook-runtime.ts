@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
   resolveConfigScopedRuntimeCacheValue,
   type ConfigScopedRuntimeCache,
@@ -8,6 +9,7 @@ import {
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
+import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import type {
   ProviderPlugin,
@@ -66,6 +68,33 @@ function matchesProviderLiteralId(provider: ProviderPlugin, providerId: string):
   return !!normalized && normalizeLowercaseStringOrEmpty(provider.id) === normalized;
 }
 
+function resolveCompatibleActiveProviderRegistry(
+  params: ProviderRuntimePluginLookupParams,
+): PluginRegistry | undefined {
+  return getLoadedRuntimePluginRegistry({
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+  });
+}
+
+function findProviderRuntimePluginInRegistry(params: {
+  registry: PluginRegistry;
+  provider: string;
+  apiOwnerHint?: string;
+}): ProviderPlugin | undefined {
+  return params.registry.providers
+    .map((entry) => Object.assign({}, entry.provider, { pluginId: entry.pluginId }))
+    .find((plugin) => {
+      if (params.apiOwnerHint) {
+        return (
+          matchesProviderLiteralId(plugin, params.provider) ||
+          matchesProviderId(plugin, params.apiOwnerHint)
+        );
+      }
+      return matchesProviderId(plugin, params.provider);
+    });
+}
+
 export function resolveProviderPluginsForHooks(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -106,16 +135,27 @@ export function resolveProviderPluginsForHooks(params: {
 export function resolveProviderRuntimePlugin(
   params: ProviderRuntimePluginLookupParams,
 ): ProviderPlugin | undefined {
+  const apiOwnerHint = resolveProviderConfigApiOwnerHint({
+    provider: params.provider,
+    config: params.config,
+  });
+  const activeRegistry = resolveCompatibleActiveProviderRegistry(params);
+  const activePlugin = activeRegistry
+    ? findProviderRuntimePluginInRegistry({
+        registry: activeRegistry,
+        provider: params.provider,
+        apiOwnerHint,
+      })
+    : undefined;
+  if (activePlugin) {
+    return activePlugin;
+  }
   const cacheConfig = params.env && params.env !== process.env ? undefined : params.config;
   const plugin = resolveConfigScopedRuntimeCacheValue({
     cache: providerRuntimePluginCache,
     config: cacheConfig,
     key: resolveProviderRuntimePluginCacheKey(params),
     load: () => {
-      const apiOwnerHint = resolveProviderConfigApiOwnerHint({
-        provider: params.provider,
-        config: params.config,
-      });
       return (
         resolveProviderPluginsForHooks({
           config: params.config,

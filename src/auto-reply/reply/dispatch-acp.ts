@@ -17,6 +17,7 @@ import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { markDiagnosticSessionProgress } from "../../logging/diagnostic.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -39,36 +40,33 @@ import {
 import { hasInboundMedia } from "./inbound-media.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
-let dispatchAcpManagerRuntimePromise: Promise<
-  typeof import("./dispatch-acp-manager.runtime.js")
-> | null = null;
-let dispatchAcpSessionRuntimePromise: Promise<
-  typeof import("./dispatch-acp-session.runtime.js")
-> | null = null;
-let dispatchAcpTtsRuntimePromise: Promise<typeof import("./dispatch-acp-tts.runtime.js")> | null =
-  null;
-let dispatchAcpTranscriptRuntimePromise: Promise<
-  typeof import("./dispatch-acp-transcript.runtime.js")
-> | null = null;
+const dispatchAcpManagerRuntimeLoader = createLazyImportLoader(
+  () => import("./dispatch-acp-manager.runtime.js"),
+);
+const dispatchAcpSessionRuntimeLoader = createLazyImportLoader(
+  () => import("./dispatch-acp-session.runtime.js"),
+);
+const dispatchAcpTtsRuntimeLoader = createLazyImportLoader(
+  () => import("./dispatch-acp-tts.runtime.js"),
+);
+const dispatchAcpTranscriptRuntimeLoader = createLazyImportLoader(
+  () => import("./dispatch-acp-transcript.runtime.js"),
+);
 
 function loadDispatchAcpManagerRuntime() {
-  dispatchAcpManagerRuntimePromise ??= import("./dispatch-acp-manager.runtime.js");
-  return dispatchAcpManagerRuntimePromise;
+  return dispatchAcpManagerRuntimeLoader.load();
 }
 
 function loadDispatchAcpSessionRuntime() {
-  dispatchAcpSessionRuntimePromise ??= import("./dispatch-acp-session.runtime.js");
-  return dispatchAcpSessionRuntimePromise;
+  return dispatchAcpSessionRuntimeLoader.load();
 }
 
 function loadDispatchAcpTtsRuntime() {
-  dispatchAcpTtsRuntimePromise ??= import("./dispatch-acp-tts.runtime.js");
-  return dispatchAcpTtsRuntimePromise;
+  return dispatchAcpTtsRuntimeLoader.load();
 }
 
 function loadDispatchAcpTranscriptRuntime() {
-  dispatchAcpTranscriptRuntimePromise ??= import("./dispatch-acp-transcript.runtime.js");
-  return dispatchAcpTranscriptRuntimePromise;
+  return dispatchAcpTranscriptRuntimeLoader.load();
 }
 
 type DispatchProcessedRecorder = (

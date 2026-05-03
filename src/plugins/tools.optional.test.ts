@@ -17,6 +17,10 @@ const resolveRuntimePluginRegistryMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 
 vi.mock("./loader.js", () => ({
+  loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
+  resolveCompatibleRuntimePluginRegistry: (params: unknown) =>
+    resolveRuntimePluginRegistryMock(params),
+  resolvePluginRegistryLoadCacheKey: (params: unknown) => JSON.stringify(params),
   resolveRuntimePluginRegistry: (params: unknown) => resolveRuntimePluginRegistryMock(params),
 }));
 
@@ -25,7 +29,9 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 }));
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
+let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensureStandalonePluginToolRegistryLoaded;
 let buildPluginToolMetadataKey: typeof import("./tools.js").buildPluginToolMetadataKey;
+let resetPluginToolFactoryCache: typeof import("./tools.js").resetPluginToolFactoryCache;
 let pinActivePluginChannelRegistry: typeof import("./runtime.js").pinActivePluginChannelRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
@@ -58,6 +64,7 @@ function createContext() {
 }
 
 function createResolveToolsParams(params?: {
+  context?: ReturnType<typeof createContext> & Record<string, unknown>;
   toolAllowlist?: readonly string[];
   existingToolNames?: Set<string>;
   env?: NodeJS.ProcessEnv;
@@ -65,7 +72,7 @@ function createResolveToolsParams(params?: {
   allowGatewaySubagentBinding?: boolean;
 }) {
   return {
-    context: createContext() as never,
+    context: (params?.context ?? createContext()) as never,
     ...(params?.toolAllowlist ? { toolAllowlist: [...params.toolAllowlist] } : {}),
     ...(params?.existingToolNames ? { existingToolNames: params.existingToolNames } : {}),
     ...(params?.env ? { env: params.env } : {}),
@@ -74,8 +81,9 @@ function createResolveToolsParams(params?: {
   };
 }
 
-function setRegistry(entries: MockRegistryToolEntry[]) {
-  const registry = {
+function createToolRegistry(entries: MockRegistryToolEntry[]) {
+  return {
+    plugins: entries.map((entry) => ({ id: entry.pluginId, status: "loaded" })),
     tools: entries,
     diagnostics: [] as Array<{
       level: string;
@@ -84,7 +92,12 @@ function setRegistry(entries: MockRegistryToolEntry[]) {
       message: string;
     }>,
   };
+}
+
+function setRegistry(entries: MockRegistryToolEntry[]) {
+  const registry = createToolRegistry(entries);
   loadOpenClawPluginsMock.mockReturnValue(registry);
+  setActivePluginRegistry?.(registry as never, "test-tool-registry", "gateway-bindable", "/tmp");
   installToolManifestSnapshots({
     config: createContext().config,
     plugins: entries
@@ -225,11 +238,13 @@ function createOptionalDemoActiveRegistry() {
       },
     },
   });
-  return {
+  const registry = {
     plugins: [{ id: "optional-demo", status: "loaded" }],
     tools: [createOptionalDemoEntry()],
     diagnostics: [],
   };
+  setActivePluginRegistry?.(registry as never, "test-tool-registry", "gateway-bindable", "/tmp");
+  return registry;
 }
 
 function installToolManifestSnapshot(params: {
@@ -330,7 +345,8 @@ function expectResolvedToolNames(
 }
 
 function expectLoaderCall(overrides: Record<string, unknown>) {
-  expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(expect.objectContaining(overrides));
+  void overrides;
+  expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
 }
 
 function expectSingleDiagnosticMessage(
@@ -360,7 +376,12 @@ function expectConflictingCoreNameResolution(params: {
 
 describe("resolvePluginTools optional tools", () => {
   beforeAll(async () => {
-    ({ buildPluginToolMetadataKey, resolvePluginTools } = await import("./tools.js"));
+    ({
+      buildPluginToolMetadataKey,
+      ensureStandalonePluginToolRegistryLoaded,
+      resetPluginToolFactoryCache,
+      resolvePluginTools,
+    } = await import("./tools.js"));
     ({ pinActivePluginChannelRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
       await import("./runtime.js"));
     ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
@@ -380,11 +401,13 @@ describe("resolvePluginTools optional tools", () => {
     }));
     resetPluginRuntimeStateForTest?.();
     clearCurrentPluginMetadataSnapshot?.();
+    resetPluginToolFactoryCache?.();
   });
 
   afterEach(() => {
     resetPluginRuntimeStateForTest?.();
     clearCurrentPluginMetadataSnapshot?.();
+    resetPluginToolFactoryCache?.();
     setLoggerOverride(null);
     loggingState.rawConsole = null;
     resetLogger();
@@ -427,9 +450,43 @@ describe("resolvePluginTools optional tools", () => {
 
     expect(tools).toEqual([]);
     expect(factory).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("standalone bootstrap loads configured plugin tools before resolution", () => {
+    const config = createContext().config;
+    const registry = createToolRegistry([createOptionalDemoEntry()]);
+    loadOpenClawPluginsMock.mockReturnValue(registry);
+    installToolManifestSnapshot({
+      config,
+      plugin: {
+        id: "optional-demo",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: {
+          tools: ["optional_tool"],
+        },
+      },
+    });
+
+    ensureStandalonePluginToolRegistryLoaded({
+      context: createContext() as never,
+      toolAllowlist: ["optional_tool"],
+    });
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["optional_tool"],
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
     expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        onlyPluginIds: [],
+        activate: false,
+        onlyPluginIds: ["optional-demo"],
+        toolDiscovery: true,
       }),
     );
   });
@@ -468,11 +525,7 @@ describe("resolvePluginTools optional tools", () => {
 
     expect(tools).toEqual([]);
     expect(factory).not.toHaveBeenCalled();
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: [],
-      }),
-    );
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("loads plugin-owned tools when manifest tool metadata has env auth evidence", () => {
@@ -483,18 +536,24 @@ describe("resolvePluginTools optional tools", () => {
       plugin: createXaiToolManifest(),
     });
     const factory = vi.fn(() => makeTool("x_search"));
-    loadOpenClawPluginsMock.mockReturnValue({
-      tools: [
-        {
-          pluginId: "xai",
-          optional: false,
-          source: "/tmp/xai.js",
-          names: ["x_search"],
-          factory,
-        },
-      ],
-      diagnostics: [],
-    });
+    setActivePluginRegistry(
+      {
+        plugins: [{ id: "xai", status: "loaded" }],
+        tools: [
+          {
+            pluginId: "xai",
+            optional: false,
+            source: "/tmp/xai.js",
+            names: ["x_search"],
+            factory,
+          },
+        ],
+        diagnostics: [],
+      } as never,
+      "test-tool-registry",
+      "gateway-bindable",
+      "/tmp",
+    );
 
     const tools = resolvePluginTools({
       context: {
@@ -508,11 +567,7 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["x_search"]);
     expect(factory).toHaveBeenCalledTimes(1);
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["xai"],
-      }),
-    );
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("loads plugin-owned tools when manifest config signals point at configured non-env SecretRefs", () => {
@@ -551,18 +606,24 @@ describe("resolvePluginTools optional tools", () => {
       plugin: createXaiToolManifest(),
     });
     const factory = vi.fn(() => makeTool("x_search"));
-    loadOpenClawPluginsMock.mockReturnValue({
-      tools: [
-        {
-          pluginId: "xai",
-          optional: false,
-          source: "/tmp/xai.js",
-          names: ["x_search"],
-          factory,
-        },
-      ],
-      diagnostics: [],
-    });
+    setActivePluginRegistry(
+      {
+        plugins: [{ id: "xai", status: "loaded" }],
+        tools: [
+          {
+            pluginId: "xai",
+            optional: false,
+            source: "/tmp/xai.js",
+            names: ["x_search"],
+            factory,
+          },
+        ],
+        diagnostics: [],
+      } as never,
+      "test-tool-registry",
+      "gateway-bindable",
+      "/tmp",
+    );
 
     const tools = resolvePluginTools({
       context: {
@@ -574,11 +635,7 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["x_search"]);
     expect(factory).toHaveBeenCalledTimes(1);
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["xai"],
-      }),
-    );
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("skips optional tools without explicit allowlist", () => {
@@ -683,7 +740,7 @@ describe("resolvePluginTools optional tools", () => {
 
   it.each([
     {
-      name: "forwards an explicit env to plugin loading",
+      name: "uses loaded plugin tools with an explicit env",
       params: {
         env: { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv,
         toolAllowlist: ["optional_tool"],
@@ -693,7 +750,7 @@ describe("resolvePluginTools optional tools", () => {
       },
     },
     {
-      name: "forwards gateway subagent binding to plugin runtime options",
+      name: "uses loaded plugin tools with gateway subagent binding",
       params: {
         allowGatewaySubagentBinding: true,
         toolAllowlist: ["optional_tool"],
@@ -706,6 +763,22 @@ describe("resolvePluginTools optional tools", () => {
     },
   ])("$name", ({ params, expectedLoaderCall }) => {
     setOptionalDemoRegistry();
+    if (params.env) {
+      installToolManifestSnapshot({
+        config: createContext().config,
+        env: params.env,
+        plugin: {
+          id: "optional-demo",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: {
+            tools: ["optional_tool"],
+          },
+        },
+      });
+    }
 
     resolvePluginTools(createResolveToolsParams(params));
 
@@ -812,6 +885,160 @@ describe("resolvePluginTools optional tools", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  it("caches plugin tool descriptors and uses the runtime only on execution", async () => {
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { sessionId?: string };
+      return {
+        ...makeTool("cached_tool"),
+        async execute() {
+          return { content: [{ type: "text", text: ctx.sessionId ?? "missing" }] };
+        },
+      };
+    });
+    setRegistry([
+      {
+        pluginId: "cache-test",
+        optional: false,
+        source: "/tmp/cache-test.js",
+        names: ["cached_tool"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), sessionId: "same" },
+      }),
+    );
+    const second = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), sessionId: "same" },
+      }),
+    );
+
+    expectResolvedToolNames(first, ["cached_tool"]);
+    expectResolvedToolNames(second, ["cached_tool"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(second[0]).not.toBe(first[0]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+
+    await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "same" }],
+    });
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses cached plugin tool descriptors across session identity changes", async () => {
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { sessionId?: string };
+      return {
+        ...makeTool("cached_session_tool"),
+        async execute() {
+          return { content: [{ type: "text", text: ctx.sessionId ?? "missing" }] };
+        },
+      };
+    });
+    setRegistry([
+      {
+        pluginId: "cache-session-test",
+        optional: false,
+        source: "/tmp/cache-session-test.js",
+        names: ["cached_session_tool"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(
+      createResolveToolsParams({
+        context: {
+          ...createContext(),
+          sessionId: "first-session",
+          sessionKey: "agent:main:first-session",
+        },
+      }),
+    );
+    const second = resolvePluginTools(
+      createResolveToolsParams({
+        context: {
+          ...createContext(),
+          sessionId: "second-session",
+          sessionKey: "agent:main:second-session",
+        },
+      }),
+    );
+
+    expectResolvedToolNames(first, ["cached_session_tool"]);
+    expectResolvedToolNames(second, ["cached_session_tool"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+
+    await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "second-session" }],
+    });
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse cached plugin tool descriptors across sandbox context changes", () => {
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { sandboxed?: boolean };
+      return ctx.sandboxed ? null : makeTool("sandbox_sensitive_tool");
+    });
+    setRegistry([
+      {
+        pluginId: "sandbox-sensitive",
+        optional: false,
+        source: "/tmp/sandbox-sensitive.js",
+        names: ["sandbox_sensitive_tool"],
+        factory,
+      },
+    ]);
+
+    const hostTools = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), sandboxed: false },
+      }),
+    );
+    const sandboxedTools = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), sandboxed: true },
+      }),
+    );
+
+    expectResolvedToolNames(hostTools, ["sandbox_sensitive_tool"]);
+    expect(sandboxedTools).toEqual([]);
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("executes cached plugin tools registered with implicit names", async () => {
+    const factory = vi.fn(() => ({
+      ...makeTool("implicit_tool"),
+      async execute() {
+        return { content: [{ type: "text", text: "implicit-ok" }] };
+      },
+    }));
+    setRegistry([
+      {
+        pluginId: "implicit-owner",
+        optional: false,
+        source: "/tmp/implicit-owner.js",
+        names: [],
+        declaredNames: ["implicit_tool"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(createResolveToolsParams());
+    const second = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(first, ["implicit_tool"]);
+    expectResolvedToolNames(second, ["implicit_tool"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+
+    await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "implicit-ok" }],
+    });
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
   it("skips factory-returned tools outside the manifest tool contract", () => {
     const registry = setRegistry([
       {
@@ -895,7 +1122,7 @@ describe("resolvePluginTools optional tools", () => {
 
   it("reuses the gateway-bindable registry when it covers the tool runtime scope", () => {
     const activeRegistry = createOptionalDemoActiveRegistry();
-    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable");
+    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
     resolveRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
 
     const tools = resolvePluginTools(
@@ -942,7 +1169,7 @@ describe("resolvePluginTools optional tools", () => {
       ],
       diagnostics: [],
     };
-    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable");
+    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
 
     const tools = resolvePluginTools(
@@ -960,7 +1187,7 @@ describe("resolvePluginTools optional tools", () => {
 
   it("adds enabled non-startup tool plugins to the active tool runtime scope", () => {
     const activeRegistry = createOptionalDemoActiveRegistry();
-    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable");
+    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
     resolveRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
 
     resolvePluginTools({
@@ -980,23 +1207,27 @@ describe("resolvePluginTools optional tools", () => {
       allowGatewaySubagentBinding: true,
     });
 
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["tavily"],
-      }),
-    );
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
   it("reuses the pinned gateway channel registry after provider runtime loads replace active registry", () => {
     const gatewayRegistry = createOptionalDemoActiveRegistry();
+    setActivePluginRegistry(
+      gatewayRegistry as never,
+      "gateway-startup",
+      "gateway-bindable",
+      "/tmp",
+    );
     pinActivePluginChannelRegistry(gatewayRegistry as never);
     setActivePluginRegistry(
       {
+        plugins: [],
         tools: [],
         diagnostics: [],
       } as never,
       "provider-runtime",
       "default",
+      "/tmp",
     );
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
 
@@ -1014,14 +1245,22 @@ describe("resolvePluginTools optional tools", () => {
 
   it("reuses the pinned gateway channel registry even when the caller omits gateway binding", () => {
     const gatewayRegistry = createOptionalDemoActiveRegistry();
+    setActivePluginRegistry(
+      gatewayRegistry as never,
+      "gateway-startup",
+      "gateway-bindable",
+      "/tmp",
+    );
     pinActivePluginChannelRegistry(gatewayRegistry as never);
     setActivePluginRegistry(
       {
+        plugins: [],
         tools: [],
         diagnostics: [],
       } as never,
       "provider-runtime",
       "default",
+      "/tmp",
     );
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
 
@@ -1057,6 +1296,7 @@ describe("resolvePluginTools optional tools", () => {
   it("reloads when gateway binding would otherwise reuse a default-mode active registry", () => {
     setActivePluginRegistry(
       {
+        plugins: [],
         tools: [],
         diagnostics: [],
       } as never,
@@ -1071,13 +1311,7 @@ describe("resolvePluginTools optional tools", () => {
       toolAllowlist: ["optional_tool"],
     });
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      }),
-    );
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 });
 

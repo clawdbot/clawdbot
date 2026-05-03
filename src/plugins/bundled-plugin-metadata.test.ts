@@ -139,6 +139,24 @@ function readPackageManifest(pluginDir: string): PackageManifest | undefined {
     : undefined;
 }
 
+function collectRootPackageExcludedExtensionDirsForTest(): readonly string[] {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
+    files?: unknown;
+  };
+  if (!Array.isArray(packageJson.files)) {
+    return [];
+  }
+  return packageJson.files
+    .flatMap((entry) => {
+      if (typeof entry !== "string") {
+        return [];
+      }
+      const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
+      return match?.[1] ? [match[1]] : [];
+    })
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function collectRepoBundledChannelConfigsForTest(dirName: string) {
   const pluginDir = path.join(repoRoot, "extensions", dirName);
   const manifest = loadPluginManifest(pluginDir, false);
@@ -226,6 +244,18 @@ describe("bundled plugin metadata", () => {
     );
     expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-lab/runtime-api.js");
     expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-matrix/runtime-api.js");
+  });
+
+  it("excludes root-package-excluded plugin sidecars from the packaged runtime sidecar baseline", () => {
+    for (const pluginDir of collectRootPackageExcludedExtensionDirsForTest()) {
+      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(`dist/extensions/${pluginDir}/index.js`);
+      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(
+        `dist/extensions/${pluginDir}/runtime-api.js`,
+      );
+      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(
+        `dist/extensions/${pluginDir}/runtime-setter-api.js`,
+      );
+    }
   });
 
   it("captures setup-entry metadata for bundled channel plugins", () => {

@@ -1,3 +1,4 @@
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
@@ -53,6 +54,7 @@ export function asRuntimeConfig(config: OpenClawConfig): RuntimeConfig {
 export function materializeRuntimeConfig(
   config: OpenClawConfig,
   mode: ConfigMaterializationMode,
+  options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
 ): RuntimeConfig {
   const profile = MATERIALIZATION_PROFILES[mode];
   let next = applyMessageDefaults(config);
@@ -62,12 +64,12 @@ export function materializeRuntimeConfig(
   next = applySessionDefaults(next);
   next = applyAgentDefaults(next);
   if (profile.includeContextPruningDefaults) {
-    next = applyContextPruningDefaults(next);
+    next = applyContextPruningDefaults(next, { manifestRegistry: options.manifestRegistry });
   }
   if (profile.includeCompactionDefaults) {
     next = applyCompactionDefaults(next);
   }
-  next = applyModelDefaults(next);
+  next = applyModelDefaults(next, { manifestRegistry: options.manifestRegistry });
   next = applyTalkConfigNormalization(next);
   if (profile.normalizePaths) {
     normalizeConfigPaths(next);

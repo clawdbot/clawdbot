@@ -6,6 +6,7 @@ import type { AgentRouteBinding } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { describeBinding } from "./agents.binding-format.js";
 import { requireValidConfig, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 
@@ -29,11 +30,12 @@ type AgentsUnbindOptions = {
   json?: boolean;
 };
 
-let agentBindingsModulePromise: Promise<AgentBindingsModule> | undefined;
+const agentBindingsModuleLoader = createLazyImportLoader<AgentBindingsModule>(
+  () => import("./agents.bindings.js"),
+);
 
 function loadAgentBindingsModule(): Promise<AgentBindingsModule> {
-  agentBindingsModulePromise ??= import("./agents.bindings.js");
-  return agentBindingsModulePromise;
+  return agentBindingsModuleLoader.load();
 }
 
 function resolveAgentId(

@@ -536,7 +536,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       subtype: "bot_message",
       attachments: [
         {
-          text: "Readiness probe failed: Get http://10.42.13.132:8000/status: context deadline exceeded",
+          text: "Readiness probe failed: Get https://status.example.test/readiness: context deadline exceeded",
         },
       ],
     });
@@ -545,6 +545,11 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.RawBody).toContain("Readiness probe failed");
+    // Slack message attachments can carry the user-visible body even when the
+    // top-level message text is empty.
+    expect(prepared!.ctxPayload.CommandBody).toBe("");
+    expect(prepared!.ctxPayload.BodyForCommands).toBe("");
+    expect(prepared!.ctxPayload.BodyForAgent).toContain("Readiness probe failed");
   });
 
   it("drops bot-authored room messages when allowBots is true but no owner is present (#59284)", async () => {

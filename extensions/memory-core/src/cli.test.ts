@@ -1528,10 +1528,12 @@ describe("memory cli", () => {
 
   it("prints conceptual promotion signals", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      const dayMs = 24 * 60 * 60 * 1000;
+      const nowMs = Date.now();
       await recordShortTermRecalls({
         workspaceDir,
         query: "router vlan",
-        nowMs: Date.parse("2026-04-01T00:00:00.000Z"),
+        nowMs: nowMs - 2 * dayMs,
         results: [
           {
             path: "memory/2026-04-01.md",
@@ -1546,7 +1548,7 @@ describe("memory cli", () => {
       await recordShortTermRecalls({
         workspaceDir,
         query: "glacier backup",
-        nowMs: Date.parse("2026-04-03T00:00:00.000Z"),
+        nowMs: nowMs - dayMs,
         results: [
           {
             path: "memory/2026-04-01.md",

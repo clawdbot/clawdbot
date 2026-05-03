@@ -11,6 +11,7 @@ export function createVoiceCallBaseConfig(params?: {
     fromNumber: "+15550001234",
     inboundPolicy: "disabled",
     allowFrom: [],
+    numbers: {},
     outbound: { defaultMode: "notify", notifyHangupDelaySec: 3 },
     maxDurationSeconds: 300,
     staleCallReaperSeconds: 600,

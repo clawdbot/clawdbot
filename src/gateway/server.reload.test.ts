@@ -46,6 +46,14 @@ const hoisted = vi.hoisted(() => {
   const totalPendingReplies = { value: 0 };
   const totalQueueSize = { value: 0 };
   const activeTaskCount = { value: 0 };
+  const activeTaskBlockers: Array<{
+    taskId: string;
+    status: "queued" | "running";
+    runtime: "subagent" | "acp" | "cli" | "cron";
+    runId?: string;
+    label?: string;
+    title?: string;
+  }> = [];
 
   const startGmailWatcher = vi.fn(async () => ({ started: true }));
   const stopGmailWatcher = vi.fn(async () => {});
@@ -150,6 +158,7 @@ const hoisted = vi.hoisted(() => {
     totalPendingReplies,
     totalQueueSize,
     activeTaskCount,
+    activeTaskBlockers,
     startGmailWatcher,
     stopGmailWatcher,
     resetModelCatalogCache,
@@ -258,6 +267,7 @@ vi.mock("../tasks/task-registry.maintenance.js", async () => {
   );
   return {
     ...actual,
+    getInspectableActiveTaskRestartBlockers: () => hoisted.activeTaskBlockers,
     getInspectableTaskRegistrySummary: () => ({
       active: hoisted.activeTaskCount.value,
       queued: 0,
@@ -312,6 +322,7 @@ describe("gateway hot reload", () => {
     hoisted.totalPendingReplies.value = 0;
     hoisted.totalQueueSize.value = 0;
     hoisted.activeTaskCount.value = 0;
+    hoisted.activeTaskBlockers.length = 0;
     embeddedRunMock.activeIds.clear();
     hoisted.resetModelCatalogCache.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockReset();
@@ -882,6 +893,40 @@ describe("gateway hot reload", () => {
         {
           mcp: {
             servers: {},
+          },
+        },
+      );
+
+      expect(hoisted.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("reloads plugin runtime surfaces and disposes MCP runtimes on plugin config hot reloads", async () => {
+    await withNonMinimalGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
+
+      await onHotReload?.(
+        {
+          changedPaths: ["plugins.entries.discord.enabled"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["plugins.entries.discord.enabled"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: true,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: true,
+          noopPaths: [],
+        },
+        {
+          plugins: {
+            entries: {
+              discord: { enabled: false },
+            },
           },
         },
       );

@@ -172,6 +172,7 @@ function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeMo
 function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
   const trimmedModelId = ctx.modelId.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
+  const synthBaseUrl = ctx.providerConfig?.baseUrl ?? OPENAI_CODEX_BASE_URL;
 
   if (lower === OPENAI_CODEX_GPT_55_MODEL_ID) {
     const model = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId) as
@@ -188,7 +189,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
         name: trimmedModelId,
         api: "openai-codex-responses",
         provider: PROVIDER_ID,
-        baseUrl: OPENAI_CODEX_BASE_URL,
+        baseUrl: synthBaseUrl,
         reasoning: true,
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -264,7 +265,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
           : trimmedModelId,
       api: "openai-codex-responses",
       provider: PROVIDER_ID,
-      baseUrl: OPENAI_CODEX_BASE_URL,
+      baseUrl: synthBaseUrl,
       reasoning: true,
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -378,16 +379,15 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
       onProgress: (message) => spin.update(message),
       onVerification: async ({ verificationUrl, userCode, expiresInMs }) => {
         const expiresInMinutes = Math.max(1, Math.round(expiresInMs / 60_000));
-        const codeLine = ctx.isRemote
-          ? "Code: [shown on the local device only]"
-          : `Code: ${userCode}`;
+        // The prompter note is the user-facing TTY surface, so remote/headless
+        // users need the code there; keep the persistent runtime log URL-only.
         await ctx.prompter.note(
           [
             ctx.isRemote
               ? "Open this URL in your LOCAL browser and enter the code below."
               : "Open this URL in your browser and enter the code below.",
             `URL: ${verificationUrl}`,
-            codeLine,
+            `Code: ${userCode}`,
             `Code expires in ${expiresInMinutes} minutes. Never share it.`,
           ].join("\n"),
           "OpenAI Codex device code",

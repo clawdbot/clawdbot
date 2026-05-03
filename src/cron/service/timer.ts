@@ -456,7 +456,11 @@ function emitFailureAlert(
 
   state.deps.enqueueSystemEvent(text, { agentId: params.job.agentId });
   if (params.job.wakeMode === "now") {
-    state.deps.requestHeartbeatNow({ reason: `cron:${params.job.id}:failure-alert` });
+    state.deps.requestHeartbeat({
+      source: "cron",
+      intent: "immediate",
+      reason: `cron:${params.job.id}:failure-alert`,
+    });
   }
 }
 
@@ -1374,7 +1378,6 @@ async function executeMainSessionCronJob(
   });
   if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
     const reason = `cron:${job.id}`;
-    const isRecurringJob = job.schedule.kind !== "at";
     const maxWaitMs = state.deps.wakeNowHeartbeatBusyMaxWaitMs ?? 2 * 60_000;
     const retryDelayMs = state.deps.wakeNowHeartbeatBusyRetryDelayMs ?? 250;
     const waitStartedAt = state.deps.nowMs();
@@ -1385,6 +1388,8 @@ async function executeMainSessionCronJob(
         return { status: "error", error: timeoutErrorMessage() };
       }
       heartbeatResult = await state.deps.runHeartbeatOnce({
+        source: "cron",
+        intent: "immediate",
         reason,
         agentId: job.agentId,
         sessionKey: targetMainSessionKey,
@@ -1396,12 +1401,11 @@ async function executeMainSessionCronJob(
       ) {
         break;
       }
-      if (isRecurringJob || heartbeatResult.reason === HEARTBEAT_SKIP_CRON_IN_PROGRESS) {
-        // Recurring main-session cron jobs should not hold the cron lane open
-        // while runtime lanes are busy. A cron-in-progress skip is caused by
-        // this job's own active marker, so direct wake-now cannot succeed until
-        // the cron job returns and clears it (#50773).
-        state.deps.requestHeartbeatNow({
+      if (heartbeatResult.reason === HEARTBEAT_SKIP_CRON_IN_PROGRESS) {
+        // The active cron marker blocks direct wake-now until this job returns.
+        state.deps.requestHeartbeat({
+          source: "cron",
+          intent: "immediate",
           reason,
           agentId: job.agentId,
           sessionKey: targetMainSessionKey,
@@ -1416,7 +1420,9 @@ async function executeMainSessionCronJob(
         if (abortSignal?.aborted) {
           return { status: "error", error: timeoutErrorMessage() };
         }
-        state.deps.requestHeartbeatNow({
+        state.deps.requestHeartbeat({
+          source: "cron",
+          intent: "immediate",
           reason,
           agentId: job.agentId,
           sessionKey: targetMainSessionKey,
@@ -1439,7 +1445,9 @@ async function executeMainSessionCronJob(
   if (abortSignal?.aborted) {
     return { status: "error", error: timeoutErrorMessage() };
   }
-  state.deps.requestHeartbeatNow({
+  state.deps.requestHeartbeat({
+    source: "cron",
+    intent: job.wakeMode === "now" ? "immediate" : "event",
     reason: `cron:${job.id}`,
     agentId: job.agentId,
     sessionKey: targetMainSessionKey,
@@ -1589,7 +1597,7 @@ export function wake(
   }
   state.deps.enqueueSystemEvent(text);
   if (opts.mode === "now") {
-    state.deps.requestHeartbeatNow({ reason: "wake" });
+    state.deps.requestHeartbeat({ source: "manual", intent: "immediate", reason: "wake" });
   }
   return { ok: true } as const;
 }

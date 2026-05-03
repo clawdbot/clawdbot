@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -214,7 +214,7 @@ test("sessions.reset returns unavailable when active run does not stop", async (
   expect(filesAfterResetAttempt.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(false);
 });
 
-test("sessions.reset emits before_reset for the entry actually reset under the store lock", async () => {
+test("sessions.reset emits before_reset for the entry actually reset in the writer slot", async () => {
   const { dir } = await createSessionStoreDir();
   const oldTranscriptPath = path.join(dir, "sess-old.jsonl");
   const newTranscriptPath = path.join(dir, "sess-new.jsonl");
@@ -248,54 +248,34 @@ test("sessions.reset emits before_reset for the entry actually reset under the s
   });
 
   beforeResetHookState.hasBeforeResetHook = true;
-  const [
-    { getRuntimeConfig },
-    { resolveGatewaySessionStoreTarget },
-    { withSessionStoreLockForTest },
-  ] = await Promise.all([
-    import("../config/config.js"),
-    import("./session-utils.js"),
-    import("../config/sessions/store.js"),
-  ]);
+  const [{ getRuntimeConfig }, { resolveGatewaySessionStoreTarget }, { updateSessionStore }] =
+    await Promise.all([
+      import("../config/config.js"),
+      import("./session-utils.js"),
+      import("../config/sessions.js"),
+    ]);
   const gatewayStorePath = resolveGatewaySessionStoreTarget({
     cfg: getRuntimeConfig(),
     key: "main",
   }).storePath;
 
-  let pendingReset:
-    | ReturnType<(typeof import("./session-reset-service.js"))["performGatewaySessionReset"]>
-    | undefined;
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
-  await withSessionStoreLockForTest(gatewayStorePath, async () => {
-    pendingReset = performGatewaySessionReset({
-      key: "main",
-      reason: "new",
-      commandSource: "gateway:sessions.reset",
+  await updateSessionStore(gatewayStorePath, (store) => {
+    store["agent:main:main"] = sessionStoreEntry("sess-new", {
+      sessionFile: newTranscriptPath,
     });
-    await vi.waitFor(() => {
-      expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
-    });
-    await fs.writeFile(
-      gatewayStorePath,
-      JSON.stringify(
-        {
-          "agent:main:main": sessionStoreEntry("sess-new", {
-            sessionFile: newTranscriptPath,
-          }),
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
   });
 
-  const reset = await pendingReset!;
+  const reset = await performGatewaySessionReset({
+    key: "main",
+    reason: "new",
+    commandSource: "gateway:sessions.reset",
+  });
   expect(reset.ok).toBe(true);
   const internalEvent = (
     sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
   )[0]?.[0] as { context?: { previousSessionEntry?: { sessionId?: string } } } | undefined;
-  expect(internalEvent?.context?.previousSessionEntry?.sessionId).toBe("sess-old");
+  expect(internalEvent?.context?.previousSessionEntry?.sessionId).toBe("sess-new");
   expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
   const [event, context] = (
     beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>

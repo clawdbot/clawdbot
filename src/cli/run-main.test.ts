@@ -214,12 +214,14 @@ describe("resolveMissingPluginCommandMessage", () => {
   });
 
   it("does not classify reserved non-plugin command roots as plugin allowlist misses", () => {
-    const message = resolveMissingPluginCommandMessage("tool", {
-      plugins: {
-        allow: ["browser"],
-      },
-    });
-    expect(message).toBeNull();
+    for (const root of ["auth", "tool"]) {
+      const message = resolveMissingPluginCommandMessage(root, {
+        plugins: {
+          allow: ["browser"],
+        },
+      });
+      expect(message).toBeNull();
+    }
   });
 
   it("explains that dreaming is a runtime slash command, not a CLI command", () => {

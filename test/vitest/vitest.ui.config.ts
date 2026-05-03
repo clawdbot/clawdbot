@@ -7,7 +7,7 @@ export const unitUiIncludePatterns = [
   "ui/src/ui/views/agents-utils.test.ts",
   "ui/src/ui/views/channels.test.ts",
   "ui/src/ui/views/chat.test.ts",
-  "ui/src/ui/views/dreams.test.ts",
+  "ui/src/ui/views/dreaming.test.ts",
   "ui/src/ui/views/usage-render-details.test.ts",
   "ui/src/ui/controllers/agents.test.ts",
   "ui/src/ui/controllers/chat.test.ts",

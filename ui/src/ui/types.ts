@@ -409,6 +409,11 @@ export type SessionCompactionCheckpoint = {
   postCompaction: SessionCompactionTranscriptReference;
 };
 
+export type SessionCompactionCheckpointPreview = Pick<
+  SessionCompactionCheckpoint,
+  "checkpointId" | "createdAt" | "reason"
+>;
+
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
@@ -436,6 +441,7 @@ export type GatewaySessionRow = {
   totalTokens?: number;
   totalTokensFresh?: boolean;
   status?: SessionRunStatus;
+  hasActiveRun?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
   startedAt?: number;
@@ -447,7 +453,7 @@ export type GatewaySessionRow = {
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   compactionCheckpointCount?: number;
-  latestCompactionCheckpoint?: SessionCompactionCheckpoint;
+  latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
 };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;

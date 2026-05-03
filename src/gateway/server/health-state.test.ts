@@ -57,8 +57,35 @@ describe("refreshGatewayHealthSnapshot", () => {
       includeSensitive: false,
       runtimeSnapshot: undefined,
     });
+    expect(Object.hasOwn(getHealthSnapshotMock.mock.calls[0]?.[0] ?? {}, "eventLoop")).toBe(false);
     resolveSnapshot?.(createHealthSummary());
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+  });
+
+  it("passes event-loop health only when the hook returns a snapshot", async () => {
+    const healthState = await loadHealthState();
+    const eventLoop = {
+      degraded: true,
+      reasons: ["event_loop_delay" as const],
+      intervalMs: 2_000,
+      delayP99Ms: 1_500,
+      delayMaxMs: 1_700,
+      utilization: 0.2,
+      cpuCoreRatio: 0.1,
+    };
+
+    await healthState.refreshGatewayHealthSnapshot({
+      probe: false,
+      getEventLoopHealth: () => eventLoop,
+    });
+    await healthState.refreshGatewayHealthSnapshot({
+      probe: true,
+      getEventLoopHealth: () => undefined,
+    });
+
+    expect(getHealthSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(getHealthSnapshotMock.mock.calls[0]?.[0]?.eventLoop).toBe(eventLoop);
+    expect(Object.hasOwn(getHealthSnapshotMock.mock.calls[1]?.[0] ?? {}, "eventLoop")).toBe(false);
   });
 
   it("captures runtime snapshots for completed refreshes and guards snapshot failures", async () => {
@@ -98,7 +125,9 @@ describe("refreshGatewayHealthSnapshot", () => {
     const sensitiveSummary = createHealthSummary();
     const safeSummary = createHealthSummary();
     const broadcast = vi.fn();
-    getHealthSnapshotMock.mockResolvedValueOnce(sensitiveSummary).mockResolvedValueOnce(safeSummary);
+    getHealthSnapshotMock
+      .mockResolvedValueOnce(sensitiveSummary)
+      .mockResolvedValueOnce(safeSummary);
     healthState.setBroadcastHealthUpdate(broadcast);
     const version = healthState.getHealthVersion();
 

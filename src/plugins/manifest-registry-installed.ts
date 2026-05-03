@@ -14,6 +14,10 @@ import {
   type PackageManifest,
 } from "./manifest.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
+import {
+  normalizePluginDependencySpecs,
+  type PluginDependencySpecMap,
+} from "./status-dependencies.js";
 
 function resolvePackageJsonPath(record: InstalledPluginIndexRecord): string | undefined {
   if (!record.packageJson?.path) {
@@ -101,25 +105,40 @@ function resolveFallbackPluginSource(record: InstalledPluginIndexRecord): string
   return path.join(rootDir, DEFAULT_PLUGIN_ENTRY_CANDIDATES[0]);
 }
 
-function resolveInstalledPackageManifest(
-  record: InstalledPluginIndexRecord,
-): OpenClawPackageManifest | undefined {
+function resolveInstalledPackageMetadata(record: InstalledPluginIndexRecord): {
+  packageManifest?: OpenClawPackageManifest;
+  packageDependencies?: PluginDependencySpecMap;
+  packageOptionalDependencies?: PluginDependencySpecMap;
+} {
+  const fallbackPackageManifest = record.packageChannel
+    ? {
+        channel: record.packageChannel,
+      }
+    : undefined;
   const rootDir = resolveInstalledPluginRootDir(record);
   const packageJsonPath = record.packageJson?.path
     ? path.resolve(rootDir, record.packageJson.path)
     : undefined;
   if (!packageJsonPath) {
-    return record.packageChannel ? { channel: record.packageChannel } : undefined;
+    return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
   }
   const relative = path.relative(rootDir, packageJsonPath);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return record.packageChannel ? { channel: record.packageChannel } : undefined;
+    return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
   }
   try {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as PackageManifest;
     const packageManifest = getPackageManifestMetadata(packageJson);
+    const dependencies = normalizePluginDependencySpecs({
+      dependencies: packageJson.dependencies,
+      optionalDependencies: packageJson.optionalDependencies,
+    });
     if (!packageManifest) {
-      return record.packageChannel ? { channel: record.packageChannel } : undefined;
+      return {
+        ...(fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {}),
+        packageDependencies: dependencies.dependencies,
+        packageOptionalDependencies: dependencies.optionalDependencies,
+      };
     }
     const channel =
       record.packageChannel || packageManifest.channel
@@ -129,17 +148,21 @@ function resolveInstalledPackageManifest(
           }
         : undefined;
     return {
-      ...packageManifest,
-      ...(channel ? { channel } : {}),
+      packageManifest: {
+        ...packageManifest,
+        ...(channel ? { channel } : {}),
+      },
+      packageDependencies: dependencies.dependencies,
+      packageOptionalDependencies: dependencies.optionalDependencies,
     };
   } catch {
-    return record.packageChannel ? { channel: record.packageChannel } : undefined;
+    return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
   }
 }
 
 function toPluginCandidate(record: InstalledPluginIndexRecord): PluginCandidate {
   const rootDir = resolveInstalledPluginRootDir(record);
-  const packageManifest = resolveInstalledPackageManifest(record);
+  const packageMetadata = resolveInstalledPackageMetadata(record);
   return {
     idHint: record.pluginId,
     source: record.source ?? resolveFallbackPluginSource(record),
@@ -150,7 +173,15 @@ function toPluginCandidate(record: InstalledPluginIndexRecord): PluginCandidate 
     ...(record.bundleFormat ? { bundleFormat: record.bundleFormat } : {}),
     ...(record.packageName ? { packageName: record.packageName } : {}),
     ...(record.packageVersion ? { packageVersion: record.packageVersion } : {}),
-    ...(packageManifest ? { packageManifest } : {}),
+    ...(packageMetadata.packageManifest
+      ? { packageManifest: packageMetadata.packageManifest }
+      : {}),
+    ...(packageMetadata.packageDependencies
+      ? { packageDependencies: packageMetadata.packageDependencies }
+      : {}),
+    ...(packageMetadata.packageOptionalDependencies
+      ? { packageOptionalDependencies: packageMetadata.packageOptionalDependencies }
+      : {}),
     packageDir: rootDir,
   };
 }

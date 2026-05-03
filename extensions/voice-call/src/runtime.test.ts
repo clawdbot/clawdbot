@@ -44,6 +44,7 @@ vi.mock("./config.js", () => ({
     const normalizedPhone = params.phone?.replace(/\D/g, "");
     return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
   },
+  resolveVoiceCallEffectiveConfig: (config: VoiceCallConfig) => ({ config }),
   resolveVoiceCallConfig: mocks.resolveVoiceCallConfig,
   resolveTwilioAuthToken: mocks.resolveTwilioAuthToken,
   validateProviderConfig: mocks.validateProviderConfig,
@@ -336,6 +337,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
         resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
         loadSessionStore: vi.fn(() => sessionStore),
         saveSessionStore: vi.fn(async () => {}),
+        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
         resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
       },
       runEmbeddedPiAgent,
@@ -420,6 +422,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
         resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
         loadSessionStore: vi.fn(() => sessionStore),
         saveSessionStore: vi.fn(async () => {}),
+        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
         resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
       },
       runEmbeddedPiAgent,
@@ -482,6 +485,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
         resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
         loadSessionStore: vi.fn(() => sessionStore),
         saveSessionStore: vi.fn(async () => {}),
+        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
         resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
       },
       runEmbeddedPiAgent,

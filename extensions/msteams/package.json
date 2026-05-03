@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/msteams",
-  "version": "2026.5.1-beta.1",
+  "version": "2026.5.3",
   "description": "OpenClaw Microsoft Teams channel plugin",
   "repository": {
     "type": "git",
@@ -22,7 +22,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.25"
+    "openclaw": ">=2026.5.3"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -58,10 +58,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.4.25"
+      "pluginApi": ">=2026.5.3"
     },
     "build": {
-      "openclawVersion": "2026.5.1-beta.1"
+      "openclawVersion": "2026.5.3"
     },
     "release": {
       "publishToClawHub": true,

@@ -15,7 +15,12 @@ import { normalizeProviderId } from "./model-selection.js";
 
 export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
 
-type ModelEntry = { id: string; contextWindow?: number; contextTokens?: number };
+type ModelEntry = {
+  id: string;
+  provider?: string;
+  contextWindow?: number;
+  contextTokens?: number;
+};
 type ModelRegistryLike = {
   getAvailable?: () => ModelEntry[];
   getAll: () => ModelEntry[];
@@ -53,7 +58,7 @@ export function applyDiscoveredContextWindows(params: {
         : typeof model.contextWindow === "number"
           ? Math.trunc(model.contextWindow)
           : undefined;
-    const contextTokens = shouldUseDiscoveredAnthropicOpus47ContextWindow(model.id)
+    const contextTokens = shouldUseDiscoveredAnthropicOpus47ContextWindow(model)
       ? ANTHROPIC_CONTEXT_1M_TOKENS
       : discoveredContextTokens;
     if (!contextTokens || contextTokens <= 0) {
@@ -101,8 +106,7 @@ export function applyConfiguredContextWindows(params: {
 }
 
 function loadModelsConfigRuntime() {
-  CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimePromise ??= import("./models-config.runtime.js");
-  return CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimePromise;
+  return CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimeLoader.load();
 }
 
 function isLikelyOpenClawCliProcess(argv: string[] = process.argv): boolean {
@@ -152,6 +156,7 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "hooks",
   "logs",
   "memory",
+  "message",
   "models",
   "pairing",
   "plugins",
@@ -237,7 +242,9 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
         await import("./pi-model-discovery-runtime.js");
       const agentDir = resolveOpenClawAgentDir();
       const authStorage = discoverAuthStorage(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir) as unknown as ModelRegistryLike;
+      const modelRegistry = discoverModels(authStorage, agentDir, {
+        normalizeModels: false,
+      }) as unknown as ModelRegistryLike;
       const models =
         typeof modelRegistry.getAvailable === "function"
           ? modelRegistry.getAvailable()
@@ -419,17 +426,23 @@ function shouldUseAnthropicOpus47ContextWindow(params: {
   );
 }
 
-function shouldUseDiscoveredAnthropicOpus47ContextWindow(modelId: string): boolean {
+function shouldUseDiscoveredAnthropicOpus47ContextWindow(model: ModelEntry): boolean {
+  const provider =
+    typeof model.provider === "string" ? normalizeProviderId(model.provider) : undefined;
+  const modelId = model.id;
   if (!isClaudeOpus47Model(modelId)) {
     return false;
+  }
+  if (provider) {
+    return provider === "anthropic" || provider === "claude-cli";
   }
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   const slash = normalized.indexOf("/");
   if (slash < 0) {
     return false;
   }
-  const provider = normalizeProviderId(normalized.slice(0, slash));
-  return provider === "claude-cli";
+  const inferredProvider = normalizeProviderId(normalized.slice(0, slash));
+  return inferredProvider === "claude-cli";
 }
 
 function resolveModelFamilyId(modelId: string): string {

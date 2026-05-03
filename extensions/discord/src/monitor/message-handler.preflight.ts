@@ -121,28 +121,6 @@ export async function preflightDiscordMessage(
 
   const pluralkitConfig = params.discordConfig?.pluralkit;
   const webhookId = resolveDiscordWebhookId(message);
-  const pluralkitInfo = await resolveDiscordPreflightPluralKitInfo({
-    message,
-    webhookId,
-    config: pluralkitConfig,
-    abortSignal: params.abortSignal,
-  });
-  if (isPreflightAborted(params.abortSignal)) {
-    return null;
-  }
-  const sender = resolveDiscordSenderIdentity({
-    author,
-    member: params.data.member,
-    pluralkitInfo,
-  });
-
-  if (author.bot) {
-    if (allowBotsMode === "off" && !sender.isPluralKit) {
-      logVerbose("discord: drop bot message (allowBots=false)");
-      return null;
-    }
-  }
-
   const isGuildMessage = Boolean(params.data.guild_id);
   const channelInfo = await resolveDiscordChannelInfo(params.client, messageChannelId);
   if (isPreflightAborted(params.abortSignal)) {
@@ -188,6 +166,26 @@ export async function preflightDiscordMessage(
   ) {
     logVerbose(`discord: drop bound-thread bot system message ${message.id}`);
     return null;
+  }
+  const pluralkitInfo = await resolveDiscordPreflightPluralKitInfo({
+    message,
+    config: pluralkitConfig,
+    abortSignal: params.abortSignal,
+  });
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+  const sender = resolveDiscordSenderIdentity({
+    author,
+    member: params.data.member,
+    pluralkitInfo,
+  });
+
+  if (author.bot) {
+    if (allowBotsMode === "off" && !sender.isPluralKit) {
+      logVerbose("discord: drop bot message (allowBots=false)");
+      return null;
+    }
   }
   const data = message === params.data.message ? params.data : { ...params.data, message };
   logDebug(
@@ -639,6 +637,7 @@ export async function preflightDiscordMessage(
     messageChannelId,
     author,
     sender,
+    canonicalMessageId: pluralkitInfo?.original?.trim() || undefined,
     memberRoleIds,
     channelInfo,
     channelName,

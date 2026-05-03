@@ -689,6 +689,12 @@ describe("config help copy quality", () => {
     expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
   });
 
+  it("documents session write-lock acquire timeout defaults", () => {
+    const acquireTimeout = FIELD_HELP["session.writeLock.acquireTimeoutMs"];
+    expect(acquireTimeout.includes("60000")).toBe(true);
+    expect(/transcript|lock/i.test(acquireTimeout)).toBe(true);
+  });
+
   it("documents session maintenance duration/size examples and deprecations", () => {
     const pruneAfter = FIELD_HELP["session.maintenance.pruneAfter"];
     expect(pruneAfter.includes("30d")).toBe(true);

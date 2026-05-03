@@ -34,8 +34,8 @@ export type PublishablePluginPackage = {
   packageDir: string;
   packageName: string;
   version: string;
-  channel: "stable" | "beta";
-  publishTag: "latest" | "beta";
+  channel: "stable" | "alpha" | "beta";
+  publishTag: "latest" | "alpha" | "beta";
   installNpmSpec?: string;
 };
 
@@ -117,7 +117,7 @@ export function resolvePublishablePluginVersion(params: {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     params.validationErrors.push(
-      `${params.extensionId}: package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${version}".`,
+      `${params.extensionId}: package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "${version}".`,
     );
     return null;
   }
@@ -244,7 +244,7 @@ export function collectPublishablePluginPackageErrors(
     errors.push("package.json version must be non-empty.");
   } else if (parseReleaseVersion(packageVersion) === null) {
     errors.push(
-      `package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${packageVersion}".`,
+      `package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "${packageVersion}".`,
     );
   }
   if (!Array.isArray(extensions) || extensions.length === 0) {

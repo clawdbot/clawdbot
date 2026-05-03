@@ -1,14 +1,14 @@
 import type { OpenClawConfig } from "../../config/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { withProgress } from "../progress.js";
 
 type GatewayStatusProbeKind = "connect" | "read";
 
-let probeGatewayModulePromise: Promise<typeof import("../../gateway/probe.js")> | undefined;
+const probeGatewayModuleLoader = createLazyImportLoader(() => import("../../gateway/probe.js"));
 
 async function loadProbeGatewayModule(): Promise<typeof import("../../gateway/probe.js")> {
-  probeGatewayModulePromise ??= import("../../gateway/probe.js");
-  return await probeGatewayModulePromise;
+  return await probeGatewayModuleLoader.load();
 }
 
 function resolveProbeFailureMessage(result: {

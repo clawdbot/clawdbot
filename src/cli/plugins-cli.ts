@@ -51,6 +51,17 @@ function formatRegistryState(state: "missing" | "fresh" | "stale"): string {
   return theme.warn(state);
 }
 
+function reportMissingPlugin(id: string) {
+  defaultRuntime.error(
+    `Plugin not found: ${id}. Run \`openclaw plugins list\` to see installed plugins.`,
+  );
+  return defaultRuntime.exit(1);
+}
+
+function matchesPluginId(plugin: { id: string }, id: string) {
+  return plugin.id === id;
+}
+
 export function registerPluginsCli(program: Command) {
   const plugins = program
     .command("plugins")
@@ -102,13 +113,22 @@ export function registerPluginsCli(program: Command) {
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
       const { enablePluginInConfig } = await import("../plugins/enable.js");
+      const { normalizePluginId } = await import("../plugins/config-state.js");
+      const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
       const { applySlotSelectionForPlugin, logSlotWarnings } =
         await import("./plugins-command-helpers.js");
       const { refreshPluginRegistryAfterConfigMutation } =
         await import("./plugins-registry-refresh.js");
       const snapshot = await readConfigFileSnapshot();
       const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-      const enableResult = enablePluginInConfig(cfg, id);
+      const report = buildPluginRegistrySnapshotReport({ config: cfg });
+      id = normalizePluginId(id);
+      if (!report.plugins.some((plugin) => matchesPluginId(plugin, id))) {
+        return reportMissingPlugin(id);
+      }
+      const enableResult = enablePluginInConfig(cfg, id, {
+        updateChannelConfig: false,
+      });
       let next: OpenClawConfig = enableResult.config;
       const slotResult = applySlotSelectionForPlugin(next, id);
       next = slotResult.config;
@@ -141,12 +161,21 @@ export function registerPluginsCli(program: Command) {
     .description("Disable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
+      const { normalizePluginId } = await import("../plugins/config-state.js");
+      const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
       const { setPluginEnabledInConfig } = await import("./plugins-config.js");
       const { refreshPluginRegistryAfterConfigMutation } =
         await import("./plugins-registry-refresh.js");
       const snapshot = await readConfigFileSnapshot();
       const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-      const next = setPluginEnabledInConfig(cfg, id, false);
+      const report = buildPluginRegistrySnapshotReport({ config: cfg });
+      id = normalizePluginId(id);
+      if (!report.plugins.some((plugin) => matchesPluginId(plugin, id))) {
+        return reportMissingPlugin(id);
+      }
+      const next = setPluginEnabledInConfig(cfg, id, false, {
+        updateChannelConfig: false,
+      });
       await replaceConfigFile({
         nextConfig: next,
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),

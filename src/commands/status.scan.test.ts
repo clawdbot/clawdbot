@@ -90,13 +90,13 @@ describe("scanStatus", () => {
     expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
       expect.objectContaining({ marker: "resolved" }),
       expect.objectContaining({
-        includeSetupFallbackPlugins: false,
+        includeSetupFallbackPlugins: true,
         sourceConfig: expect.objectContaining({ marker: "source" }),
       }),
     );
   });
 
-  it("keeps default text status off live channel status and setup runtime fallback", async () => {
+  it("keeps default text status off live channel status while keeping configured channel setup fallback", async () => {
     configureScanStatus({ hasConfiguredChannels: true });
     mocks.probeGateway.mockResolvedValue({
       ok: true,
@@ -117,7 +117,7 @@ describe("scanStatus", () => {
     );
     expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
       expect.any(Object),
-      expect.objectContaining({ includeSetupFallbackPlugins: false }),
+      expect.objectContaining({ includeSetupFallbackPlugins: true }),
     );
   });
 

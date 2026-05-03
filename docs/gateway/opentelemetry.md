@@ -30,7 +30,7 @@ works without code changes. For local file logs and how to read them, see
 For packaged installs, install the plugin first:
 
 ```bash
-openclaw plugins install @openclaw/diagnostics-otel
+openclaw plugins install clawhub:@openclaw/diagnostics-otel
 ```
 
 ```json5

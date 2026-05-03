@@ -213,6 +213,8 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
 
   </Accordion>
   <Accordion title="Bedrock">
+    ### Bedrock embedding config
+
     Bedrock uses the AWS SDK default credential chain — no API keys needed. If OpenClaw runs on EC2 with a Bedrock-enabled instance role, just set the provider and model:
 
     ```json5

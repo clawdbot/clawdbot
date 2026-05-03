@@ -220,6 +220,10 @@ async function sendTelegramOutbound(params: {
 }
 
 const telegramMessageActions: ChannelMessageActionAdapter = {
+  resolveExecutionMode: (ctx) =>
+    getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.resolveExecutionMode?.(ctx) ??
+    telegramMessageActionsImpl.resolveExecutionMode?.(ctx) ??
+    "gateway",
   describeMessageTool: (ctx) =>
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.describeMessageTool?.(ctx) ??
     telegramMessageActionsImpl.describeMessageTool?.(ctx) ??

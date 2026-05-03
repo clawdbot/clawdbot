@@ -90,6 +90,7 @@ vi.mock("../utils/message-channel.js", () => ({
 function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   currentTasks: Map<string, ReturnType<typeof createTaskRecord>>;
   snapshotTasks: ReturnType<typeof createTaskRecord>[];
+  listTaskRecords?: () => ReturnType<typeof createTaskRecord>[];
   acpEntry?: AcpSessionStoreEntry;
   acpEntries?: AcpSessionStoreEntry[];
   sessionBindings?: SessionBindingRecord[];
@@ -123,10 +124,19 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     parseAgentSessionKey: () => null as ParsedAgentSessionKey | null,
     isCronJobActive: () => false,
     getAgentRunContext: () => undefined,
+    hasActiveTaskForChildSessionKey: ({ sessionKey, excludeTaskId }) => {
+      const normalized = sessionKey.trim().toLowerCase();
+      return Array.from(params.currentTasks.values()).some(
+        (task) =>
+          task.taskId !== excludeTaskId &&
+          (task.status === "queued" || task.status === "running") &&
+          task.childSessionKey?.trim().toLowerCase() === normalized,
+      );
+    },
     deleteTaskRecordById: (taskId: string) => params.currentTasks.delete(taskId),
     ensureTaskRegistryReady: () => {},
     getTaskById: (taskId: string) => params.currentTasks.get(taskId),
-    listTaskRecords: () => params.snapshotTasks,
+    listTaskRecords: params.listTaskRecords ?? (() => params.snapshotTasks),
     markTaskLostById: (patch: {
       taskId: string;
       endedAt: number;
@@ -1628,6 +1638,103 @@ describe("task-registry", () => {
     });
   });
 
+  it("does not relist task records for each terminal ACP cleanup check", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+      const tasks = Array.from({ length: 20 }, (_, index) => {
+        const task = createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          requesterSessionKey: "agent:main:main",
+          scopeKind: "session",
+          childSessionKey: `agent:claude:acp:terminal-${index}`,
+          runId: `run-terminal-acp-snapshot-${index}`,
+          task: `Terminal ACP task ${index}`,
+          status: "succeeded",
+          deliveryStatus: "delivered",
+        });
+        return {
+          ...task,
+          endedAt: now - 60_000,
+          lastEventAt: now - 60_000,
+        };
+      });
+      const currentTasks = new Map(tasks.map((task) => [task.taskId, task]));
+      let listCalls = 0;
+
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks,
+        snapshotTasks: tasks,
+        listTaskRecords: () => {
+          listCalls += 1;
+          return tasks;
+        },
+      });
+
+      await runTaskRegistryMaintenance();
+
+      expect(listCalls).toBe(1);
+    });
+  });
+
+  it("keeps terminal ACP cleanup from closing a child session with fresh active work", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+      const parentSessionKey = "agent:main:telegram:direct:owner";
+      const childSessionKey = "agent:claude:acp:shared-child";
+      const terminal = createTaskRecord({
+        runtime: "acp",
+        ownerKey: parentSessionKey,
+        requesterSessionKey: parentSessionKey,
+        scopeKind: "session",
+        childSessionKey,
+        runId: "run-terminal-acp-shared",
+        task: "Old ACP task",
+        status: "succeeded",
+        deliveryStatus: "delivered",
+      });
+      const terminalCurrent = {
+        ...terminal,
+        endedAt: now - 60_000,
+        lastEventAt: now - 60_000,
+      };
+      const active = createTaskRecord({
+        runtime: "acp",
+        ownerKey: parentSessionKey,
+        requesterSessionKey: parentSessionKey,
+        scopeKind: "session",
+        childSessionKey,
+        runId: "run-active-acp-shared",
+        task: "Current ACP task",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+      const closeAcpSession = vi.fn().mockResolvedValue(undefined);
+
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks: new Map([
+          [terminal.taskId, terminalCurrent],
+          [active.taskId, active],
+        ]),
+        snapshotTasks: [terminalCurrent],
+        acpEntry: createAcpSessionStoreEntry({
+          sessionKey: childSessionKey,
+          parentSessionKey,
+          mode: "oneshot",
+        }),
+        closeAcpSession,
+      });
+
+      await runTaskRegistryMaintenance();
+
+      expect(closeAcpSession).not.toHaveBeenCalled();
+    });
+  });
+
   it("closes stale terminal persistent ACP sessions only when no binding remains", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
@@ -1977,6 +2084,7 @@ describe("task-registry", () => {
         parseAgentSessionKey: () => null,
         isCronJobActive: () => false,
         getAgentRunContext: () => undefined,
+        hasActiveTaskForChildSessionKey: () => false,
         deleteTaskRecordById: () => false,
         ensureTaskRegistryReady: () => {},
         getTaskById: () => undefined,

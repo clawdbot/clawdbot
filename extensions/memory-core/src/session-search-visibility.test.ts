@@ -11,6 +11,7 @@ const crossAgentStore = {
     sessionFile: "/tmp/sessions/w1.jsonl",
   },
 };
+let combinedSessionStore: typeof crossAgentStore | Record<string, never> = crossAgentStore;
 
 vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => {
   const actual =
@@ -19,7 +20,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
     ...actual,
     loadCombinedSessionStoreForGateway: vi.fn(() => ({
       storePath: "(test)",
-      store: crossAgentStore,
+      store: combinedSessionStore,
     })),
   };
 });
@@ -27,6 +28,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
 describe("filterMemorySearchHitsBySessionVisibility", () => {
   afterEach(() => {
     vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGateway).mockClear();
+    combinedSessionStore = crossAgentStore;
   });
 
   it("drops sessions-sourced hits when requester key is missing (fail closed)", async () => {
@@ -146,6 +148,59 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       sandboxed: false,
       hits: [hit],
     });
+    expect(filtered).toEqual([]);
+  });
+
+  it("keeps same-agent deleted archive hits using owner metadata when the live store entry is gone", async () => {
+    combinedSessionStore = {};
+    const hit: MemorySearchResult = {
+      path: "sessions/main/deleted-stem.jsonl.deleted.2026-02-16T22-27-33.000Z",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({
+      tools: {
+        sessions: { visibility: "agent" },
+      },
+    });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+
+    expect(filtered).toEqual([hit]);
+  });
+
+  it("still denies cross-agent deleted archive hits resolved from owner metadata when a2a is disabled", async () => {
+    combinedSessionStore = {};
+    const hit: MemorySearchResult = {
+      path: "sessions/peer/deleted-stem.jsonl.deleted.2026-02-16T22-27-33.000Z",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: false },
+      },
+    });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+
     expect(filtered).toEqual([]);
   });
 });

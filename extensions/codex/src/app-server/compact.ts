@@ -74,6 +74,7 @@ export async function maybeCompactCodexAppServerSession(
           sessionFile: params.sessionFile,
           reason: "compaction",
           runtimeContext: params.contextEngineRuntimeContext,
+          config: params.config,
         });
       } catch (error) {
         embeddedAgentLog.warn(

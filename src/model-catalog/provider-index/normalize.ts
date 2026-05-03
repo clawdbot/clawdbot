@@ -1,3 +1,4 @@
+import { parseClawHubPluginSpec } from "../../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -25,16 +26,24 @@ function normalizeInstall(value: unknown): OpenClawProviderIndexPluginInstall | 
   if (!isRecord(value)) {
     return undefined;
   }
+  const clawhubSpec = normalizeOptionalString(value.clawhubSpec);
+  const parsedClawHub = clawhubSpec ? parseClawHubPluginSpec(clawhubSpec) : null;
   const npmSpec = normalizeOptionalString(value.npmSpec);
-  const parsed = npmSpec ? parseRegistryNpmSpec(npmSpec) : null;
-  if (!parsed) {
+  const parsedNpm = npmSpec ? parseRegistryNpmSpec(npmSpec) : null;
+  if (!parsedClawHub && !parsedNpm) {
     return undefined;
   }
-  const defaultChoice = value.defaultChoice === "npm" ? "npm" : undefined;
+  const defaultChoice =
+    value.defaultChoice === "clawhub" && parsedClawHub
+      ? "clawhub"
+      : value.defaultChoice === "npm" && parsedNpm
+        ? "npm"
+        : undefined;
   const minHostVersion = normalizeOptionalString(value.minHostVersion);
   const expectedIntegrity = normalizeOptionalString(value.expectedIntegrity);
   return {
-    npmSpec: parsed.raw,
+    ...(parsedClawHub ? { clawhubSpec } : {}),
+    ...(parsedNpm ? { npmSpec: parsedNpm.raw } : {}),
     ...(defaultChoice ? { defaultChoice } : {}),
     ...(minHostVersion ? { minHostVersion } : {}),
     ...(expectedIntegrity ? { expectedIntegrity } : {}),

@@ -6,6 +6,7 @@ import {
   type ConnectPairingRequiredReason,
 } from "../gateway/protocol/connect-error-details.js";
 import { type RuntimeEnv } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
@@ -20,47 +21,41 @@ import { buildStatusCommandReportData } from "./status.command-report-data.ts";
 import { buildStatusCommandReportLines } from "./status.command-report.ts";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.ts";
 
-let statusScanModulePromise: Promise<typeof import("./status.scan.js")> | undefined;
-let statusScanFastJsonModulePromise:
-  | Promise<typeof import("./status.scan.fast-json.js")>
-  | undefined;
-let statusAllModulePromise: Promise<typeof import("./status-all.js")> | undefined;
-let statusCommandTextRuntimePromise:
-  | Promise<typeof import("./status.command.text-runtime.js")>
-  | undefined;
-let statusGatewayConnectionRuntimePromise:
-  | Promise<typeof import("./status.gateway-connection.runtime.js")>
-  | undefined;
-let statusNodeModeModulePromise: Promise<typeof import("./status.node-mode.js")> | undefined;
+const statusScanModuleLoader = createLazyImportLoader(() => import("./status.scan.js"));
+const statusScanFastJsonModuleLoader = createLazyImportLoader(
+  () => import("./status.scan.fast-json.js"),
+);
+const statusAllModuleLoader = createLazyImportLoader(() => import("./status-all.js"));
+const statusCommandTextRuntimeLoader = createLazyImportLoader(
+  () => import("./status.command.text-runtime.js"),
+);
+const statusGatewayConnectionRuntimeLoader = createLazyImportLoader(
+  () => import("./status.gateway-connection.runtime.js"),
+);
+const statusNodeModeModuleLoader = createLazyImportLoader(() => import("./status.node-mode.js"));
 
 function loadStatusScanModule() {
-  statusScanModulePromise ??= import("./status.scan.js");
-  return statusScanModulePromise;
+  return statusScanModuleLoader.load();
 }
 
 function loadStatusScanFastJsonModule() {
-  statusScanFastJsonModulePromise ??= import("./status.scan.fast-json.js");
-  return statusScanFastJsonModulePromise;
+  return statusScanFastJsonModuleLoader.load();
 }
 
 function loadStatusAllModule() {
-  statusAllModulePromise ??= import("./status-all.js");
-  return statusAllModulePromise;
+  return statusAllModuleLoader.load();
 }
 
 function loadStatusCommandTextRuntime() {
-  statusCommandTextRuntimePromise ??= import("./status.command.text-runtime.js");
-  return statusCommandTextRuntimePromise;
+  return statusCommandTextRuntimeLoader.load();
 }
 
 function loadStatusGatewayConnectionRuntime() {
-  statusGatewayConnectionRuntimePromise ??= import("./status.gateway-connection.runtime.js");
-  return statusGatewayConnectionRuntimePromise;
+  return statusGatewayConnectionRuntimeLoader.load();
 }
 
 function loadStatusNodeModeModule() {
-  statusNodeModeModulePromise ??= import("./status.node-mode.js");
-  return statusNodeModeModulePromise;
+  return statusNodeModeModuleLoader.load();
 }
 
 export function resolvePairingRecoveryContext(params: {

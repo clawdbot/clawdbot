@@ -12,6 +12,9 @@ const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const errors = [];
 const packageJson = JSON.parse(readText("package.json"));
 const packageScripts = new Set(Object.keys(packageJson.scripts ?? {}));
+// This lane proves the published Codex npm plugin against live OpenAI auth, so
+// it intentionally needs both live credentials and the package-backed image.
+const livePackageBackedLanes = new Set(["live-codex-npm-plugin"]);
 
 function readText(relativePath) {
   return fs.readFileSync(path.join(ROOT_DIR, relativePath), "utf8");
@@ -58,6 +61,7 @@ function validateUniqueLanes(label, lanes) {
 }
 
 function validateLane(label, lane) {
+  const resources = laneResources(lane);
   if (!lane.name || typeof lane.name !== "string") {
     errors.push(`${label}: Docker E2E lane is missing a string name`);
   }
@@ -70,7 +74,7 @@ function validateLane(label, lane) {
       `${label}: Docker E2E lane '${lane.name}' has invalid image kind '${lane.e2eImageKind}'`,
     );
   }
-  if (lane.live && lane.e2eImageKind) {
+  if (lane.live && lane.e2eImageKind && !livePackageBackedLanes.has(lane.name)) {
     errors.push(`${label}: live Docker E2E lane '${lane.name}' must not require a package image`);
   }
   if (!lane.live && !lane.e2eImageKind) {
@@ -79,7 +83,7 @@ function validateLane(label, lane) {
   if (laneWeight(lane) < 1) {
     errors.push(`${label}: Docker E2E lane '${lane.name}' must have positive weight`);
   }
-  if (!laneResources(lane).includes("docker")) {
+  if (!resources.includes("docker")) {
     errors.push(`${label}: Docker E2E lane '${lane.name}' must include the docker resource`);
   }
 

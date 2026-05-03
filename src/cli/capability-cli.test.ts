@@ -547,6 +547,48 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
+  it("rejects local Codex provider probes before simple-completion dispatch", async () => {
+    mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      selection: {
+        provider: "codex",
+        modelId: "gpt-5.4",
+        agentDir: "/tmp/agent",
+      },
+      model: {
+        provider: "codex",
+        id: "gpt-5.4",
+        api: "openai-codex-responses",
+      },
+      auth: {
+        apiKey: "codex-app-server",
+        source: "codex-app-server",
+        mode: "token",
+      },
+    } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "model",
+          "run",
+          "--model",
+          "codex/gpt-5.4",
+          "--prompt",
+          "hello",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Codex app-server agent runtime"),
+    );
+    expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  });
+
   it.each(["", "   ", "\n\t"])(
     "rejects empty model run prompts before local dispatch (%j)",
     async (prompt) => {

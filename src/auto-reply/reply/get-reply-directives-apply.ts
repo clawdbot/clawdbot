@@ -1,6 +1,7 @@
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -16,38 +17,36 @@ import type { TypingController } from "./typing.js";
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
-let commandsStatusPromise: Promise<typeof import("./commands-status.runtime.js")> | null = null;
-let directiveLevelsPromise: Promise<typeof import("./directive-handling.levels.js")> | null = null;
-let directiveImplPromise: Promise<typeof import("./directive-handling.impl.js")> | null = null;
-let directiveFastLanePromise: Promise<typeof import("./directive-handling.fast-lane.js")> | null =
-  null;
-let directivePersistPromise: Promise<
-  typeof import("./directive-handling.persist.runtime.js")
-> | null = null;
+const commandsStatusLoader = createLazyImportLoader(() => import("./commands-status.runtime.js"));
+const directiveLevelsLoader = createLazyImportLoader(
+  () => import("./directive-handling.levels.js"),
+);
+const directiveImplLoader = createLazyImportLoader(() => import("./directive-handling.impl.js"));
+const directiveFastLaneLoader = createLazyImportLoader(
+  () => import("./directive-handling.fast-lane.js"),
+);
+const directivePersistLoader = createLazyImportLoader(
+  () => import("./directive-handling.persist.runtime.js"),
+);
 
 function loadCommandsStatus() {
-  commandsStatusPromise ??= import("./commands-status.runtime.js");
-  return commandsStatusPromise;
+  return commandsStatusLoader.load();
 }
 
 function loadDirectiveLevels() {
-  directiveLevelsPromise ??= import("./directive-handling.levels.js");
-  return directiveLevelsPromise;
+  return directiveLevelsLoader.load();
 }
 
 function loadDirectiveImpl() {
-  directiveImplPromise ??= import("./directive-handling.impl.js");
-  return directiveImplPromise;
+  return directiveImplLoader.load();
 }
 
 function loadDirectiveFastLane() {
-  directiveFastLanePromise ??= import("./directive-handling.fast-lane.js");
-  return directiveFastLanePromise;
+  return directiveFastLaneLoader.load();
 }
 
 function loadDirectivePersist() {
-  directivePersistPromise ??= import("./directive-handling.persist.runtime.js");
-  return directivePersistPromise;
+  return directivePersistLoader.load();
 }
 
 function hasOnlyModelDirective(directives: InlineDirectives): boolean {
@@ -304,7 +303,7 @@ export async function applyInlineDirectiveOverrides(params: {
             : undefined,
           modelSelection.isDefault
             ? `Model reset to default (${labelWithAlias}).`
-            : `Model set to ${labelWithAlias}.`,
+            : `Model set to ${labelWithAlias} for this session.`,
           modelResolution.profileOverride
             ? `Auth profile set to ${modelResolution.profileOverride}.`
             : undefined,

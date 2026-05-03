@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
@@ -19,20 +20,20 @@ type WebGuardedFetchModule = Pick<
   "withSelfHostedWebToolsEndpoint" | "withTrustedWebToolsEndpoint"
 >;
 
-let webGuardedFetchPromise: Promise<WebGuardedFetchModule> | null = null;
+const webGuardedFetchLoader = createLazyImportLoader<WebGuardedFetchModule>(
+  () => import("./web-guarded-fetch.js"),
+);
 
 async function loadTrustedWebToolsEndpoint(): Promise<
   WebGuardedFetchModule["withTrustedWebToolsEndpoint"]
 > {
-  webGuardedFetchPromise ??= import("./web-guarded-fetch.js");
-  return (await webGuardedFetchPromise).withTrustedWebToolsEndpoint;
+  return (await webGuardedFetchLoader.load()).withTrustedWebToolsEndpoint;
 }
 
 async function loadSelfHostedWebToolsEndpoint(): Promise<
   WebGuardedFetchModule["withSelfHostedWebToolsEndpoint"]
 > {
-  webGuardedFetchPromise ??= import("./web-guarded-fetch.js");
-  return (await webGuardedFetchPromise).withSelfHostedWebToolsEndpoint;
+  return (await webGuardedFetchLoader.load()).withSelfHostedWebToolsEndpoint;
 }
 
 export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web

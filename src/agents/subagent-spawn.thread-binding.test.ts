@@ -55,6 +55,11 @@ describe("spawnSubagentDirect thread binding delivery", () => {
         },
         list: [{ id: "main", workspace: "/tmp/workspace-main" }],
       },
+      session: {
+        threadBindings: {
+          defaultSpawnContext: "isolated",
+        },
+      },
     });
     currentSessionBindingService = { listBySession: () => [] };
     currentDeliveryTargetResolver = (params) => ({

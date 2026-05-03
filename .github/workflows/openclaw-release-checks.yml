@@ -58,6 +58,11 @@ on:
         required: false
         default: ""
         type: string
+      package_acceptance_package_spec:
+        description: Optional published package spec for Package Acceptance; blank uses the prepared release artifact
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ inputs.rerun_group }}
@@ -83,6 +88,7 @@ jobs:
       release_profile: ${{ steps.inputs.outputs.release_profile }}
       rerun_group: ${{ steps.inputs.outputs.rerun_group }}
       live_suite_filter: ${{ steps.inputs.outputs.live_suite_filter }}
+      package_acceptance_package_spec: ${{ steps.inputs.outputs.package_acceptance_package_spec }}
     steps:
       - name: Require main or release workflow ref for release checks
         env:
@@ -199,6 +205,7 @@ jobs:
           RELEASE_PROFILE_INPUT: ${{ inputs.release_profile }}
           RELEASE_RERUN_GROUP_INPUT: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER_INPUT: ${{ inputs.live_suite_filter }}
+          RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT: ${{ inputs.package_acceptance_package_spec }}
         run: |
           set -euo pipefail
           {
@@ -208,6 +215,7 @@ jobs:
             printf 'release_profile=%s\n' "$RELEASE_PROFILE_INPUT"
             printf 'rerun_group=%s\n' "$RELEASE_RERUN_GROUP_INPUT"
             printf 'live_suite_filter=%s\n' "$RELEASE_LIVE_SUITE_FILTER_INPUT"
+            printf 'package_acceptance_package_spec=%s\n' "$RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT"
           } >> "$GITHUB_OUTPUT"
 
       - name: Summarize validated ref
@@ -220,6 +228,7 @@ jobs:
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RELEASE_RERUN_GROUP: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
         run: |
           {
             echo "## Release checks"
@@ -233,6 +242,11 @@ jobs:
             echo "- Rerun group: \`${RELEASE_RERUN_GROUP}\`"
             if [[ -n "${RELEASE_LIVE_SUITE_FILTER// }" ]]; then
               echo "- Live suite filter: \`${RELEASE_LIVE_SUITE_FILTER}\`"
+            fi
+            if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
+              echo "- Package Acceptance package spec: \`${PACKAGE_ACCEPTANCE_PACKAGE_SPEC}\`"
+            else
+              echo "- Package Acceptance package spec: prepared release artifact"
             fi
             echo "- This run will execute cross-OS release validation, install smoke, QA Lab parity, Matrix, and Telegram lanes, and the non-Parallels Docker/live/openwebui coverage from the CI migration plan."
           } >> "$GITHUB_STEP_SUMMARY"
@@ -333,7 +347,7 @@ jobs:
       candidate_file_name: openclaw-current.tgz
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       candidate_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
-      openai_model: openai/gpt-5.5
+      openai_model: openai/gpt-5.4
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -439,12 +453,13 @@ jobs:
     uses: ./.github/workflows/package-acceptance.yml
     with:
       workflow_ref: ${{ github.ref_name }}
-      source: artifact
+      source: ${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}
+      package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || 'openclaw@beta' }}
       artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
       package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
       suite_profile: custom
       docker_lanes: doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update
-      published_upgrade_survivor_baselines: release-history
+      published_upgrade_survivor_baselines: all-since-2026.4.23
       published_upgrade_survivor_scenarios: reported-issues
       telegram_mode: mock-openai
       telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-context-command,telegram-mention-gating

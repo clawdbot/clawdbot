@@ -137,6 +137,36 @@ describe("status.command-sections", () => {
     ]);
   });
 
+  it("adds degraded event-loop health to status rows", () => {
+    const rows = buildStatusHealthRows({
+      health: {
+        durationMs: 42,
+        eventLoop: {
+          degraded: true,
+          reasons: ["event_loop_delay"],
+          intervalMs: 62_000,
+          delayP99Ms: 61_000,
+          delayMaxMs: 62_000,
+          utilization: 1,
+          cpuCoreRatio: 1,
+        },
+      } as HealthSummary,
+      formatHealthChannelLines: () => [],
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows).toEqual([
+      { Item: "Gateway", Status: "ok(reachable)", Detail: "42ms" },
+      {
+        Item: "Event loop",
+        Status: "warn(WARN)",
+        Detail: "reasons event_loop_delay · max 62000ms · p99 61000ms · util 1 · cpu 1",
+      },
+    ]);
+  });
+
   it("builds footer lines from update and reachability state", () => {
     expect(
       buildStatusFooterLines({

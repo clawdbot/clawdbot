@@ -45,6 +45,16 @@ describe("shouldRequireNpmDistTagMirrorAuth", () => {
     ).toBe(false);
   });
 
+  it("publishes alpha prereleases without dist-tag mirroring", () => {
+    const plan = resolveNpmPublishPlan("2026.4.1-alpha.1");
+
+    expect(plan).toEqual({
+      channel: "alpha",
+      publishTag: "alpha",
+      mirrorDistTags: [],
+    });
+  });
+
   it("does not require auth when a publish already has npm auth", () => {
     const plan = resolveNpmPublishPlan("2026.4.1");
     const auth = resolveNpmDistTagMirrorAuth({ npmToken: "token" });

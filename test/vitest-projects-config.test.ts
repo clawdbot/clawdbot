@@ -25,7 +25,7 @@ import {
   resolveSharedVitestWorkerConfig,
   sharedVitestConfig,
 } from "./vitest/vitest.shared.config.ts";
-import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
+import { createUiVitestConfig, unitUiIncludePatterns } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 import unitUiConfig from "./vitest/vitest.unit-ui.config.ts";
 import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";
@@ -163,6 +163,7 @@ describe("projects vitest config", () => {
     expect(unitUiConfig.test?.environment).toBe("jsdom");
     expect(unitUiConfig.test?.isolate).toBe(false);
     expect(normalizeConfigPath(unitUiConfig.test?.runner)).toBe("test/non-isolated-runner.ts");
+    expect(unitUiIncludePatterns).toContain("ui/src/ui/views/dreaming.test.ts");
     const setupFiles = normalizeConfigPaths(unitUiConfig.test?.setupFiles);
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
     expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");

@@ -1,4 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { VERSION } from "../version.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
 import {
   installLaunchAgent,
@@ -29,6 +33,7 @@ import type {
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
+  GatewayServiceStartRepairIssue,
   GatewayServiceStartResult,
   GatewayServiceStageArgs,
   GatewayServiceState,
@@ -51,6 +56,7 @@ export type {
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
+  GatewayServiceStartRepairIssue,
   GatewayServiceStartResult,
   GatewayServiceStageArgs,
   GatewayServiceState,
@@ -91,6 +97,68 @@ function mergeGatewayServiceEnv(
   };
 }
 
+const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"].map((entry) =>
+  path.resolve(entry),
+);
+
+function pathIsSameOrChild(candidate: string, parent: string): boolean {
+  return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
+}
+
+function isTemporaryProgramPath(value: string | undefined): boolean {
+  if (!value || !path.isAbsolute(value)) {
+    return false;
+  }
+  const resolved = path.resolve(value);
+  return TEMP_PROGRAM_ROOTS.some((root) => pathIsSameOrChild(resolved, root));
+}
+
+function isMissingProgramPath(value: string | undefined): boolean {
+  if (!value || !path.isAbsolute(value)) {
+    return false;
+  }
+  return !fs.existsSync(value);
+}
+
+function collectGatewayServiceStartRepairIssues(
+  state: GatewayServiceState,
+): GatewayServiceStartRepairIssue[] {
+  const command = state.command;
+  if (!state.loaded || !command) {
+    return [];
+  }
+  const issues: GatewayServiceStartRepairIssue[] = [];
+  const serviceVersion = command.environment?.OPENCLAW_SERVICE_VERSION?.trim();
+  if (serviceVersion && serviceVersion !== VERSION) {
+    issues.push({
+      code: "version-mismatch",
+      message: `service was installed by OpenClaw ${serviceVersion}, current CLI is ${VERSION}`,
+    });
+  }
+  for (const candidate of command.programArguments.slice(0, 2)) {
+    if (isTemporaryProgramPath(candidate)) {
+      issues.push({
+        code: "temporary-program",
+        message: `service command points at a temporary path: ${candidate}`,
+      });
+      continue;
+    }
+    if (isMissingProgramPath(candidate)) {
+      issues.push({
+        code: "missing-program",
+        message: `service command points at a missing path: ${candidate}`,
+      });
+    }
+  }
+  return issues;
+}
+
+export function formatGatewayServiceStartRepairIssues(
+  issues: GatewayServiceStartRepairIssue[],
+): string {
+  return issues.map((issue) => issue.message).join("; ");
+}
+
 export async function readGatewayServiceState(
   service: GatewayService,
   args: GatewayServiceEnvArgs = {},
@@ -121,6 +189,15 @@ export async function startGatewayService(
     return {
       outcome: "missing-install",
       state,
+    };
+  }
+
+  const repairIssues = collectGatewayServiceStartRepairIssues(state);
+  if (repairIssues.length > 0) {
+    return {
+      outcome: "repair-required",
+      state,
+      issues: repairIssues,
     };
   }
 

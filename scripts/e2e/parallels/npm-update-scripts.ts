@@ -17,6 +17,8 @@ export interface NpmUpdateScriptInput {
   updateTarget: string;
 }
 
+const windowsStalePostSwapImportRegex = String.raw`node_modules\\openclaw\\dist\\[^\\]+-[A-Za-z0-9_-]+\.js`;
+
 function posixModelProviderConfigCommands(
   command: string,
   modelId: string,
@@ -180,7 +182,7 @@ $updateExit = $LASTEXITCODE
 $updateOutput
 if ($updateExit -ne 0) {
   $updateText = $updateOutput | Out-String
-  $stalePostSwapImport = $updateText -match 'ERR_MODULE_NOT_FOUND' -and $updateText -match 'node_modules\\openclaw\\dist\\[^\\]+-[A-Za-z0-9_-]+\\.js'
+  $stalePostSwapImport = $updateText -match 'ERR_MODULE_NOT_FOUND' -and $updateText -match ${psSingleQuote(windowsStalePostSwapImportRegex)}
   if (-not $stalePostSwapImport) { throw "openclaw update failed with exit code $updateExit" }
   Write-Host "openclaw update returned a stale post-swap module import; continuing to post-update health checks"
 }

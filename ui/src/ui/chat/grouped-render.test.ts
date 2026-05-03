@@ -243,6 +243,104 @@ function clearDeleteConfirmSkip() {
   localStorageValues.delete("openclaw:skipDeleteConfirm");
 }
 
+function stubAnimationFrameQueue() {
+  const callbacks: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    callbacks.push(callback);
+    return callbacks.length;
+  });
+  return () => {
+    const pending = callbacks.splice(0);
+    for (const callback of pending) {
+      callback(performance.now());
+    }
+  };
+}
+
+function getLastCaptureClickListener(calls: readonly unknown[][]) {
+  for (let index = calls.length - 1; index >= 0; index--) {
+    const [type, listener, options] = calls[index] ?? [];
+    if (type === "click" && options === true && listener) {
+      return listener;
+    }
+  }
+  return null;
+}
+
+function countCaptureClickListenerRemovals(calls: readonly unknown[][], listener: unknown) {
+  return calls.filter(
+    ([type, removedListener, options]) =>
+      type === "click" && options === true && removedListener === listener,
+  ).length;
+}
+
+function renderDeleteConfirmFixture() {
+  const container = document.createElement("div");
+  container.dataset.deleteConfirmFixture = "true";
+  document.body.appendChild(container);
+  const onDelete = vi.fn();
+  clearDeleteConfirmSkip();
+  renderMessageGroups(
+    container,
+    [
+      createMessageGroup(
+        {
+          role: "assistant",
+          content: "hello from assistant",
+          timestamp: 1000,
+        },
+        "assistant",
+      ),
+    ],
+    { onDelete },
+  );
+  const deleteButton = container.querySelector<HTMLButtonElement>(".chat-group-delete");
+  expect(deleteButton).not.toBeNull();
+  return { container, deleteButton: deleteButton!, onDelete };
+}
+
+function openDeleteConfirm(deleteButton: HTMLButtonElement) {
+  deleteButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+}
+
+function clickDeleteButtonIconPath(deleteButton: HTMLButtonElement) {
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  icon.appendChild(path);
+  deleteButton.appendChild(icon);
+  path.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+}
+
+function setupArmedDeleteConfirm() {
+  const flushAnimationFrames = stubAnimationFrameQueue();
+  const addListenerSpy = vi.spyOn(document, "addEventListener");
+  const removeListenerSpy = vi.spyOn(document, "removeEventListener");
+  const fixture = renderDeleteConfirmFixture();
+
+  openDeleteConfirm(fixture.deleteButton);
+  flushAnimationFrames();
+
+  const outsideClickListener = getLastCaptureClickListener(addListenerSpy.mock.calls);
+  expect(outsideClickListener).not.toBeNull();
+  expect(fixture.container.querySelector(".chat-delete-confirm")).not.toBeNull();
+
+  return { ...fixture, outsideClickListener, removeListenerSpy };
+}
+
+function expectDeleteConfirmDismissed(params: {
+  container: HTMLElement;
+  outsideClickListener: unknown;
+  removeListenerSpy: ReturnType<typeof vi.spyOn>;
+}) {
+  expect(params.container.querySelector(".chat-delete-confirm")).toBeNull();
+  expect(
+    countCaptureClickListenerRemovals(
+      params.removeListenerSpy.mock.calls,
+      params.outsideClickListener,
+    ),
+  ).toBe(1);
+}
+
 async function flushAssistantAttachmentAvailabilityChecks() {
   for (let i = 0; i < 6; i++) {
     await Promise.resolve();
@@ -250,8 +348,13 @@ async function flushAssistantAttachmentAvailabilityChecks() {
 }
 
 afterEach(() => {
+  document.querySelectorAll("[data-delete-confirm-fixture]").forEach((element) => {
+    element.remove();
+  });
+  clearDeleteConfirmSkip();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("grouped chat rendering", () => {
@@ -316,6 +419,71 @@ describe("grouped chat rendering", () => {
     );
     expect(assistantConfirm).not.toBeNull();
     expect(assistantConfirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
+  });
+
+  it("removes the delete confirm outside-click listener when Cancel dismisses it", () => {
+    const fixture = setupArmedDeleteConfirm();
+    const cancel = fixture.container.querySelector<HTMLButtonElement>(
+      ".chat-delete-confirm__cancel",
+    );
+
+    expect(cancel).not.toBeNull();
+    cancel?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expectDeleteConfirmDismissed(fixture);
+    expect(fixture.onDelete).not.toHaveBeenCalled();
+  });
+
+  it("removes the delete confirm outside-click listener when Delete dismisses it", () => {
+    const fixture = setupArmedDeleteConfirm();
+    const confirm = fixture.container.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes");
+
+    expect(confirm).not.toBeNull();
+    confirm?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expectDeleteConfirmDismissed(fixture);
+    expect(fixture.onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes the delete confirm outside-click listener when an outside click dismisses it", () => {
+    const fixture = setupArmedDeleteConfirm();
+
+    document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expectDeleteConfirmDismissed(fixture);
+    expect(fixture.onDelete).not.toHaveBeenCalled();
+  });
+
+  it("removes the delete confirm outside-click listener when the delete button toggles it", () => {
+    const fixture = setupArmedDeleteConfirm();
+
+    openDeleteConfirm(fixture.deleteButton);
+
+    expectDeleteConfirmDismissed(fixture);
+    expect(fixture.onDelete).not.toHaveBeenCalled();
+  });
+
+  it("removes the delete confirm outside-click listener when the delete button icon toggles it", () => {
+    const fixture = setupArmedDeleteConfirm();
+
+    clickDeleteButtonIconPath(fixture.deleteButton);
+
+    expectDeleteConfirmDismissed(fixture);
+    expect(fixture.onDelete).not.toHaveBeenCalled();
+  });
+
+  it("does not attach the delete confirm outside-click listener after an immediate toggle", () => {
+    const flushAnimationFrames = stubAnimationFrameQueue();
+    const addListenerSpy = vi.spyOn(document, "addEventListener");
+    const fixture = renderDeleteConfirmFixture();
+
+    openDeleteConfirm(fixture.deleteButton);
+    openDeleteConfirm(fixture.deleteButton);
+    flushAnimationFrames();
+
+    expect(fixture.container.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(getLastCaptureClickListener(addListenerSpy.mock.calls)).toBeNull();
+    expect(fixture.onDelete).not.toHaveBeenCalled();
   });
 
   it("renders assistant context usage from input and cache tokens", () => {

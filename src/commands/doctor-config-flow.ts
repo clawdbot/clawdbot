@@ -1,5 +1,5 @@
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import { findLegacyConfigIssues } from "../config/legacy.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -24,6 +24,30 @@ function hasLegacyInternalHookHandlers(raw: unknown): boolean {
   const handlers = (raw as { hooks?: { internal?: { handlers?: unknown } } })?.hooks?.internal
     ?.handlers;
   return Array.isArray(handlers) && handlers.length > 0;
+}
+
+function collectInvalidHookTransformsDirWarnings(
+  cfg: OpenClawConfig,
+  configPath: string,
+): string[] {
+  const transformsDir = cfg.hooks?.transformsDir?.trim();
+  if (!transformsDir) {
+    return [];
+  }
+  const configDir = path.dirname(configPath);
+  const transformsRoot = path.join(configDir, "hooks", "transforms");
+  const resolved = path.isAbsolute(transformsDir)
+    ? path.resolve(transformsDir)
+    : path.resolve(transformsRoot, transformsDir);
+  const relative = path.relative(transformsRoot, resolved);
+  const escapesRoot =
+    relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  if (!escapesRoot) {
+    return [];
+  }
+  return [
+    `- hooks.transformsDir: ${transformsDir} is outside ${transformsRoot}. Hook transform modules must live under ${transformsRoot}; move custom transforms there or remove hooks.transformsDir.`,
+  ];
 }
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
@@ -52,6 +76,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let pendingChanges = false;
   let fixHints: string[] = [];
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
+  const sourceMeta = (snapshot.sourceConfig as { meta?: { lastTouchedVersion?: unknown } })?.meta;
+  const sourceLastTouchedVersion =
+    typeof sourceMeta?.lastTouchedVersion === "string" ? sourceMeta.lastTouchedVersion : undefined;
 
   const legacyStep = applyLegacyCompatibilityStep({
     snapshot,
@@ -64,15 +91,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     if (snapshot.parsed === snapshot.sourceConfig) {
       return [];
     }
-    const { collectRelevantDoctorPluginIds, listPluginDoctorLegacyConfigRules } =
-      await import("../plugins/doctor-contract-registry.js");
-    return findLegacyConfigIssues(
-      snapshot.parsed,
-      snapshot.parsed,
-      listPluginDoctorLegacyConfigRules({
-        pluginIds: collectRelevantDoctorPluginIds(snapshot.parsed),
-      }),
-    );
+    const { findDoctorLegacyConfigIssues } =
+      await import("./doctor/shared/legacy-config-issues.js");
+    return findDoctorLegacyConfigIssues(snapshot.parsed, snapshot.parsed);
   })();
   const seenLegacyIssues = new Set(
     snapshot.legacyIssues.map((issue) => `${issue.path}:${issue.message}`),
@@ -110,6 +131,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       ].join("\n"),
       "Legacy config keys detected",
     );
+  }
+  const hookTransformsDirWarnings = collectInvalidHookTransformsDirWarnings(cfg, snapshot.path);
+  if (hookTransformsDirWarnings.length > 0) {
+    note(sanitizeDoctorNote(hookTransformsDirWarnings.join("\n")), "Doctor warnings");
   }
 
   const normalized = normalizeCompatibilityConfigValues(candidate);
@@ -254,5 +279,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
+    ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
   };
 }

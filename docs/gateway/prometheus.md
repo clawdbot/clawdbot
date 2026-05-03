@@ -8,7 +8,7 @@ read_when:
   - You want metrics without running an OpenTelemetry collector
 ---
 
-OpenClaw can expose diagnostics metrics through the bundled `diagnostics-prometheus` plugin. It listens to trusted internal diagnostics and renders a Prometheus text endpoint at:
+OpenClaw can expose diagnostics metrics through the official `diagnostics-prometheus` plugin. It listens to trusted internal diagnostics and renders a Prometheus text endpoint at:
 
 ```text
 GET /api/diagnostics/prometheus
@@ -25,6 +25,11 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 ## Quick start
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install clawhub:@openclaw/diagnostics-prometheus
+    ```
+  </Step>
   <Step title="Enable the plugin">
     <Tabs>
       <Tab title="Config">

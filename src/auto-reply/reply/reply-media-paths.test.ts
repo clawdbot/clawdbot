@@ -486,4 +486,38 @@ describe("createReplyMediaPathNormalizer", () => {
       groupSpace: undefined,
     });
   });
+
+  it("passes home-relative local media sources into shared outbound media access", async () => {
+    const homeRelativePath = "~/Pictures/chart.png";
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: { tools: { fs: { workspaceOnly: false } } },
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: [homeRelativePath],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: "/tmp/outbound-media/chart.png",
+      mediaUrls: ["/tmp/outbound-media/chart.png"],
+    });
+    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith({
+      cfg: { tools: { fs: { workspaceOnly: false } } },
+      agentId: expect.any(String),
+      workspaceDir: "/tmp/agent-workspace",
+      mediaSources: [homeRelativePath],
+      sessionKey: "session-key",
+      messageProvider: undefined,
+      accountId: undefined,
+      requesterSenderId: undefined,
+      requesterSenderName: undefined,
+      requesterSenderUsername: undefined,
+      requesterSenderE164: undefined,
+      groupId: undefined,
+      groupChannel: undefined,
+      groupSpace: undefined,
+    });
+  });
 });

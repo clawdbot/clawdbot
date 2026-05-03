@@ -4,6 +4,7 @@ import { resolveOsSummary } from "../infra/os-summary.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
 import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import {
@@ -13,65 +14,60 @@ import {
 import { loadStatusScanCommandConfig } from "./status.scan.config-shared.js";
 import type { GatewayProbeSnapshot } from "./status.scan.shared.js";
 
-let statusScanDepsRuntimeModulePromise:
-  | Promise<typeof import("./status.scan.deps.runtime.js")>
-  | undefined;
-let statusAgentLocalModulePromise: Promise<typeof import("./status.agent-local.js")> | undefined;
-let statusUpdateModulePromise: Promise<typeof import("./status.update.js")> | undefined;
-let statusScanRuntimeModulePromise: Promise<typeof import("./status.scan.runtime.js")> | undefined;
-let gatewayCallModulePromise: Promise<typeof import("../gateway/call.js")> | undefined;
-let statusSummaryModulePromise: Promise<typeof import("./status.summary.js")> | undefined;
-let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
-let commandConfigResolutionModulePromise:
-  | Promise<typeof import("../cli/command-config-resolution.js")>
-  | undefined;
-let commandSecretTargetsModulePromise:
-  | Promise<typeof import("../cli/command-secret-targets.js")>
-  | undefined;
+const statusScanDepsRuntimeModuleLoader = createLazyImportLoader(
+  () => import("./status.scan.deps.runtime.js"),
+);
+const statusAgentLocalModuleLoader = createLazyImportLoader(
+  () => import("./status.agent-local.js"),
+);
+const statusUpdateModuleLoader = createLazyImportLoader(() => import("./status.update.js"));
+const statusScanRuntimeModuleLoader = createLazyImportLoader(
+  () => import("./status.scan.runtime.js"),
+);
+const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
+const statusSummaryModuleLoader = createLazyImportLoader(() => import("./status.summary.js"));
+const configModuleLoader = createLazyImportLoader(() => import("../config/config.js"));
+const commandConfigResolutionModuleLoader = createLazyImportLoader(
+  () => import("../cli/command-config-resolution.js"),
+);
+const commandSecretTargetsModuleLoader = createLazyImportLoader(
+  () => import("../cli/command-secret-targets.js"),
+);
 
 function loadStatusScanDepsRuntimeModule() {
-  statusScanDepsRuntimeModulePromise ??= import("./status.scan.deps.runtime.js");
-  return statusScanDepsRuntimeModulePromise;
+  return statusScanDepsRuntimeModuleLoader.load();
 }
 
 function loadStatusAgentLocalModule() {
-  statusAgentLocalModulePromise ??= import("./status.agent-local.js");
-  return statusAgentLocalModulePromise;
+  return statusAgentLocalModuleLoader.load();
 }
 
 function loadStatusUpdateModule() {
-  statusUpdateModulePromise ??= import("./status.update.js");
-  return statusUpdateModulePromise;
+  return statusUpdateModuleLoader.load();
 }
 
 function loadStatusScanRuntimeModule() {
-  statusScanRuntimeModulePromise ??= import("./status.scan.runtime.js");
-  return statusScanRuntimeModulePromise;
+  return statusScanRuntimeModuleLoader.load();
 }
 
 function loadGatewayCallModule() {
-  gatewayCallModulePromise ??= import("../gateway/call.js");
-  return gatewayCallModulePromise;
+  return gatewayCallModuleLoader.load();
 }
 
 function loadStatusSummaryModule() {
-  statusSummaryModulePromise ??= import("./status.summary.js");
-  return statusSummaryModulePromise;
+  return statusSummaryModuleLoader.load();
 }
 
 function loadConfigModule() {
-  configModulePromise ??= import("../config/config.js");
-  return configModulePromise;
+  return configModuleLoader.load();
 }
 
 function loadCommandConfigResolutionModule() {
-  commandConfigResolutionModulePromise ??= import("../cli/command-config-resolution.js");
-  return commandConfigResolutionModulePromise;
+  return commandConfigResolutionModuleLoader.load();
 }
 
 function loadCommandSecretTargetsModule() {
-  commandSecretTargetsModulePromise ??= import("../cli/command-secret-targets.js");
-  return commandSecretTargetsModulePromise;
+  return commandSecretTargetsModuleLoader.load();
 }
 
 async function resolveStatusChannelsStatus(params: {
@@ -255,6 +251,7 @@ export async function collectStatusScanOverview(params: {
           showSecrets: params.showSecrets,
           sourceConfig,
           includeSetupFallbackPlugins: params.includeChannelSetupRuntimeFallback !== false,
+          liveChannelStatus: channelsStatus,
         });
         params.progress?.tick();
         return { channelsStatus, channelIssues, channels };

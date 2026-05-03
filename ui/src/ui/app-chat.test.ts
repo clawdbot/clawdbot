@@ -8,15 +8,34 @@ import {
   registerChatAttachmentPayload,
   resetChatAttachmentPayloadStoreForTest,
 } from "./chat/attachment-payload-store.ts";
+import type { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import type { GatewaySessionRow, SessionsListResult } from "./types.ts";
 
-const { setLastActiveSessionKeyMock } = vi.hoisted(() => ({
+type ExecuteSlashCommand = typeof executeSlashCommand;
+
+const { executeSlashCommandMock, setLastActiveSessionKeyMock } = vi.hoisted(() => ({
+  executeSlashCommandMock: vi.fn(),
   setLastActiveSessionKeyMock: vi.fn(),
 }));
 
 vi.mock("./app-last-active-session.ts", () => ({
   setLastActiveSessionKey: (...args: unknown[]) => setLastActiveSessionKeyMock(...args),
 }));
+
+vi.mock("./chat/slash-command-executor.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat/slash-command-executor.ts")>();
+  return {
+    ...actual,
+    executeSlashCommand: (...args: Parameters<ExecuteSlashCommand>) => {
+      const implementation = executeSlashCommandMock.getMockImplementation() as
+        | ExecuteSlashCommand
+        | undefined;
+      return implementation
+        ? executeSlashCommandMock(...args)
+        : actual.executeSlashCommand(...args);
+    },
+  };
+});
 
 let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
 let steerQueuedChatMessage: typeof import("./app-chat.ts").steerQueuedChatMessage;
@@ -420,6 +439,7 @@ describe("handleSendChat", () => {
   });
 
   beforeEach(() => {
+    executeSlashCommandMock.mockReset();
     setLastActiveSessionKeyMock.mockReset();
   });
 
@@ -469,8 +489,71 @@ describe("handleSendChat", () => {
     expect(host.refreshSessionsAfterChat.size).toBe(0);
   });
 
-  it("sends button-triggered /new resets after confirmation", async () => {
+  it("runs the fresh-session action for confirmed /new overrides", async () => {
     const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const onSlashAction = vi.fn();
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "restore me",
+      sessionKey: "agent:main",
+      onSlashAction,
+    });
+
+    await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(request).not.toHaveBeenCalled();
+    expect(onSlashAction).toHaveBeenCalledWith("new-session");
+    expect(host.chatMessage).toBe("restore me");
+    expect(host.refreshSessionsAfterChat.size).toBe(0);
+  });
+
+  it("routes typed /new through the fresh-session action without confirmation", async () => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const onSlashAction = vi.fn();
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/new",
+      sessionKey: "agent:main",
+      onSlashAction,
+    });
+
+    await handleSendChat(host);
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expect(onSlashAction).toHaveBeenCalledWith("new-session");
+    expect(host.chatMessage).toBe("");
+  });
+
+  it("does not queue typed /new behind an active run", async () => {
+    const onSlashAction = vi.fn();
+    const host = makeHost({
+      chatMessage: "/new",
+      chatRunId: "run-main",
+      chatStream: "Working...",
+      onSlashAction,
+    });
+
+    await handleSendChat(host);
+
+    expect(onSlashAction).toHaveBeenCalledWith("new-session");
+    expect(host.chatQueue).toEqual([]);
+    expect(host.chatRunId).toBe("run-main");
+    expect(host.chatStream).toBe("Working...");
+    expect(host.chatMessage).toBe("");
+  });
+
+  it("preserves typed /reset command dispatch without confirmation", async () => {
+    const confirm = vi.fn(() => false);
     vi.stubGlobal("confirm", confirm);
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
@@ -480,56 +563,22 @@ describe("handleSendChat", () => {
     });
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
-      chatMessage: "restore me",
+      chatMessage: "/reset",
       sessionKey: "agent:main",
     });
 
-    await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
+    await handleSendChat(host);
 
-    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
         sessionKey: "agent:main",
-        message: "/new",
-        deliver: false,
-        idempotencyKey: expect.any(String),
+        message: "/reset",
       }),
     );
-    expect(host.chatMessage).toBe("restore me");
-    expect(host.refreshSessionsAfterChat).toContain(host.chatRunId);
+    expect(host.chatMessage).toBe("");
   });
-
-  it.each(["/new", "/reset"])(
-    "preserves typed %s command dispatch without confirmation",
-    async (command) => {
-      const confirm = vi.fn(() => false);
-      vi.stubGlobal("confirm", confirm);
-      const request = vi.fn(async (method: string) => {
-        if (method === "chat.send") {
-          return { status: "started" };
-        }
-        throw new Error(`Unexpected request: ${method}`);
-      });
-      const host = makeHost({
-        client: { request } as unknown as ChatHost["client"],
-        chatMessage: command,
-        sessionKey: "agent:main",
-      });
-
-      await handleSendChat(host);
-
-      expect(confirm).not.toHaveBeenCalled();
-      expect(request).toHaveBeenCalledWith(
-        "chat.send",
-        expect.objectContaining({
-          sessionKey: "agent:main",
-          message: command,
-        }),
-      );
-      expect(host.chatMessage).toBe("");
-    },
-  );
 
   it("keeps slash-command model changes in sync with the chat header cache", async () => {
     vi.stubGlobal(
@@ -588,6 +637,48 @@ describe("handleSendChat", () => {
       value: "openai/gpt-5-mini",
     });
     expect(onSlashAction).toHaveBeenCalledWith("refresh-tools-effective");
+  });
+
+  it("shows local slash-command feedback when the gateway client is unavailable", async () => {
+    const host = makeHost({
+      client: null,
+      chatMessage: "/think",
+      connected: true,
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatMessage).toBe("");
+    expect(host.chatMessages).toEqual([
+      expect.objectContaining({
+        role: "system",
+        content: "Cannot run `/think`: Control UI is not connected to the Gateway.",
+      }),
+    ]);
+  });
+
+  it("shows local slash-command feedback when dispatch fails unexpectedly", async () => {
+    executeSlashCommandMock.mockRejectedValue(new Error("dispatch failed"));
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/think",
+      connected: true,
+    });
+
+    await handleSendChat(host);
+
+    expect(executeSlashCommandMock).toHaveBeenCalledTimes(1);
+    expect(host.chatMessage).toBe("");
+    expect(host.lastError).toBe("Error: dispatch failed");
+    expect(host.chatMessages).toEqual([
+      expect.objectContaining({
+        role: "system",
+        content: "Command `/think` failed unexpectedly.",
+      }),
+    ]);
   });
 
   it("sends /btw immediately while a main run is active without queueing it", async () => {
@@ -931,6 +1022,24 @@ describe("handleAbortChat", () => {
     expect(host.pendingAbort).toEqual({ runId: "run-main", sessionKey: "agent:main" });
     expect(host.chatMessage).toBe("");
     expect(host.chatRunId).toBe("run-main");
+  });
+
+  it("queues a session-scoped abort while disconnected after active run state is recovered", async () => {
+    const host = makeHost({
+      connected: false,
+      chatRunId: null,
+      chatMessage: "draft",
+      sessionKey: "agent:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main", { hasActiveRun: true }),
+        row("agent:other", { hasActiveRun: true }),
+      ]),
+    });
+
+    await handleAbortChat(host);
+
+    expect(host.pendingAbort).toEqual({ runId: null, sessionKey: "agent:main" });
+    expect(host.chatMessage).toBe("");
   });
 
   it("keeps the draft when disconnected without an active run", async () => {

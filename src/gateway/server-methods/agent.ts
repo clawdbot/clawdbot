@@ -41,6 +41,7 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { formatUncaughtError } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -126,9 +127,37 @@ import {
   waitForTerminalGatewayDedupe,
 } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+} from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+
+function formatAttachmentFailureForLog(err: unknown): string {
+  const primary = formatUncaughtError(err);
+  const cause = err instanceof Error ? err.cause : undefined;
+  if (cause === undefined) {
+    return primary;
+  }
+  const causeText = formatUncaughtError(cause);
+  if (!causeText || causeText === primary) {
+    return primary;
+  }
+  return `${primary}\nCaused by: ${causeText}`;
+}
+
+function logAttachmentFailure(
+  logGateway: Pick<GatewayRequestContext["logGateway"], "error">,
+  label: string,
+  err: unknown,
+): void {
+  logGateway.error(label, {
+    error: formatAttachmentFailureForLog(err),
+    consoleMessage: `${label}: ${formatForLog(err)}`,
+  });
+}
 
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
@@ -632,6 +661,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         // MediaOffloadError indicates a server-side storage fault (ENOSPC, EPERM,
         // etc.). Map it to UNAVAILABLE so clients can retry without treating it as
         // a bad request. All other errors are input-validation failures → 4xx.
+        logAttachmentFailure(context.logGateway, "agent attachment parse failed", err);
         const isServerFault = err instanceof MediaOffloadError;
         respond(
           false,
@@ -1039,20 +1069,22 @@ export const agentHandlers: GatewayRequestHandlers = {
         claudeCliSessionId: entry?.claudeCliSessionId,
       };
       sessionEntry = mergeSessionEntry(entry, nextEntryPatch);
-      const sendPolicy = resolveSendPolicy({
-        cfg,
-        entry,
-        sessionKey: canonicalKey,
-        channel: entry?.channel,
-        chatType: entry?.chatType,
-      });
-      if (sendPolicy === "deny") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
-        );
-        return;
+      if (request.deliver === true) {
+        const sendPolicy = resolveSendPolicy({
+          cfg,
+          entry: sessionEntry,
+          sessionKey: canonicalKey,
+          channel: sessionEntry?.channel,
+          chatType: sessionEntry?.chatType,
+        });
+        if (sendPolicy === "deny") {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+          );
+          return;
+        }
       }
       resolvedSessionId = sessionId;
       const canonicalSessionKey = canonicalKey;

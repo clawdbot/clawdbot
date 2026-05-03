@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveManifestContractOwnerPluginId } from "../../plugins/plugin-registry.js";
 import { getActiveRuntimeWebToolsMetadata } from "../../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
+import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { resolveWebSearchProviderId, runWebSearch } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult } from "./common.js";
@@ -92,7 +93,10 @@ export function createWebSearchTool(options?: {
           : options?.runtimeWebSearch;
       const runtimeProviderId =
         runtimeWebSearch?.selectedProvider ?? runtimeWebSearch?.providerConfigured;
-      const config = options?.lateBindRuntimeConfig === true ? undefined : options?.config;
+      const config =
+        options?.lateBindRuntimeConfig === true
+          ? (getActiveSecretsRuntimeSnapshot()?.config ?? options?.config)
+          : options?.config;
       const preferRuntimeProviders =
         Boolean(runtimeProviderId) &&
         !resolveManifestContractOwnerPluginId({

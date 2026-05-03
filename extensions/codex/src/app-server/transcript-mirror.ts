@@ -6,8 +6,10 @@ import { CURRENT_SESSION_VERSION, type SessionManager } from "@mariozechner/pi-c
 import {
   acquireSessionWriteLock,
   emitSessionTranscriptUpdate,
+  resolveSessionWriteLockAcquireTimeoutMs,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
+  type SessionWriteLockAcquireTimeoutConfig,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 const TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES = 64 * 1024;
@@ -25,6 +27,7 @@ export async function mirrorCodexAppServerTranscript(params: {
   agentId?: string;
   messages: AgentMessage[];
   idempotencyScope?: string;
+  config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<void> {
   const messages = params.messages.filter(
     (message) => message.role === "user" || message.role === "assistant",
@@ -36,7 +39,7 @@ export async function mirrorCodexAppServerTranscript(params: {
   await fs.mkdir(path.dirname(params.sessionFile), { recursive: true });
   const lock = await acquireSessionWriteLock({
     sessionFile: params.sessionFile,
-    timeoutMs: 10_000,
+    timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
   });
   try {
     const existingIdempotencyKeys = await readTranscriptIdempotencyKeys(params.sessionFile);

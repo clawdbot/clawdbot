@@ -15,10 +15,20 @@ const processMocks = vi.hoisted(() => ({
   runCommandWithTimeout: vi.fn(async () => ({ stdout: "", stderr: "", code: 0 })),
 }));
 
+const gatewayMocks = vi.hoisted(() => ({
+  callGateway: vi.fn(),
+  isGatewayTransportError: vi.fn(),
+}));
+
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
   replaceConfigFile: configMocks.replaceConfigFile,
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: gatewayMocks.callGateway,
+  isGatewayTransportError: gatewayMocks.isGatewayTransportError,
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -75,9 +85,63 @@ describe("agents delete command", () => {
     configMocks.readConfigFileSnapshot.mockReset();
     configMocks.replaceConfigFile.mockReset();
     processMocks.runCommandWithTimeout.mockClear();
+    gatewayMocks.callGateway.mockReset();
+    gatewayMocks.callGateway.mockRejectedValue(
+      Object.assign(new Error("closed"), { name: "GatewayTransportError" }),
+    );
+    gatewayMocks.isGatewayTransportError.mockReset();
+    gatewayMocks.isGatewayTransportError.mockImplementation(
+      (error: unknown) => error instanceof Error && error.name === "GatewayTransportError",
+    );
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
+  });
+
+  it("routes deletion through the Gateway when reachable", async () => {
+    await withStateDirEnv("openclaw-agents-delete-gateway-", async ({ stateDir }) => {
+      const now = Date.now();
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      const sessions = {
+        "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
+        "agent:main:main": { sessionId: "sess-main", updatedAt: now + 2 },
+      };
+      const storePath = await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        deletedAgentId: "ops",
+        sessions,
+      });
+      gatewayMocks.callGateway.mockResolvedValue({
+        ok: true,
+        agentId: "ops",
+        removedBindings: 0,
+      });
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      expect(gatewayMocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "agents.delete",
+          params: { agentId: "ops", deleteFiles: true },
+          requiredMethods: ["agents.delete"],
+        }),
+      );
+      expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
+      expectSessionStore(storePath, sessions);
+      expect(readJsonLogs()[0]).toMatchObject({
+        agentId: "ops",
+        removedBindings: 0,
+        transport: "gateway",
+      });
+    });
   });
 
   it("purges deleted agent entries from the session store", async () => {

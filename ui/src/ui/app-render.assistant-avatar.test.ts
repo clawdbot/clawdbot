@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { html } from "lit";
+import { html, render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppViewState } from "./app-view-state.ts";
 import type { QuickSettingsProps } from "./views/config-quick.ts";
@@ -89,6 +89,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     localMediaPreviewRoots: [],
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,
+    chatMessageMaxWidth: null,
     sessionKey: "main",
     chatLoading: false,
     chatSending: false,
@@ -226,5 +227,39 @@ describe("renderApp assistant avatar routing", () => {
     expect(quickSettingsProps.current?.assistantAvatarStatus).toBe("data");
     expect(quickSettingsProps.current?.assistantAvatarReason).toBeNull();
     expect(quickSettingsProps.current?.assistantAvatarOverride).toBe(dataUrl);
+  });
+
+  it("applies the configured chat message width as a shell CSS variable", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(createState({ tab: "chat", chatMessageMaxWidth: "min(1280px, 82%)" })),
+      container,
+    );
+
+    const shell = container.querySelector<HTMLElement>(".shell");
+    expect(shell?.style.getPropertyValue("--chat-message-max-width")).toBe("min(1280px, 82%)");
+  });
+
+  it("does not throw when stale cron state contains a job without a payload", () => {
+    expect(() =>
+      renderApp(
+        createState({
+          cronJobs: [
+            {
+              id: "bad-missing-payload",
+              name: "Broken",
+              enabled: true,
+              createdAtMs: 0,
+              updatedAtMs: 0,
+              schedule: { kind: "cron", expr: "0 9 * * *" },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: undefined,
+            } as unknown as AppViewState["cronJobs"][number],
+          ],
+        }),
+      ),
+    ).not.toThrow();
   });
 });

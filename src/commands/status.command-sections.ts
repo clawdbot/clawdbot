@@ -23,6 +23,7 @@ type SummaryLike = Pick<StatusSummary, "tasks" | "taskAudit" | "heartbeat" | "se
 type MemoryLike = MemoryStatusSnapshot | null;
 type MemoryPluginLike = MemoryPluginStatus;
 type SessionsRecentLike = SessionStatus;
+type EventLoopHealthLike = NonNullable<HealthSummary["eventLoop"]>;
 
 export type StatusMemoryStateResolvers = {
   resolveMemoryVectorState: (value: NonNullable<MemoryStatusSnapshot["vector"]>) => {
@@ -260,6 +261,13 @@ export function buildStatusHealthRows(params: {
       Detail: `${params.health.durationMs}ms`,
     },
   ];
+  if (params.health.eventLoop) {
+    rows.push({
+      Item: "Event loop",
+      Status: params.health.eventLoop.degraded ? params.warn("WARN") : params.ok("OK"),
+      Detail: formatEventLoopHealthDetail(params.health.eventLoop),
+    });
+  }
   for (const line of params.formatHealthChannelLines(params.health, { accountMode: "all" })) {
     const colon = line.indexOf(":");
     if (colon === -1) {
@@ -284,6 +292,17 @@ export function buildStatusHealthRows(params: {
     rows.push({ Item: item, Status: status, Detail: detail });
   }
   return rows;
+}
+
+export function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): string {
+  const parts = [
+    eventLoop.reasons.length > 0 ? `reasons ${eventLoop.reasons.join(",")}` : "healthy",
+    `max ${Math.round(eventLoop.delayMaxMs)}ms`,
+    `p99 ${Math.round(eventLoop.delayP99Ms)}ms`,
+    `util ${eventLoop.utilization}`,
+    `cpu ${eventLoop.cpuCoreRatio}`,
+  ];
+  return parts.join(" · ");
 }
 
 export function buildStatusSessionsRows(params: {

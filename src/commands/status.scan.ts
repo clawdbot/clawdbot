@@ -53,7 +53,7 @@ export async function scanStatus(
         opts,
         showSecrets: process.env.OPENCLAW_SHOW_SECRETS?.trim() !== "0",
         includeLiveChannelStatus: includeLiveChannelChecks,
-        includeChannelSetupRuntimeFallback: includeLiveChannelChecks,
+        includeChannelSetupRuntimeFallback: true,
         progress,
         labels: {
           loadingConfig: "Loading config…",

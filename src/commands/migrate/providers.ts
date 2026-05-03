@@ -1,5 +1,6 @@
 import { getRuntimeConfig } from "../../config/config.js";
 import {
+  ensureStandaloneMigrationProviderRegistryLoaded,
   resolvePluginMigrationProvider,
   resolvePluginMigrationProviders,
 } from "../../plugins/migration-provider-runtime.js";
@@ -10,6 +11,7 @@ import type { MigrateCommonOptions } from "./types.js";
 
 export function resolveMigrationProvider(providerId: string): MigrationProviderPlugin {
   const config = getRuntimeConfig();
+  ensureStandaloneMigrationProviderRegistryLoaded({ cfg: config });
   const provider = resolvePluginMigrationProvider({ providerId, cfg: config });
   if (!provider) {
     const available = resolvePluginMigrationProviders({ cfg: config }).map((entry) => entry.id);

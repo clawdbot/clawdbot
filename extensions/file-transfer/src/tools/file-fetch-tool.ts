@@ -7,7 +7,6 @@ import {
   type NodeListNode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
-import { Type } from "typebox";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { throwFromNodePayload } from "../shared/errors.js";
 import {
@@ -16,38 +15,16 @@ import {
   TEXT_INLINE_MIME_SET,
 } from "../shared/mime.js";
 import { humanSize, readGatewayCallOptions, readTrimmedString } from "../shared/params.js";
-
-const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
-const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
-// Stash fetched files in a non-TTL subdir so a follow-up tool call within
-// the same agent turn can still reference them. The default "inbound"
-// subdir gets cleaned every 2 minutes which has bitten us in iMessage flows.
-const FILE_TRANSFER_SUBDIR = "file-transfer";
-
-const FileFetchToolSchema = Type.Object({
-  node: Type.String({
-    description: "Node id, name, or IP. Resolves the same way as the nodes tool.",
-  }),
-  path: Type.String({
-    description: "Absolute path to the file on the node. Canonicalized server-side.",
-  }),
-  maxBytes: Type.Optional(
-    Type.Number({
-      description: "Max bytes to fetch. Default 8 MB, hard ceiling 16 MB (single round-trip).",
-    }),
-  ),
-  gatewayUrl: Type.Optional(Type.String()),
-  gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
-});
+import {
+  FILE_FETCH_DEFAULT_MAX_BYTES,
+  FILE_FETCH_HARD_MAX_BYTES,
+  FILE_FETCH_TOOL_DESCRIPTOR,
+  FILE_TRANSFER_SUBDIR,
+} from "./descriptors.js";
 
 export function createFileFetchTool(): AnyAgentTool {
   return {
-    label: "File Fetch",
-    name: "file_fetch",
-    description:
-      "Retrieve a file from a paired node by absolute path. Returns image content blocks for image MIME types, inlines small text files (≤8 KB) as text content, and saves everything else under the gateway media store with a path you can pass to file_write or other tools. Use this for screenshots, photos, receipts, logs, source files. Pair with file_write to copy a file from one node to another (no exec/cp shell-out needed). Requires operator opt-in: gateway.nodes.allowCommands must include 'file.fetch' AND plugins.entries.file-transfer.config.nodes.<node>.allowReadPaths must match the path. Without policy configured, every call is denied.",
-    parameters: FileFetchToolSchema,
+    ...FILE_FETCH_TOOL_DESCRIPTOR,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const node = readTrimmedString(params, "node");

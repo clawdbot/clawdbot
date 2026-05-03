@@ -38,6 +38,8 @@ const providerRuntimeDeps = {
   ...defaultProviderRuntimeDeps,
 };
 
+let preparedExtraParamsCache = new WeakMap<OpenClawConfig, Map<string, Record<string, unknown>>>();
+
 export const __testing = {
   setProviderRuntimeDepsForTest(
     deps: Partial<typeof defaultProviderRuntimeDeps> | undefined,
@@ -51,6 +53,7 @@ export const __testing = {
       deps?.wrapProviderStreamFn ?? defaultProviderRuntimeDeps.wrapProviderStreamFn;
   },
   resetProviderRuntimeDepsForTest(): void {
+    clearPreparedExtraParamsCache();
     providerRuntimeDeps.prepareProviderExtraParams =
       defaultProviderRuntimeDeps.prepareProviderExtraParams;
     providerRuntimeDeps.resolveProviderExtraParamsForTransport =
@@ -134,6 +137,60 @@ function hasExplicitTransportSetting(settings: { transport?: unknown }): boolean
   return Object.hasOwn(settings, "transport");
 }
 
+function clearPreparedExtraParamsCache(): void {
+  preparedExtraParamsCache = new WeakMap();
+}
+
+function fingerprintPreparedExtraParamsModel(model?: ProviderRuntimeModel): unknown {
+  if (!model) {
+    return null;
+  }
+  const record = model as unknown as Record<string, unknown>;
+  return {
+    api: model.api,
+    provider: model.provider,
+    id: model.id,
+    name: model.name,
+    baseUrl: model.baseUrl,
+    reasoning: model.reasoning,
+    input: model.input,
+    cost: model.cost,
+    compat: record.compat ?? null,
+    contextWindow: model.contextWindow,
+    contextTokens: model.contextTokens ?? null,
+    headers: record.headers ?? null,
+    maxTokens: model.maxTokens,
+    params: model.params ?? null,
+    requestTimeoutMs: model.requestTimeoutMs ?? null,
+  };
+}
+
+function resolvePreparedExtraParamsCacheKey(params: {
+  provider: string;
+  modelId: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  extraParamsOverride?: Record<string, unknown>;
+  thinkingLevel?: ThinkLevel;
+  agentId?: string;
+  resolvedExtraParams?: Record<string, unknown>;
+  model?: ProviderRuntimeModel;
+  resolvedTransport?: SupportedTransport;
+}): string {
+  return JSON.stringify({
+    provider: params.provider,
+    modelId: params.modelId,
+    agentId: params.agentId ?? "",
+    agentDir: params.agentDir ?? "",
+    workspaceDir: params.workspaceDir ?? "",
+    thinkingLevel: params.thinkingLevel ?? "",
+    resolvedTransport: params.resolvedTransport ?? "",
+    extraParamsOverride: params.extraParamsOverride ?? null,
+    resolvedExtraParams: params.resolvedExtraParams ?? null,
+    model: fingerprintPreparedExtraParamsModel(params.model),
+  });
+}
+
 export function resolvePreparedExtraParams(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -176,6 +233,14 @@ export function resolvePreparedExtraParams(params: {
     merged.cachedContent = resolvedCachedContent;
     delete merged.cached_content;
   }
+  const cfg = params.cfg;
+  const cacheKey = cfg ? resolvePreparedExtraParamsCacheKey(params) : undefined;
+  if (cacheKey) {
+    const cached = preparedExtraParamsCache.get(cfg!)?.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
   const prepared =
     providerRuntimeDeps.prepareProviderExtraParams({
       provider: params.provider,
@@ -207,7 +272,16 @@ export function resolvePreparedExtraParams(params: {
       transport: params.resolvedTransport ?? resolveSupportedTransport(prepared.transport),
     },
   })?.patch;
-  return transportPatch ? { ...prepared, ...transportPatch } : prepared;
+  const result = transportPatch ? { ...prepared, ...transportPatch } : prepared;
+  if (cacheKey) {
+    let bucket = preparedExtraParamsCache.get(cfg!);
+    if (!bucket) {
+      bucket = new Map();
+      preparedExtraParamsCache.set(cfg!, bucket);
+    }
+    bucket.set(cacheKey, result);
+  }
+  return result;
 }
 
 function sanitizeExtraParamsRecord(

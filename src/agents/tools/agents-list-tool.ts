@@ -21,7 +21,6 @@ type AgentListEntry = {
   model?: string;
   agentRuntime?: {
     id: string;
-    fallback?: "pi" | "none";
     source: "env" | "agent" | "defaults" | "implicit";
   };
 };

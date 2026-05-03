@@ -1,6 +1,7 @@
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyPolicy } from "../../shared/silent-reply-policy.js";
 import {
   normalizeOptionalLowercaseString,
@@ -12,7 +13,7 @@ import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
 import { extractExplicitGroupId } from "./group-id.js";
 
-let groupsRuntimePromise: Promise<typeof import("./groups.runtime.js")> | null = null;
+const groupsRuntimeLoader = createLazyImportLoader(() => import("./groups.runtime.js"));
 
 type DiscordGroupConfig = {
   requireMention?: boolean;
@@ -26,8 +27,7 @@ type DiscordConfigWithGuilds = {
 };
 
 function loadGroupsRuntime() {
-  groupsRuntimePromise ??= import("./groups.runtime.js");
-  return groupsRuntimePromise;
+  return groupsRuntimeLoader.load();
 }
 
 async function resolveRuntimeChannelId(raw?: string | null): Promise<string | null> {

@@ -6,7 +6,7 @@ import { DiscordEntityCache } from "./entity-cache.js";
 import { DiscordEventQueue, type DiscordEventQueueOptions } from "./event-queue.js";
 import { dispatchInteraction } from "./interaction-dispatch.js";
 import { RequestClient, type RequestClientOptions } from "./rest.js";
-import type { Guild, GuildMember, User } from "./structures.js";
+import type { Guild, GuildMember, Message, User } from "./structures.js";
 
 export interface Route {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -44,15 +44,24 @@ export interface ClientOptions {
   disableDeployRoute?: boolean;
   disableInteractionsRoute?: boolean;
   disableEventsRoute?: boolean;
+  commandDeployHashStorePath?: string;
   devGuilds?: string[];
   eventQueue?: DiscordEventQueueOptions;
   restCacheTtlMs?: number;
 }
 
+type OneOffComponentResult =
+  | { success: true; customId: string; message: Message; values?: string[] }
+  | { success: false; message: Message; reason: "timed out" };
+
 export class ComponentRegistry<
   T extends { customId: string; customIdParser?: typeof parseCustomId; type?: number },
 > {
   private entries = new Map<string, T[]>();
+  private oneOffComponents = new Map<
+    string,
+    { message: Message; resolve(result: OneOffComponentResult): void; timer: NodeJS.Timeout }
+  >();
   private wildcardEntries: T[] = [];
 
   register(entry: T): void {
@@ -90,10 +99,64 @@ export class ComponentRegistry<
       return true;
     });
   }
+
+  waitForMessageComponent(message: Message, timeoutMs: number): Promise<OneOffComponentResult> {
+    const key = createOneOffComponentKey(message.id, message.channelId);
+    return new Promise((resolve) => {
+      const existing = this.oneOffComponents.get(key);
+      if (existing) {
+        clearTimeout(existing.timer);
+        existing.resolve({ success: false, message, reason: "timed out" });
+      }
+      const timer = setTimeout(
+        () => {
+          this.oneOffComponents.delete(key);
+          resolve({ success: false, message, reason: "timed out" });
+        },
+        Math.max(0, timeoutMs),
+      );
+      timer.unref?.();
+      this.oneOffComponents.set(key, {
+        message,
+        timer,
+        resolve,
+      });
+    });
+  }
+
+  resolveOneOffComponent(params: {
+    channelId?: string;
+    customId: string;
+    messageId?: string;
+    values?: string[];
+  }): boolean {
+    if (!params.messageId || !params.channelId) {
+      return false;
+    }
+    const entry = this.oneOffComponents.get(
+      createOneOffComponentKey(params.messageId, params.channelId),
+    );
+    if (!entry) {
+      return false;
+    }
+    clearTimeout(entry.timer);
+    this.oneOffComponents.delete(createOneOffComponentKey(params.messageId, params.channelId));
+    entry.resolve({
+      success: true,
+      customId: params.customId,
+      message: entry.message,
+      values: params.values,
+    });
+    return true;
+  }
 }
 
 function parseRegistryKey(customId: string, parser: typeof parseCustomId = parseCustomId): string {
   return parser(customId).key;
+}
+
+function createOneOffComponentKey(messageId: string, channelId: string): string {
+  return `${messageId}:${channelId}`;
 }
 
 export class Client {
@@ -143,6 +206,7 @@ export class Client {
       clientId: this.options.clientId,
       commands: this.commands,
       devGuilds: this.options.devGuilds,
+      hashStorePath: this.options.commandDeployHashStorePath,
       rest: () => this.rest,
     });
     for (const component of handlers.components ?? []) {

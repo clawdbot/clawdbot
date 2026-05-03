@@ -1,6 +1,7 @@
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -9,11 +10,10 @@ import {
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
-let compactRuntimePromise: Promise<typeof import("./commands-compact.runtime.js")> | null = null;
+const compactRuntimeLoader = createLazyImportLoader(() => import("./commands-compact.runtime.js"));
 
 function loadCompactRuntime(): Promise<typeof import("./commands-compact.runtime.js")> {
-  compactRuntimePromise ??= import("./commands-compact.runtime.js");
-  return compactRuntimePromise;
+  return compactRuntimeLoader.load();
 }
 
 function extractCompactInstructions(params: {

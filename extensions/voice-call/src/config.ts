@@ -74,6 +74,24 @@ export type PlivoConfig = z.infer<typeof PlivoConfigSchema>;
 
 export type VoiceCallTtsConfig = z.infer<typeof TtsConfigSchema>;
 
+const VoiceCallNumberRouteConfigSchema = z
+  .object({
+    /** Greeting message for inbound calls to this number. */
+    inboundGreeting: z.string().optional(),
+    /** TTS override for inbound calls to this number. Deep-merges with global voice-call TTS. */
+    tts: TtsConfigSchema,
+    /** Agent ID to use for voice response generation for this number. */
+    agentId: z.string().min(1).optional(),
+    /** Optional model override for voice responses for this number. */
+    responseModel: z.string().optional(),
+    /** System prompt for voice responses for this number. */
+    responseSystemPrompt: z.string().optional(),
+    /** Timeout for response generation in ms for this number. */
+    responseTimeoutMs: z.number().int().positive().optional(),
+  })
+  .strict();
+export type VoiceCallNumberRouteConfig = z.infer<typeof VoiceCallNumberRouteConfigSchema>;
+
 // -----------------------------------------------------------------------------
 // Webhook Server Configuration
 // -----------------------------------------------------------------------------
@@ -353,6 +371,9 @@ export const VoiceCallConfigSchema = z
     /** Greeting message for inbound calls */
     inboundGreeting: z.string().optional(),
 
+    /** Per-dialed-number overrides for inbound calls. Keys are E.164 numbers. */
+    numbers: z.record(E164Schema, VoiceCallNumberRouteConfigSchema).default({}),
+
     /** Outbound call configuration */
     outbound: OutboundConfigSchema,
 
@@ -426,6 +447,10 @@ export const VoiceCallConfigSchema = z
   .strict();
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
+export type VoiceCallEffectiveConfigResult = {
+  config: VoiceCallConfig;
+  numberRouteKey?: string;
+};
 type DeepPartial<T> = T extends SecretInput
   ? T
   : T extends Array<infer U>
@@ -480,6 +505,56 @@ function normalizeVoiceCallTtsConfig(
   return TtsConfigSchema.parse(deepMergeDefined(defaults ?? {}, overrides ?? {}));
 }
 
+function normalizePhoneRouteKey(phone: string | undefined): string {
+  return phone?.replace(/\D/g, "") ?? "";
+}
+
+export function resolveVoiceCallNumberRouteKey(
+  config: Pick<VoiceCallConfig, "numbers">,
+  phone: string | undefined,
+): string | undefined {
+  const routes = config.numbers;
+  if (!routes) {
+    return undefined;
+  }
+  if (phone && Object.prototype.hasOwnProperty.call(routes, phone)) {
+    return phone;
+  }
+
+  const normalizedPhone = normalizePhoneRouteKey(phone);
+  if (!normalizedPhone) {
+    return undefined;
+  }
+  return Object.keys(routes).find(
+    (routeKey) => normalizePhoneRouteKey(routeKey) === normalizedPhone,
+  );
+}
+
+export function resolveVoiceCallEffectiveConfig(
+  config: VoiceCallConfig,
+  phoneOrRouteKey: string | undefined,
+): VoiceCallEffectiveConfigResult {
+  const numberRouteKey = resolveVoiceCallNumberRouteKey(config, phoneOrRouteKey);
+  if (!numberRouteKey) {
+    return { config };
+  }
+
+  const route = config.numbers[numberRouteKey];
+  if (!route) {
+    return { config };
+  }
+
+  return {
+    numberRouteKey,
+    config: {
+      ...config,
+      ...route,
+      tts: normalizeVoiceCallTtsConfig(config.tts, route.tts),
+      numbers: config.numbers,
+    },
+  };
+}
+
 function sanitizeVoiceCallProviderConfigs(
   value: Record<string, Record<string, unknown> | undefined> | undefined,
 ): Record<string, Record<string, unknown>> {
@@ -490,6 +565,19 @@ function sanitizeVoiceCallProviderConfigs(
     Object.entries(value).filter(
       (entry): entry is [string, Record<string, unknown>] => entry[1] !== undefined,
     ),
+  );
+}
+
+function sanitizeVoiceCallNumberRoutes(
+  value: Record<string, unknown> | undefined,
+): Record<string, VoiceCallNumberRouteConfig> {
+  if (!value) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter((entry): entry is [string, unknown] => entry[1] !== undefined)
+      .map(([key, route]) => [key, VoiceCallNumberRouteConfigSchema.parse(route)]),
   );
 }
 
@@ -522,6 +610,9 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     ...defaults,
     ...config,
     allowFrom: config.allowFrom ?? defaults.allowFrom,
+    numbers: sanitizeVoiceCallNumberRoutes(
+      (config.numbers ?? defaults.numbers) as Record<string, unknown>,
+    ),
     outbound: { ...defaults.outbound, ...config.outbound },
     serve,
     tailscale: { ...defaults.tailscale, ...config.tailscale },

@@ -185,6 +185,7 @@ describe("trajectory metadata", () => {
       timedOut: false,
       idleTimedOut: false,
       timedOutDuringCompaction: false,
+      timedOutDuringToolExecution: false,
       compactionCount: 1,
       assistantTexts: ["done"],
       finalPromptText: "run tests",

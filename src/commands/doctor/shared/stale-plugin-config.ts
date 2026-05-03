@@ -3,7 +3,7 @@ import { CHANNEL_IDS } from "../../../channels/ids.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
-import { loadPluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
+import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "./object.js";
 
@@ -29,7 +29,7 @@ function collectPluginRegistryState(
   env?: NodeJS.ProcessEnv,
 ): StalePluginRegistryState {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  const registry = loadPluginMetadataSnapshot({
+  const registry = loadManifestMetadataSnapshot({
     config: cfg,
     workspaceDir: workspaceDir ?? undefined,
     env: env ?? process.env,
@@ -104,7 +104,7 @@ function scanStalePluginConfigWithState(
       continue;
     }
     const pluginId = normalizePluginId(rawPluginId);
-    if (!pluginId || knownIds.has(pluginId)) {
+    if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
       continue;
     }
     hits.push({
@@ -119,7 +119,7 @@ function scanStalePluginConfigWithState(
   if (entries) {
     for (const rawPluginId of Object.keys(entries)) {
       const pluginId = normalizePluginId(rawPluginId);
-      if (!pluginId || knownIds.has(pluginId)) {
+      if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
         continue;
       }
       hits.push({

@@ -28,6 +28,7 @@ export type GenerateImageParams = {
   outputFormat?: ImageGenerationOutputFormat;
   background?: ImageGenerationBackground;
   inputImages?: ImageGenerationSourceImage[];
+  autoProviderFallback?: boolean;
   /** Optional per-request provider timeout in milliseconds. */
   timeoutMs?: number;
   providerOptions?: ImageGenerationProviderOptions;

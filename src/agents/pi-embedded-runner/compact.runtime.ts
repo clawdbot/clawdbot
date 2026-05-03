@@ -1,10 +1,10 @@
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CompactEmbeddedPiSessionDirect } from "./compact.runtime.types.js";
 
-let compactRuntimePromise: Promise<typeof import("./compact.js")> | null = null;
+const compactRuntimeLoader = createLazyImportLoader(() => import("./compact.js"));
 
 function loadCompactRuntime() {
-  compactRuntimePromise ??= import("./compact.js");
-  return compactRuntimePromise;
+  return compactRuntimeLoader.load();
 }
 
 export async function compactEmbeddedPiSessionDirect(

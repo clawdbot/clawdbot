@@ -1,13 +1,13 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { setAbortMemory } from "./abort-primitives.js";
 
-let sessionStoreRuntimePromise: Promise<
-  typeof import("../../config/sessions/store.runtime.js")
-> | null = null;
+const sessionStoreRuntimeLoader = createLazyImportLoader(
+  () => import("../../config/sessions/store.runtime.js"),
+);
 
 function loadSessionStoreRuntime() {
-  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
-  return sessionStoreRuntimePromise;
+  return sessionStoreRuntimeLoader.load();
 }
 
 export async function applySessionHints(params: {

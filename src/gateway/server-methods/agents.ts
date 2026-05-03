@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { findOverlappingWorkspaceAgentIds } from "../../agents/agent-delete-safety.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -19,7 +20,6 @@ import {
   ensureAgentWorkspace,
   isWorkspaceSetupCompleted,
 } from "../../agents/workspace.js";
-import { purgeAgentSessionStoreEntries } from "../../commands/agents.command-shared.js";
 import {
   applyAgentConfig,
   findAgentEntryIndex,
@@ -27,7 +27,10 @@ import {
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
 import { replaceConfigFile } from "../../config/config.js";
-import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
+import {
+  purgeAgentSessionStoreEntries,
+  resolveSessionTranscriptsDirForAgent,
+} from "../../config/sessions.js";
 import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
@@ -657,8 +660,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
     await purgeAgentSessionStoreEntries(cfg, agentId);
 
     if (deleteFiles) {
+      const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
+      const deleteWorkspace = workspaceSharedWith.length === 0;
       await Promise.all([
-        moveToTrashBestEffort(workspaceDir),
+        ...(deleteWorkspace ? [moveToTrashBestEffort(workspaceDir)] : []),
         moveToTrashBestEffort(agentDir),
         moveToTrashBestEffort(sessionsDir),
       ]);

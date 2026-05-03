@@ -5,6 +5,7 @@ import {
   resolveBundledInstallPlanForCatalogEntry,
   resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
+  resolveOfficialExternalInstallPlanBeforeNpm,
 } from "./plugin-install-plan.js";
 
 describe("plugin install plan helpers", () => {
@@ -33,6 +34,55 @@ describe("plugin install plan helpers", () => {
     });
 
     expect(findBundledSource).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+  });
+
+  it("resolves exact official external plugin ids before npm fallback", () => {
+    const findOfficialExternalPlugin = vi.fn().mockReturnValue({
+      pluginId: "brave",
+      npmSpec: "@openclaw/brave-plugin",
+      expectedIntegrity: "sha512-brave",
+    });
+
+    const result = resolveOfficialExternalInstallPlanBeforeNpm({
+      rawSpec: "brave",
+      findOfficialExternalPlugin,
+    });
+
+    expect(findOfficialExternalPlugin).toHaveBeenCalledWith("brave");
+    expect(result).toEqual({
+      pluginId: "brave",
+      npmSpec: "@openclaw/brave-plugin",
+      expectedIntegrity: "sha512-brave",
+    });
+  });
+
+  it("skips official external plan for explicit npm selectors", () => {
+    const findOfficialExternalPlugin = vi.fn();
+
+    expect(
+      resolveOfficialExternalInstallPlanBeforeNpm({
+        rawSpec: "brave@beta",
+        findOfficialExternalPlugin,
+      }),
+    ).toBeNull();
+    expect(
+      resolveOfficialExternalInstallPlanBeforeNpm({
+        rawSpec: "@openclaw/brave-plugin",
+        findOfficialExternalPlugin,
+      }),
+    ).toBeNull();
+    expect(findOfficialExternalPlugin).not.toHaveBeenCalled();
+  });
+
+  it("skips official external plan without an npm install spec", () => {
+    const result = resolveOfficialExternalInstallPlanBeforeNpm({
+      rawSpec: "brave",
+      findOfficialExternalPlugin: vi.fn().mockReturnValue({
+        pluginId: "brave",
+      }),
+    });
+
     expect(result).toBeNull();
   });
 

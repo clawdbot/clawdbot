@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   clearMemoryPluginState,
-  registerMemoryFlushPlanResolver,
+  registerMemoryCapability,
+  type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -21,6 +22,10 @@ const runEmbeddedPiAgentMock = vi.fn();
 const refreshQueuedFollowupSessionMock = vi.fn();
 const incrementCompactionCountMock = vi.fn();
 
+function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
+  registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
+}
+
 function createReplyOperation() {
   return {
     abortSignal: new AbortController().signal,
@@ -34,7 +39,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
   beforeEach(async () => {
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-unit-"));
-    registerMemoryFlushPlanResolver(() => ({
+    registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
       reserveTokensFloor: 20_000,
@@ -180,7 +185,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("runs memory flush on the configured maintenance model without active fallbacks", async () => {
-    registerMemoryFlushPlanResolver(() => ({
+    registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
       reserveTokensFloor: 20_000,
@@ -317,7 +322,7 @@ describe("runMemoryFlushIfNeeded", () => {
       `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
       "utf8",
     );
-    registerMemoryFlushPlanResolver(() => ({
+    registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 1,
       forceFlushTranscriptBytes: 1_000_000_000,
       reserveTokensFloor: 0,
@@ -367,7 +372,7 @@ describe("runMemoryFlushIfNeeded", () => {
       `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
       "utf8",
     );
-    registerMemoryFlushPlanResolver(() => ({
+    registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 1,
       forceFlushTranscriptBytes: 1_000_000_000,
       reserveTokensFloor: 0,
@@ -442,7 +447,7 @@ describe("runMemoryFlushIfNeeded", () => {
       })}\n`,
       "utf8",
     );
-    registerMemoryFlushPlanResolver(() => ({
+    registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
       reserveTokensFloor: 0,
@@ -493,7 +498,7 @@ describe("runMemoryFlushIfNeeded", () => {
       })}\n`,
       "utf8",
     );
-    registerMemoryFlushPlanResolver(() => ({
+    registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
       reserveTokensFloor: 0,
@@ -553,7 +558,7 @@ describe("runMemoryFlushIfNeeded", () => {
       ].join("\n"),
       "utf8",
     );
-    registerMemoryFlushPlanResolver(() => ({
+    registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
       reserveTokensFloor: 0,
@@ -725,7 +730,7 @@ describe("runMemoryFlushIfNeeded", () => {
         },
       },
     };
-    registerMemoryFlushPlanResolver(() => ({
+    registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
       reserveTokensFloor: 20_000,

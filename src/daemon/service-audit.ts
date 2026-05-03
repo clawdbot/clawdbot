@@ -1,10 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -19,6 +16,7 @@ import {
   hasInlineEnvironmentSource,
   isEnvironmentFileOnlySource,
 } from "./service-managed-env.js";
+import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./service-path-policy.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 import { resolveSystemdUserUnitPath } from "./systemd.js";
 
@@ -385,15 +383,6 @@ function getPathModule(platform: NodeJS.Platform) {
   return platform === "win32" ? path.win32 : path.posix;
 }
 
-function normalizePathEntry(entry: string, platform: NodeJS.Platform): string {
-  const pathModule = getPathModule(platform);
-  const normalized = pathModule.normalize(entry).replaceAll("\\", "/");
-  if (platform === "win32") {
-    return normalizeLowercaseStringOrEmpty(normalized);
-  }
-  return normalized;
-}
-
 function getEquivalentMinimalPathEntries(
   entry: string,
   platform: NodeJS.Platform,
@@ -410,7 +399,7 @@ function getEquivalentMinimalPathEntries(
   if (!equivalent) {
     return [];
   }
-  const normalizedEquivalent = normalizePathEntry(equivalent, platform);
+  const normalizedEquivalent = normalizeServicePathEntry(equivalent, platform);
   return normalizedExpected.has(normalizedEquivalent) ? [equivalent] : [];
 }
 
@@ -433,20 +422,26 @@ function auditGatewayServicePath(
     return;
   }
 
-  const expected = getMinimalServicePathPartsFromEnv({ platform, env });
+  const expected = getMinimalServicePathPartsFromEnv({
+    platform,
+    env,
+    includeMissingUserBinDefaults: false,
+  });
   const parts = servicePath
     .split(getPathModule(platform).delimiter)
     .map((entry) => entry.trim())
     .filter(Boolean);
-  const normalizedParts = new Set(parts.map((entry) => normalizePathEntry(entry, platform)));
-  const normalizedExpected = new Set(expected.map((entry) => normalizePathEntry(entry, platform)));
+  const normalizedParts = new Set(parts.map((entry) => normalizeServicePathEntry(entry, platform)));
+  const normalizedExpected = new Set(
+    expected.map((entry) => normalizeServicePathEntry(entry, platform)),
+  );
   const missing = expected.filter((entry) => {
-    const normalized = normalizePathEntry(entry, platform);
+    const normalized = normalizeServicePathEntry(entry, platform);
     if (normalizedParts.has(normalized)) {
       return false;
     }
     return !getEquivalentMinimalPathEntries(entry, platform, normalizedExpected).some(
-      (equivalent) => normalizedParts.has(normalizePathEntry(equivalent, platform)),
+      (equivalent) => normalizedParts.has(normalizeServicePathEntry(equivalent, platform)),
     );
   });
   if (missing.length > 0) {
@@ -458,23 +453,11 @@ function auditGatewayServicePath(
   }
 
   const nonMinimal = parts.filter((entry) => {
-    const normalized = normalizePathEntry(entry, platform);
+    const normalized = normalizeServicePathEntry(entry, platform);
     if (normalizedExpected.has(normalized)) {
       return false;
     }
-    return (
-      normalized.includes("/.nvm/") ||
-      normalized.includes("/.fnm/") ||
-      normalized.includes("/.volta/") ||
-      normalized.includes("/.asdf/") ||
-      normalized.includes("/.n/") ||
-      normalized.includes("/.nodenv/") ||
-      normalized.includes("/.nodebrew/") ||
-      normalized.includes("/nvs/") ||
-      normalized.includes("/.local/share/pnpm/") ||
-      normalized.includes("/pnpm/") ||
-      normalized.endsWith("/pnpm")
-    );
+    return isNonMinimalServicePathEntry(normalized, platform);
   });
   if (nonMinimal.length > 0) {
     issues.push({

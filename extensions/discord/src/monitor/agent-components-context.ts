@@ -8,7 +8,7 @@ import {
   type ComponentInteractionContext,
   type DiscordChannelContext,
 } from "./agent-components.types.js";
-import { normalizeDiscordSlug } from "./allow-list.js";
+import { normalizeDiscordDisplaySlug, normalizeDiscordSlug } from "./allow-list.js";
 import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
 
 function formatUsername(user: { username: string; discriminator?: string | null }): string {
@@ -72,6 +72,7 @@ export function resolveDiscordChannelContext(
   const channelInfo = resolveDiscordChannelInfoSafe(channel);
   const channelName = channelInfo.name;
   const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
+  const displayChannelSlug = channelName ? normalizeDiscordDisplaySlug(channelName) : "";
   const channelType = channelInfo.type;
   const isThread = isThreadChannelType(channelType);
 
@@ -86,7 +87,16 @@ export function resolveDiscordChannelContext(
     }
   }
 
-  return { channelName, channelSlug, channelType, isThread, parentId, parentName, parentSlug };
+  return {
+    channelName,
+    channelSlug,
+    displayChannelSlug,
+    channelType,
+    isThread,
+    parentId,
+    parentName,
+    parentSlug,
+  };
 }
 
 export async function resolveComponentInteractionContext(params: {

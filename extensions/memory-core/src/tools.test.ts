@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   getMemorySearchManagerMockConfigs,
+  getMemorySearchManagerMockParams,
   resetMemoryToolMockState,
   setMemoryBackend,
   setMemorySearchImpl,
@@ -105,6 +106,25 @@ describe("memory_search unavailable payloads", () => {
     expect((result.details as { debug?: { searchMs?: number } }).debug?.searchMs).toEqual(
       expect.any(Number),
     );
+  });
+
+  it("uses explicit plugin context agent over synthetic active-memory session keys", async () => {
+    const tool = createMemorySearchToolOrThrow({
+      config: asOpenClawConfig({
+        agents: {
+          list: [
+            { id: "main", default: true, memorySearch: { enabled: false } },
+            { id: "recall", memorySearch: { enabled: true } },
+          ],
+        },
+      }),
+      agentId: "recall",
+      agentSessionKey: "explicit:user-session:active-memory:abc123",
+    });
+
+    await tool.execute("recall", { query: "favorite food" });
+
+    expect(getMemorySearchManagerMockParams().at(-1)?.agentId).toBe("recall");
   });
 
   it("re-resolves config when executing a previously created tool", async () => {

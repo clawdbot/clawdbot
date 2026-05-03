@@ -40,6 +40,29 @@ describe("typing persistence bug fix", () => {
     expect(onReplyStartSpy).not.toHaveBeenCalledTimes(2);
   });
 
+  it("keeps typing alive while keepalive ticks continue during long runs", async () => {
+    const longRunCleanupSpy = vi.fn();
+    const longRunController = createTypingController({
+      onReplyStart: onReplyStartSpy,
+      onCleanup: longRunCleanupSpy,
+      typingIntervalSeconds: 6,
+      typingTtlMs: 10_000,
+      log: vi.fn(),
+    });
+
+    await longRunController.startTypingLoop();
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(longRunCleanupSpy).not.toHaveBeenCalled();
+
+    longRunController.cleanup();
+    expect(longRunCleanupSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("should stop typing when both runComplete and dispatchIdle are true", async () => {
     // Start typing
     await controller.startTypingLoop();

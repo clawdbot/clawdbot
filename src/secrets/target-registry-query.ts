@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
+import { loadChannelSecretContractApi } from "./channel-contract-api.js";
 import { getPath } from "./path-utils.js";
 import { getCoreSecretTargetRegistry, getSecretTargetRegistry } from "./target-registry-data.js";
 import {
@@ -32,10 +32,7 @@ let compiledCoreOpenClawTargetState: {
   targetsByType: Map<string, CompiledTargetRegistryEntry[]>;
 } | null = null;
 
-const compiledBundledChannelOpenClawTargets = new Map<
-  string,
-  CompiledTargetRegistryEntry[] | null
->();
+const compiledChannelOpenClawTargets = new Map<string, CompiledTargetRegistryEntry[] | null>();
 
 function buildTargetTypeIndex(
   compiledSecretTargetRegistry: CompiledTargetRegistryEntry[],
@@ -112,21 +109,25 @@ function getCompiledCoreOpenClawTargetState() {
   return compiledCoreOpenClawTargetState;
 }
 
-function getCompiledBundledChannelOpenClawTargets(
+function getCompiledChannelOpenClawTargets(
   channelId: string,
 ): CompiledTargetRegistryEntry[] | null {
   const normalizedChannelId = channelId.trim();
   if (!normalizedChannelId) {
     return null;
   }
-  if (compiledBundledChannelOpenClawTargets.has(normalizedChannelId)) {
-    return compiledBundledChannelOpenClawTargets.get(normalizedChannelId) ?? null;
+  if (compiledChannelOpenClawTargets.has(normalizedChannelId)) {
+    return compiledChannelOpenClawTargets.get(normalizedChannelId) ?? null;
   }
   const compiledEntries =
-    loadBundledChannelSecretContractApi(normalizedChannelId)
+    loadChannelSecretContractApi({
+      channelId: normalizedChannelId,
+      config: {} as OpenClawConfig,
+      env: process.env,
+    })
       ?.secretTargetRegistryEntries?.filter((entry) => entry.configFile === "openclaw.json")
       .map(compileTargetRegistryEntry) ?? null;
-  compiledBundledChannelOpenClawTargets.set(normalizedChannelId, compiledEntries);
+  compiledChannelOpenClawTargets.set(normalizedChannelId, compiledEntries);
   return compiledEntries;
 }
 
@@ -327,12 +328,11 @@ export function resolveConfigSecretTargetByPath(pathSegments: string[]): Resolve
     return resolved;
   }
 
-  const explicitBundledChannelId =
-    pathSegments[0] === "channels" ? (pathSegments[1]?.trim() ?? "") : "";
-  const explicitBundledChannelEntries = explicitBundledChannelId
-    ? getCompiledBundledChannelOpenClawTargets(explicitBundledChannelId)
+  const explicitChannelId = pathSegments[0] === "channels" ? (pathSegments[1]?.trim() ?? "") : "";
+  const explicitChannelEntries = explicitChannelId
+    ? getCompiledChannelOpenClawTargets(explicitChannelId)
     : null;
-  for (const entry of explicitBundledChannelEntries ?? []) {
+  for (const entry of explicitChannelEntries ?? []) {
     if (!entry.includeInPlan) {
       continue;
     }

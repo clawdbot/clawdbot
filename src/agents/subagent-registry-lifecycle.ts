@@ -4,6 +4,7 @@ import type { callGateway as defaultCallGateway } from "../gateway/call.js";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   completeTaskRunByRunId,
   failTaskRunByRunId,
@@ -44,13 +45,14 @@ type BrowserCleanupModule = Pick<
   "cleanupBrowserSessionsForLifecycleEnd"
 >;
 
-let browserCleanupPromise: Promise<BrowserCleanupModule> | null = null;
+const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(
+  () => import("../browser-lifecycle-cleanup.js"),
+);
 
 async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
   BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"]
 > {
-  browserCleanupPromise ??= import("../browser-lifecycle-cleanup.js");
-  return (await browserCleanupPromise).cleanupBrowserSessionsForLifecycleEnd;
+  return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
 }
 
 export function createSubagentRegistryLifecycleController(params: {

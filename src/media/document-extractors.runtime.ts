@@ -4,30 +4,12 @@ import type {
   DocumentExtractionResult,
 } from "../plugins/document-extractor-types.js";
 import { resolvePluginDocumentExtractors } from "../plugins/document-extractors.runtime.js";
+import { createConfigScopedPromiseLoader } from "../plugins/plugin-cache-primitives.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
-let extractorPromise: Promise<ReturnType<typeof resolvePluginDocumentExtractors>> | undefined;
-const extractorPromisesByConfig = new WeakMap<
-  OpenClawConfig,
-  Promise<ReturnType<typeof resolvePluginDocumentExtractors>>
->();
-
-async function loadDocumentExtractors(config?: OpenClawConfig) {
-  if (config) {
-    const cached = extractorPromisesByConfig.get(config);
-    if (cached) {
-      return await cached;
-    }
-    const promise = Promise.resolve().then(() => resolvePluginDocumentExtractors({ config }));
-    extractorPromisesByConfig.set(config, promise);
-    void promise.catch(() => {
-      extractorPromisesByConfig.delete(config);
-    });
-    return await promise;
-  }
-  extractorPromise ??= Promise.resolve(resolvePluginDocumentExtractors());
-  return await extractorPromise;
-}
+const documentExtractorLoader = createConfigScopedPromiseLoader((config?: OpenClawConfig) =>
+  resolvePluginDocumentExtractors(config ? { config } : undefined),
+);
 
 export async function extractDocumentContent(
   params: DocumentExtractionRequest & {
@@ -35,7 +17,7 @@ export async function extractDocumentContent(
   },
 ): Promise<(DocumentExtractionResult & { extractor: string }) | null> {
   const mimeType = normalizeLowercaseStringOrEmpty(params.mimeType);
-  const extractors = await loadDocumentExtractors(params.config);
+  const extractors = await documentExtractorLoader.load(params.config);
   const request: DocumentExtractionRequest = {
     buffer: params.buffer,
     mimeType: params.mimeType,

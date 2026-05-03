@@ -6,6 +6,14 @@ import { generateVoiceResponse } from "./response-generator.js";
 function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
   const sessionStore: Record<string, { sessionId: string; updatedAt: number }> = {};
   const saveSessionStore = vi.fn(async () => {});
+  const updateSessionStore = vi.fn(
+    async (
+      _storePath: string,
+      mutator: (store: Record<string, { sessionId: string; updatedAt: number }>) => unknown,
+    ) => {
+      return await mutator(sessionStore);
+    },
+  );
   const runEmbeddedPiAgent = vi.fn(async () => ({
     payloads,
     meta: { durationMs: 12, aborted: false },
@@ -44,6 +52,7 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
       resolveStorePath,
       loadSessionStore: () => sessionStore,
       saveSessionStore,
+      updateSessionStore,
       resolveSessionFilePath,
     },
   } as unknown as CoreAgentDeps;
@@ -52,6 +61,7 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
     runtime,
     runEmbeddedPiAgent,
     saveSessionStore,
+    updateSessionStore,
     sessionStore,
     resolveAgentDir,
     resolveAgentWorkspaceDir,
@@ -157,7 +167,7 @@ describe("generateVoiceResponse", () => {
   });
 
   it("pins the voice session to responseModel before running the embedded agent", async () => {
-    const { runtime, runEmbeddedPiAgent, saveSessionStore, sessionStore } = createAgentRuntime([
+    const { runtime, runEmbeddedPiAgent, updateSessionStore, sessionStore } = createAgentRuntime([
       { text: '{"spoken":"Pinned model works."}' },
     ]);
     const voiceConfig = VoiceCallConfigSchema.parse({
@@ -181,7 +191,10 @@ describe("generateVoiceResponse", () => {
       modelOverride: "gpt-4.1-nano",
       modelOverrideSource: "auto",
     });
-    expect(saveSessionStore).toHaveBeenCalledWith("/tmp/openclaw/main/sessions.json", sessionStore);
+    expect(updateSessionStore).toHaveBeenCalledWith(
+      "/tmp/openclaw/main/sessions.json",
+      expect.any(Function),
+    );
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",

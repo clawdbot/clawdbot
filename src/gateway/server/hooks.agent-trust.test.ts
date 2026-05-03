@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.fn();
-const requestHeartbeatNowMock = vi.fn();
+const requestHeartbeatMock = vi.fn();
 const runCronIsolatedAgentTurnMock = vi.fn();
 const resolveMainSessionKeyMock = vi.fn(() => "main-session");
 const loadConfigMock = vi.fn(() => ({}));
@@ -12,7 +12,7 @@ vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventMock,
 }));
 vi.mock("../../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: requestHeartbeatNowMock,
+  requestHeartbeat: requestHeartbeatMock,
 }));
 vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
@@ -101,7 +101,7 @@ describe("dispatchAgentHook trust handling", () => {
 
     await vi.waitFor(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
     expect(logHooksInfoMock).toHaveBeenCalledWith(
       "hook agent run completed without announcement",
       expect.objectContaining({
@@ -191,7 +191,7 @@ describe("dispatchAgentHook trust handling", () => {
 
     await vi.waitFor(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 
   it("marks error events as untrusted and sanitizes hook names", async () => {

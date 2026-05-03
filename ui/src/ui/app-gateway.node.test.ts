@@ -679,6 +679,23 @@ describe("connectGateway", () => {
     expect(host.chatStream).toBeNull();
   });
 
+  it("sends queued session-scoped chat aborts after reconnect", async () => {
+    const host = createHost();
+    host.pendingAbort = { sessionKey: "main" };
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitHello();
+    await Promise.resolve();
+
+    expect(client.request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "main",
+    });
+    expect(host.pendingAbort).toBeNull();
+  });
+
   it("logs and drops stale queued chat abort failures after reconnect", async () => {
     const host = createHost();
     host.pendingAbort = { runId: "run-stale", sessionKey: "main" };

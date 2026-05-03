@@ -1,7 +1,7 @@
 import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 
-const RESERVED_NON_PLUGIN_COMMAND_ROOTS = new Set(["tool", "tools"]);
+const RESERVED_NON_PLUGIN_COMMAND_ROOTS = new Set(["auth", "tool", "tools"]);
 
 export function isReservedNonPluginCommandRoot(primary: string | null | undefined): boolean {
   return typeof primary === "string" && RESERVED_NON_PLUGIN_COMMAND_ROOTS.has(primary);

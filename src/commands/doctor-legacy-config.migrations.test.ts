@@ -468,7 +468,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
-          agentRuntime: { id: "auto", fallback: "pi" },
+          agentRuntime: { id: "auto" },
           model: {
             primary: "codex/gpt-5.5",
             fallbacks: ["anthropic/claude-sonnet-4-6", "codex/gpt-5.4-mini"],
@@ -494,7 +494,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.config.agents?.defaults?.agentRuntime).toEqual({
       id: "codex",
-      fallback: "pi",
     });
     expect(res.config.agents?.defaults?.models).toEqual({
       "codex/gpt-5.5": { alias: "legacy-codex" },

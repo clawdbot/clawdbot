@@ -139,7 +139,7 @@ function readParentPidFromProc(pid: number): number | null {
  * `node:fs` to inject `/proc/<pid>/status` payloads) — there is no
  * reachable override for runtime callers to mutate.
  */
-function getSelfAndAncestorPidsSync(): Set<number> {
+export function getSelfAndAncestorPidsSync(): Set<number> {
   const pids = new Set<number>([process.pid]);
   const immediateParent = getParentPid();
   if (!Number.isFinite(immediateParent) || immediateParent <= 0) {

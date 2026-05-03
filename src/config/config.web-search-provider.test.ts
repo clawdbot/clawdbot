@@ -434,6 +434,35 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("rejects installable provider ids when the plugin is not active", () => {
+    const res = validateConfigObjectWithPlugins(
+      buildWebSearchProviderConfig({
+        provider: "brave",
+      }),
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues).toContainEqual(
+      expect.objectContaining({
+        path: "tools.web.search.provider",
+        message:
+          'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
+        allowedValues: expect.arrayContaining(["brave"]),
+      }),
+    );
+  });
+
   it("rejects unknown provider ids without plugin evidence", () => {
     const res = validateConfigObjectWithPlugins({
       tools: {

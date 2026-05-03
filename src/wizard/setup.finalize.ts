@@ -52,6 +52,7 @@ type FinalizeOnboardingOptions = {
 type OnboardSearchModule = typeof import("../commands/onboard-search.js");
 
 let onboardSearchModulePromise: Promise<OnboardSearchModule> | undefined;
+const HATCH_TUI_TIMEOUT_MS = 5 * 60 * 1000;
 
 function loadOnboardSearchModule(): Promise<OnboardSearchModule> {
   onboardSearchModulePromise ??= import("../commands/onboard-search.js");
@@ -458,6 +459,7 @@ export async function finalizeSetupWizard(
           local: true,
           deliver: false,
           message: hasBootstrap ? "Wake up, my friend!" : undefined,
+          timeoutMs: HATCH_TUI_TIMEOUT_MS,
         });
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });

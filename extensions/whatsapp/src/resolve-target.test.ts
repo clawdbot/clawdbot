@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isWhatsAppGroupJid,
+  isWhatsAppNewsletterJid,
   looksLikeWhatsAppTargetId,
   isWhatsAppUserTarget,
   normalizeWhatsAppMessagingTarget,
@@ -13,6 +14,15 @@ describe("normalizeWhatsAppTarget", () => {
     expect(normalizeWhatsAppTarget("123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
     expect(normalizeWhatsAppTarget("whatsapp:120363401234567890@g.us")).toBe(
       "120363401234567890@g.us",
+    );
+  });
+
+  it("preserves newsletter JIDs", () => {
+    expect(normalizeWhatsAppTarget("120363401234567890@newsletter")).toBe(
+      "120363401234567890@newsletter",
+    );
+    expect(normalizeWhatsAppTarget("WhatsApp:120363401234567890@NEWSLETTER")).toBe(
+      "120363401234567890@newsletter",
     );
   });
 
@@ -40,6 +50,7 @@ describe("normalizeWhatsAppTarget", () => {
     expect(normalizeWhatsAppTarget("group:123456789-987654321@g.us")).toBeNull();
     expect(normalizeWhatsAppTarget(" WhatsApp:Group:123456789-987654321@G.US ")).toBeNull();
     expect(normalizeWhatsAppTarget("abc@s.whatsapp.net")).toBeNull();
+    expect(normalizeWhatsAppTarget("abc@newsletter")).toBeNull();
   });
 
   it("rejects non-WhatsApp provider-prefixed phone-like targets", () => {
@@ -68,6 +79,17 @@ describe("isWhatsAppUserTarget", () => {
   });
 });
 
+describe("isWhatsAppNewsletterJid", () => {
+  it("detects newsletter JIDs with or without prefixes", () => {
+    expect(isWhatsAppNewsletterJid("120363401234567890@newsletter")).toBe(true);
+    expect(isWhatsAppNewsletterJid("whatsapp:120363401234567890@newsletter")).toBe(true);
+    expect(isWhatsAppNewsletterJid("120363401234567890@NEWSLETTER")).toBe(true);
+    expect(isWhatsAppNewsletterJid("abc@newsletter")).toBe(false);
+    expect(isWhatsAppNewsletterJid("120363401234567890@g.us")).toBe(false);
+    expect(isWhatsAppNewsletterJid("+1555123")).toBe(false);
+  });
+});
+
 describe("isWhatsAppGroupJid", () => {
   it("detects group JIDs with or without prefixes", () => {
     expect(isWhatsAppGroupJid("120363401234567890@g.us")).toBe(true);
@@ -91,6 +113,7 @@ describe("looksLikeWhatsAppTargetId", () => {
   it("detects common WhatsApp target forms", () => {
     expect(looksLikeWhatsAppTargetId("whatsapp:+15555550123")).toBe(true);
     expect(looksLikeWhatsAppTargetId("15555550123@c.us")).toBe(true);
+    expect(looksLikeWhatsAppTargetId("120363401234567890@newsletter")).toBe(true);
     expect(looksLikeWhatsAppTargetId("+15555550123")).toBe(true);
     expect(looksLikeWhatsAppTargetId("")).toBe(false);
   });

@@ -39,6 +39,7 @@ export type HeartbeatStatus = {
 
 export type StatusSummary = {
   runtimeVersion?: string | null;
+  eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
   linkChannel?: {
     id: ChannelId;
     label: string;

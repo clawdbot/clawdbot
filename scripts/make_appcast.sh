@@ -29,7 +29,7 @@ ZIP_NAME=$(basename "$ZIP")
 ZIP_BASE="${ZIP_NAME%.zip}"
 VERSION=${SPARKLE_RELEASE_VERSION:-}
 if [[ -z "$VERSION" ]]; then
-  # Accept legacy calver suffixes like -1 and prerelease forms like -beta.1 / .beta.1.
+  # Accept legacy calver suffixes like -1 and prerelease forms like -alpha.1 / -beta.1 / .beta.1.
   if [[ "$ZIP_NAME" =~ ^OpenClaw-([0-9]+(\.[0-9]+){1,2}([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?)\.zip$ ]]; then
     VERSION="${BASH_REMATCH[1]}"
   else

@@ -80,6 +80,10 @@ export type CanonicalSentMessageHookContext = {
   groupId?: string;
 };
 
+function readNonBlankString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
 export function deriveInboundMessageHookContext(
   ctx: FinalizedMsgContext,
   overrides?: {
@@ -89,13 +93,10 @@ export function deriveInboundMessageHookContext(
 ): CanonicalInboundMessageHookContext {
   const content =
     overrides?.content ??
-    (typeof ctx.BodyForCommands === "string"
-      ? ctx.BodyForCommands
-      : typeof ctx.RawBody === "string"
-        ? ctx.RawBody
-        : typeof ctx.Body === "string"
-          ? ctx.Body
-          : "");
+    readNonBlankString(ctx.BodyForCommands) ??
+    readNonBlankString(ctx.RawBody) ??
+    readNonBlankString(ctx.Body) ??
+    "";
   const channelId = normalizeLowercaseStringOrEmpty(
     ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "",
   );

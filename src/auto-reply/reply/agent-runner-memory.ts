@@ -26,6 +26,7 @@ import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -48,11 +49,12 @@ import { incrementCompactionCount } from "./session-updates.js";
 
 type PiEmbeddedRuntime = typeof import("../../agents/pi-embedded.js");
 
-let piEmbeddedRuntimePromise: Promise<PiEmbeddedRuntime> | undefined;
+const piEmbeddedRuntimeLoader = createLazyImportLoader<PiEmbeddedRuntime>(
+  () => import("../../agents/pi-embedded.js"),
+);
 
 function loadPiEmbeddedRuntime(): Promise<PiEmbeddedRuntime> {
-  piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.js");
-  return piEmbeddedRuntimePromise;
+  return piEmbeddedRuntimeLoader.load();
 }
 
 async function compactEmbeddedPiSessionDefault(

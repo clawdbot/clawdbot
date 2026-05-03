@@ -14,4 +14,5 @@ export type ControlUiBootstrapConfig = {
   localMediaPreviewRoots?: string[];
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
+  chatMessageMaxWidth?: string;
 };

@@ -183,6 +183,60 @@ describe("provider public artifacts", () => {
     }
   });
 
+  it("uses caller-provided manifest metadata for provider policy aliases", async () => {
+    const loadPluginManifestRegistry = vi.fn(() => {
+      throw new Error("unexpected manifest registry scan");
+    });
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
+      if (dirName !== "owner") {
+        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
+      }
+      return {
+        resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }),
+      };
+    });
+
+    vi.doMock("./manifest-registry.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./manifest-registry.js")>();
+      return {
+        ...actual,
+        loadPluginManifestRegistry,
+      };
+    });
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+    vi.resetModules();
+
+    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=provider-alias-manifest");
+
+    const surface = resolvePolicySurface("alias", {
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "owner",
+            channels: [],
+            cliBackends: [],
+            hooks: [],
+            origin: "bundled",
+            manifestPath: "/tmp/owner/openclaw.plugin.json",
+            providers: ["alias"],
+            rootDir: "/tmp/owner",
+            skills: [],
+            source: "/tmp/owner/index.js",
+          },
+        ],
+      },
+    });
+
+    expect(surface?.resolveThinkingProfile?.({ provider: "alias", modelId: "demo" })).toEqual({
+      levels: [{ id: "owner" }],
+    });
+    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
   it("loads provider policy surfaces without package-manager repair", async () => {
     const loadBundledPluginPublicArtifactModuleSync = vi.fn(() => ({
       normalizeConfig: (ctx: { providerConfig: ModelProviderConfig }) => ctx.providerConfig,

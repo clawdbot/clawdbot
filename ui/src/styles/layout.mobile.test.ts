@@ -20,6 +20,15 @@ function readLayoutCss(): string {
   return readFileSync(cssPath!, "utf8");
 }
 
+function readGroupedChatCss(): string {
+  const cssPath = [
+    resolve(process.cwd(), "ui/src/styles/chat/grouped.css"),
+    resolve(process.cwd(), "..", "ui/src/styles/chat/grouped.css"),
+  ].find((candidate) => existsSync(candidate));
+  expect(cssPath).toBeTruthy();
+  return readFileSync(cssPath!, "utf8");
+}
+
 describe("chat header responsive mobile styles", () => {
   it("keeps the chat header and session controls from clipping on narrow widths", () => {
     const css = readMobileCss();
@@ -44,5 +53,13 @@ describe("sidebar menu trigger styles", () => {
     expect(css).toContain("box-shadow: var(--focus-ring);");
     expect(css).toContain(".topbar-nav-toggle {");
     expect(css).toContain("display: none;");
+  });
+});
+
+describe("grouped chat width styles", () => {
+  it("uses the config-fed CSS variable with the current fallback", () => {
+    const css = readGroupedChatCss();
+
+    expect(css).toContain("max-width: var(--chat-message-max-width, min(900px, 68%));");
   });
 });

@@ -29,6 +29,8 @@ API key auth, and dynamic model resolution.
 
 <Steps>
   <Step title="Package and manifest">
+    ### Step 1: Package and manifest
+
     <CodeGroup>
     ```json package.json
     {
@@ -481,6 +483,8 @@ API key auth, and dynamic model resolution.
   </Step>
 
   <Step title="Add extra capabilities (optional)">
+    ### Step 5: Add extra capabilities
+
     A provider plugin can register speech, realtime transcription, realtime
     voice, media understanding, image generation, video generation, web fetch,
     and web search alongside text inference. OpenClaw classifies this as a
@@ -683,6 +687,8 @@ API key auth, and dynamic model resolution.
   </Step>
 
   <Step title="Test">
+    ### Step 6: Test
+
     ```typescript src/provider.test.ts
     import { describe, it, expect } from "vitest";
     // Export your provider config object from index.ts or a dedicated file

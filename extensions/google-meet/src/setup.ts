@@ -87,6 +87,7 @@ export function getGoogleMeetSetupStatus(
     fullConfig?: unknown;
     mode?: GoogleMeetMode;
     transport?: GoogleMeetTransport;
+    twilioDialInNumber?: string;
   },
 ): {
   ok: boolean;
@@ -99,6 +100,7 @@ export function getGoogleMeetSetupStatus(
     fullConfig?: unknown;
     mode?: GoogleMeetMode;
     transport?: GoogleMeetTransport;
+    twilioDialInNumber?: string;
   },
 ) {
   const checks: SetupCheck[] = [];
@@ -190,6 +192,21 @@ export function getGoogleMeetSetupStatus(
         config.chrome.waitForInCallMs > 0
           ? `Realtime intro waits up to ${config.chrome.waitForInCallMs}ms for the Meet tab to be in-call`
           : "Set chrome.waitForInCallMs to delay realtime intro until the Meet tab is in-call",
+    });
+  }
+
+  if (transport === "twilio") {
+    const hasRequestDialPlan = Boolean(options?.twilioDialInNumber);
+    const hasDefaultDialPlan = Boolean(config.twilio.defaultDialInNumber);
+    const hasDialPlan = hasRequestDialPlan || hasDefaultDialPlan;
+    checks.push({
+      id: "twilio-dial-plan",
+      ok: hasDialPlan,
+      message: hasRequestDialPlan
+        ? "Twilio request includes a Meet dial-in number"
+        : hasDefaultDialPlan
+          ? "Twilio default Meet dial-in number is configured"
+          : "Twilio joins require a Meet dial-in phone number; pass dialInNumber with optional pin/dtmfSequence or configure twilio.defaultDialInNumber",
     });
   }
 

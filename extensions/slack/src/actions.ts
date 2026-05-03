@@ -132,11 +132,18 @@ export async function removeSlackReaction(
   opts: SlackActionClientOpts = {},
 ) {
   const client = await getClient(opts, "write");
-  await client.reactions.remove({
-    channel: channelId,
-    timestamp: messageId,
-    name: normalizeEmoji(emoji),
-  });
+  try {
+    await client.reactions.remove({
+      channel: channelId,
+      timestamp: messageId,
+      name: normalizeEmoji(emoji),
+    });
+  } catch (err) {
+    if (hasSlackPlatformError(err, "no_reaction")) {
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function removeOwnSlackReactions(
@@ -163,10 +170,9 @@ export async function removeOwnSlackReactions(
   }
   await Promise.all(
     Array.from(toRemove, (name) =>
-      client.reactions.remove({
-        channel: channelId,
-        timestamp: messageId,
-        name,
+      removeSlackReaction(channelId, messageId, name, {
+        ...opts,
+        client,
       }),
     ),
   );

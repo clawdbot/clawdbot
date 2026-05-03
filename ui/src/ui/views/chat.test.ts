@@ -53,6 +53,29 @@ vi.mock("../chat/build-chat-items.ts", () => ({
     stream: string | null;
     streamStartedAt: number | null;
   }) => {
+    if (
+      props.messages.some(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          (message as { __testDivider?: unknown }).__testDivider === true,
+      )
+    ) {
+      return [
+        {
+          kind: "divider",
+          key: "divider:compaction:test",
+          label: "Compacted history",
+          description:
+            "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
+          action: {
+            kind: "session-checkpoints",
+            label: "Open checkpoints",
+          },
+          timestamp: 1,
+        },
+      ];
+    }
     if (props.messages.length > 0) {
       return [
         {
@@ -372,6 +395,7 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
       onDismissSideResult: () => undefined,
       onNewSession: () => undefined,
       onClearHistory: () => undefined,
+      onOpenSessionCheckpoints: () => undefined,
       agentsList: null,
       currentAgentId: "main",
       onAgentChange: () => undefined,
@@ -388,6 +412,25 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
   );
   return container;
 }
+
+describe("chat compaction divider", () => {
+  it("renders checkpoint recovery copy and action", () => {
+    const onOpenSessionCheckpoints = vi.fn();
+    const container = renderChatView({
+      messages: [{ __testDivider: true }],
+      onOpenSessionCheckpoints,
+    });
+
+    expect(container.textContent).toContain("Compacted history");
+    expect(container.textContent).toContain("Earlier turns are preserved");
+    const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
+    expect(button?.textContent).toContain("Open checkpoints");
+
+    button?.click();
+
+    expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
+  });
+});
 
 afterEach(() => {
   loadSessionsMock.mockClear();

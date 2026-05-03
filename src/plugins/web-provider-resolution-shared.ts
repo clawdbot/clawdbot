@@ -1,7 +1,7 @@
 import { resolveBundledPluginCompatibleLoadValues } from "./activation-context.js";
 import type { PluginLoadOptions } from "./loader.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 
 export type WebProviderContract = "webSearchProviders" | "webFetchProviders";
@@ -66,7 +66,7 @@ function loadInstalledWebProviderManifestRecords(params: {
   env?: PluginLoadOptions["env"];
   pluginIds?: readonly string[];
 }): readonly PluginManifestRecord[] {
-  const records = loadPluginMetadataSnapshot({
+  const records = loadManifestMetadataSnapshot({
     config: params.config ?? {},
     workspaceDir: params.workspaceDir,
     env: params.env ?? process.env,

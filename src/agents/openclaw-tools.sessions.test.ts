@@ -1098,6 +1098,174 @@ describe("sessions tools", () => {
     });
   });
 
+  it("sessions_send keeps delayed requester replies alive after a wait timeout", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "agent:main:main";
+    const targetKey = "agent:director1:main";
+    let targetWaitCount = 0;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        if (params?.sessionKey === targetKey) {
+          return { runId: "run-target", status: "accepted", acceptedAt: 2000 };
+        }
+        if (params?.sessionKey === requesterKey) {
+          return { runId: "run-requester", status: "accepted", acceptedAt: 2001 };
+        }
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        if (params?.runId === "run-target") {
+          targetWaitCount += 1;
+          return targetWaitCount === 1
+            ? { runId: "run-target", status: "timeout" }
+            : { runId: "run-target", status: "ok" };
+        }
+        if (params?.runId === "run-requester") {
+          return { runId: "run-requester", status: "ok" };
+        }
+      }
+      if (request.method === "chat.history") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        if (params?.sessionKey === targetKey && targetWaitCount > 1) {
+          return {
+            messages: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "late director reply" }],
+                timestamp: 20,
+              },
+            ],
+          };
+        }
+        if (params?.sessionKey === requesterKey) {
+          return {
+            messages: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "requester saw director" }],
+                timestamp: 21,
+              },
+            ],
+          };
+        }
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+      config: {
+        ...TEST_CONFIG,
+        session: {
+          ...TEST_CONFIG.session,
+          agentToAgent: { maxPingPongTurns: 1 },
+        },
+      },
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-delayed", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      sessionKey: targetKey,
+      delivery: { status: "pending", mode: "announce" },
+    });
+
+    await vi.waitFor(
+      () => {
+        const requesterReplyCall = calls.find(
+          (call) =>
+            call.method === "agent" &&
+            (call.params as { sessionKey?: string } | undefined)?.sessionKey === requesterKey,
+        );
+        expect(requesterReplyCall).toBeDefined();
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    const requesterReplyCall = calls.find(
+      (call) =>
+        call.method === "agent" &&
+        (call.params as { sessionKey?: string } | undefined)?.sessionKey === requesterKey,
+    );
+    const replyParams = requesterReplyCall?.params as
+      | {
+          extraSystemPrompt?: string;
+          inputProvenance?: { sourceSessionKey?: string };
+          message?: string;
+          sessionKey?: string;
+        }
+      | undefined;
+    expect(replyParams).toMatchObject({
+      sessionKey: requesterKey,
+      inputProvenance: { sourceSessionKey: targetKey },
+    });
+    expect(replyParams?.message).toContain("late director reply");
+    expect(replyParams?.extraSystemPrompt).toContain("Agent-to-agent reply step");
+    expect(replyParams?.extraSystemPrompt).toContain("Current agent: Agent 1 (requester)");
+    expect(calls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
+  it("sessions_send preserves terminal timeouts without starting A2A", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "agent:main:main";
+    const targetKey = "agent:director1:main";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-terminal", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return {
+          runId: "run-terminal",
+          status: "timeout",
+          endedAt: 3000,
+          stopReason: "timeout",
+          error: "agent run timed out",
+        };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-terminal", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    expect(result.details).toMatchObject({
+      status: "timeout",
+      error: "agent run timed out",
+      sessionKey: targetKey,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+  });
+
   it("sessions_send skips duplicate A2A delivery for waited parent-owned native subagents", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     const requesterKey = "agent:main:discord:direct:parent";

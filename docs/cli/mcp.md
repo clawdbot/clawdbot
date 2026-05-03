@@ -147,7 +147,7 @@ The current bridge exposes these MCP tools:
 
   </Accordion>
   <Accordion title="conversation_get">
-    Returns one conversation by `session_key`.
+    Returns one conversation by `session_key` using a direct Gateway session lookup.
   </Accordion>
   <Accordion title="messages_read">
     Reads recent transcript messages for one session-backed conversation.

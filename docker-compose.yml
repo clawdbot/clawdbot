@@ -2,6 +2,9 @@ services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     build: .
+    env_file:
+      - path: .env
+        required: false
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -71,6 +74,9 @@ services:
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     network_mode: "service:openclaw-gateway"
+    env_file:
+      - path: .env
+        required: false
     cap_drop:
       - NET_RAW
       - NET_ADMIN

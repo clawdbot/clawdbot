@@ -66,10 +66,10 @@ export type ChatHost = ChatInputHistoryState & {
   sessionsResult?: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
-  pendingAbort?: { runId: string; sessionKey: string } | null;
+  pendingAbort?: { runId?: string | null; sessionKey: string } | null;
   chatSubmitGuards?: Map<string, Promise<void>>;
   /** Callback for slash-command side effects that need app-level access. */
-  onSlashAction?: (action: string) => void;
+  onSlashAction?: (action: string) => void | Promise<void>;
 };
 
 export type ChatSendOptions = {
@@ -88,6 +88,21 @@ export type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult };
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
+}
+
+export function hasAbortableSessionRun(host: {
+  chatRunId?: string | null;
+  sessionKey: string;
+  sessionsResult?: SessionsListResult | null;
+}): boolean {
+  if (host.chatRunId) {
+    return true;
+  }
+  return Boolean(
+    host.sessionsResult?.sessions.some(
+      (session) => session.key === host.sessionKey && session.hasActiveRun === true,
+    ),
+  );
 }
 
 export function isChatStopCommand(text: string) {
@@ -135,11 +150,12 @@ function isBtwCommand(text: string) {
 }
 
 export async function handleAbortChat(host: ChatHost) {
-  // If disconnected but we have an active runId, queue the abort for when we reconnect
-  if (!host.connected && host.chatRunId) {
+  const activeRunId = host.chatRunId;
+  // If disconnected but this session is abortable, queue the abort for when we reconnect.
+  if (!host.connected && hasAbortableSessionRun(host)) {
     host.chatMessage = "";
     resetChatInputHistoryNavigation(host);
-    host.pendingAbort = { runId: host.chatRunId, sessionKey: host.sessionKey };
+    host.pendingAbort = { runId: activeRunId, sessionKey: host.sessionKey };
     return;
   }
   if (!host.connected) {
@@ -527,7 +543,7 @@ export async function handleSendChat(
 }
 
 function shouldQueueLocalSlashCommand(name: string): boolean {
-  return !["stop", "focus", "export-session", "steer", "redirect"].includes(name);
+  return !["stop", "focus", "export-session", "steer", "redirect", "new"].includes(name);
 }
 
 // ── Slash Command Dispatch ──
@@ -543,11 +559,11 @@ async function dispatchSlashCommand(
       await handleAbortChat(host);
       return;
     case "new":
-      await sendChatMessageNow(host, "/new", {
-        refreshSessions: true,
-        previousDraft: sendOpts?.previousDraft,
-        restoreDraft: sendOpts?.restoreDraft,
-      });
+      if (!host.onSlashAction) {
+        host.lastError = "New Chat is unavailable.";
+        return;
+      }
+      await host.onSlashAction("new-session");
       return;
     case "reset":
       await sendChatMessageNow(host, "/reset", {
@@ -560,22 +576,36 @@ async function dispatchSlashCommand(
       await clearChatHistory(host);
       return;
     case "focus":
-      host.onSlashAction?.("toggle-focus");
+      await host.onSlashAction?.("toggle-focus");
       return;
     case "export-session":
-      host.onSlashAction?.("export");
+      await host.onSlashAction?.("export");
       return;
   }
 
-  if (!host.client) {
+  if (!host.client || !host.connected) {
+    host.lastError = "Gateway not connected";
+    injectCommandResult(
+      host,
+      `Cannot run \`/${name}\`: Control UI is not connected to the Gateway.`,
+    );
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
     return;
   }
 
   const targetSessionKey = host.sessionKey;
-  const result = await executeSlashCommand(host.client, targetSessionKey, name, args, {
-    chatModelCatalog: host.chatModelCatalog,
-    sessionsResult: host.sessionsResult,
-  });
+  let result: Awaited<ReturnType<typeof executeSlashCommand>>;
+  try {
+    result = await executeSlashCommand(host.client, targetSessionKey, name, args, {
+      chatModelCatalog: host.chatModelCatalog,
+      sessionsResult: host.sessionsResult,
+    });
+  } catch (err) {
+    host.lastError = String(err);
+    injectCommandResult(host, `Command \`/${name}\` failed unexpectedly.`);
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    return;
+  }
 
   if (result.content) {
     injectCommandResult(host, result.content);
@@ -596,7 +626,7 @@ async function dispatchSlashCommand(
       ...host.chatModelOverrides,
       [targetSessionKey]: result.sessionPatch.modelOverride ?? null,
     };
-    host.onSlashAction?.("refresh-tools-effective");
+    await host.onSlashAction?.("refresh-tools-effective");
   }
 
   if (result.action === "refresh") {

@@ -173,6 +173,20 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   });
 
+  it("resolves home-relative local media paths through allowed local roots", async () => {
+    vi.stubEnv("OPENCLAW_HOME", fixtureRoot);
+    try {
+      const result = await loadWebMedia("~/workspace/chart.png", {
+        maxBytes: 1024 * 1024,
+        localRoots: [workspaceDir],
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("rejects host-read text files outside local roots", async () => {
     const secretFile = path.join(fixtureRoot, "secret.txt");
     await fs.writeFile(secretFile, "secret", "utf8");

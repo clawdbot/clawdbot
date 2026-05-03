@@ -8,9 +8,13 @@ export type BundledPluginBuildEntry = {
 export type BundledPluginBuildEntryParams = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  includeRootPackageExcludedDirs?: boolean;
 };
 
 export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS: Set<string>;
+export function collectRootPackageExcludedExtensionDirs(
+  params?: BundledPluginBuildEntryParams,
+): Set<string>;
 export function collectBundledPluginBuildEntries(
   params?: BundledPluginBuildEntryParams,
 ): BundledPluginBuildEntry[];

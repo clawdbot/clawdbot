@@ -12,11 +12,18 @@ export async function openAuthenticatedGatewayWs(port: number, token: string): P
 
 export async function waitForGatewayWsClose(
   ws: WebSocket,
+  timeoutMs = 10_000,
 ): Promise<{ code: number; reason: string }> {
-  return await new Promise((resolve) => {
-    ws.once("close", (code, reason) => {
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.off("close", onClose);
+      reject(new Error(`gateway websocket did not close within ${timeoutMs}ms`));
+    }, timeoutMs);
+    const onClose = (code: number, reason: Buffer) => {
+      clearTimeout(timer);
       resolve({ code, reason: reason.toString() });
-    });
+    };
+    ws.once("close", onClose);
   });
 }
 

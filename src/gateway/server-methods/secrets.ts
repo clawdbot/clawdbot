@@ -8,6 +8,10 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function invalidSecretsResolveField(
   errors: ErrorObject[] | null | undefined,
 ): "commandName" | "targetIds" {
@@ -43,8 +47,8 @@ export function createSecretsHandlers(params: {
       try {
         const result = await params.reloadSecrets();
         respond(true, { ok: true, warningCount: result.warningCount });
-      } catch {
-        params.log?.warn?.("secrets.reload failed");
+      } catch (error) {
+        params.log?.warn?.(`secrets.reload failed: ${errorMessage(error)}`);
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "secrets.reload failed"));
       }
     },
@@ -100,8 +104,8 @@ export function createSecretsHandlers(params: {
           throw new Error("secrets.resolve returned invalid payload.");
         }
         respond(true, payload);
-      } catch {
-        params.log?.warn?.("secrets.resolve failed");
+      } catch (error) {
+        params.log?.warn?.(`secrets.resolve failed: ${errorMessage(error)}`);
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "secrets.resolve failed"));
       }
     },

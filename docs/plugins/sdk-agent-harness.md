@@ -201,25 +201,20 @@ model refs remain compatibility aliases for the native harness.
 When this mode runs, Codex owns the native thread id, resume behavior,
 compaction, and app-server execution. OpenClaw still owns the chat channel,
 visible transcript mirror, tool policy, approvals, media delivery, and session
-selection. Use `agentRuntime.id: "codex"` without a `fallback` override
-when you need to prove that only the Codex app-server path can claim the run.
-Explicit plugin runtimes already fail closed by default. Set `fallback: "pi"`
-only when you intentionally want PI to handle missing harness selection. Codex
-app-server failures already fail directly instead of retrying through PI.
+selection. Use `agentRuntime.id: "codex"` when you need to prove that only the
+Codex app-server path can claim the run. Explicit plugin runtimes fail closed;
+Codex app-server selection failures and runtime failures are not retried through
+PI.
 
-## Disable PI fallback
+## Runtime strictness
 
-By default, OpenClaw runs embedded agents with `agents.defaults.agentRuntime`
-set to `{ id: "auto", fallback: "pi" }`. In `auto` mode, registered plugin
-harnesses can claim a provider/model pair. If none match, OpenClaw falls back
-to PI.
-
-In `auto` mode, set `fallback: "none"` when you need missing plugin harness
-selection to fail instead of using PI. Explicit plugin runtimes such as
-`agentRuntime.id: "codex"` already fail closed by default, unless
-`fallback: "pi"` is set in the same config or environment override scope.
-Selected plugin harness failures always fail hard. This does not block an
-explicit `agentRuntime.id: "pi"` or `OPENCLAW_AGENT_RUNTIME=pi`.
+By default, OpenClaw runs embedded agents with OpenClaw Pi. In `auto` mode,
+registered plugin harnesses can claim a provider/model pair, and PI handles the
+turn when none match. Use an explicit plugin runtime such as
+`agentRuntime.id: "codex"` when missing harness selection should fail instead
+of routing through PI. Selected plugin harness failures always fail hard. This
+does not block an explicit `agentRuntime.id: "pi"` or
+`OPENCLAW_AGENT_RUNTIME=pi`.
 
 For Codex-only embedded runs:
 
@@ -236,17 +231,15 @@ For Codex-only embedded runs:
 }
 ```
 
-If you want any registered plugin harness to claim matching models but never
-want OpenClaw to silently fall back to PI, keep `runtime: "auto"` and disable
-the fallback:
+If you want any registered plugin harness to claim matching models and otherwise
+use PI, set `id: "auto"`:
 
 ```json
 {
   "agents": {
     "defaults": {
       "agentRuntime": {
-        "id": "auto",
-        "fallback": "none"
+        "id": "auto"
       }
     }
   }
@@ -259,39 +252,30 @@ Per-agent overrides use the same shape:
 {
   "agents": {
     "defaults": {
-      "agentRuntime": {
-        "id": "auto",
-        "fallback": "pi"
-      }
+      "agentRuntime": { "id": "auto" }
     },
     "list": [
       {
         "id": "codex-only",
         "model": "openai/gpt-5.5",
-        "agentRuntime": {
-          "id": "codex",
-          "fallback": "none"
-        }
+        "agentRuntime": { "id": "codex" }
       }
     ]
   }
 }
 ```
 
-`OPENCLAW_AGENT_RUNTIME` still overrides the configured runtime. Use
-`OPENCLAW_AGENT_HARNESS_FALLBACK=none` to disable PI fallback from the
-environment.
+`OPENCLAW_AGENT_RUNTIME` still overrides the configured runtime.
 
 ```bash
-OPENCLAW_AGENT_RUNTIME=codex \
-OPENCLAW_AGENT_HARNESS_FALLBACK=none \
-openclaw gateway run
+OPENCLAW_AGENT_RUNTIME=codex openclaw gateway run
 ```
 
-With fallback disabled, a session fails early when the requested harness is not
-registered, does not support the resolved provider/model, or fails before
-producing turn side effects. That is intentional for Codex-only deployments and
-for live tests that must prove the Codex app-server path is actually in use.
+With an explicit plugin runtime, a session fails early when the requested
+harness is not registered, does not support the resolved provider/model, or
+fails before producing turn side effects. That is intentional for Codex-only
+deployments and for live tests that must prove the Codex app-server path is
+actually in use.
 
 This setting only controls the embedded agent harness. It does not disable
 image, video, music, TTS, PDF, or other provider-specific model routing.

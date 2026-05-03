@@ -179,35 +179,44 @@ describe("slack native streaming thread hint", () => {
 });
 
 describe("slack preview streaming eligibility", () => {
-  it("stays on for room messages when streaming mode is enabled", () => {
+  it("stays off when streaming mode is disabled", () => {
     expect(
       shouldEnableSlackPreviewStreaming({
-        mode: "partial",
-        isDirectMessage: false,
-      }),
-    ).toBe(true);
-  });
-
-  it("stays off for top-level DMs without a reply thread", () => {
-    expect(
-      shouldEnableSlackPreviewStreaming({
-        mode: "partial",
-        isDirectMessage: true,
+        mode: "off",
       }),
     ).toBe(false);
   });
 
-  it("allows DM preview when the reply is threaded", () => {
+  it("stays on for room messages when streaming mode is enabled", () => {
     expect(
       shouldEnableSlackPreviewStreaming({
         mode: "partial",
-        isDirectMessage: true,
-        threadTs: "1000.1",
       }),
     ).toBe(true);
   });
 
-  it("keeps top-level DMs off even when replyToMode would create a reply thread", () => {
+  it("allows top-level DM draft previews without a reply thread", () => {
+    expect(
+      shouldEnableSlackPreviewStreaming({
+        mode: "partial",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows non-partial draft preview modes", () => {
+    expect(
+      shouldEnableSlackPreviewStreaming({
+        mode: "block",
+      }),
+    ).toBe(true);
+    expect(
+      shouldEnableSlackPreviewStreaming({
+        mode: "progress",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps native streaming thread hints separate from draft preview eligibility", () => {
     const streamThreadHint = resolveSlackStreamingThreadHint({
       replyToMode: "all",
       incomingThreadTs: undefined,
@@ -218,10 +227,8 @@ describe("slack preview streaming eligibility", () => {
     expect(
       shouldEnableSlackPreviewStreaming({
         mode: "partial",
-        isDirectMessage: true,
-        threadTs: undefined,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(streamThreadHint).toBe("1000.4");
   });
 });

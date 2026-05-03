@@ -7,6 +7,10 @@ type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
 type RunBeforeToolCallHookResult = Awaited<ReturnType<RunBeforeToolCallHook>>;
 
+const pluginToolMetaState = vi.hoisted(
+  () => new Map<string, { pluginId: string; optional: boolean }>(),
+);
+
 const hookMocks = vi.hoisted(() => ({
   resolveToolLoopDetectionConfig: vi.fn(() => ({ warnAt: 3 })),
   runBeforeToolCallHook: vi.fn(
@@ -63,7 +67,8 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/tools.js", () => ({
-  getPluginToolMeta: () => undefined,
+  getPluginToolMeta: (tool: { name?: string }) =>
+    typeof tool?.name === "string" ? pluginToolMetaState.get(tool.name) : undefined,
 }));
 
 // Perf: the real tool factory instantiates many tools per request; for these HTTP
@@ -135,6 +140,11 @@ vi.mock("../agents/openclaw-tools.js", () => {
       name: "browser",
       parameters: { type: "object", properties: {} },
       execute: async () => ({ ok: true, result: "browser" }),
+    },
+    {
+      name: "plugin_doctor",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, permissionFlow: true }),
     },
     {
       name: "owner_only_test",
@@ -259,6 +269,8 @@ beforeEach(() => {
   pluginHttpHandlers = [];
   cfg = {};
   lastCreateOpenClawToolsContext = undefined;
+  pluginToolMetaState.clear();
+  pluginToolMetaState.set("plugin_doctor", { pluginId: "test-plugin", optional: true });
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
   hookMocks.runBeforeToolCallHook.mockClear();
@@ -461,6 +473,25 @@ describe("POST /tools/invoke", () => {
 
     expect(res.status).toBe(200);
     expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
+  });
+
+  it("allows the requested plugin tool through Gateway profile filtering", async () => {
+    cfg = {
+      ...cfg,
+      agents: { list: [{ id: "main", default: true }] },
+      tools: { profile: "minimal" },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "plugin_doctor",
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result).toMatchObject({ ok: true, permissionFlow: true });
+    expect(lastCreateOpenClawToolsContext?.pluginToolAllowlist).toEqual(
+      expect.arrayContaining(["plugin_doctor"]),
+    );
   });
 
   it("blocks tool execution when before_tool_call rejects the invoke", async () => {

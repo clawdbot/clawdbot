@@ -7,6 +7,7 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -47,11 +48,12 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
 
 type AcpSpawnModule = typeof import("../acp-spawn.js");
 
-let acpSpawnModulePromise: Promise<AcpSpawnModule> | undefined;
+const acpSpawnModuleLoader = createLazyImportLoader<AcpSpawnModule>(
+  () => import("../acp-spawn.js"),
+);
 
 async function loadAcpSpawnModule(): Promise<AcpSpawnModule> {
-  acpSpawnModulePromise ??= import("../acp-spawn.js");
-  return await acpSpawnModulePromise;
+  return await acpSpawnModuleLoader.load();
 }
 
 function summarizeError(err: unknown): string {

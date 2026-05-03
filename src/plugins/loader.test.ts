@@ -73,11 +73,9 @@ import {
   listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
+  registerMemoryCapability,
   registerMemoryCorpusSupplement,
-  registerMemoryFlushPlanResolver,
   registerMemoryPromptSupplement,
-  registerMemoryPromptSection,
-  registerMemoryRuntime,
   resolveMemoryFlushPlan,
 } from "./memory-state.js";
 import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
@@ -2388,16 +2386,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       search: async () => [],
       get: async () => null,
     });
-    registerMemoryPromptSection(() => ["active memory section"]);
     registerMemoryPromptSupplement("memory-wiki", () => ["active wiki supplement"]);
-    registerMemoryFlushPlanResolver(() => ({
-      softThresholdTokens: 1,
-      forceFlushTranscriptBytes: 2,
-      reserveTokensFloor: 3,
-      prompt: "active",
-      systemPrompt: "active",
-      relativePath: "memory/active.md",
-    }));
     const activeRuntime = {
       async getMemorySearchManager() {
         return { manager: null, error: "active" };
@@ -2406,7 +2395,18 @@ module.exports = { id: "throws-after-import", register() {} };`,
         return { backend: "builtin" as const };
       },
     };
-    registerMemoryRuntime(activeRuntime);
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["active memory section"],
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 2,
+        reserveTokensFloor: 3,
+        prompt: "active",
+        systemPrompt: "active",
+        relativePath: "memory/active.md",
+      }),
+      runtime: activeRuntime,
+    });
     const plugin = writePlugin({
       id: "snapshot-memory",
       filename: "snapshot-memory.cjs",
@@ -3115,6 +3115,45 @@ module.exports = { id: "throws-after-import", register() {} };`,
       config,
     });
 
+    expect((globalThis as Record<string, unknown>)[marker]).toBe(1);
+    delete (globalThis as Record<string, unknown>)[marker];
+  });
+
+  it("reuses a gateway-bindable cache entry for later default-mode loads", () => {
+    useNoBundledPlugins();
+    const marker = "__openclawGatewayBindableCacheRegisterCount";
+    const plugin = writePlugin({
+      id: "gateway-bindable-cache",
+      filename: "gateway-bindable-cache.cjs",
+      body: `module.exports = {
+        id: "gateway-bindable-cache",
+        register() {
+          globalThis.${marker} = (globalThis.${marker} || 0) + 1;
+        },
+      };`,
+    });
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["gateway-bindable-cache"],
+          entries: {
+            "gateway-bindable-cache": { enabled: true },
+          },
+        },
+      },
+    };
+
+    const gatewayBindable = loadOpenClawPlugins({
+      ...options,
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    });
+    const defaultMode = loadOpenClawPlugins(options);
+
+    expect(defaultMode).toBe(gatewayBindable);
     expect((globalThis as Record<string, unknown>)[marker]).toBe(1);
     delete (globalThis as Record<string, unknown>)[marker];
   });
@@ -5170,6 +5209,64 @@ module.exports = {
     ).toBe(true);
   });
 
+  it("prefers built bundled plugin artifacts over source TS when requested", () => {
+    const repoRoot = makeTempDir();
+    const sourceDir = path.join(repoRoot, "extensions", "startup-artifact-test");
+    const runtimeDir = path.join(repoRoot, "dist-runtime", "extensions", "startup-artifact-test");
+    mkdirSafe(sourceDir);
+    mkdirSafe(runtimeDir);
+    fs.writeFileSync(
+      path.join(sourceDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "startup-artifact-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(sourceDir, "index.ts"),
+      'throw new Error("source TS should not load during gateway startup");\n',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(runtimeDir, "index.js"),
+      'module.exports = { id: "startup-artifact-test", register() {} };\n',
+      "utf-8",
+    );
+
+    const registry = withEnv(
+      {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      },
+      () =>
+        loadOpenClawPlugins({
+          cache: false,
+          preferBuiltPluginArtifacts: true,
+          onlyPluginIds: ["startup-artifact-test"],
+          config: {
+            plugins: {
+              allow: ["startup-artifact-test"],
+              entries: {
+                "startup-artifact-test": {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        }),
+    );
+
+    expect(registry.plugins.find((entry) => entry.id === "startup-artifact-test")?.status).toBe(
+      "loaded",
+    );
+  });
+
   it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -6173,6 +6270,74 @@ module.exports = {
             pluginId: plugin.id,
             expectWarning: false,
             expectedSource: plugin.file,
+          };
+        },
+      },
+      {
+        label: "does not warn when install paths resolve through a symlinked state root",
+        loadRegistry: () => {
+          useNoBundledPlugins();
+          const stateDir = makeTempDir();
+          const realHome = path.join(stateDir, "real-home");
+          const linkedHome = path.join(stateDir, "linked-home");
+          mkdirSafe(realHome);
+          fs.symlinkSync(realHome, linkedHome, process.platform === "win32" ? "junction" : "dir");
+
+          const pluginDir = path.join(
+            realHome,
+            ".openclaw",
+            "npm",
+            "node_modules",
+            "@example",
+            "tracked-symlink-install",
+          );
+          mkdirSafe(pluginDir);
+          const plugin = writePlugin({
+            id: "tracked-symlink-install",
+            body: simplePluginBody("tracked-symlink-install"),
+            dir: pluginDir,
+            filename: "index.cjs",
+          });
+          writePersistedInstalledPluginIndexInstallRecordsSync(
+            {
+              [plugin.id]: {
+                source: "npm",
+                spec: "@example/tracked-symlink-install@1.0.0",
+                installPath: path.join(
+                  linkedHome,
+                  ".openclaw",
+                  "npm",
+                  "node_modules",
+                  "@example",
+                  "tracked-symlink-install",
+                ),
+                version: "1.0.0",
+              },
+            },
+            { stateDir },
+          );
+
+          const warnings: string[] = [];
+          const registry = loadOpenClawPlugins({
+            cache: false,
+            logger: createWarningLogger(warnings),
+            env: {
+              ...process.env,
+              OPENCLAW_STATE_DIR: stateDir,
+              OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+            },
+            config: {
+              plugins: {
+                enabled: true,
+              },
+            },
+          });
+
+          return {
+            registry,
+            warnings,
+            pluginId: plugin.id,
+            expectWarning: false,
           };
         },
       },

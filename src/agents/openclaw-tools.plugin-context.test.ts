@@ -109,6 +109,34 @@ describe("openclaw plugin tool context", () => {
     );
   });
 
+  it("uses requester agent override for synthetic embedded session keys", () => {
+    const recallWorkspace = path.join(process.cwd(), "tmp-recall-workspace");
+    const config = {
+      agents: {
+        defaults: { workspace: path.join(process.cwd(), "tmp-default-workspace") },
+        list: [
+          { id: "main", default: true },
+          { id: "recall", workspace: recallWorkspace },
+        ],
+      },
+    } as never;
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config,
+        agentSessionKey: "explicit:user-session:active-memory:abc123",
+        requesterAgentIdOverride: "recall",
+      },
+      resolvedConfig: config,
+    });
+
+    expect(result.context).toEqual(
+      expect.objectContaining({
+        agentId: "recall",
+        workspaceDir: recallWorkspace,
+      }),
+    );
+  });
+
   it("forwards browser session wiring", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {

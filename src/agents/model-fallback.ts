@@ -5,6 +5,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
@@ -181,11 +182,12 @@ type ModelFallbackRunResult<T> = {
 
 type ModelFallbackAuthRuntime = typeof import("./model-fallback-auth.runtime.js");
 
-let modelFallbackAuthRuntimePromise: Promise<ModelFallbackAuthRuntime> | undefined;
+const modelFallbackAuthRuntimeLoader = createLazyImportLoader<ModelFallbackAuthRuntime>(
+  () => import("./model-fallback-auth.runtime.js"),
+);
 
 async function loadModelFallbackAuthRuntime() {
-  modelFallbackAuthRuntimePromise ??= import("./model-fallback-auth.runtime.js");
-  return await modelFallbackAuthRuntimePromise;
+  return await modelFallbackAuthRuntimeLoader.load();
 }
 
 function buildFallbackSuccess<T>(params: {

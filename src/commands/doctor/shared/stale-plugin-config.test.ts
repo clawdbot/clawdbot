@@ -114,6 +114,39 @@ describe("doctor stale plugin config helpers", () => {
     ]);
   });
 
+  it("keeps built-in channel ids in restrictive plugin config", () => {
+    const result = maybeRepairStalePluginConfig({
+      plugins: {
+        allow: ["telegram", "whatsapp", "acpx"],
+        entries: {
+          telegram: { enabled: true },
+          whatsapp: { enabled: true },
+          acpx: { enabled: true },
+        },
+      },
+      channels: {
+        whatsapp: {
+          enabled: true,
+          allowFrom: ["+15555550123"],
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.changes).toEqual([
+      "- plugins.allow: removed 1 stale plugin id (acpx)",
+      "- plugins.entries: removed 1 stale plugin entry (acpx)",
+    ]);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "whatsapp"]);
+    expect(result.config.plugins?.entries).toEqual({
+      telegram: { enabled: true },
+      whatsapp: { enabled: true },
+    });
+    expect(result.config.channels?.whatsapp).toEqual({
+      enabled: true,
+      allowFrom: ["+15555550123"],
+    });
+  });
+
   it("removes stale third-party channel config and dependent channel refs", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {

@@ -2008,6 +2008,65 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
   });
 
+  it("preserves event-loop health sampled by the refresh path", async () => {
+    const eventLoop = {
+      degraded: true,
+      reasons: ["event_loop_delay" as const],
+      intervalMs: 2_000,
+      delayP99Ms: 1_500,
+      delayMaxMs: 1_800,
+      utilization: 0.2,
+      cpuCoreRatio: 0.1,
+    };
+    const replacementEventLoop = {
+      degraded: false,
+      reasons: [],
+      intervalMs: 1,
+      delayP99Ms: 0,
+      delayMaxMs: 0,
+      utilization: 0,
+      cpuCoreRatio: 0,
+    };
+    const fresh = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      eventLoop,
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
+    const getEventLoopHealth = vi.fn(() => replacementEventLoop);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => null,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        getEventLoopHealth,
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(getEventLoopHealth).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ eventLoop }), undefined);
+  });
+
   it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {
     const cached = {
       ok: true,

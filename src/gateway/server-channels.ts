@@ -25,6 +25,7 @@ import {
   normalizeOptionalAccountId,
 } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 export type { ChannelRuntimeSnapshot };
 
@@ -36,6 +37,7 @@ const CHANNEL_RESTART_POLICY: BackoffPolicy = {
 };
 const MAX_RESTART_ATTEMPTS = 10;
 const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
+const CHANNEL_STARTUP_CONCURRENCY = 4;
 
 type ChannelRuntimeStore = {
   aborts: Map<string, AbortController>;
@@ -376,8 +378,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       return;
     }
 
-    await Promise.all(
-      accountIds.map(async (id) => {
+    const startup = await runTasksWithConcurrency({
+      limit: CHANNEL_STARTUP_CONCURRENCY,
+      tasks: accountIds.map((id) => async () => {
         if (store.tasks.has(id)) {
           return;
         }
@@ -617,7 +620,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           }
         }
       }),
-    );
+    });
+    if (startup.hasError) {
+      throw startup.firstError;
+    }
   };
 
   const startChannel = async (channelId: ChannelId, accountId?: string) => {
@@ -696,25 +702,18 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const startChannels = async () => {
-    const pending = [...listChannelPlugins()];
-    const workerCount = Math.min(8, pending.length);
-    await Promise.all(
-      Array.from({ length: workerCount }, async () => {
-        for (;;) {
-          const plugin = pending.shift();
-          if (!plugin) {
-            return;
-          }
-          try {
-            await measureStartup(`channels.${plugin.id}.start`, () => startChannel(plugin.id));
-          } catch (err) {
-            ensureChannelLog(plugin.id).error?.(
-              `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
-            );
-          }
+    await runTasksWithConcurrency({
+      limit: CHANNEL_STARTUP_CONCURRENCY,
+      tasks: [...listChannelPlugins()].map((plugin) => async () => {
+        try {
+          await measureStartup(`channels.${plugin.id}.start`, () => startChannel(plugin.id));
+        } catch (err) {
+          ensureChannelLog(plugin.id).error?.(
+            `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
+          );
         }
       }),
-    );
+    });
   };
 
   const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {

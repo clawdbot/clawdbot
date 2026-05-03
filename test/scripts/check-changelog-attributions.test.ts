@@ -28,10 +28,21 @@ describe("check-changelog-attributions", () => {
   });
 
   it("keeps PR changelog gates on the same attribution policy", () => {
+    const commonLib = readFileSync("scripts/pr-lib/common.sh", "utf8");
     const changelogLib = readFileSync("scripts/pr-lib/changelog.sh", "utf8");
     const gates = readFileSync("scripts/pr-lib/gates.sh", "utf8");
+    const mergeLib = readFileSync("scripts/pr-lib/merge.sh", "utf8");
+    const prepareCore = readFileSync("scripts/pr-lib/prepare-core.sh", "utf8");
 
+    expect(commonLib).toContain("pr_contributor_allows_human_trailers");
+    expect(commonLib).toContain("resolve_contributor_coauthor_email");
     expect(changelogLib).toContain("node scripts/check-changelog-attributions.mjs CHANGELOG.md");
+    expect(changelogLib).toContain("changelog_thanks_required_for_contributor");
+    expect(changelogLib).toContain('"app/"*');
+    expect(changelogLib).toContain('"clawsweeper"');
     expect(gates).toContain("validate_changelog_attribution_policy");
+    expect(prepareCore).toContain("resolve_contributor_coauthor_email");
+    expect(mergeLib).toContain("pr_contributor_allows_human_trailers");
+    expect(mergeLib).toContain("Skipping PR author co-author trailer check for bot/app author");
   });
 });

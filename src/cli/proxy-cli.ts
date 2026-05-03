@@ -1,13 +1,15 @@
 import type { Command } from "commander";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 
 type ProxyCliRuntime = typeof import("./proxy-cli.runtime.js");
 
-let proxyCliRuntimePromise: Promise<ProxyCliRuntime> | undefined;
+const proxyCliRuntimeLoader = createLazyImportLoader<ProxyCliRuntime>(
+  () => import("./proxy-cli.runtime.js"),
+);
 
 async function loadProxyCliRuntime(): Promise<ProxyCliRuntime> {
-  proxyCliRuntimePromise ??= import("./proxy-cli.runtime.js");
-  return await proxyCliRuntimePromise;
+  return await proxyCliRuntimeLoader.load();
 }
 
 function parseOptionalNumber(value: string | undefined): number | undefined {

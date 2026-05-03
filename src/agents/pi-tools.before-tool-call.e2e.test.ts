@@ -181,6 +181,17 @@ describe("before_tool_call loop detection behavior", () => {
     expect(loopEvent?.toolName).toBe(params.toolName);
   }
 
+  function expectToolLoopBlockedResult(result: unknown, expectedReason: string) {
+    expect(result).toMatchObject({
+      content: [{ type: "text", text: expect.stringContaining(expectedReason) }],
+      details: {
+        status: "blocked",
+        deniedReason: "tool-loop",
+        reason: expect.stringContaining(expectedReason),
+      },
+    });
+  }
+
   it("blocks known poll loops when no progress repeats", async () => {
     const { tool, params } = createNoProgressProcessFixture("sess-1");
 
@@ -188,9 +199,8 @@ describe("before_tool_call loop detection behavior", () => {
       await expect(tool.execute(`poll-${i}`, params, undefined, undefined)).resolves.toBeDefined();
     }
 
-    await expect(
-      tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined),
-    ).rejects.toThrow("CRITICAL");
+    const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
+    expectToolLoopBlockedResult(result, "CRITICAL");
   });
 
   it("does nothing when loopDetection.enabled is false", async () => {
@@ -240,9 +250,13 @@ describe("before_tool_call loop detection behavior", () => {
       await expect(tool.execute(`read-${i}`, params, undefined, undefined)).resolves.toBeDefined();
     }
 
-    await expect(
-      tool.execute(`read-${GLOBAL_CIRCUIT_BREAKER_THRESHOLD}`, params, undefined, undefined),
-    ).rejects.toThrow("global circuit breaker");
+    const result = await tool.execute(
+      `read-${GLOBAL_CIRCUIT_BREAKER_THRESHOLD}`,
+      params,
+      undefined,
+      undefined,
+    );
+    expectToolLoopBlockedResult(result, "global circuit breaker");
   });
 
   it("does not carry loop history across run ids", async () => {
@@ -315,14 +329,13 @@ describe("before_tool_call loop detection behavior", () => {
       const { readTool, listTool } = createPingPongTools();
       await runPingPongSequence(readTool, listTool, CRITICAL_THRESHOLD - 1);
 
-      await expect(
-        listTool.execute(
-          `list-${CRITICAL_THRESHOLD - 1}`,
-          { dir: "/workspace" },
-          undefined,
-          undefined,
-        ),
-      ).rejects.toThrow("CRITICAL");
+      const result = await listTool.execute(
+        `list-${CRITICAL_THRESHOLD - 1}`,
+        { dir: "/workspace" },
+        undefined,
+        undefined,
+      );
+      expectToolLoopBlockedResult(result, "CRITICAL");
 
       const loopEvent = emitted.at(-1);
       expectCriticalLoopEvent(loopEvent, {
@@ -365,9 +378,8 @@ describe("before_tool_call loop detection behavior", () => {
         await tool.execute(`poll-${i}`, params, undefined, undefined);
       }
 
-      await expect(
-        tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined),
-      ).rejects.toThrow("CRITICAL");
+      const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
+      expectToolLoopBlockedResult(result, "CRITICAL");
 
       const loopEvent = emitted.at(-1);
       expectCriticalLoopEvent(loopEvent, {

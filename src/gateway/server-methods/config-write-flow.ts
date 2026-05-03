@@ -12,6 +12,7 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { resolveEffectiveSharedGatewayAuth } from "../auth.js";
 import { buildGatewayReloadPlan, resolveGatewayReloadSettings } from "../config-reload.js";
 import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plane-audit.js";
@@ -44,6 +45,16 @@ export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawC
     return prevAuth !== nextAuth;
   }
   return prevAuth.mode !== nextAuth.mode || !isDeepStrictEqual(prevAuth.secret, nextAuth.secret);
+}
+
+export function didActiveSharedGatewayAuthChange(params: {
+  fallbackPrev: OpenClawConfig;
+  next: OpenClawConfig;
+}): boolean {
+  return didSharedGatewayAuthChange(
+    getActiveSecretsRuntimeSnapshot()?.config ?? params.fallbackPrev,
+    params.next,
+  );
 }
 
 function queueSharedGatewayAuthDisconnect(

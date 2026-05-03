@@ -181,8 +181,8 @@ describe("lmstudio plugin", () => {
         compat: {
           supportsUsageInStreaming: true,
           supportsReasoningEffort: true,
-          supportedReasoningEfforts: ["off", "on"],
-          reasoningEffortMap: { off: "off", high: "on" },
+          supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+          reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
         },
         contextWindow: 32768,
         contextTokens: 8192,

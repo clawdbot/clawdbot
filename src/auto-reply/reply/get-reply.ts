@@ -14,6 +14,7 @@ import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
@@ -45,57 +46,53 @@ import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
 
-let sessionResetModelRuntimePromise: Promise<
-  typeof import("./session-reset-model.runtime.js")
-> | null = null;
-let stageSandboxMediaRuntimePromise: Promise<
-  typeof import("./stage-sandbox-media.runtime.js")
-> | null = null;
-let mediaUnderstandingApplyRuntimePromise: Promise<
-  typeof import("../../media-understanding/apply.runtime.js")
-> | null = null;
-let linkUnderstandingApplyRuntimePromise: Promise<
-  typeof import("../../link-understanding/apply.runtime.js")
-> | null = null;
-let commandsCoreRuntimePromise: Promise<typeof import("./commands-core.runtime.js")> | null = null;
+const sessionResetModelRuntimeLoader = createLazyImportLoader(
+  () => import("./session-reset-model.runtime.js"),
+);
+const stageSandboxMediaRuntimeLoader = createLazyImportLoader(
+  () => import("./stage-sandbox-media.runtime.js"),
+);
+const mediaUnderstandingApplyRuntimeLoader = createLazyImportLoader(
+  () => import("../../media-understanding/apply.runtime.js"),
+);
+const linkUnderstandingApplyRuntimeLoader = createLazyImportLoader(
+  () => import("../../link-understanding/apply.runtime.js"),
+);
+const commandsCoreRuntimeLoader = createLazyImportLoader(
+  () => import("./commands-core.runtime.js"),
+);
 
 function loadSessionResetModelRuntime() {
-  sessionResetModelRuntimePromise ??= import("./session-reset-model.runtime.js");
-  return sessionResetModelRuntimePromise;
+  return sessionResetModelRuntimeLoader.load();
 }
 
 function loadStageSandboxMediaRuntime() {
-  stageSandboxMediaRuntimePromise ??= import("./stage-sandbox-media.runtime.js");
-  return stageSandboxMediaRuntimePromise;
+  return stageSandboxMediaRuntimeLoader.load();
 }
 
 function loadMediaUnderstandingApplyRuntime() {
-  mediaUnderstandingApplyRuntimePromise ??= import("../../media-understanding/apply.runtime.js");
-  return mediaUnderstandingApplyRuntimePromise;
+  return mediaUnderstandingApplyRuntimeLoader.load();
 }
 
 function loadLinkUnderstandingApplyRuntime() {
-  linkUnderstandingApplyRuntimePromise ??= import("../../link-understanding/apply.runtime.js");
-  return linkUnderstandingApplyRuntimePromise;
+  return linkUnderstandingApplyRuntimeLoader.load();
 }
 
 function loadCommandsCoreRuntime() {
-  commandsCoreRuntimePromise ??= import("./commands-core.runtime.js");
-  return commandsCoreRuntimePromise;
+  return commandsCoreRuntimeLoader.load();
 }
 
-let hookRunnerGlobalPromise: Promise<typeof import("../../plugins/hook-runner-global.js")> | null =
-  null;
-let originRoutingPromise: Promise<typeof import("./origin-routing.js")> | null = null;
+const hookRunnerGlobalLoader = createLazyImportLoader(
+  () => import("../../plugins/hook-runner-global.js"),
+);
+const originRoutingLoader = createLazyImportLoader(() => import("./origin-routing.js"));
 
 function loadHookRunnerGlobal() {
-  hookRunnerGlobalPromise ??= import("../../plugins/hook-runner-global.js");
-  return hookRunnerGlobalPromise;
+  return hookRunnerGlobalLoader.load();
 }
 
 function loadOriginRouting() {
-  originRoutingPromise ??= import("./origin-routing.js");
-  return originRoutingPromise;
+  return originRoutingLoader.load();
 }
 
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
@@ -145,7 +142,7 @@ async function applyMediaUnderstandingIfNeeded(params: {
     await applyMediaUnderstanding(params);
     return true;
   } catch (err) {
-    mediaUnderstandingApplyRuntimePromise = null;
+    mediaUnderstandingApplyRuntimeLoader.clear();
     logVerbose(
       `media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );
@@ -165,7 +162,7 @@ async function applyLinkUnderstandingIfNeeded(params: {
     await applyLinkUnderstanding(params);
     return true;
   } catch (err) {
-    linkUnderstandingApplyRuntimePromise = null;
+    linkUnderstandingApplyRuntimeLoader.clear();
     logVerbose(
       `link understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );

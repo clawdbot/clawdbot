@@ -39,6 +39,7 @@ export function resolveGatewayScopedTools(params: {
   excludeToolNames?: Iterable<string>;
   disablePluginTools?: boolean;
   senderIsOwner?: boolean;
+  gatewayRequestedTools?: string[];
 }) {
   const {
     agentId,
@@ -53,11 +54,15 @@ export function resolveGatewayScopedTools(params: {
   } = resolveEffectiveToolPolicy({ config: params.cfg, sessionKey: params.sessionKey });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
-  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
-  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
-    providerProfilePolicy,
-    providerProfileAlsoAllow,
-  );
+  const gatewayRequestedTools = params.gatewayRequestedTools ?? [];
+  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
+    ...(profileAlsoAllow ?? []),
+    ...gatewayRequestedTools,
+  ]);
+  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(providerProfilePolicy, [
+    ...(providerProfileAlsoAllow ?? []),
+    ...gatewayRequestedTools,
+  ]);
   const groupPolicy = resolveGroupToolPolicy({
     config: params.cfg,
     sessionKey: params.sessionKey,
@@ -101,6 +106,7 @@ export function resolveGatewayScopedTools(params: {
       agentProviderPolicy,
       groupPolicy,
       subagentPolicy,
+      gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
     ]),
   });
 

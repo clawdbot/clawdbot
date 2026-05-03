@@ -13,10 +13,13 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
-import { resolvePluginTools } from "../plugins/tools.js";
+import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
 function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
+  ensureStandalonePluginToolRegistryLoaded({
+    context: { config },
+  });
   return resolvePluginTools({
     context: { config },
     suppressNameConflicts: true,

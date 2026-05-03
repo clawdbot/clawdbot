@@ -8,7 +8,7 @@ import type {
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
   maybeCompactAgentHarnessSession,
-  runAgentHarnessAttemptWithFallback,
+  runAgentHarnessAttempt,
   selectAgentHarness,
 } from "./selection.js";
 import type { AgentHarness } from "./types.js";
@@ -25,7 +25,6 @@ vi.mock("./builtin-pi.js", () => ({
 }));
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
-const originalHarnessFallback = process.env.OPENCLAW_AGENT_HARNESS_FALLBACK;
 
 afterEach(() => {
   clearAgentHarnesses();
@@ -34,11 +33,6 @@ afterEach(() => {
     delete process.env.OPENCLAW_AGENT_RUNTIME;
   } else {
     process.env.OPENCLAW_AGENT_RUNTIME = originalRuntime;
-  }
-  if (originalHarnessFallback == null) {
-    delete process.env.OPENCLAW_AGENT_HARNESS_FALLBACK;
-  } else {
-    process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = originalHarnessFallback;
   }
 });
 
@@ -68,6 +62,7 @@ function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
     timedOut: false,
     idleTimedOut: false,
     timedOutDuringCompaction: false,
+    timedOutDuringToolExecution: false,
     promptError: null,
     promptErrorSource: null,
     sessionIdUsed,
@@ -100,39 +95,18 @@ function registerFailingCodexHarness(): void {
   );
 }
 
-describe("runAgentHarnessAttemptWithFallback", () => {
+describe("runAgentHarnessAttempt", () => {
   it("fails when a forced plugin harness is unavailable and fallback is omitted", async () => {
     process.env.OPENCLAW_AGENT_RUNTIME = "codex";
 
-    await expect(runAgentHarnessAttemptWithFallback(createAttemptParams())).rejects.toThrow(
-      'Requested agent harness "codex" is not registered and PI fallback is disabled.',
+    await expect(runAgentHarnessAttempt(createAttemptParams())).rejects.toThrow(
+      'Requested agent harness "codex" is not registered.',
     );
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 
-  it("falls back to the PI harness for a forced plugin harness only when explicitly configured", async () => {
-    process.env.OPENCLAW_AGENT_RUNTIME = "codex";
-    process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "pi";
-
-    const result = await runAgentHarnessAttemptWithFallback(createAttemptParams());
-
-    expect(result.sessionIdUsed).toBe("pi");
-    expect(piRunAttempt).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not inherit config fallback when env forces a plugin harness", async () => {
-    process.env.OPENCLAW_AGENT_RUNTIME = "codex";
-
-    await expect(
-      runAgentHarnessAttemptWithFallback(
-        createAttemptParams({ agents: { defaults: { agentRuntime: { fallback: "pi" } } } }),
-      ),
-    ).rejects.toThrow('Requested agent harness "codex" is not registered');
-    expect(piRunAttempt).not.toHaveBeenCalled();
-  });
-
   it("falls back to the PI harness in auto mode when no plugin harness matches", async () => {
-    const result = await runAgentHarnessAttemptWithFallback(
+    const result = await runAgentHarnessAttempt(
       createAttemptParams({ agents: { defaults: { agentRuntime: { id: "auto" } } } }),
     );
 
@@ -144,7 +118,7 @@ describe("runAgentHarnessAttemptWithFallback", () => {
     registerFailingCodexHarness();
 
     await expect(
-      runAgentHarnessAttemptWithFallback(
+      runAgentHarnessAttempt(
         createAttemptParams({ agents: { defaults: { agentRuntime: { id: "auto" } } } }),
       ),
     ).rejects.toThrow("codex startup failed");
@@ -154,7 +128,7 @@ describe("runAgentHarnessAttemptWithFallback", () => {
   it("uses PI by default even when plugin harnesses would support the model", async () => {
     registerFailingCodexHarness();
 
-    const result = await runAgentHarnessAttemptWithFallback(createAttemptParams());
+    const result = await runAgentHarnessAttempt(createAttemptParams());
 
     expect(result.sessionIdUsed).toBe("pi");
     expect(piRunAttempt).toHaveBeenCalledTimes(1);
@@ -164,7 +138,7 @@ describe("runAgentHarnessAttemptWithFallback", () => {
     registerFailingCodexHarness();
 
     await expect(
-      runAgentHarnessAttemptWithFallback(
+      runAgentHarnessAttempt(
         createAttemptParams({ agents: { defaults: { agentRuntime: { id: "codex" } } } }),
       ),
     ).rejects.toThrow("codex startup failed");
@@ -188,7 +162,7 @@ describe("runAgentHarnessAttemptWithFallback", () => {
     const params = createAttemptParams({
       agents: { defaults: { agentRuntime: { id: "auto" } } },
     });
-    const result = await runAgentHarnessAttemptWithFallback(params);
+    const result = await runAgentHarnessAttempt(params);
 
     expect(classify).toHaveBeenCalledWith(
       expect.objectContaining({ sessionIdUsed: "codex" }),
@@ -200,45 +174,21 @@ describe("runAgentHarnessAttemptWithFallback", () => {
     });
   });
 
-  it("honors env fallback override over config fallback", async () => {
-    process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "none";
-
-    await expect(
-      runAgentHarnessAttemptWithFallback(
-        createAttemptParams({
-          agents: { defaults: { agentRuntime: { id: "auto", fallback: "pi" } } },
-        }),
-      ),
-    ).rejects.toThrow("PI fallback is disabled");
-    expect(piRunAttempt).not.toHaveBeenCalled();
-  });
-
   it("fails for config-forced plugin harnesses when fallback is omitted", async () => {
     await expect(
-      runAgentHarnessAttemptWithFallback(
+      runAgentHarnessAttempt(
         createAttemptParams({ agents: { defaults: { agentRuntime: { id: "codex" } } } }),
       ),
     ).rejects.toThrow('Requested agent harness "codex" is not registered');
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 
-  it("allows config-forced plugin harnesses to opt into PI fallback", async () => {
-    const result = await runAgentHarnessAttemptWithFallback(
-      createAttemptParams({
-        agents: { defaults: { agentRuntime: { id: "codex", fallback: "pi" } } },
-      }),
-    );
-
-    expect(result.sessionIdUsed).toBe("pi");
-    expect(piRunAttempt).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not inherit default fallback when an agent forces a plugin harness", async () => {
+  it("does not let a strict agent plugin runtime fall back to PI", async () => {
     await expect(
-      runAgentHarnessAttemptWithFallback({
+      runAgentHarnessAttempt({
         ...createAttemptParams({
           agents: {
-            defaults: { agentRuntime: { fallback: "pi" } },
+            defaults: { agentRuntime: { id: "auto" } },
             list: [{ id: "strict", agentRuntime: { id: "codex" } }],
           },
         }),
@@ -246,21 +196,6 @@ describe("runAgentHarnessAttemptWithFallback", () => {
       }),
     ).rejects.toThrow('Requested agent harness "codex" is not registered');
     expect(piRunAttempt).not.toHaveBeenCalled();
-  });
-
-  it("lets an agent-forced plugin harness opt into PI fallback", async () => {
-    const result = await runAgentHarnessAttemptWithFallback({
-      ...createAttemptParams({
-        agents: {
-          defaults: { agentRuntime: { fallback: "none" } },
-          list: [{ id: "strict", agentRuntime: { id: "codex", fallback: "pi" } }],
-        },
-      }),
-      sessionKey: "agent:strict:session-1",
-    });
-
-    expect(result.sessionIdUsed).toBe("pi");
-    expect(piRunAttempt).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -357,26 +292,13 @@ describe("selectAgentHarness", () => {
     expect(supports).not.toHaveBeenCalled();
   });
 
-  it("fails instead of choosing PI when no plugin harness matches and fallback is none", () => {
-    expect(() =>
-      selectAgentHarness({
-        provider: "anthropic",
-        modelId: "sonnet-4.6",
-        config: {
-          agents: { defaults: { agentRuntime: { id: "auto", fallback: "none" } } },
-        },
-      }),
-    ).toThrow("PI fallback is disabled");
-    expect(piRunAttempt).not.toHaveBeenCalled();
-  });
-
   it("allows per-agent runtime policy overrides", () => {
     const config: OpenClawConfig = {
       agents: {
-        defaults: { agentRuntime: { fallback: "pi" } },
+        defaults: { agentRuntime: { id: "auto" } },
         list: [
           { id: "main", default: true },
-          { id: "strict", agentRuntime: { id: "auto", fallback: "none" } },
+          { id: "strict", agentRuntime: { id: "codex" } },
         ],
       },
     };
@@ -388,7 +310,7 @@ describe("selectAgentHarness", () => {
         config,
         sessionKey: "agent:strict:session-1",
       }),
-    ).toThrow("PI fallback is disabled");
+    ).toThrow('Requested agent harness "codex" is not registered');
     expect(selectAgentHarness({ provider: "anthropic", modelId: "sonnet-4.6", config }).id).toBe(
       "pi",
     );
@@ -398,25 +320,25 @@ describe("selectAgentHarness", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
-          agentRuntime: { id: "auto", fallback: "none" },
+          agentRuntime: { id: "auto" },
         },
       },
     };
 
-    expect(() =>
+    expect(
       selectAgentHarness({
         provider: "anthropic",
         modelId: "sonnet-4.6",
         config,
-      }),
-    ).toThrow("PI fallback is disabled");
+      }).id,
+    ).toBe("pi");
   });
 
   it("does not treat CLI runtime aliases as embedded harness ids", async () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
-          agentRuntime: { id: "claude-cli", fallback: "none" },
+          agentRuntime: { id: "claude-cli" },
         },
       },
     };
@@ -424,7 +346,7 @@ describe("selectAgentHarness", () => {
     expect(selectAgentHarness({ provider: "openai", modelId: "gpt-5.4", config }).id).toBe("pi");
 
     await expect(
-      runAgentHarnessAttemptWithFallback({
+      runAgentHarnessAttempt({
         ...createAttemptParams(config),
         provider: "openai",
         modelId: "gpt-5.4",

@@ -7,6 +7,14 @@ type BundledLookup = (params: {
   value: string;
 }) => BundledPluginSource | undefined;
 
+type OfficialExternalPluginLookup = (pluginId: string) =>
+  | {
+      pluginId: string;
+      npmSpec?: string;
+      expectedIntegrity?: string;
+    }
+  | undefined;
+
 function isBareNpmPackageName(spec: string): boolean {
   const trimmed = spec.trim();
   return /^[a-z0-9][a-z0-9-._~]*$/.test(trimmed);
@@ -62,6 +70,25 @@ export function resolveBundledInstallPlanBeforeNpm(params: {
   return {
     bundledSource,
     warning: `Using bundled plugin "${bundledSource.pluginId}" from ${shortenHomePath(bundledSource.localPath)} for bare install spec "${params.rawSpec}". To install an npm package with the same name, use a scoped package name (for example @scope/${params.rawSpec}).`,
+  };
+}
+
+export function resolveOfficialExternalInstallPlanBeforeNpm(params: {
+  rawSpec: string;
+  findOfficialExternalPlugin: OfficialExternalPluginLookup;
+}): { pluginId: string; npmSpec: string; expectedIntegrity?: string } | null {
+  if (!isBareNpmPackageName(params.rawSpec)) {
+    return null;
+  }
+  const entry = params.findOfficialExternalPlugin(params.rawSpec);
+  const npmSpec = entry?.npmSpec?.trim();
+  if (!entry?.pluginId || !npmSpec) {
+    return null;
+  }
+  return {
+    pluginId: entry.pluginId,
+    npmSpec,
+    ...(entry.expectedIntegrity ? { expectedIntegrity: entry.expectedIntegrity } : {}),
   };
 }
 

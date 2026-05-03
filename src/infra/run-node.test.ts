@@ -448,6 +448,55 @@ describe("run-node script", () => {
     });
   });
 
+  it("adds Node CPU profiling flags to the launched OpenClaw child when requested", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+      const profileDir = path.join(tmp, ".artifacts", "profiles");
+      const spawnCalls: Array<{ args: string[]; env: Record<string, string | undefined> }> = [];
+      const spawn = (_cmd: string, args: string[], options?: unknown) => {
+        const opts = options as { env?: NodeJS.ProcessEnv } | undefined;
+        spawnCalls.push({ args, env: { ...opts?.env } });
+        return createExitedProcess(0);
+      };
+      const { spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+          OPENCLAW_RUN_NODE_CPU_PROF_DIR: ".artifacts/profiles",
+        },
+        spawn,
+        spawnSync,
+        execPath: process.execPath,
+        platform: process.platform,
+        process: createFakeProcess(),
+      });
+
+      expect(exitCode).toBe(0);
+      const childArgs = spawnCalls.at(-1)?.args ?? [];
+      expect(childArgs[0]).toBe("--cpu-prof");
+      expect(childArgs[1]).toBe(`--cpu-prof-dir=${profileDir}`);
+      expect(childArgs[2]).toMatch(
+        /^--cpu-prof-name=openclaw-status-4242-\d{4}-\d{2}-\d{2}T.*\.cpuprofile$/,
+      );
+      expect(childArgs.slice(3)).toEqual(["openclaw.mjs", "status"]);
+      expect(spawnCalls.at(-1)?.env.OPENCLAW_RUN_NODE_CPU_PROF_DIR).toBe(profileDir);
+      expect(fsSync.existsSync(profileDir)).toBe(true);
+    });
+  });
+
   it("surfaces generic output log stream errors", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp);

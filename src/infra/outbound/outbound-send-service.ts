@@ -159,6 +159,7 @@ export async function executeSendAction(params: {
         text: mirrorText,
         mediaUrls: mirrorMediaUrls,
         idempotencyKey: params.ctx.mirror.idempotencyKey,
+        config: params.ctx.cfg,
       });
     },
   });

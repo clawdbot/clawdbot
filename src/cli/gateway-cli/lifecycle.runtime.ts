@@ -10,6 +10,7 @@ export {
 } from "../../infra/process-respawn.js";
 export {
   resolveGatewayRestartDeferralTimeoutMs,
+  consumeGatewayRestartIntentPayloadSync,
   consumeGatewayRestartIntentSync,
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
@@ -27,4 +28,5 @@ export {
   resetAllLanes,
   waitForActiveTasks,
 } from "../../process/command-queue.js";
+export { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
 export { reloadTaskRegistryFromStore } from "../../tasks/runtime-internal.js";

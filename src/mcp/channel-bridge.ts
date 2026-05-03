@@ -18,6 +18,7 @@ import type {
   ConversationDescriptor,
   PendingApproval,
   QueueEvent,
+  SessionDescribeResult,
   SessionListResult,
   SessionMessagePayload,
   WaitFilter,
@@ -206,10 +207,13 @@ export class OpenClawChannelBridge {
     if (!normalizedSessionKey) {
       return null;
     }
-    const conversations = await this.listConversations({ limit: 500, includeLastMessage: true });
-    return (
-      conversations.find((conversation) => conversation.sessionKey === normalizedSessionKey) ?? null
-    );
+    await this.waitUntilReady();
+    const response: SessionDescribeResult = await this.requestGateway("sessions.describe", {
+      key: normalizedSessionKey,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+    });
+    return response.session ? toConversation(response.session) : null;
   }
 
   async readMessages(

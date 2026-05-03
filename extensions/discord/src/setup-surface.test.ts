@@ -94,3 +94,44 @@ describe("discordSetupWizard.status", () => {
     expect(configured).toBe(false);
   });
 });
+
+describe("discordSetupWizard.groupAccess", () => {
+  it("writes resolved Discord channel rows to their selected guild and channel", () => {
+    const next = discordSetupWizard.groupAccess?.applyAllowlist?.({
+      cfg: {
+        channels: {
+          discord: {
+            guilds: {
+              existing: {
+                channels: {
+                  keep: { enabled: true },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "default",
+      resolved: [
+        {
+          input: "OpenClaw/#triage",
+          resolved: true,
+          guildId: "guild-1",
+          channelId: "channel-1",
+        },
+        {
+          input: "missing",
+          resolved: false,
+        },
+      ],
+    });
+
+    expect(next?.channels?.discord?.guilds?.["guild-1"]?.channels?.["channel-1"]).toEqual({
+      enabled: true,
+    });
+    expect(next?.channels?.discord?.guilds?.["*"]).toBeUndefined();
+    expect(next?.channels?.discord?.guilds?.existing?.channels?.keep).toEqual({
+      enabled: true,
+    });
+  });
+});

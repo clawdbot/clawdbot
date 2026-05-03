@@ -744,8 +744,35 @@ function isBuiltInChannelAlreadyEnabled(cfg: OpenClawConfig, channelId: string):
   );
 }
 
-function registerPluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
-  const builtInChannelId = normalizeChatChannelId(pluginId);
+function resolveAutoEnableChannelId(params: {
+  entry: PluginAutoEnableCandidate;
+  manifestRegistry: PluginManifestRegistry;
+}): string | null {
+  const builtInChannelId = normalizeChatChannelId(params.entry.pluginId);
+  if (builtInChannelId) {
+    return builtInChannelId;
+  }
+  if (params.entry.kind !== "channel-configured") {
+    return null;
+  }
+  const plugin = params.manifestRegistry.plugins.find(
+    (record) => record.id === params.entry.pluginId,
+  );
+  if (plugin?.origin !== "bundled") {
+    return null;
+  }
+  const channelId = normalizeManifestChannelId(params.entry.channelId);
+  return (plugin.channels ?? []).some((id) => normalizeManifestChannelId(id) === channelId)
+    ? channelId
+    : null;
+}
+
+function registerPluginEntry(
+  cfg: OpenClawConfig,
+  entry: PluginAutoEnableCandidate,
+  manifestRegistry: PluginManifestRegistry,
+): OpenClawConfig {
+  const builtInChannelId = resolveAutoEnableChannelId({ entry, manifestRegistry });
   if (builtInChannelId) {
     const channels = cfg.channels as Record<string, unknown> | undefined;
     const existing = channels?.[builtInChannelId];
@@ -771,8 +798,8 @@ function registerPluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawCon
       ...cfg.plugins,
       entries: {
         ...cfg.plugins?.entries,
-        [pluginId]: {
-          ...(cfg.plugins?.entries?.[pluginId] as Record<string, unknown> | undefined),
+        [entry.pluginId]: {
+          ...(cfg.plugins?.entries?.[entry.pluginId] as Record<string, unknown> | undefined),
           enabled: true,
         },
       },
@@ -838,11 +865,12 @@ function resolveChannelAutoEnableDisplayLabel(
   manifestRegistry: PluginManifestRegistry,
 ): string | undefined {
   const builtInChannelId = normalizeChatChannelId(entry.channelId);
-  if (builtInChannelId) {
-    return getChatChannelMeta(builtInChannelId)?.label;
-  }
   const plugin = manifestRegistry.plugins.find((record) => record.id === entry.pluginId);
-  return plugin?.channelConfigs?.[entry.channelId]?.label ?? plugin?.channelCatalogMeta?.label;
+  return (
+    (builtInChannelId ? getChatChannelMeta(builtInChannelId)?.label : undefined) ??
+    plugin?.channelConfigs?.[entry.channelId]?.label ??
+    plugin?.channelCatalogMeta?.label
+  );
 }
 
 function formatAutoEnableChange(
@@ -891,7 +919,10 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
   const preferOverCache = new Map<string, string[]>();
 
   for (const entry of params.candidates) {
-    const builtInChannelId = normalizeChatChannelId(entry.pluginId);
+    const builtInChannelId = resolveAutoEnableChannelId({
+      entry,
+      manifestRegistry: params.manifestRegistry,
+    });
     if (isPluginDenied(next, entry.pluginId) || isPluginExplicitlyDisabled(next, entry.pluginId)) {
       continue;
     }
@@ -926,7 +957,7 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
       continue;
     }
 
-    next = registerPluginEntry(next, entry.pluginId);
+    next = registerPluginEntry(next, entry, params.manifestRegistry);
     next = ensurePluginAllowlisted(next, entry.pluginId);
     const reason = resolvePluginAutoEnableCandidateReason(entry);
     autoEnabledReasons.set(entry.pluginId, [

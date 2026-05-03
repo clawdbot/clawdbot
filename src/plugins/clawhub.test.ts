@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const parseClawHubPluginSpecMock = vi.fn();
 const fetchClawHubPackageDetailMock = vi.fn();
+const fetchClawHubPackageArtifactMock = vi.fn();
 const fetchClawHubPackageVersionMock = vi.fn();
 const downloadClawHubPackageArchiveMock = vi.fn();
 const archiveCleanupMock = vi.fn();
@@ -21,6 +22,7 @@ vi.mock("../infra/clawhub.js", async () => {
     ...actual,
     parseClawHubPluginSpec: (...args: unknown[]) => parseClawHubPluginSpecMock(...args),
     fetchClawHubPackageDetail: (...args: unknown[]) => fetchClawHubPackageDetailMock(...args),
+    fetchClawHubPackageArtifact: (...args: unknown[]) => fetchClawHubPackageArtifactMock(...args),
     fetchClawHubPackageVersion: (...args: unknown[]) => fetchClawHubPackageVersionMock(...args),
     downloadClawHubPackageArchive: (...args: unknown[]) =>
       downloadClawHubPackageArchiveMock(...args),
@@ -57,8 +59,6 @@ const DEMO_CLAWPACK_SHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const DEMO_CLAWPACK_INTEGRITY = `sha256-${Buffer.from(DEMO_CLAWPACK_SHA256, "hex").toString(
   "base64",
 )}`;
-const DEMO_CLAWPACK_MANIFEST_SHA256 =
-  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const tempDirs: string[] = [];
 
 function sha256Hex(value: string): string {
@@ -145,6 +145,12 @@ function expectClawHubInstallFlow(params: {
       version: params.version,
     }),
   );
+  expect(fetchClawHubPackageArtifactMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      name: "demo",
+      version: params.version,
+    }),
+  );
   expect(installPluginFromArchiveMock).toHaveBeenCalledWith(
     expect.objectContaining({
       archivePath: params.archivePath,
@@ -177,6 +183,7 @@ describe("installPluginFromClawHub", () => {
   beforeEach(() => {
     parseClawHubPluginSpecMock.mockReset();
     fetchClawHubPackageDetailMock.mockReset();
+    fetchClawHubPackageArtifactMock.mockReset();
     fetchClawHubPackageVersionMock.mockReset();
     downloadClawHubPackageArchiveMock.mockReset();
     archiveCleanupMock.mockReset();
@@ -213,6 +220,9 @@ describe("installPluginFromClawHub", () => {
         },
       },
     });
+    fetchClawHubPackageArtifactMock.mockImplementation((params) =>
+      fetchClawHubPackageVersionMock(params),
+    );
     downloadClawHubPackageArchiveMock.mockResolvedValue({
       archivePath: "/tmp/clawhub-demo/archive.zip",
       integrity: DEMO_ARCHIVE_INTEGRITY,
@@ -336,29 +346,26 @@ describe("installPluginFromClawHub", () => {
           pluginApiRange: ">=2026.3.22",
           minGatewayVersion: "2026.3.0",
         },
-        clawpack: {
-          available: true,
-          specVersion: 1,
-          format: "clawpack.zip",
+        artifact: {
+          kind: "npm-pack",
+          format: "tgz",
           sha256: DEMO_CLAWPACK_SHA256,
           size: 4096,
-          fileCount: 7,
-          manifestSha256: DEMO_CLAWPACK_MANIFEST_SHA256,
-          builtAt: 1774200000000,
-          buildVersion: "2026.3.22",
-          hostTargets: [],
-          environment: null,
-          runtimeBundles: [],
+          npmIntegrity: "sha512-clawpack",
+          npmShasum: "1".repeat(40),
+          npmTarballName: "demo-2026.3.22.tgz",
         },
       },
     });
     downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
-      archivePath: "/tmp/clawhub-demo/clawpack.zip",
+      archivePath: "/tmp/clawhub-demo/demo-2026.3.22.tgz",
       integrity: DEMO_CLAWPACK_INTEGRITY,
       sha256Hex: DEMO_CLAWPACK_SHA256,
       artifact: "clawpack",
       clawpackHeaderSha256: DEMO_CLAWPACK_SHA256,
-      clawpackHeaderSpecVersion: 1,
+      npmIntegrity: "sha512-clawpack",
+      npmShasum: "1".repeat(40),
+      npmTarballName: "demo-2026.3.22.tgz",
       cleanup: archiveCleanupMock,
     });
 
@@ -371,12 +378,153 @@ describe("installPluginFromClawHub", () => {
       ok: true,
       clawhub: {
         integrity: DEMO_CLAWPACK_INTEGRITY,
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        npmIntegrity: "sha512-clawpack",
+        npmShasum: "1".repeat(40),
+        npmTarballName: "demo-2026.3.22.tgz",
         clawpackSha256: DEMO_CLAWPACK_SHA256,
-        clawpackSpecVersion: 1,
-        clawpackManifestSha256: DEMO_CLAWPACK_MANIFEST_SHA256,
         clawpackSize: 4096,
       },
     });
+    expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        artifact: "clawpack",
+        name: "demo",
+        version: "2026.3.22",
+      }),
+    );
+  });
+
+  it("uses the artifact resolver response as the install decision", async () => {
+    fetchClawHubPackageVersionMock.mockClear();
+    fetchClawHubPackageArtifactMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+      },
+      version: {
+        version: "2026.3.22",
+        compatibility: {
+          pluginApiRange: ">=2026.3.22",
+          minGatewayVersion: "2026.3.0",
+        },
+      },
+      artifact: {
+        source: "clawhub",
+        artifactKind: "npm-pack",
+        packageName: "demo",
+        version: "2026.3.22",
+        artifactSha256: DEMO_CLAWPACK_SHA256,
+        npmIntegrity: "sha512-clawpack",
+        npmShasum: "1".repeat(40),
+      },
+    });
+    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
+      archivePath: "/tmp/clawhub-demo/demo-2026.3.22.tgz",
+      integrity: DEMO_CLAWPACK_INTEGRITY,
+      sha256Hex: DEMO_CLAWPACK_SHA256,
+      artifact: "clawpack",
+      clawpackHeaderSha256: DEMO_CLAWPACK_SHA256,
+      npmIntegrity: "sha512-clawpack",
+      npmShasum: "1".repeat(40),
+      cleanup: archiveCleanupMock,
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      clawhub: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        npmIntegrity: "sha512-clawpack",
+        npmShasum: "1".repeat(40),
+        clawpackSha256: DEMO_CLAWPACK_SHA256,
+      },
+    });
+    expect(fetchClawHubPackageArtifactMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "demo",
+        version: "2026.3.22",
+      }),
+    );
+    expect(fetchClawHubPackageVersionMock).not.toHaveBeenCalled();
+    expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        artifact: "clawpack",
+        name: "demo",
+        version: "2026.3.22",
+      }),
+    );
+  });
+
+  it("falls back to version metadata when the ClawHub artifact resolver route is missing", async () => {
+    fetchClawHubPackageArtifactMock.mockRejectedValueOnce(
+      new ClawHubRequestError({
+        path: "/api/v1/packages/demo/versions/2026.3.22/artifact",
+        status: 404,
+        body: "Not Found",
+      }),
+    );
+    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+      },
+      version: {
+        version: "2026.3.22",
+        createdAt: 0,
+        changelog: "",
+        compatibility: {
+          pluginApiRange: ">=2026.3.22",
+          minGatewayVersion: "2026.3.0",
+        },
+        artifact: {
+          kind: "npm-pack",
+          format: "tgz",
+          sha256: DEMO_CLAWPACK_SHA256,
+          size: 4096,
+          npmIntegrity: "sha512-clawpack",
+          npmShasum: "1".repeat(40),
+        },
+      },
+    });
+    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
+      archivePath: "/tmp/clawhub-demo/demo-2026.3.22.tgz",
+      integrity: DEMO_CLAWPACK_INTEGRITY,
+      sha256Hex: DEMO_CLAWPACK_SHA256,
+      artifact: "clawpack",
+      clawpackHeaderSha256: DEMO_CLAWPACK_SHA256,
+      npmIntegrity: "sha512-clawpack",
+      npmShasum: "1".repeat(40),
+      cleanup: archiveCleanupMock,
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      clawhub: {
+        artifactKind: "npm-pack",
+        npmIntegrity: "sha512-clawpack",
+        clawpackSha256: DEMO_CLAWPACK_SHA256,
+      },
+    });
+    expect(fetchClawHubPackageVersionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "demo",
+        version: "2026.3.22",
+      }),
+    );
     expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledWith(
       expect.objectContaining({
         artifact: "clawpack",
@@ -396,23 +544,20 @@ describe("installPluginFromClawHub", () => {
           pluginApiRange: ">=2026.3.22",
           minGatewayVersion: "2026.3.0",
         },
-        clawpack: {
-          available: true,
-          specVersion: 1,
-          format: "clawpack.zip",
+        artifact: {
+          kind: "npm-pack",
+          format: "tgz",
           sha256: DEMO_CLAWPACK_SHA256,
           size: 4096,
-          manifestSha256: DEMO_CLAWPACK_MANIFEST_SHA256,
         },
       },
     });
     downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
-      archivePath: "/tmp/clawhub-demo/clawpack.zip",
+      archivePath: "/tmp/clawhub-demo/demo-2026.3.22.tgz",
       integrity: DEMO_CLAWPACK_INTEGRITY,
       sha256Hex: DEMO_CLAWPACK_SHA256,
       artifact: "clawpack",
       clawpackHeaderSha256: DEMO_CLAWPACK_SHA256,
-      clawpackHeaderSpecVersion: 1,
       cleanup: archiveCleanupMock,
     });
 
@@ -435,7 +580,7 @@ describe("installPluginFromClawHub", () => {
     );
     expect(installPluginFromArchiveMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        archivePath: "/tmp/clawhub-demo/clawpack.zip",
+        archivePath: "/tmp/clawhub-demo/demo-2026.3.22.tgz",
       }),
     );
   });
@@ -451,16 +596,15 @@ describe("installPluginFromClawHub", () => {
           pluginApiRange: ">=2026.3.22",
           minGatewayVersion: "2026.3.0",
         },
-        clawpack: {
-          available: true,
-          specVersion: 1,
-          format: "clawpack.zip",
+        artifact: {
+          kind: "npm-pack",
+          format: "tgz",
           sha256: DEMO_CLAWPACK_SHA256,
         },
       },
     });
     downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
-      archivePath: "/tmp/clawhub-demo/clawpack.zip",
+      archivePath: "/tmp/clawhub-demo/demo-2026.3.22.tgz",
       integrity: `sha256-${Buffer.from(mismatchedSha256, "hex").toString("base64")}`,
       sha256Hex: mismatchedSha256,
       artifact: "clawpack",
@@ -482,6 +626,49 @@ describe("installPluginFromClawHub", () => {
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
+  it("points explicit ClawHub ClawPack download failures at npm during launch rollout", async () => {
+    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.3.22",
+        createdAt: 0,
+        changelog: "",
+        compatibility: {
+          pluginApiRange: ">=2026.3.22",
+          minGatewayVersion: "2026.3.0",
+        },
+        artifact: {
+          kind: "npm-pack",
+          format: "tgz",
+          sha256: DEMO_CLAWPACK_SHA256,
+        },
+      },
+    });
+    downloadClawHubPackageArchiveMock.mockRejectedValueOnce(
+      new ClawHubRequestError({
+        path: "/api/v1/packages/demo/versions/2026.3.22/artifact/download",
+        status: 404,
+        body: "Not Found",
+      }),
+    );
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error:
+        'ClawHub artifact download for "demo@2026.3.22" is not available yet (ClawHub /api/v1/packages/demo/versions/2026.3.22/artifact/download failed (404): Not Found). Use "npm:demo@2026.3.22" for launch installs while ClawHub artifact routing is being rolled out.',
+    });
+    expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        artifact: "clawpack",
+      }),
+    );
+    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+  });
+
   it("does not persist package-level ClawPack metadata for version records without ClawPack facts", async () => {
     parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "2026.3.21" });
     fetchClawHubPackageDetailMock.mockResolvedValueOnce({
@@ -497,19 +684,11 @@ describe("installPluginFromClawHub", () => {
           pluginApiRange: ">=2026.3.22",
           minGatewayVersion: "2026.3.0",
         },
-        clawpack: {
-          available: true,
-          specVersion: 1,
-          format: "clawpack.zip",
+        artifact: {
+          kind: "npm-pack",
+          format: "tgz",
           sha256: DEMO_CLAWPACK_SHA256,
           size: 4096,
-          fileCount: 7,
-          manifestSha256: DEMO_CLAWPACK_MANIFEST_SHA256,
-          builtAt: 1774200000000,
-          buildVersion: "2026.3.22",
-          hostTargets: [],
-          environment: null,
-          runtimeBundles: [],
         },
       },
     });

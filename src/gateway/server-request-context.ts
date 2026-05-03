@@ -52,6 +52,7 @@ type GatewayRequestContextParams = {
   findRunningWizard: GatewayRequestContext["findRunningWizard"];
   purgeWizardSession: GatewayRequestContext["purgeWizardSession"];
   getRuntimeSnapshot: GatewayRequestContext["getRuntimeSnapshot"];
+  getEventLoopHealth?: GatewayRequestContext["getEventLoopHealth"];
   startChannel: GatewayRequestContext["startChannel"];
   stopChannel: GatewayRequestContext["stopChannel"];
   markChannelLoggedOut: GatewayRequestContext["markChannelLoggedOut"];
@@ -147,6 +148,7 @@ export function createGatewayRequestContext(
     findRunningWizard: params.findRunningWizard,
     purgeWizardSession: params.purgeWizardSession,
     getRuntimeSnapshot: params.getRuntimeSnapshot,
+    getEventLoopHealth: params.getEventLoopHealth,
     startChannel: params.startChannel,
     stopChannel: params.stopChannel,
     markChannelLoggedOut: params.markChannelLoggedOut,

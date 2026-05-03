@@ -125,6 +125,7 @@ Current source-of-truth:
 <AccordionGroup>
   <Accordion title="Sessions and runs">
     - `/new [model]` starts a new session; `/reset` is the reset alias.
+    - Control UI intercepts typed `/new` to create and switch to a fresh dashboard session; typed `/reset` still runs the Gateway's in-place reset.
     - `/reset soft [message]` keeps the current transcript, drops reused CLI backend session ids, and reruns startup/system-prompt loading in-place.
     - `/compact [instructions]` compacts the session context. See [Compaction](/concepts/compaction).
     - `/stop` aborts the current run.
@@ -249,8 +250,8 @@ User-invocable skills are also exposed as slash commands:
     - In multi-account channels, config-targeted `/allowlist --account <id>` and `/config set channels.<provider>.accounts.<id>...` also honor the target account's `configWrites`.
     - `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from OpenClaw session logs.
     - `/restart` is enabled by default; set `commands.restart: false` to disable it.
-    - `/plugins install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, `git:<repo>`, or `clawhub:<pkg>`.
-    - `/plugins enable|disable` updates plugin config and may prompt for a restart.
+    - `/plugins install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, `git:<repo>`, or `clawhub:<pkg>`, then requests a Gateway restart because plugin source modules changed.
+    - `/plugins enable|disable` updates plugin config and triggers Gateway plugin reload for new agent turns.
 
   </Accordion>
   <Accordion title="Channel-specific behavior">
@@ -428,8 +429,9 @@ Examples:
 
 <Note>
 - `/plugins list` and `/plugins show` use real plugin discovery against the current workspace plus on-disk config.
+- `/plugins install` installs from ClawHub, npm, git, local directories, and archives.
 - `/plugins enable|disable` updates plugin config only; it does not install or uninstall plugins.
-- After enable/disable changes, restart the gateway to apply them.
+- Enable and disable changes hot-reload Gateway plugin runtime surfaces for new agent turns; install requests a Gateway restart because plugin source modules changed.
 
 </Note>
 

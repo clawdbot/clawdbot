@@ -77,6 +77,10 @@ function resolveChannelConfigSchemaModulePath(rootDir: string): string | null {
     path.join(rootDir, "src", "config-schema.js"),
     path.join(rootDir, "src", "config-schema.mts"),
     path.join(rootDir, "src", "config-schema.mjs"),
+    path.join(rootDir, "src", "config-surface.ts"),
+    path.join(rootDir, "src", "config-surface.js"),
+    path.join(rootDir, "src", "config-surface.mts"),
+    path.join(rootDir, "src", "config-surface.mjs"),
   ];
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {

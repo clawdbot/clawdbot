@@ -16,10 +16,19 @@ type TelegramMenuCommand = {
   description: string;
 };
 
+type TelegramCommandMenuScope =
+  | { label: "default"; options?: undefined }
+  | { label: "all_group_chats"; options: { scope: { type: "all_group_chats" } } };
+
 type TelegramPluginCommandSpec = {
   name: unknown;
   description: unknown;
 };
+
+const TELEGRAM_COMMAND_MENU_SCOPES: readonly TelegramCommandMenuScope[] = [
+  { label: "default" },
+  { label: "all_group_chats", options: { scope: { type: "all_group_chats" } } },
+];
 
 function countTelegramCommandText(value: string): number {
   return Array.from(value).length;
@@ -232,6 +241,57 @@ function writeCachedCommandHash(
   syncedCommandHashes.set(key, hash);
 }
 
+function formatTelegramCommandScopeOperation(
+  operation: "deleteMyCommands" | "setMyCommands",
+  scope: TelegramCommandMenuScope,
+): string {
+  return scope.label === "default" ? operation : `${operation}(${scope.label})`;
+}
+
+async function deleteTelegramMenuCommandsForScopes(params: {
+  bot: Bot;
+  runtime: RuntimeEnv;
+}): Promise<boolean> {
+  const { bot, runtime } = params;
+  if (typeof bot.api.deleteMyCommands !== "function") {
+    return true;
+  }
+
+  let allDeleted = true;
+  for (const scope of TELEGRAM_COMMAND_MENU_SCOPES) {
+    const deleted = await withTelegramApiErrorLogging({
+      operation: formatTelegramCommandScopeOperation("deleteMyCommands", scope),
+      runtime,
+      fn: () =>
+        scope.options ? bot.api.deleteMyCommands(scope.options) : bot.api.deleteMyCommands(),
+    })
+      .then(() => true)
+      .catch(() => false);
+    allDeleted &&= deleted;
+  }
+  return allDeleted;
+}
+
+async function setTelegramMenuCommandsForScopes(params: {
+  bot: Bot;
+  runtime: RuntimeEnv;
+  commands: TelegramMenuCommand[];
+  shouldLog?: (err: unknown) => boolean;
+}): Promise<void> {
+  const { bot, runtime, commands, shouldLog } = params;
+  for (const scope of TELEGRAM_COMMAND_MENU_SCOPES) {
+    await withTelegramApiErrorLogging({
+      operation: formatTelegramCommandScopeOperation("setMyCommands", scope),
+      runtime,
+      shouldLog,
+      fn: () =>
+        scope.options
+          ? bot.api.setMyCommands(commands, scope.options)
+          : bot.api.setMyCommands(commands),
+    });
+  }
+}
+
 export function syncTelegramMenuCommands(params: {
   bot: Bot;
   runtime: RuntimeEnv;
@@ -253,21 +313,15 @@ export function syncTelegramMenuCommands(params: {
     }
 
     // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
-    let deleteSucceeded = true;
-    if (typeof bot.api.deleteMyCommands === "function") {
-      deleteSucceeded = await withTelegramApiErrorLogging({
-        operation: "deleteMyCommands",
-        runtime,
-        fn: () => bot.api.deleteMyCommands(),
-      })
-        .then(() => true)
-        .catch(() => false);
-    }
+    const deleteSucceeded = await deleteTelegramMenuCommandsForScopes({ bot, runtime });
 
     if (commandsToRegister.length === 0) {
       if (!deleteSucceeded) {
         runtime.log?.("telegram: deleteMyCommands failed; skipping empty-menu hash cache write");
         return;
+      }
+      if (typeof bot.api.deleteMyCommands !== "function") {
+        await setTelegramMenuCommandsForScopes({ bot, runtime, commands: [] });
       }
       writeCachedCommandHash(accountId, botIdentity, currentHash);
       return;
@@ -277,11 +331,11 @@ export function syncTelegramMenuCommands(params: {
     const initialCommandCount = commandsToRegister.length;
     while (retryCommands.length > 0) {
       try {
-        await withTelegramApiErrorLogging({
-          operation: "setMyCommands",
+        await setTelegramMenuCommandsForScopes({
+          bot,
           runtime,
+          commands: retryCommands,
           shouldLog: (err) => !isBotCommandsTooMuchError(err),
-          fn: () => bot.api.setMyCommands(retryCommands),
         });
         if (retryCommands.length < initialCommandCount) {
           runtime.log?.(

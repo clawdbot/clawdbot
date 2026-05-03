@@ -694,6 +694,41 @@ function isFeishuNativeVoiceAudio(params: { fileName: string; contentType?: stri
   );
 }
 
+function normalizeMediaNameForExtension(raw: string): string {
+  try {
+    return new URL(raw).pathname;
+  } catch {
+    return raw.split(/[?#]/, 1)[0] ?? raw;
+  }
+}
+
+export function shouldSuppressFeishuTextForVoiceMedia(params: {
+  mediaUrl?: string;
+  fileName?: string;
+  contentType?: string;
+  audioAsVoice?: boolean;
+}): boolean {
+  if (params.audioAsVoice === true) {
+    return true;
+  }
+  if (
+    params.fileName &&
+    isFeishuNativeVoiceAudio({
+      fileName: params.fileName,
+      contentType: params.contentType,
+    })
+  ) {
+    return true;
+  }
+  if (!params.mediaUrl) {
+    return false;
+  }
+  return isFeishuNativeVoiceAudio({
+    fileName: normalizeMediaNameForExtension(params.mediaUrl),
+    contentType: params.contentType,
+  });
+}
+
 function isLikelyTranscodableAudio(params: { fileName: string; contentType?: string }): boolean {
   const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
   const contentType = normalizeLowercaseStringOrEmpty(params.contentType);

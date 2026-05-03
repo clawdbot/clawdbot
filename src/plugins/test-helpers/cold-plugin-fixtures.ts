@@ -17,6 +17,7 @@ type ColdPluginFixtureOptions = {
   pluginId?: string;
   packageName?: string;
   packageVersion?: string;
+  packageJson?: Record<string, unknown>;
   providerId?: string;
   channelId?: string;
   authChoiceId?: string;
@@ -37,6 +38,7 @@ export function createColdPluginFixture(options: ColdPluginFixtureOptions): Cold
       {
         name: options.packageName ?? "@example/openclaw-cold-control-plane",
         version: options.packageVersion ?? "1.0.0",
+        ...options.packageJson,
         openclaw: { extensions: ["./index.cjs"] },
       },
       null,

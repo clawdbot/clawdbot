@@ -133,6 +133,16 @@ afterEach(() => {
 });
 
 describe("bundle manifest parsing", () => {
+  it("does not treat openclaw.bundle.json as a bundle manifest", () => {
+    const rootDir = makeTempDir();
+    writeBundleManifest(rootDir, "openclaw.bundle.json", {
+      name: "Not Real",
+      skills: ["skills"],
+    });
+
+    expect(detectBundleManifestFormat(rootDir)).toBeNull();
+  });
+
   it.each([
     {
       name: "detects and loads Codex bundle manifests",

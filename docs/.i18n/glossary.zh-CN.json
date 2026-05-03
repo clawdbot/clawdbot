@@ -4,6 +4,10 @@
     "target": "OpenClaw"
   },
   {
+    "source": "ClawHub",
+    "target": "ClawHub"
+  },
+  {
     "source": "OpenAI",
     "target": "OpenAI"
   },
@@ -470,6 +474,14 @@
   {
     "source": "Plugins",
     "target": "插件"
+  },
+  {
+    "source": "Manage plugins",
+    "target": "管理插件"
+  },
+  {
+    "source": "Plugin manifest",
+    "target": "插件清单"
   },
   {
     "source": "Building plugins",

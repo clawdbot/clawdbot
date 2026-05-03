@@ -654,6 +654,11 @@ async function runModelRun(params: {
     if ("error" in prepared) {
       throw new Error(prepared.error);
     }
+    if (prepared.selection.provider === "codex") {
+      throw new Error(
+        'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with agents.defaults.agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
+      );
+    }
     const result = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
       auth: prepared.auth,

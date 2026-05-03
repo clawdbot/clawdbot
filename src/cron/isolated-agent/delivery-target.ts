@@ -11,6 +11,7 @@ import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loa
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
 export type DeliveryTargetResolution =
   | {
@@ -31,13 +32,12 @@ export type DeliveryTargetResolution =
       error: Error;
     };
 
-let targetsRuntimePromise:
-  | Promise<typeof import("../../infra/outbound/targets.runtime.js")>
-  | undefined;
+const targetsRuntimeLoader = createLazyImportLoader(
+  () => import("../../infra/outbound/targets.runtime.js"),
+);
 
 async function loadTargetsRuntime() {
-  targetsRuntimePromise ??= import("../../infra/outbound/targets.runtime.js");
-  return await targetsRuntimePromise;
+  return await targetsRuntimeLoader.load();
 }
 
 async function resolveOutboundTargetWithRuntime(
@@ -95,21 +95,19 @@ function deliveryTargetsShareThreadRoute(params: {
   return Boolean(normalizedTo && normalizedLastTo && normalizedTo === normalizedLastTo);
 }
 
-let channelSelectionRuntimePromise:
-  | Promise<typeof import("../../infra/outbound/channel-selection.runtime.js")>
-  | undefined;
-let deliveryTargetRuntimePromise:
-  | Promise<typeof import("./delivery-target.runtime.js")>
-  | undefined;
+const channelSelectionRuntimeLoader = createLazyImportLoader(
+  () => import("../../infra/outbound/channel-selection.runtime.js"),
+);
+const deliveryTargetRuntimeLoader = createLazyImportLoader(
+  () => import("./delivery-target.runtime.js"),
+);
 
 async function loadChannelSelectionRuntime() {
-  channelSelectionRuntimePromise ??= import("../../infra/outbound/channel-selection.runtime.js");
-  return await channelSelectionRuntimePromise;
+  return await channelSelectionRuntimeLoader.load();
 }
 
 async function loadDeliveryTargetRuntime() {
-  deliveryTargetRuntimePromise ??= import("./delivery-target.runtime.js");
-  return await deliveryTargetRuntimePromise;
+  return await deliveryTargetRuntimeLoader.load();
 }
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,

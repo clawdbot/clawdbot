@@ -7,6 +7,7 @@ import type { PluginDiagnostic } from "../plugins/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
+const clearActivatedPluginRuntimeState = vi.hoisted(() => vi.fn());
 const loadPluginLookUpTable = vi.hoisted(() =>
   vi.fn(() => ({
     startup: {
@@ -34,6 +35,7 @@ const handleGatewayRequest = vi.hoisted(() =>
 );
 
 vi.mock("../plugins/loader.js", () => ({
+  clearActivatedPluginRuntimeState,
   loadOpenClawPlugins,
 }));
 
@@ -307,6 +309,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  clearActivatedPluginRuntimeState.mockClear();
   loadOpenClawPlugins.mockReset();
   loadPluginLookUpTable.mockReset().mockReturnValue({
     startup: {
@@ -385,6 +388,7 @@ describe("loadGatewayPlugins", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["discord", "telegram"],
+        preferBuiltPluginArtifacts: true,
       }),
     );
   });
@@ -629,6 +633,7 @@ describe("loadGatewayPlugins", () => {
       baseMethods: ["sessions.get"],
     });
 
+    expect(clearActivatedPluginRuntimeState).toHaveBeenCalledTimes(1);
     expect(loadOpenClawPlugins).not.toHaveBeenCalled();
     expect(result.pluginRegistry.plugins).toEqual([]);
     expect(result.gatewayMethods).toEqual(["sessions.get"]);

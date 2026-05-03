@@ -7,7 +7,7 @@ const IOS_VERSION_XCCONFIG_FILE = "apps/ios/Config/Version.xcconfig";
 const IOS_RELEASE_NOTES_FILE = "apps/ios/fastlane/metadata/en-US/release_notes.txt";
 
 const PINNED_IOS_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.\d{1,2})$/u;
-const GATEWAY_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.\d{1,2})(?:-(?:beta\.\d+|\d+))?$/u;
+const GATEWAY_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.\d{1,2})(?:-(?:alpha\.\d+|beta\.\d+|\d+))?$/u;
 
 type IosVersionManifest = {
   version: string;
@@ -52,7 +52,7 @@ export function normalizeGatewayVersionToPinnedIosVersion(rawVersion: string): s
   const match = GATEWAY_VERSION_PATTERN.exec(trimmed);
   if (!match) {
     throw new Error(
-      `Invalid gateway version '${rawVersion}'. Expected YYYY.M.D, YYYY.M.D-beta.N, or YYYY.M.D-N.`,
+      `Invalid gateway version '${rawVersion}'. Expected YYYY.M.D, YYYY.M.D-alpha.N, YYYY.M.D-beta.N, or YYYY.M.D-N.`,
     );
   }
 

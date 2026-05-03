@@ -6,10 +6,7 @@ import { normalizeChannelId as normalizeBundledChannelId } from "../channels/reg
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  listPluginContributionIds,
-  loadPluginRegistrySnapshot,
-} from "../plugins/plugin-registry.js";
+import { listManifestChannelContributionIds } from "../plugins/manifest-contribution-ids.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
@@ -220,16 +217,11 @@ function resolveDefaultAccountId(cfg: OpenClawConfig, provider: ChannelId): stri
 }
 
 function listManifestChannelIds(config: OpenClawConfig): Set<string> {
-  const index = loadPluginRegistrySnapshot({
-    config,
-    env: process.env,
-  });
   return new Set(
-    listPluginContributionIds({
-      index,
-      contribution: "channels",
+    listManifestChannelContributionIds({
       includeDisabled: true,
       config,
+      env: process.env,
     }),
   );
 }

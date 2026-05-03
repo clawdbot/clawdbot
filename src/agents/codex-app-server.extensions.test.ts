@@ -70,6 +70,7 @@ describe("agent tool result middleware", () => {
           },
         },
       },
+      onlyPluginIds: ["tool-result-middleware"],
     };
 
     loadOpenClawPlugins(options);
@@ -112,6 +113,7 @@ describe("agent tool result middleware", () => {
     });
 
     const registry = loadOpenClawPlugins({
+      onlyPluginIds: ["tool-result-middleware"],
       config: {
         plugins: {
           entries: {
@@ -152,6 +154,7 @@ describe("agent tool result middleware", () => {
 
     const registry = loadOpenClawPlugins({
       workspaceDir: tmp,
+      onlyPluginIds: ["tool-result-middleware"],
       config: {
         plugins: {
           load: { paths: [pluginFile] },
@@ -191,6 +194,7 @@ export default { id: "tool-result-middleware", register(api) {
     });
 
     loadOpenClawPlugins({
+      onlyPluginIds: ["tool-result-middleware"],
       config: {
         plugins: {
           entries: {
@@ -290,6 +294,7 @@ describe("Codex app-server extension factories", () => {
           },
         },
       },
+      onlyPluginIds: ["codex-ext"],
     };
 
     loadOpenClawPlugins(options);
@@ -331,6 +336,7 @@ describe("Codex app-server extension factories", () => {
 
     const registry = loadOpenClawPlugins({
       workspaceDir: tmp,
+      onlyPluginIds: ["codex-ext"],
       config: {
         plugins: {
           load: { paths: [pluginFile] },
@@ -363,6 +369,7 @@ describe("Codex app-server extension factories", () => {
     });
 
     const registry = loadOpenClawPlugins({
+      onlyPluginIds: ["codex-ext"],
       config: {
         plugins: {
           entries: {
@@ -404,6 +411,7 @@ describe("Codex app-server extension factories", () => {
     });
 
     const registry = loadOpenClawPlugins({
+      onlyPluginIds: ["codex-ext"],
       config: {
         plugins: {
           entries: {

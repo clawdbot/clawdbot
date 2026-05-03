@@ -354,7 +354,10 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(emitSpy).toHaveBeenCalledWith(result.sessionFile);
+      expect(emitSpy).toHaveBeenCalledWith({
+        sessionFile: result.sessionFile,
+        sessionKey,
+      });
     }
     emitSpy.mockRestore();
   });

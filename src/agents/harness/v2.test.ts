@@ -47,6 +47,7 @@ function createAttemptResult(): EmbeddedRunAttemptResult {
     timedOut: false,
     idleTimedOut: false,
     timedOutDuringCompaction: false,
+    timedOutDuringToolExecution: false,
     promptError: null,
     promptErrorSource: null,
     sessionIdUsed: "session-1",

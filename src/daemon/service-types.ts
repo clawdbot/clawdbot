@@ -48,10 +48,20 @@ export type GatewayServiceState = {
   runtime?: GatewayServiceRuntime;
 };
 
+export type GatewayServiceStartRepairIssue = {
+  code: "missing-program" | "temporary-program" | "version-mismatch";
+  message: string;
+};
+
 export type GatewayServiceStartResult =
   | { outcome: "started"; state: GatewayServiceState }
   | { outcome: "scheduled"; state: GatewayServiceState }
-  | { outcome: "missing-install"; state: GatewayServiceState };
+  | { outcome: "missing-install"; state: GatewayServiceState }
+  | {
+      outcome: "repair-required";
+      state: GatewayServiceState;
+      issues: GatewayServiceStartRepairIssue[];
+    };
 
 export type GatewayServiceRenderArgs = {
   description?: string;

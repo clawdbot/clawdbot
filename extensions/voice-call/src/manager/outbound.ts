@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveVoiceCallSessionKey, type CallMode } from "../config.js";
+import {
+  resolveVoiceCallEffectiveConfig,
+  resolveVoiceCallSessionKey,
+  type CallMode,
+} from "../config.js";
 import { resolvePreferredTtsVoice } from "../tts-provider-voice.js";
 import {
   type EndReason,
@@ -242,7 +246,11 @@ export async function speak(
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
 
-    const voice = resolvePreferredTtsVoice(ctx.config);
+    const numberRouteKey =
+      typeof call.metadata?.numberRouteKey === "string" ? call.metadata.numberRouteKey : call.to;
+    const voice = resolvePreferredTtsVoice(
+      resolveVoiceCallEffectiveConfig(ctx.config, numberRouteKey).config,
+    );
     await provider.playTts({
       callId,
       providerCallId,

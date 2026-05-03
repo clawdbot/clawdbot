@@ -20,6 +20,7 @@ import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -173,57 +174,53 @@ type CompletedDirectCronDelivery = {
   results: OutboundDeliveryResult[];
 };
 
-let gatewayCallRuntimePromise: Promise<typeof import("../../gateway/call.runtime.js")> | undefined;
-let deliveryOutboundRuntimePromise:
-  | Promise<typeof import("./delivery-outbound.runtime.js")>
-  | undefined;
-let deliverySubagentRegistryRuntimePromise:
-  | Promise<typeof import("./delivery-subagent-registry.runtime.js")>
-  | undefined;
-let deliveryLoggerRuntimePromise:
-  | Promise<typeof import("./delivery-logger.runtime.js")>
-  | undefined;
-let subagentFollowupRuntimePromise:
-  | Promise<typeof import("./subagent-followup.runtime.js")>
-  | undefined;
-let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | undefined;
+const gatewayCallRuntimeLoader = createLazyImportLoader(
+  () => import("../../gateway/call.runtime.js"),
+);
+const deliveryOutboundRuntimeLoader = createLazyImportLoader(
+  () => import("./delivery-outbound.runtime.js"),
+);
+const deliverySubagentRegistryRuntimeLoader = createLazyImportLoader(
+  () => import("./delivery-subagent-registry.runtime.js"),
+);
+const deliveryLoggerRuntimeLoader = createLazyImportLoader(
+  () => import("./delivery-logger.runtime.js"),
+);
+const subagentFollowupRuntimeLoader = createLazyImportLoader(
+  () => import("./subagent-followup.runtime.js"),
+);
+const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 
 const COMPLETED_DIRECT_CRON_DELIVERIES = new Map<string, CompletedDirectCronDelivery>();
 
 async function loadGatewayCallRuntime(): Promise<typeof import("../../gateway/call.runtime.js")> {
-  gatewayCallRuntimePromise ??= import("../../gateway/call.runtime.js");
-  return await gatewayCallRuntimePromise;
+  return await gatewayCallRuntimeLoader.load();
 }
 
 async function loadDeliveryOutboundRuntime(): Promise<
   typeof import("./delivery-outbound.runtime.js")
 > {
-  deliveryOutboundRuntimePromise ??= import("./delivery-outbound.runtime.js");
-  return await deliveryOutboundRuntimePromise;
+  return await deliveryOutboundRuntimeLoader.load();
 }
 
 async function loadDeliverySubagentRegistryRuntime(): Promise<
   typeof import("./delivery-subagent-registry.runtime.js")
 > {
-  deliverySubagentRegistryRuntimePromise ??= import("./delivery-subagent-registry.runtime.js");
-  return await deliverySubagentRegistryRuntimePromise;
+  return await deliverySubagentRegistryRuntimeLoader.load();
 }
 
 async function loadDeliveryLoggerRuntime(): Promise<typeof import("./delivery-logger.runtime.js")> {
-  deliveryLoggerRuntimePromise ??= import("./delivery-logger.runtime.js");
-  return await deliveryLoggerRuntimePromise;
+  return await deliveryLoggerRuntimeLoader.load();
 }
 
 async function loadSubagentFollowupRuntime(): Promise<
   typeof import("./subagent-followup.runtime.js")
 > {
-  subagentFollowupRuntimePromise ??= import("./subagent-followup.runtime.js");
-  return await subagentFollowupRuntimePromise;
+  return await subagentFollowupRuntimeLoader.load();
 }
 
 async function loadTtsRuntime(): Promise<typeof import("../../tts/tts.runtime.js")> {
-  ttsRuntimePromise ??= import("../../tts/tts.runtime.js");
-  return await ttsRuntimePromise;
+  return await ttsRuntimeLoader.load();
 }
 
 async function logCronDeliveryWarn(message: string): Promise<void> {

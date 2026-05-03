@@ -236,6 +236,98 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
 
+  it("reports request timing for attributed RPC latency", async () => {
+    const onRequestTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onRequestTiming,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 3,
+        auth: { role: "operator", scopes: [] },
+      },
+    });
+    onRequestTiming.mockClear();
+
+    const request = client.request("sessions.list", { includeGlobal: true });
+    const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+    expect(frame.method).toBe("sessions.list");
+
+    ws.emitMessage({
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { sessions: [] },
+    });
+
+    await expect(request).resolves.toEqual({ sessions: [] });
+    expect(onRequestTiming).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: frame.id,
+        method: "sessions.list",
+        ok: true,
+        durationMs: expect.any(Number),
+      }),
+    );
+  });
+
+  it("reports failed request timing without including request params", async () => {
+    const onRequestTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onRequestTiming,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 3,
+        auth: { role: "operator", scopes: [] },
+      },
+    });
+    onRequestTiming.mockClear();
+
+    const request = client.request("config.get", { token: "do-not-log" });
+    const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+    expect(frame.method).toBe("config.get");
+
+    ws.emitMessage({
+      type: "res",
+      id: frame.id,
+      ok: false,
+      error: { code: "CONFIG_ERROR", message: "config failed" },
+    });
+
+    await expect(request).rejects.toMatchObject({ gatewayCode: "CONFIG_ERROR" });
+    expect(onRequestTiming).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        params: expect.anything(),
+      }),
+    );
+    expect(onRequestTiming).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: frame.id,
+        method: "config.get",
+        ok: false,
+        errorCode: "CONFIG_ERROR",
+        durationMs: expect.any(Number),
+      }),
+    );
+  });
+
   it("prefers explicit shared auth over cached device tokens", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",

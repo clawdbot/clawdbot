@@ -7,6 +7,7 @@ export {
   findLatestTaskForFlowId,
   finalizeTaskRunByRunId,
   getTaskById,
+  hasActiveTaskForChildSessionKey,
   listTaskRecords,
   listTasksForFlowId,
   listTasksForOwnerKey,

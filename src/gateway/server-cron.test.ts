@@ -8,7 +8,7 @@ import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const {
   enqueueSystemEventMock,
-  requestHeartbeatNowMock,
+  requestHeartbeatMock,
   runHeartbeatOnceMock,
   loadConfigMock,
   fetchWithSsrFGuardMock,
@@ -18,7 +18,7 @@ const {
   runCronChangedMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
-  requestHeartbeatNowMock: vi.fn(),
+  requestHeartbeatMock: vi.fn(),
   runHeartbeatOnceMock: vi.fn<
     (...args: unknown[]) => Promise<{ status: "ran"; durationMs: number }>
   >(async () => ({ status: "ran", durationMs: 1 })),
@@ -37,8 +37,8 @@ function enqueueSystemEvent(...args: unknown[]) {
   return enqueueSystemEventMock(...args);
 }
 
-function requestHeartbeatNow(...args: unknown[]) {
-  return requestHeartbeatNowMock(...args);
+function requestHeartbeat(...args: unknown[]) {
+  return requestHeartbeatMock(...args);
 }
 
 function runHeartbeatOnce(...args: unknown[]) {
@@ -55,7 +55,7 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
       "../infra/heartbeat-wake.js",
     ),
     () => ({
-      requestHeartbeatNow,
+      requestHeartbeat,
     }),
   );
 });
@@ -113,7 +113,7 @@ function createCronConfig(name: string): OpenClawConfig {
 describe("buildGatewayCronService", () => {
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
-    requestHeartbeatNowMock.mockClear();
+    requestHeartbeatMock.mockClear();
     runHeartbeatOnceMock.mockClear();
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
@@ -264,7 +264,7 @@ describe("buildGatewayCronService", () => {
           sessionKey: "agent:main:discord:channel:ops",
         }),
       );
-      expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+      expect(requestHeartbeatMock).toHaveBeenCalledWith(
         expect.objectContaining({
           sessionKey: "agent:main:discord:channel:ops",
         }),
@@ -288,10 +288,12 @@ describe("buildGatewayCronService", () => {
         state.cron as unknown as {
           state?: {
             deps?: {
-              requestHeartbeatNow?: (opts?: {
+              requestHeartbeat?: (opts?: {
                 agentId?: string;
                 sessionKey?: string | null;
                 reason?: string;
+                source?: string;
+                intent?: string;
                 heartbeat?: { target?: string };
               }) => void;
             };
@@ -299,13 +301,17 @@ describe("buildGatewayCronService", () => {
         }
       ).state?.deps;
 
-      cronDeps?.requestHeartbeatNow?.({
+      cronDeps?.requestHeartbeat?.({
+        source: "cron",
+        intent: "event",
         reason: "cron:test",
         sessionKey: "discord:channel:ops",
         heartbeat: { target: "last" },
       });
 
-      expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      expect(requestHeartbeatMock).toHaveBeenCalledWith({
+        source: "cron",
+        intent: "event",
         reason: "cron:test",
         agentId: "main",
         sessionKey: "agent:main:discord:channel:ops",

@@ -1789,6 +1789,50 @@ describe("active-memory plugin", () => {
     expect(lines.some((line) => line.includes("timeout_partial"))).toBe(false);
   });
 
+  it("does not inject embedded timeout boilerplate from partial transcripts", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 1,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:timeout-boilerplate-transcript";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-timeout-boilerplate-transcript",
+      updatedAt: 0,
+    };
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "LLM request timed out after 15000 ms.",
+          },
+        },
+      ]);
+      await new Promise<never>(() => {});
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? timeout boilerplate", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    const lines = getActiveMemoryLines(sessionKey);
+    expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=timeout")]);
+    expect(lines.some((line) => line.includes("timeout_partial"))).toBe(false);
+    expect(lines.some((line) => line.includes("LLM request timed out"))).toBe(false);
+  });
+
   it("returns partial transcript text when an aborted subagent rejects before the race timeout wins", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
     api.pluginConfig = {
@@ -2256,6 +2300,175 @@ describe("active-memory plugin", () => {
     expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(true);
     // Hard deadline: wall-clock time must be near timeoutMs, not 30s.
     expect(wallClockMs).toBeLessThan(CONFIGURED_TIMEOUT_MS + HARD_DEADLINE_MARGIN_MS);
+  });
+
+  it("fast-fails terminal zero-hit memory_search results without waiting for recall timeout", async () => {
+    const CONFIGURED_TIMEOUT_MS = 1_000;
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:terminal-zero-hit";
+    hoisted.sessionStore[sessionKey] = { sessionId: "s-terminal-zero-hit", updatedAt: 0 };
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: { results: [], debug: { backend: "qmd", hits: 0, searchMs: 8 } },
+          },
+        },
+      ]);
+      await new Promise<never>(() => {});
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? zero hit", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(infoLines.some((line: string) => line.includes("done status=empty"))).toBe(true);
+    expect(infoLines.some((line: string) => line.includes("done status=timeout"))).toBe(false);
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining("🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0"),
+    ]);
+  });
+
+  it("does not fast-fail memory_search results solely because debug hits is zero", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 500,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:terminal-zero-hit-with-results";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-terminal-zero-hit-with-results",
+      updatedAt: 0,
+    };
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: {
+              results: [{ path: "memory/food.md", text: "User usually orders ramen." }],
+              debug: { backend: "qmd", hits: 0, searchMs: 8 },
+            },
+          },
+        },
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { payloads: [{ text: "User usually orders ramen." }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? zero hit with results", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result?.prependContext).toContain("User usually orders ramen.");
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=ok"),
+      expect.stringContaining("🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0"),
+    ]);
+  });
+
+  it("fast-fails unavailable memory_search results without injecting provider errors", async () => {
+    const CONFIGURED_TIMEOUT_MS = 1_000;
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:terminal-unavailable";
+    hoisted.sessionStore[sessionKey] = { sessionId: "s-terminal-unavailable", updatedAt: 0 };
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: {
+              disabled: true,
+              warning: "Memory search is unavailable due to an embedding/provider error.",
+              action: "Check the embedding provider configuration, then retry memory_search.",
+              error: "embedding request failed",
+            },
+          },
+        },
+      ]);
+      await new Promise<never>(() => {});
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? unavailable", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(infoLines.some((line: string) => line.includes("done status=empty"))).toBe(true);
+    expect(infoLines.some((line: string) => line.includes("done status=timeout"))).toBe(false);
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining(
+        "🔎 Active Memory Debug: Memory search is unavailable due to an embedding/provider error. Check the embedding provider configuration, then retry memory_search.",
+      ),
+    ]);
+  });
+
+  it("does not treat memory_get misses as terminal recall results", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 500,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_get",
+            details: { path: "memory/missing.md", text: "", disabled: true, error: "not found" },
+          },
+        },
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { payloads: [{ text: "User usually orders ramen after late flights." }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? memory get miss", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:memory-get-miss",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result?.prependContext).toContain("User usually orders ramen after late flights.");
   });
 
   it("returns undefined instead of throwing when an unexpected error escapes prompt building", async () => {

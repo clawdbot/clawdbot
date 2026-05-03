@@ -344,13 +344,12 @@ OpenClaw uses several security and release-validation layers. No single scanner 
 
 ### Secret Detection
 
-OpenClaw uses `detect-secrets` with a checked-in baseline and local exclusion notes (`.secrets.baseline`, `.detect-secrets.cfg`). Secret-resolution behavior is also covered by the dedicated secrets test surface.
+OpenClaw runs the pre-commit `detect-private-key` hook in CI and keeps secret-resolution behavior covered by the dedicated secrets test surface.
 
-Run the baseline scan locally:
+Run the key scan locally:
 
 ```bash
-pip install detect-secrets==1.5.0
-detect-secrets scan --baseline .secrets.baseline
+pre-commit run --all-files detect-private-key
 ```
 
 ### Static Analysis

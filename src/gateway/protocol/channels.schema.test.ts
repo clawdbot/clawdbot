@@ -1,9 +1,10 @@
 import AjvPkg from "ajv";
 import { describe, expect, it } from "vitest";
-import { WebLoginWaitParamsSchema } from "./schema/channels.js";
+import { ChannelsStatusResultSchema, WebLoginWaitParamsSchema } from "./schema/channels.js";
+
+const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
 
 describe("WebLoginWaitParamsSchema", () => {
-  const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
   const validate = new Ajv().compile(WebLoginWaitParamsSchema);
 
   it("bounds caller-provided QR data URLs", () => {
@@ -23,5 +24,42 @@ describe("WebLoginWaitParamsSchema", () => {
         currentQrDataUrl: "https://example.com/qr.png",
       }),
     ).toBe(false);
+  });
+});
+
+describe("ChannelsStatusResultSchema", () => {
+  const validate = new Ajv().compile(ChannelsStatusResultSchema);
+
+  it("accepts gateway event-loop diagnostics emitted by channels.status", () => {
+    expect(
+      validate({
+        ts: Date.now(),
+        channelOrder: ["discord"],
+        channelLabels: { discord: "Discord" },
+        channels: { discord: { configured: true } },
+        channelAccounts: {
+          discord: [
+            {
+              accountId: "default",
+              enabled: true,
+              configured: true,
+              running: true,
+              connected: false,
+              healthState: "stale-socket",
+            },
+          ],
+        },
+        channelDefaultAccountId: { discord: "default" },
+        eventLoop: {
+          degraded: true,
+          reasons: ["event_loop_delay", "cpu"],
+          intervalMs: 62_000,
+          delayP99Ms: 1_250.5,
+          delayMaxMs: 62_000,
+          utilization: 0.98,
+          cpuCoreRatio: 1.2,
+        },
+      }),
+    ).toBe(true);
   });
 });

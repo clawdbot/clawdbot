@@ -1689,53 +1689,6 @@ describe("resolveModel", () => {
     });
   });
 
-  it("lets official openai-codex metadata override legacy unmarked models-add rows", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai-codex",
-      modelId: "gpt-5.5",
-      templateModel: {
-        ...buildOpenAICodexForwardCompatExpectation("gpt-5.5"),
-        name: "GPT-5.5",
-        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-        contextWindow: 400_000,
-      },
-    });
-
-    const cfg = {
-      models: {
-        providers: {
-          "openai-codex": {
-            baseUrl: "https://chatgpt.com/backend-api",
-            api: "openai-codex-responses",
-            models: [
-              {
-                ...makeModel("gpt-5.5"),
-                api: "openai-codex-responses",
-                reasoning: true,
-                input: ["text", "image"],
-                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-                contextWindow: 400_000,
-                contextTokens: 272_000,
-                maxTokens: 128_000,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("openai-codex", "gpt-5.5", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: "openai-codex",
-      id: "gpt-5.5",
-      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-      contextWindow: 400_000,
-      maxTokens: 128_000,
-    });
-  });
-
   it("resolves openai-codex gpt-5.5 even when discovery omits the OAuth catalog row", () => {
     const result = resolveModelForTest("openai-codex", "gpt-5.5");
 

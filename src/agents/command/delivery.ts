@@ -350,7 +350,6 @@ export async function deliverAgentCommandResult(params: {
   }
 
   if (!payloads || payloads.length === 0) {
-    runtime.log("No reply from agent.");
     return { payloads: [], meta: resultMeta };
   }
 

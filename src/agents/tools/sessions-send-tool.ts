@@ -20,6 +20,7 @@ import {
 } from "../../utils/message-channel.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
+  type AgentWaitResult,
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "../run-wait.js";
@@ -69,6 +70,10 @@ function isRequesterParentOfNativeSubagentSession(params: {
   const spawnedBy = normalizeOptionalString(params.entry.spawnedBy);
   const parentSessionKey = normalizeOptionalString(params.entry.parentSessionKey);
   return requester === spawnedBy || requester === parentSessionKey;
+}
+
+function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
+  return result.endedAt !== undefined || Boolean(result.stopReason || result.livenessState);
 }
 
 async function startAgentRun(params: {
@@ -376,6 +381,7 @@ export function createSessionsSendTool(opts?: {
           maxPingPongTurns,
           requesterSessionKey,
           requesterChannel,
+          baseline: baselineReply,
           roundOneReply,
           waitRunId,
         });
@@ -421,6 +427,15 @@ export function createSessionsSendTool(opts?: {
       });
 
       if (result.status === "timeout") {
+        if (!isTerminalAgentWaitTimeout(result)) {
+          startA2AFlow(undefined, runId);
+          return jsonResult({
+            runId,
+            status: "accepted",
+            sessionKey: displayKey,
+            delivery,
+          });
+        }
         return jsonResult({
           runId,
           status: "timeout",

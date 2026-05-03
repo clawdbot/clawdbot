@@ -52,6 +52,11 @@ function normalizeInstallRecord(
   setInstallStringField(normalized, "clawhubPackage", record.clawhubPackage);
   setInstallStringField(normalized, "clawhubFamily", record.clawhubFamily);
   setInstallStringField(normalized, "clawhubChannel", record.clawhubChannel);
+  setInstallStringField(normalized, "artifactKind", record.artifactKind);
+  setInstallStringField(normalized, "artifactFormat", record.artifactFormat);
+  setInstallStringField(normalized, "npmIntegrity", record.npmIntegrity);
+  setInstallStringField(normalized, "npmShasum", record.npmShasum);
+  setInstallStringField(normalized, "npmTarballName", record.npmTarballName);
   setInstallStringField(normalized, "clawpackSha256", record.clawpackSha256);
   setInstallNumberField(normalized, "clawpackSpecVersion", record.clawpackSpecVersion);
   setInstallStringField(normalized, "clawpackManifestSha256", record.clawpackManifestSha256);

@@ -50,6 +50,7 @@ describe("secrets handlers", () => {
       diagnostics: string[];
       inactiveRefPaths: string[];
     }>;
+    log?: { warn?: (message: string) => void };
   }) {
     const reloadSecrets = overrides?.reloadSecrets ?? (async () => ({ warningCount: 0 }));
     const resolveSecrets =
@@ -62,6 +63,7 @@ describe("secrets handlers", () => {
     return createSecretsHandlers({
       reloadSecrets,
       resolveSecrets,
+      log: overrides?.log,
     });
   }
 
@@ -75,8 +77,10 @@ describe("secrets handlers", () => {
   });
 
   it("returns unavailable when reload fails", async () => {
+    const warn = vi.fn();
     const handlers = createHandlers({
-      reloadSecrets: vi.fn().mockRejectedValue(new Error("reload failed")),
+      reloadSecrets: vi.fn().mockRejectedValue(new Error("disk full")),
+      log: { warn },
     });
     const respond = vi.fn();
     await invokeSecretsReload({ handlers, respond });
@@ -88,6 +92,7 @@ describe("secrets handlers", () => {
         message: "secrets.reload failed",
       }),
     );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk full"));
   });
 
   it("resolves requested command secret assignments from the active snapshot", async () => {
@@ -189,12 +194,13 @@ describe("secrets handlers", () => {
   });
 
   it("returns unavailable when secrets.resolve handler returns an invalid payload shape", async () => {
+    const warn = vi.fn();
     const resolveSecrets = vi.fn().mockResolvedValue({
       assignments: [{ path: TALK_TEST_PROVIDER_API_KEY_PATH, pathSegments: [""], value: "sk" }],
       diagnostics: [],
       inactiveRefPaths: [],
     });
-    const handlers = createHandlers({ resolveSecrets });
+    const handlers = createHandlers({ resolveSecrets, log: { warn } });
     const respond = vi.fn();
     await invokeSecretsResolve({
       handlers,
@@ -210,5 +216,32 @@ describe("secrets handlers", () => {
         message: "secrets.resolve failed",
       }),
     );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("secrets.resolve returned invalid payload."),
+    );
+  });
+
+  it("logs error details when secrets.resolve throws", async () => {
+    const warn = vi.fn();
+    const handlers = createHandlers({
+      resolveSecrets: vi.fn().mockRejectedValue(new Error("EACCES: permission denied")),
+      log: { warn },
+    });
+    const respond = vi.fn();
+    await invokeSecretsResolve({
+      handlers,
+      respond,
+      commandName: "memory status",
+      targetIds: ["talk.providers.*.apiKey"],
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: "secrets.resolve failed",
+      }),
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("EACCES: permission denied"));
   });
 });

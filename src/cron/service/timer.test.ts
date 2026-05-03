@@ -37,7 +37,7 @@ describe("cron service timer seam coverage", () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
     await writeCronStoreSnapshot({
@@ -51,7 +51,7 @@ describe("cron service timer seam coverage", () => {
       log: logger,
       nowMs: () => now,
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -62,7 +62,9 @@ describe("cron service timer seam coverage", () => {
       sessionKey: "agent:main:main",
       contextKey: "cron:main-heartbeat-job",
     });
-    expect(requestHeartbeatNow).toHaveBeenCalledWith({
+    expect(requestHeartbeat).toHaveBeenCalledWith({
+      source: "cron",
+      intent: "event",
       reason: "cron:main-heartbeat-job",
       agentId: undefined,
       sessionKey: "agent:main:main",
@@ -94,7 +96,7 @@ describe("cron service timer seam coverage", () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
 
     await writeCronStoreSnapshot({
       storePath,
@@ -113,7 +115,7 @@ describe("cron service timer seam coverage", () => {
       log: logger,
       nowMs: () => now,
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -137,7 +139,7 @@ describe("cron service timer seam coverage", () => {
     const now = Date.parse("2026-03-23T06:00:00.000Z");
     const staleNextRunAtMs = now;
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
 
     await saveCronStore(storePath, {
       version: 1,
@@ -169,14 +171,14 @@ describe("cron service timer seam coverage", () => {
       log: logger,
       nowMs: () => now,
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
     await onTimer(state);
 
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+    expect(requestHeartbeat).not.toHaveBeenCalled();
 
     const persisted = await loadCronStore(storePath);
     const job = persisted.jobs[0];

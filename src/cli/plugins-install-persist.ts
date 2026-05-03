@@ -107,6 +107,9 @@ export async function persistPluginInstall(params: {
         nextInstallRecords,
         nextConfig: next,
         baseHash: params.snapshot.baseHash,
+        writeOptions: {
+          afterWrite: { mode: "restart", reason: "plugin source changed" },
+        },
       }),
     { command: "install" },
   );

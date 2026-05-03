@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  HEARTBEAT_RESPONSE_TOOL_PROMPT,
   isHeartbeatContentEffectivelyEmpty,
   parseHeartbeatTasks,
+  resolveHeartbeatPromptForResponseTool,
   stripHeartbeatToken,
 } from "./heartbeat.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
@@ -262,6 +264,27 @@ Check the server logs
 ### Subsection
 `;
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+});
+
+describe("resolveHeartbeatPromptForResponseTool", () => {
+  it("uses the structured heartbeat response tool instead of the legacy ok token", () => {
+    const prompt = resolveHeartbeatPromptForResponseTool();
+
+    expect(prompt).toBe(HEARTBEAT_RESPONSE_TOOL_PROMPT);
+    expect(prompt).toContain("heartbeat_respond");
+    expect(prompt).toContain("notify=false");
+    expect(prompt).not.toContain(HEARTBEAT_TOKEN);
+  });
+
+  it("keeps custom heartbeat prompts intact and appends the tool-mode contract", () => {
+    const prompt = resolveHeartbeatPromptForResponseTool(
+      "Check the deployment queue and only interrupt the user for blockers.",
+    );
+
+    expect(prompt).toContain("Check the deployment queue");
+    expect(prompt).toContain("heartbeat_respond");
+    expect(prompt).toContain("notify=false");
   });
 });
 

@@ -13,6 +13,7 @@ import {
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resetTelegramForumFlagCacheForTest,
+  shouldUseTelegramDmThreadSession,
 } from "./helpers.js";
 
 describe("resolveTelegramForumThreadId", () => {
@@ -122,6 +123,33 @@ describe("buildTelegramThreadParams", () => {
     { input: { id: 0, scope: "none" as const }, expected: { message_thread_id: 0 } },
   ])("builds thread params", ({ input, expected }) => {
     expect(buildTelegramThreadParams(input)).toEqual(expected);
+  });
+});
+
+describe("shouldUseTelegramDmThreadSession", () => {
+  it("keeps incidental DM thread ids flat by default", () => {
+    expect(shouldUseTelegramDmThreadSession({ dmThreadId: 42 })).toBe(false);
+  });
+
+  it("uses DM thread sessions for explicit or topic-required configs", () => {
+    expect(
+      shouldUseTelegramDmThreadSession({
+        dmThreadId: 42,
+        directConfig: { threadReplies: "inbound" },
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseTelegramDmThreadSession({
+        dmThreadId: 42,
+        directConfig: { requireTopic: true },
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseTelegramDmThreadSession({
+        dmThreadId: 42,
+        topicConfig: { agentId: "support" },
+      }),
+    ).toBe(true);
   });
 });
 

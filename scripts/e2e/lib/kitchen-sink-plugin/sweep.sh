@@ -75,9 +75,19 @@ assert_kitchen_sink_removed() {
   node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs assert-removed
 }
 
+assert_kitchen_sink_cutover_preinstalled() {
+  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs assert-cutover-preinstalled
+}
+
 run_success_scenario() {
   echo "Testing ${KITCHEN_SINK_LABEL} install from ${KITCHEN_SINK_SPEC}..."
-  run_logged_print "kitchen-sink-install-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins install "$KITCHEN_SINK_SPEC"
+  local install_args=("$KITCHEN_SINK_SPEC")
+  if [ -n "${KITCHEN_SINK_PREINSTALL_SPEC:-}" ]; then
+    run_logged_print "kitchen-sink-preinstall-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins install "$KITCHEN_SINK_PREINSTALL_SPEC"
+    assert_kitchen_sink_cutover_preinstalled
+    install_args+=("--force")
+  fi
+  run_logged_print "kitchen-sink-install-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins install "${install_args[@]}"
   configure_kitchen_sink_runtime
   run_logged_print "kitchen-sink-enable-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins enable "$KITCHEN_SINK_ID"
   node "$OPENCLAW_ENTRY" plugins list --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-plugins.json"
@@ -102,15 +112,21 @@ run_failure_scenario() {
   assert_kitchen_sink_removed
 }
 
-if [[ "$KITCHEN_SINK_SCENARIOS" == *"clawhub:"* ]] &&
-  [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" != "1" ]] &&
-  [[ -z "${OPENCLAW_CLAWHUB_URL:-}" && -z "${CLAWHUB_URL:-}" ]]; then
-  clawhub_fixture_dir="$(mktemp -d "/tmp/openclaw-kitchen-sink-clawhub.XXXXXX")"
-  start_kitchen_sink_clawhub_fixture_server "$clawhub_fixture_dir"
+if [[ "$KITCHEN_SINK_SCENARIOS" == *"clawhub:"* ]]; then
+  if [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" = "1" ]]; then
+    export OPENCLAW_CLAWHUB_URL="${OPENCLAW_CLAWHUB_URL:-${CLAWHUB_URL:-https://clawhub.ai}}"
+  else
+    if [[ -n "${OPENCLAW_CLAWHUB_URL:-}" || -n "${CLAWHUB_URL:-}" ]]; then
+      echo "Ignoring ambient ClawHub URL for fixture-mode kitchen-sink E2E; set OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB=1 for live ClawHub."
+    fi
+    unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
+    clawhub_fixture_dir="$(mktemp -d "/tmp/openclaw-kitchen-sink-clawhub.XXXXXX")"
+    start_kitchen_sink_clawhub_fixture_server "$clawhub_fixture_dir"
+  fi
 fi
 
 scenario_count=0
-while IFS='|' read -r label spec plugin_id source expectation surface_mode personality; do
+while IFS='|' read -r label spec plugin_id source expectation surface_mode personality preinstall_spec; do
   if [ -z "${label:-}" ] || [[ "$label" == \#* ]]; then
     continue
   fi
@@ -122,6 +138,7 @@ while IFS='|' read -r label spec plugin_id source expectation surface_mode perso
   export KITCHEN_SINK_SURFACE_MODE="$surface_mode"
   export KITCHEN_SINK_PERSONALITY="${personality:-}"
   export OPENCLAW_KITCHEN_SINK_PERSONALITY="${personality:-}"
+  export KITCHEN_SINK_PREINSTALL_SPEC="${preinstall_spec:-}"
   case "$expectation" in
   success)
     run_success_scenario

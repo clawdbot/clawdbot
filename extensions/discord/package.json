@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.5.1-beta.1",
+  "version": "2026.5.3",
   "description": "OpenClaw Discord channel plugin",
   "repository": {
     "type": "git",
@@ -21,7 +21,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.25"
+    "openclaw": ">=2026.5.3"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -43,6 +43,7 @@
       "blurb": "very well supported right now.",
       "systemImage": "bubble.left.and.bubble.right",
       "markdownCapable": true,
+      "preferSessionLookupForAnnounceTarget": true,
       "commands": {
         "nativeCommandsAutoEnabled": true,
         "nativeSkillsAutoEnabled": true
@@ -60,13 +61,14 @@
     "install": {
       "npmSpec": "@openclaw/discord",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10"
+      "minHostVersion": ">=2026.4.10",
+      "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.4.25"
+      "pluginApi": ">=2026.5.3"
     },
     "build": {
-      "openclawVersion": "2026.5.1-beta.1"
+      "openclawVersion": "2026.5.3"
     },
     "release": {
       "publishToClawHub": true,

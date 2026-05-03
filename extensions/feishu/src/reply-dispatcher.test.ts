@@ -20,6 +20,10 @@ const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
+const shouldSuppressFeishuTextForVoiceMediaMock = vi.hoisted(
+  () => (params: { mediaUrl?: string; audioAsVoice?: boolean }) =>
+    params.audioAsVoice === true || /\.(?:ogg|opus)(?:[?#]|$)/i.test(params.mediaUrl ?? ""),
+);
 
 function mergeStreamingText(
   previousText: string | undefined,
@@ -58,7 +62,10 @@ vi.mock("./send.js", () => ({
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
 }));
-vi.mock("./media.js", () => ({ sendMediaFeishu: sendMediaFeishuMock }));
+vi.mock("./media.js", () => ({
+  sendMediaFeishu: sendMediaFeishuMock,
+  shouldSuppressFeishuTextForVoiceMedia: shouldSuppressFeishuTextForVoiceMediaMock,
+}));
 vi.mock("./client.js", () => ({ createFeishuClient: createFeishuClientMock }));
 vi.mock("./targets.js", () => ({ resolveReceiveIdType: resolveReceiveIdTypeMock }));
 vi.mock("./typing.js", () => ({
@@ -615,6 +622,92 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect.objectContaining({
         mediaUrl: "https://example.com/reply.mp3",
         audioAsVoice: true,
+      }),
+    );
+  });
+
+  it("suppresses duplicate text when final replies send voice media", async () => {
+    const { options } = createDispatcherHarness();
+    await options.deliver(
+      {
+        text: "spoken reply",
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      }),
+    );
+  });
+
+  it("suppresses duplicate text for native voice media without audioAsVoice", async () => {
+    const { options } = createDispatcherHarness();
+    await options.deliver(
+      {
+        text: "spoken reply",
+        mediaUrl: "https://example.com/reply.opus?download=1",
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/reply.opus?download=1",
+      }),
+    );
+  });
+
+  it("preserves captions for regular audio attachments", async () => {
+    const { options } = createDispatcherHarness();
+    await options.deliver(
+      {
+        text: "caption text",
+        mediaUrl: "https://example.com/song.mp3",
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "caption text",
+      }),
+    );
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/song.mp3",
+      }),
+    );
+  });
+
+  it("keeps skipped voice text in the upload failure fallback", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("media failed"));
+
+    const { options } = createDispatcherHarness();
+    await options.deliver(
+      {
+        text: "spoken reply",
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "spoken reply\n\n📎 https://example.com/reply.mp3",
       }),
     );
   });

@@ -94,7 +94,13 @@ function expectSinglePngDownload(params: {
   });
   expectDiscordCdnSsrFPolicy(call.ssrfPolicy);
   expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
-  expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
+  expect(saveMediaBuffer).toHaveBeenCalledWith(
+    expect.any(Buffer),
+    "image/png",
+    "inbound",
+    512,
+    params.filePathHint,
+  );
   expect(params.result).toEqual([
     {
       path: params.expectedPath,

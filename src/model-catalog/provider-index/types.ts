@@ -1,8 +1,9 @@
 import type { ModelCatalogProvider } from "../types.js";
 
 export type OpenClawProviderIndexPluginInstall = {
-  npmSpec: string;
-  defaultChoice?: "npm";
+  clawhubSpec?: string;
+  npmSpec?: string;
+  defaultChoice?: "clawhub" | "npm";
   minHostVersion?: string;
   expectedIntegrity?: string;
 };

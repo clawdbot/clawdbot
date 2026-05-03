@@ -1,7 +1,9 @@
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   Client,
@@ -136,6 +138,11 @@ export async function createDiscordMonitorClient(params: {
       publicKey: "a",
       token: params.token,
       autoDeploy: false,
+      commandDeployHashStorePath: path.join(
+        resolveStateDir(process.env),
+        "discord",
+        "command-deploy-cache.json",
+      ),
       requestOptions: {
         timeout: DISCORD_REST_TIMEOUT_MS,
         runtimeProfile: "persistent",

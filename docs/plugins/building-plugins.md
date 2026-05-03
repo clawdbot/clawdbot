@@ -15,8 +15,8 @@ combination.
 
 You do not need to add your plugin to the OpenClaw repository. Publish to
 [ClawHub](/tools/clawhub) and users install with
-`openclaw plugins install <package-name>`. OpenClaw tries ClawHub first and
-falls back to npm automatically for packages that still use npm distribution.
+`openclaw plugins install clawhub:<package-name>`. Bare package specs still
+install from npm during the launch cutover.
 
 ## Prerequisites
 
@@ -141,9 +141,8 @@ and provider plugins have dedicated guides linked above.
     openclaw plugins install clawhub:@myorg/openclaw-my-plugin
     ```
 
-    OpenClaw also checks ClawHub before npm for bare package specs like
-    `@myorg/openclaw-my-plugin`; npm remains a fallback for packages that have
-    not migrated to ClawHub yet.
+    Bare package specs like `@myorg/openclaw-my-plugin` install from npm during
+    the launch cutover. Use `clawhub:` when you want ClawHub resolution.
 
     **In-repo plugins:** place under the bundled plugin workspace tree — automatically discovered.
 
@@ -256,6 +255,11 @@ plugin manifest:
   }
 }
 ```
+
+OpenClaw captures and caches the validated descriptor from the registered tool,
+so plugins do not duplicate `description` or schema data in the manifest. The
+manifest contract only declares ownership and discovery; execution still calls
+the live registered tool implementation.
 
 Users enable optional tools in config:
 

@@ -24,7 +24,7 @@
   gap: 2px;
   flex: 1 1 auto;
   width: 100%;
-  max-width: min(900px, 68%);
+  max-width: var(--chat-message-max-width, min(900px, 68%));
   align-items: flex-start;
   min-width: 0;
 }
@@ -112,15 +112,19 @@
 
 /* Chat divider (e.g., compaction marker) */
 .chat-divider {
-  display: flex;
-  align-items: center;
+  display: grid;
   gap: 10px;
   margin: 18px 8px;
   color: var(--muted);
   font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   user-select: none;
+}
+
+.chat-divider__rule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .chat-divider__line {
@@ -135,6 +139,29 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   background: rgba(255, 255, 255, 0.02);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.chat-divider__details {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  text-align: center;
+}
+
+.chat-divider__description {
+  max-width: min(620px, 100%);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.chat-divider__action {
+  white-space: nowrap;
 }
 
 /* Avatar Styles */

@@ -12,7 +12,7 @@ import {
 } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
-import { requestHeartbeatNow, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
+import { requestHeartbeat, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
 
 installHeartbeatRunnerTestRuntime();
 
@@ -348,7 +348,7 @@ describe("runHeartbeatOnce commitments", () => {
         stableSchedulerSeed: "commitment-target-none",
       });
 
-      requestHeartbeatNow({ reason: "manual", coalesceMs: 0 });
+      requestHeartbeat({ source: "manual", intent: "manual", reason: "manual", coalesceMs: 0 });
       await vi.advanceTimersByTimeAsync(1);
       runner.stop();
 

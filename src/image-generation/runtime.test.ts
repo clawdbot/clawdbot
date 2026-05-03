@@ -95,6 +95,46 @@ describe("image-generation runtime", () => {
     expect(result.ignoredOverrides).toEqual([]);
   });
 
+  it("does not list providers when explicit config disables auto provider fallback", async () => {
+    const provider: ImageGenerationProvider = {
+      id: "image-plugin",
+      capabilities: {
+        generate: {},
+        edit: { enabled: false },
+      },
+      async generateImage() {
+        return {
+          images: [
+            {
+              buffer: Buffer.from("png-bytes"),
+              mimeType: "image/png",
+              fileName: "sample.png",
+            },
+          ],
+          model: "img-v1",
+        };
+      },
+    };
+    providers = [provider];
+
+    const params: GenerateImageParams = {
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "image-plugin/img-v1" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+      autoProviderFallback: false,
+    };
+
+    const result = await runGenerateImage(params);
+
+    expect(result.provider).toBe("image-plugin");
+    expect(listedConfigs).toEqual([]);
+  });
+
   it("uses configured image-generation timeout when the call omits timeoutMs", async () => {
     let seenTimeoutMs: number | undefined;
     const provider: ImageGenerationProvider = {

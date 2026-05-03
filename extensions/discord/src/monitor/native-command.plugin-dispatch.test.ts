@@ -529,6 +529,88 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
+  it("returns an explicit warning instead of success when dispatch produces zero visible replies", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
+      counts: { final: 0, block: 0, tool: 0 },
+      queuedFinal: false,
+    } as never);
+    const command = await createNativeCommand(cfg, {
+      name: "new",
+      description: "Start a new session.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "⚠️ Command produced no visible reply.",
+        ephemeral: true,
+      }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when dispatch reports a queued final without visible counts", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
+      counts: { final: 0, block: 0, tool: 0 },
+      queuedFinal: true,
+    } as never);
+    const command = await createNativeCommand(cfg, {
+      name: "new",
+      description: "Start a new session.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp).not.toHaveBeenCalledWith(
+      expect.objectContaining({ content: "⚠️ Command produced no visible reply." }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("returns an explicit warning when a direct plugin command has no visible reply", async () => {
+    const cfg = createConfig();
+    const commandSpec: NativeCommandSpec = {
+      name: "cron_jobs",
+      description: "List cron jobs",
+      acceptsArgs: false,
+    };
+    const interaction = createInteraction();
+    const pluginMatch = {
+      command: {
+        name: "cron_jobs",
+        description: "List cron jobs",
+        pluginId: "cron-jobs",
+        acceptsArgs: false,
+        handler: vi.fn().mockResolvedValue({ text: "" }),
+      },
+      args: undefined,
+    };
+
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
+    runtimeModuleMocks.executePluginCommand.mockResolvedValue({});
+    const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue(
+      {} as never,
+    );
+    const command = await createNativeCommand(cfg, commandSpec);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "⚠️ Command produced no visible reply." }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
   it("forwards Discord thread metadata into direct plugin command execution", async () => {
     const cfg = {
       commands: {

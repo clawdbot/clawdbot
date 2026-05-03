@@ -778,10 +778,10 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes ui targets to the ui config", () => {
+  it("routes unit ui targets to the unit ui config", () => {
     expect(buildVitestRunPlans(["ui/src/ui/views/channels.test.ts"])).toEqual([
       {
-        config: "test/vitest/vitest.ui.config.ts",
+        config: "test/vitest/vitest.unit-ui.config.ts",
         forwardedArgs: [],
         includePatterns: ["ui/src/ui/views/channels.test.ts"],
         watchMode: false,

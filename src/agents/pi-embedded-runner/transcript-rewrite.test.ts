@@ -327,9 +327,10 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
       expect(result.changed).toBe(true);
       expect(acquireSessionWriteLockMock).toHaveBeenCalledWith({
         sessionFile,
+        timeoutMs: 60_000,
       });
       expect(acquireSessionWriteLockReleaseMock).toHaveBeenCalledTimes(1);
-      expect(listener).toHaveBeenCalledWith({ sessionFile });
+      expect(listener).toHaveBeenCalledWith({ sessionFile, sessionKey: "agent:main:test" });
 
       openSpy.mockRestore();
       const rewrittenSession = SessionManager.open(sessionFile);

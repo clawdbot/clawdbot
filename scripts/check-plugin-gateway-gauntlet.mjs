@@ -389,11 +389,11 @@ function runPluginLifecycle(params) {
     const commands = [
       {
         phase: "install",
-        args: ["install", plugin.dir, "--link", "--dangerously-force-unsafe-install"],
+        args: ["install", plugin.id],
       },
       { phase: "inspect", args: ["inspect", plugin.id, "--json"] },
       { phase: "disable", args: ["disable", plugin.id] },
-      { phase: "enable", args: ["enable", plugin.id] },
+      ...(plugin.hasRequiredConfigFields ? [] : [{ phase: "enable", args: ["enable", plugin.id] }]),
       { phase: "doctor", args: ["doctor"] },
       { phase: "uninstall", args: ["uninstall", plugin.id, "--force"] },
     ];

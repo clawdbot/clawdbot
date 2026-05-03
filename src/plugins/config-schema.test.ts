@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { buildPluginConfigSchema, emptyPluginConfigSchema } from "./config-schema.js";
+import {
+  buildJsonPluginConfigSchema,
+  buildPluginConfigSchema,
+  emptyPluginConfigSchema,
+} from "./config-schema.js";
 
 function expectSafeParseCases(
   safeParse: ((value: unknown) => unknown) | undefined,
@@ -80,6 +84,37 @@ describe("buildPluginConfigSchema", () => {
       data: { normalized: true },
     });
     expect(safeParse).toHaveBeenCalledWith({ enabled: false });
+  });
+});
+
+describe("buildJsonPluginConfigSchema", () => {
+  it("validates direct JSON schemas without zod conversion", () => {
+    const result = buildJsonPluginConfigSchema(
+      {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          enabled: { type: "boolean", default: true },
+        },
+      },
+      { cacheKey: "config-schema.test.json-plugin" },
+    );
+
+    expect(result.jsonSchema).toEqual({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        enabled: { type: "boolean", default: true },
+      },
+    });
+    expect(result.safeParse?.({})).toEqual({
+      success: true,
+      data: { enabled: true },
+    });
+    expect(result.safeParse?.({ enabled: "yes" })).toEqual({
+      success: false,
+      error: { issues: [{ path: ["enabled"], message: "must be boolean" }] },
+    });
   });
 });
 

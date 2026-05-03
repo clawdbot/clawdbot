@@ -805,6 +805,7 @@ export async function handleControlUiHttpRequest(
             ? "strict"
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
+      chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }

@@ -38,6 +38,7 @@ vi.mock("@clack/prompts", () => ({
 }));
 
 vi.mock("../plugins/migration-provider-runtime.js", () => ({
+  ensureStandaloneMigrationProviderRegistryLoaded: vi.fn(),
   resolvePluginMigrationProvider: () => mocks.provider,
   resolvePluginMigrationProviders: () => [mocks.provider],
 }));

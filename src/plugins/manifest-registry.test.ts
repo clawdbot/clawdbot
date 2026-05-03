@@ -923,6 +923,35 @@ describe("loadPluginManifestRegistry", () => {
     );
   });
 
+  it("does not report deprecated providerAuthEnvVars when setup providers mirror env vars", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-openai",
+      providers: ["openai"],
+      setup: {
+        providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }],
+      },
+      providerAuthEnvVars: {
+        openai: ["OPENAI_API_KEY"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-openai",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    expect(registry.diagnostics).not.toContainEqual(
+      expect.objectContaining({
+        message: expect.stringContaining(
+          "providerAuthEnvVars is deprecated compatibility metadata",
+        ),
+      }),
+    );
+  });
+
   it("sanitizes manifest-controlled fields in provider auth compatibility diagnostics", () => {
     const dir = makeTempDir();
     const lineBreak = String.fromCharCode(10);

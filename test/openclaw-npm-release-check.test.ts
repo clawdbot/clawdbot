@@ -54,6 +54,18 @@ describe("parseReleaseVersion", () => {
     });
   });
 
+  it("parses alpha CalVer releases", () => {
+    expect(parseReleaseVersion("2026.3.10-alpha.2")).toMatchObject({
+      version: "2026.3.10-alpha.2",
+      baseVersion: "2026.3.10",
+      channel: "alpha",
+      year: 2026,
+      month: 3,
+      day: 10,
+      alphaNumber: 2,
+    });
+  });
+
   it("parses stable correction releases", () => {
     expect(parseReleaseVersion("2026.3.10-1")).toMatchObject({
       version: "2026.3.10-1",
@@ -101,6 +113,14 @@ describe("resolveNpmPublishPlan", () => {
     });
   });
 
+  it("publishes alpha prereleases to alpha only", () => {
+    expect(resolveNpmPublishPlan("2026.3.29-alpha.2", undefined, "alpha")).toEqual({
+      channel: "alpha",
+      publishTag: "alpha",
+      mirrorDistTags: [],
+    });
+  });
+
   it("publishes stable releases to beta first", () => {
     expect(resolveNpmPublishPlan("2026.3.29")).toEqual({
       channel: "stable",
@@ -136,6 +156,15 @@ describe("resolveNpmPublishPlan", () => {
   it("rejects publishing beta prereleases to latest", () => {
     expect(() => resolveNpmPublishPlan("2026.3.29-beta.2", undefined, "latest")).toThrow(
       "Beta prereleases must publish to the beta dist-tag.",
+    );
+  });
+
+  it("rejects publishing alpha prereleases to beta or latest", () => {
+    expect(() => resolveNpmPublishPlan("2026.3.29-alpha.2")).toThrow(
+      "Alpha prereleases must publish to the alpha dist-tag.",
+    );
+    expect(() => resolveNpmPublishPlan("2026.3.29-alpha.2", undefined, "latest")).toThrow(
+      "Alpha prereleases must publish to the alpha dist-tag.",
     );
   });
 });
@@ -203,6 +232,10 @@ describe("shouldSkipPackedTarballValidation", () => {
 describe("compareReleaseVersions", () => {
   it("treats stable as newer than same-day beta", () => {
     expect(compareReleaseVersions("2026.3.29", "2026.3.29-beta.2")).toBe(1);
+  });
+
+  it("orders alpha before beta on the same day", () => {
+    expect(compareReleaseVersions("2026.3.29-alpha.2", "2026.3.29-beta.1")).toBe(-1);
   });
 
   it("treats a newer beta day as newer than an older stable day", () => {

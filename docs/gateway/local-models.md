@@ -7,9 +7,22 @@ read_when:
 title: "Local models"
 ---
 
-Local is doable, but OpenClaw expects large context + strong defenses against prompt injection. Small cards truncate context and leak safety. Aim high: **≥2 maxed-out Mac Studios or equivalent GPU rig (~$30k+)**. A single **24 GB** GPU works only for lighter prompts with higher latency. Use the **largest / full-size model variant you can run**; aggressively quantized or “small” checkpoints raise prompt-injection risk (see [Security](/gateway/security)).
+Local models are doable. They also raise the bar on hardware, context size, and prompt-injection defense — small or aggressively quantized cards truncate context and leak safety. This page is the opinionated guide for higher-end local stacks and custom OpenAI-compatible local servers. For lowest-friction onboarding, start with [LM Studio](/providers/lmstudio) or [Ollama](/providers/ollama) and `openclaw onboard`.
 
-If you want the lowest-friction local setup, start with [LM Studio](/providers/lmstudio) or [Ollama](/providers/ollama) and `openclaw onboard`. This page is the opinionated guide for higher-end local stacks and custom OpenAI-compatible local servers.
+## Hardware floor
+
+Aim high: **≥2 maxed-out Mac Studios or an equivalent GPU rig (~$30k+)** for a comfortable agent loop. A single **24 GB** GPU works only for lighter prompts at higher latency. Always run the **largest / full-size variant you can host**; small or heavily quantized checkpoints raise prompt-injection risk (see [Security](/gateway/security)).
+
+## Pick a backend
+
+| Backend                                              | Use when                                                                    |
+| ---------------------------------------------------- | --------------------------------------------------------------------------- |
+| [LM Studio](/providers/lmstudio)                     | First-time local setup, GUI loader, native Responses API                    |
+| [Ollama](/providers/ollama)                          | CLI workflow, model library, hands-off systemd service                      |
+| MLX / vLLM / SGLang                                  | High-throughput self-hosted serving with an OpenAI-compatible HTTP endpoint |
+| LiteLLM / OAI-proxy / custom OpenAI-compatible proxy | You front another model API and need OpenClaw to treat it as OpenAI         |
+
+Use Responses API (`api: "openai-responses"`) when the backend supports it (LM Studio does). Otherwise stick to Chat Completions (`api: "openai-completions"`).
 
 <Warning>
 **WSL2 + Ollama + NVIDIA/CUDA users:** The official Ollama Linux installer enables a systemd service with `Restart=always`. On WSL2 GPU setups, autostart can reload the last model during boot and pin host memory. If your WSL2 VM repeatedly restarts after enabling Ollama, see [WSL2 crash loop](/providers/ollama#wsl2-crash-loop-repeated-reboots).
@@ -279,36 +292,27 @@ Compatibility notes for stricter OpenAI-compatible backends:
   }
   ```
 
-- Some smaller or stricter local backends are unstable with OpenClaw's full
-  agent-runtime prompt shape, especially when tool schemas are included. First
-  verify the provider path with the lean local probe:
+## Smaller or stricter backends
 
-  ```bash
-  openclaw infer model run --local --model <provider/model> --prompt "Reply with exactly: pong" --json
-  ```
+If the model loads cleanly but full agent turns misbehave, work top-down — confirm transport first, then narrow the surface.
 
-  To verify the Gateway route without the full agent prompt shape, use the
-  Gateway model probe instead:
+1. **Confirm the local model itself responds.** No tools, no agent context:
 
-  ```bash
-  openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
-  ```
+   ```bash
+   openclaw infer model run --local --model <provider/model> --prompt "Reply with exactly: pong" --json
+   ```
 
-  Both local and Gateway model probes send only the supplied prompt. The
-  Gateway probe still validates Gateway routing, auth, and provider selection,
-  but it intentionally skips prior session transcript, AGENTS/bootstrap context,
-  context-engine assembly, tools, and bundled MCP servers.
+2. **Confirm Gateway routing.** Sends only the supplied prompt — skips transcript, AGENTS bootstrap, context-engine assembly, tools, and bundled MCP servers, but still exercises Gateway routing, auth, and provider selection:
 
-  If that succeeds but normal OpenClaw agent turns fail, first try
-  `agents.defaults.experimental.localModelLean: true` to drop heavyweight
-  default tools like `browser`, `cron`, and `message`; this is an experimental
-  flag, not a stable default-mode setting. See
-  [Experimental Features](/concepts/experimental-features). If that still fails, try
-  `models.providers.<provider>.models[].compat.supportsTools: false`.
+   ```bash
+   openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
+   ```
 
-- If the backend still fails only on larger OpenClaw runs, the remaining issue
-  is usually upstream model/server capacity or a backend bug, not OpenClaw's
-  transport layer.
+3. **Try lean mode.** If both probes pass but real agent turns fail with malformed tool calls or oversized prompts, enable `agents.defaults.experimental.localModelLean: true`. It drops the three heaviest default tools (`browser`, `cron`, `message`) so the prompt shape is smaller and less brittle. See [Experimental Features → Local model lean mode](/concepts/experimental-features#local-model-lean-mode) for the full explanation, when to use it, and how to confirm it is on.
+
+4. **Disable tools entirely as a last resort.** If lean mode is not enough, set `models.providers.<provider>.models[].compat.supportsTools: false` for that model entry. The agent will then operate without tool calls on that model.
+
+5. **Past that, the bottleneck is upstream.** If the backend still fails only on larger OpenClaw runs after lean mode and `supportsTools: false`, the remaining issue is usually upstream model or server capacity — context window, GPU memory, kv-cache eviction, or a backend bug. It is not OpenClaw's transport layer at that point.
 
 ## Troubleshooting
 

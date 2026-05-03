@@ -41,6 +41,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -65,13 +66,12 @@ import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./sess
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 const log = createSubsystemLogger("session-init");
-let sessionArchiveRuntimePromise: Promise<
-  typeof import("../../gateway/session-archive.runtime.js")
-> | null = null;
+const sessionArchiveRuntimeLoader = createLazyImportLoader(
+  () => import("../../gateway/session-archive.runtime.js"),
+);
 
 function loadSessionArchiveRuntime() {
-  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
-  return sessionArchiveRuntimePromise;
+  return sessionArchiveRuntimeLoader.load();
 }
 
 function stripThreadIdFromDeliveryContext(

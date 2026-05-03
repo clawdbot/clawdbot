@@ -5,26 +5,50 @@ export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatal
 type GatewayModelCatalogConfig = ReturnType<typeof getRuntimeConfig>;
 type LoadModelCatalog = (params: {
   config: GatewayModelCatalogConfig;
+  readOnly?: boolean;
 }) => Promise<GatewayModelChoice[]>;
 type LoadGatewayModelCatalogParams = {
   getConfig?: () => GatewayModelCatalogConfig;
   loadModelCatalog?: LoadModelCatalog;
+  readOnly?: boolean;
 };
 
-let lastSuccessfulCatalog: GatewayModelChoice[] | null = null;
-let inFlightRefresh: Promise<GatewayModelChoice[]> | null = null;
-let staleGeneration = 0;
-let appliedGeneration = 0;
+type GatewayModelCatalogCache = {
+  lastSuccessfulCatalog: GatewayModelChoice[] | null;
+  inFlightRefresh: Promise<GatewayModelChoice[]> | null;
+  staleGeneration: number;
+  appliedGeneration: number;
+};
 
-function resetGatewayModelCatalogState(): void {
-  lastSuccessfulCatalog = null;
-  inFlightRefresh = null;
-  staleGeneration = 0;
-  appliedGeneration = 0;
+function createGatewayModelCatalogCache(): GatewayModelCatalogCache {
+  return {
+    lastSuccessfulCatalog: null,
+    inFlightRefresh: null,
+    staleGeneration: 0,
+    appliedGeneration: 0,
+  };
 }
 
-function isGatewayModelCatalogStale(): boolean {
-  return appliedGeneration < staleGeneration;
+const readOnlyModelCatalogCache = createGatewayModelCatalogCache();
+const fullModelCatalogCache = createGatewayModelCatalogCache();
+
+function resolveGatewayModelCatalogCache(
+  params?: LoadGatewayModelCatalogParams,
+): GatewayModelCatalogCache {
+  return params?.readOnly === false ? fullModelCatalogCache : readOnlyModelCatalogCache;
+}
+
+function resetGatewayModelCatalogState(): void {
+  for (const cache of [readOnlyModelCatalogCache, fullModelCatalogCache]) {
+    cache.lastSuccessfulCatalog = null;
+    cache.inFlightRefresh = null;
+    cache.staleGeneration = 0;
+    cache.appliedGeneration = 0;
+  }
+}
+
+function isGatewayModelCatalogStale(cache: GatewayModelCatalogCache): boolean {
+  return cache.appliedGeneration < cache.staleGeneration;
 }
 
 async function resolveLoadModelCatalog(
@@ -40,28 +64,31 @@ async function resolveLoadModelCatalog(
 function startGatewayModelCatalogRefresh(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelChoice[]> {
+  const cache = resolveGatewayModelCatalogCache(params);
   const config = (params?.getConfig ?? getRuntimeConfig)();
-  const refreshGeneration = staleGeneration;
+  const readOnly = params?.readOnly !== false;
+  const refreshGeneration = cache.staleGeneration;
   const refresh = resolveLoadModelCatalog(params)
-    .then((loadModelCatalog) => loadModelCatalog({ config }))
+    .then((loadModelCatalog) => loadModelCatalog({ config, readOnly }))
     .then((catalog) => {
-      if (catalog.length > 0 && refreshGeneration === staleGeneration) {
-        lastSuccessfulCatalog = catalog;
-        appliedGeneration = staleGeneration;
+      if (catalog.length > 0 && refreshGeneration === cache.staleGeneration) {
+        cache.lastSuccessfulCatalog = catalog;
+        cache.appliedGeneration = cache.staleGeneration;
       }
       return catalog;
     })
     .finally(() => {
-      if (inFlightRefresh === refresh) {
-        inFlightRefresh = null;
+      if (cache.inFlightRefresh === refresh) {
+        cache.inFlightRefresh = null;
       }
     });
-  inFlightRefresh = refresh;
+  cache.inFlightRefresh = refresh;
   return refresh;
 }
 
 export function markGatewayModelCatalogStaleForReload(): void {
-  staleGeneration += 1;
+  readOnlyModelCatalogCache.staleGeneration += 1;
+  fullModelCatalogCache.staleGeneration += 1;
 }
 
 // Test-only escape hatch: model catalog is cached at module scope for the
@@ -76,18 +103,19 @@ export async function __resetModelCatalogCacheForTest(): Promise<void> {
 export async function loadGatewayModelCatalog(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelChoice[]> {
-  const isStale = isGatewayModelCatalogStale();
-  if (!isStale && lastSuccessfulCatalog) {
-    return lastSuccessfulCatalog;
+  const cache = resolveGatewayModelCatalogCache(params);
+  const isStale = isGatewayModelCatalogStale(cache);
+  if (!isStale && cache.lastSuccessfulCatalog) {
+    return cache.lastSuccessfulCatalog;
   }
-  if (isStale && lastSuccessfulCatalog) {
-    if (!inFlightRefresh) {
+  if (isStale && cache.lastSuccessfulCatalog) {
+    if (!cache.inFlightRefresh) {
       void startGatewayModelCatalogRefresh(params).catch(() => undefined);
     }
-    return lastSuccessfulCatalog;
+    return cache.lastSuccessfulCatalog;
   }
-  if (inFlightRefresh) {
-    return await inFlightRefresh;
+  if (cache.inFlightRefresh) {
+    return await cache.inFlightRefresh;
   }
   return await startGatewayModelCatalogRefresh(params);
 }

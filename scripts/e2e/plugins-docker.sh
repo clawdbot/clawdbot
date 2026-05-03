@@ -14,18 +14,27 @@ DOCKER_ENV_ARGS=(
 )
 for env_name in \
   OPENCLAW_PLUGINS_E2E_CLAWHUB \
+  OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB \
   OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC \
-  OPENCLAW_PLUGINS_E2E_CLAWHUB_ID \
-  OPENCLAW_CLAWHUB_URL \
-  CLAWHUB_URL \
-  OPENCLAW_CLAWHUB_TOKEN \
-  CLAWHUB_TOKEN \
-  CLAWHUB_AUTH_TOKEN; do
+  OPENCLAW_PLUGINS_E2E_CLAWHUB_ID; do
   env_value="${!env_name:-}"
   if [[ -n "$env_value" && "$env_value" != "undefined" && "$env_value" != "null" ]]; then
     DOCKER_ENV_ARGS+=(-e "$env_name")
   fi
 done
+if [[ "${OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB:-0}" = "1" ]]; then
+  for env_name in \
+    OPENCLAW_CLAWHUB_URL \
+    CLAWHUB_URL \
+    OPENCLAW_CLAWHUB_TOKEN \
+    CLAWHUB_TOKEN \
+    CLAWHUB_AUTH_TOKEN; do
+    env_value="${!env_name:-}"
+    if [[ -n "$env_value" && "$env_value" != "undefined" && "$env_value" != "null" ]]; then
+      DOCKER_ENV_ARGS+=(-e "$env_name")
+    fi
+  done
+fi
 
 echo "Running plugins Docker E2E..."
 docker_e2e_run_logged_with_harness plugins-run "${DOCKER_ENV_ARGS[@]}" "$IMAGE_NAME" bash scripts/e2e/lib/plugins/sweep.sh

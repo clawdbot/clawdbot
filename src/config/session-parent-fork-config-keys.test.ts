@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
 
 describe("session parent fork config keys", () => {
-  it("rejects legacy session.parentForkMaxTokens with doctor guidance", () => {
+  it("rejects legacy session.parentForkMaxTokens as an unknown session key", () => {
     const result = validateConfigObjectRaw({
       session: {
         parentForkMaxTokens: 200_000,
@@ -16,12 +16,7 @@ describe("session parent fork config keys", () => {
     expect(result.issues).toContainEqual(
       expect.objectContaining({
         path: "session",
-        message: expect.stringContaining("session.parentForkMaxTokens was removed"),
-      }),
-    );
-    expect(result.issues).toContainEqual(
-      expect.objectContaining({
-        message: expect.stringContaining('Run "openclaw doctor --fix"'),
+        message: expect.stringContaining('Unrecognized key: "parentForkMaxTokens"'),
       }),
     );
   });

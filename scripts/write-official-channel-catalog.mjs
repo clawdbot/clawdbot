@@ -53,6 +53,10 @@ function buildCatalogEntry(packageJson) {
   };
 }
 
+function getCatalogChannelId(entry) {
+  return trimString(entry?.openclaw?.channel?.id) || trimString(entry?.name);
+}
+
 export function buildOfficialChannelCatalog(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const extensionsRoot = path.join(repoRoot, "extensions");
@@ -74,7 +78,11 @@ export function buildOfficialChannelCatalog(params = {}) {
     try {
       const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
       const entry = buildCatalogEntry(packageJson);
-      if (entry) {
+      const channelId = entry ? getCatalogChannelId(entry) : "";
+      const alreadyPresent = channelId
+        ? entries.some((existing) => getCatalogChannelId(existing) === channelId)
+        : false;
+      if (entry && !alreadyPresent) {
         entries.push(entry);
       }
     } catch {

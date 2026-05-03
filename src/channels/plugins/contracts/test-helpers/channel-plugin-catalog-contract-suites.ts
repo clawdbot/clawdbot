@@ -288,6 +288,78 @@ export function describeChannelPluginCatalogEntriesContract() {
         },
       },
       {
+        name: "accepts external manifest entries with ClawHub-only install metadata",
+        setup: () => {
+          const dir = fs.mkdtempSync(
+            path.join(resolvePreferredOpenClawTmpDir(), "openclaw-catalog-clawhub-"),
+          );
+          const catalogPath = path.join(dir, "catalog.json");
+          fs.writeFileSync(
+            catalogPath,
+            JSON.stringify({
+              $schema: "./manifest.schema.json",
+              schemaVersion: 1,
+              description:
+                "Extension manifest. Declares plugin packages that OpenClaw can discover during onboarding and install on demand via `openclaw plugins install`.",
+              entries: [
+                {
+                  source: "external",
+                  kind: "channel",
+                  openclaw: {
+                    channel: {
+                      id: "clawhub-chat",
+                      label: "ClawHub Chat",
+                      selectionLabel: "ClawHub Chat",
+                      detailLabel: "ClawHub",
+                      docsPath: "/channels/clawhub-chat",
+                      docsLabel: "clawhub chat",
+                      blurb: "ClawHub-backed chat channel.",
+                      aliases: ["chchat"],
+                      order: 47,
+                    },
+                    install: {
+                      clawhubSpec: "clawhub:openclaw/clawhub-chat@2026.5.2",
+                      defaultChoice: "clawhub",
+                      minHostVersion: ">=2026.5.1",
+                    },
+                  },
+                },
+              ],
+            }),
+          );
+          return {
+            channelId: "clawhub-chat",
+            catalogPaths: [catalogPath],
+            expected: {
+              id: "clawhub-chat",
+              meta: {
+                label: "ClawHub Chat",
+                selectionLabel: "ClawHub Chat",
+                detailLabel: "ClawHub",
+                docsPath: "/channels/clawhub-chat",
+                docsLabel: "clawhub chat",
+                blurb: "ClawHub-backed chat channel.",
+              },
+              install: {
+                clawhubSpec: "clawhub:openclaw/clawhub-chat@2026.5.2",
+                defaultChoice: "clawhub",
+                minHostVersion: ">=2026.5.1",
+              },
+              installSource: {
+                defaultChoice: "clawhub",
+                clawhub: {
+                  spec: "clawhub:openclaw/clawhub-chat@2026.5.2",
+                  packageName: "openclaw/clawhub-chat",
+                  version: "2026.5.2",
+                  exactVersion: true,
+                },
+                warnings: [],
+              },
+            },
+          };
+        },
+      },
+      {
         name: "accepts rich external manifest entries for yuanbao with pinned npm metadata",
         setup: () => {
           const dir = fs.mkdtempSync(

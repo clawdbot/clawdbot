@@ -23,6 +23,11 @@ type InputOptionsReturn = InputOptionsFactory extends (
   ? Return
   : never;
 type OnLogFunction = InputOptionsArg extends { onLog?: infer OnLog } ? NonNullable<OnLog> : never;
+type ExternalOptionFunction = (
+  id: string,
+  parentId: string | undefined,
+  isResolved: boolean,
+) => boolean | null | undefined;
 
 const env = {
   NODE_ENV: "production",
@@ -38,12 +43,37 @@ function normalizedLogHaystack(log: { message?: string; id?: string; importer?: 
   return [log.message, log.id, log.importer].filter(Boolean).join("\n").replaceAll("\\", "/");
 }
 
+function matchesExternalOption(
+  option: unknown,
+  id: string,
+  parentId: string | undefined,
+  isResolved: boolean,
+): boolean {
+  if (!option) {
+    return false;
+  }
+  if (typeof option === "function") {
+    return (option as ExternalOptionFunction)(id, parentId, isResolved) === true;
+  }
+  if (typeof option === "string") {
+    return option === id;
+  }
+  if (option instanceof RegExp) {
+    return option.test(id);
+  }
+  if (Array.isArray(option)) {
+    return option.some((entry) => matchesExternalOption(entry, id, parentId, isResolved));
+  }
+  return false;
+}
+
 function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
   }
 
   const previousOnLog = typeof options.onLog === "function" ? options.onLog : undefined;
+  const previousExternal = (options as { external?: unknown }).external;
 
   function isSuppressedLog(log: {
     code?: string;
@@ -66,6 +96,12 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
 
   return {
     ...options,
+    external(id: string, parentId: string | undefined, isResolved: boolean) {
+      return (
+        shouldNeverBundleDependency(id) ||
+        matchesExternalOption(previousExternal, id, parentId, isResolved)
+      );
+    },
     onLog(...args: Parameters<OnLogFunction>) {
       const [level, log, defaultHandler] = args;
       if (isSuppressedLog(log)) {
@@ -124,8 +160,10 @@ const bundledPluginFile = (pluginId: string, relativePath: string) =>
   `${bundledPluginRoot(pluginId)}/${relativePath}`;
 const explicitNeverBundleDependencies = [
   "@lancedb/lancedb",
+  "@larksuiteoapi/node-sdk",
   "@matrix-org/matrix-sdk-crypto-nodejs",
   "matrix-js-sdk",
+  "qrcode-terminal",
 ].toSorted((left, right) => left.localeCompare(right));
 
 function shouldNeverBundleDependency(id: string): boolean {

@@ -303,7 +303,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "codex", fallback: "none" },
+            agentRuntime: { id: "codex" },
           },
         },
       } as OpenClawConfig,
@@ -386,7 +386,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "codex", fallback: "none" },
+            agentRuntime: { id: "codex" },
           },
         },
       } as OpenClawConfig,
@@ -409,7 +409,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "codex", fallback: "none" },
+            agentRuntime: { id: "codex" },
           },
         },
       } as OpenClawConfig,
@@ -435,7 +435,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
           list: [
             {
               id: "main",
-              agentRuntime: { id: "codex", fallback: "none" },
+              agentRuntime: { id: "codex" },
             },
           ],
         },

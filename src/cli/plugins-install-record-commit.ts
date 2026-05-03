@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { replaceConfigFile } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,6 +19,7 @@ function mergeUnsetPaths(
 }
 
 type ConfigCommit = (config: OpenClawConfig, writeOptions?: ConfigWriteOptions) => Promise<void>;
+const PLUGIN_SOURCE_CHANGED_RESTART_REASON = "plugin source changed";
 
 async function commitPluginInstallRecordsWithWriter(params: {
   previousInstallRecords?: Record<string, PluginInstallRecord>;
@@ -30,8 +32,15 @@ async function commitPluginInstallRecordsWithWriter(params: {
     params.previousInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
   await writePersistedInstalledPluginIndexInstallRecords(params.nextInstallRecords);
   try {
+    const installRecordsChanged = !isDeepStrictEqual(
+      previousInstallRecords,
+      params.nextInstallRecords,
+    );
     await params.commit(params.nextConfig, {
       ...params.writeOptions,
+      ...(installRecordsChanged && params.writeOptions?.afterWrite === undefined
+        ? { afterWrite: { mode: "restart", reason: PLUGIN_SOURCE_CHANGED_RESTART_REASON } }
+        : {}),
       unsetPaths: mergeUnsetPaths(params.writeOptions?.unsetPaths, [
         Array.from(PLUGIN_INSTALLS_CONFIG_PATH),
       ]),

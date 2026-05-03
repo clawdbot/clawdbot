@@ -74,21 +74,6 @@ export async function runPluginUninstallCommand(
     config: cfg,
     plugins: report.plugins,
   });
-  const hasEntry = pluginId in (cfg.plugins?.entries ?? {});
-  const hasInstall = pluginId in (cfg.plugins?.installs ?? {});
-
-  if (!hasEntry && !hasInstall) {
-    if (plugin) {
-      runtime.error(
-        `Plugin "${pluginId}" is not managed by plugins config/install records and cannot be uninstalled.`,
-      );
-    } else {
-      runtime.error(`Plugin not found: ${id}`);
-    }
-    runtime.exit(1);
-    return;
-  }
-
   const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
   const plan = planPluginUninstall({
     config: cfg,
@@ -98,10 +83,17 @@ export async function runPluginUninstallCommand(
     extensionsDir,
   });
   if (!plan.ok) {
-    runtime.error(plan.error);
+    if (plugin) {
+      runtime.error(
+        `Plugin "${pluginId}" is not managed by plugins config/install records and cannot be uninstalled.`,
+      );
+    } else {
+      runtime.error(plan.error);
+    }
     runtime.exit(1);
     return;
   }
+  const hasInstall = pluginId in (cfg.plugins?.installs ?? {});
 
   const preview: string[] = [];
   if (plan.actions.entry) {
@@ -167,6 +159,9 @@ export async function runPluginUninstallCommand(
         nextInstallRecords,
         nextConfig,
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+        writeOptions: {
+          afterWrite: { mode: "restart", reason: "plugin source changed" },
+        },
       }),
     { command: "uninstall" },
   );

@@ -31,6 +31,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
 
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
 let clearSharedCodexAppServerClient: typeof import("./shared-client.js").clearSharedCodexAppServerClient;
+let clearSharedCodexAppServerClientIfCurrent: typeof import("./shared-client.js").clearSharedCodexAppServerClientIfCurrent;
 let createIsolatedCodexAppServerClient: typeof import("./shared-client.js").createIsolatedCodexAppServerClient;
 let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.js").resetSharedCodexAppServerClientForTests;
 
@@ -54,6 +55,7 @@ describe("shared Codex app-server client", () => {
     ({ listCodexAppServerModels } = await import("./models.js"));
     ({
       clearSharedCodexAppServerClient,
+      clearSharedCodexAppServerClientIfCurrent,
       createIsolatedCodexAppServerClient,
       resetSharedCodexAppServerClientForTests,
     } = await import("./shared-client.js"));
@@ -291,6 +293,32 @@ describe("shared Codex app-server client", () => {
     await expect(secondList).resolves.toEqual({ models: [] });
 
     expect(second.process.kill).not.toHaveBeenCalled();
+  });
+
+  it("only clears the shared client that is still current", async () => {
+    const first = createClientHarness();
+    const second = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(second.client);
+
+    const firstList = listCodexAppServerModels({ timeoutMs: 1000 });
+    await sendInitializeResult(first, "openclaw/0.125.0 (macOS; test)");
+    await sendEmptyModelList(first);
+    await expect(firstList).resolves.toEqual({ models: [] });
+
+    expect(clearSharedCodexAppServerClientIfCurrent(first.client)).toBe(true);
+    expect(first.process.kill).toHaveBeenCalledWith("SIGTERM");
+
+    const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
+    await sendInitializeResult(second, "openclaw/0.125.0 (macOS; test)");
+    await sendEmptyModelList(second);
+    await expect(secondList).resolves.toEqual({ models: [] });
+
+    expect(clearSharedCodexAppServerClientIfCurrent(first.client)).toBe(false);
+    expect(second.process.kill).not.toHaveBeenCalled();
+    expect(clearSharedCodexAppServerClientIfCurrent(second.client)).toBe(true);
+    expect(second.process.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
   it("uses a fresh websocket Authorization header after shared-client token rotation", async () => {

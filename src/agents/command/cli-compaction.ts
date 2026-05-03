@@ -166,6 +166,7 @@ async function compactCliTranscript(params: {
     reason: "compaction",
     sessionManager: params.sessionManager,
     runtimeContext,
+    config: params.cfg,
   });
   return true;
 }

@@ -22,9 +22,12 @@ function uniqueNonEmpty(values: readonly (string | null | undefined)[]) {
 
 export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchInput) {
   const provider = getQaProvider(input.providerMode);
-  const imageModelRef = provider.defaultImageGenerationModel({
-    modelProviderIds: provider.defaultImageGenerationProviderIds,
-  });
+  const usesOpenAiMockImageProvider = input.providerMode === "mock-openai";
+  const imageModelRef = usesOpenAiMockImageProvider
+    ? "openai/gpt-image-1"
+    : provider.defaultImageGenerationModel({
+        modelProviderIds: provider.defaultImageGenerationProviderIds,
+      });
   if (!imageModelRef) {
     throw new Error(
       `QA provider "${input.providerMode}" does not expose an image generation model`,
@@ -42,7 +45,8 @@ export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchI
       providerBaseUrl: input.providerBaseUrl,
     });
   })();
-  const providerPluginIds = provider.usesModelProviderPlugins ? [imageProviderId] : [];
+  const providerPluginIds =
+    provider.usesModelProviderPlugins || usesOpenAiMockImageProvider ? [imageProviderId] : [];
   const enabledPluginIds = uniqueNonEmpty(providerPluginIds);
 
   return {

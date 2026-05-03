@@ -12,6 +12,14 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
     payloads,
     meta: {},
   }));
+  const updateSessionStore = vi.fn(
+    async (
+      _storePath: string,
+      mutator: (store: Record<string, { sessionId?: string; updatedAt?: number }>) => unknown,
+    ) => {
+      return await mutator(sessionStore);
+    },
+  );
   return {
     runtime: {
       resolveAgentDir: vi.fn(() => "/tmp/agent"),
@@ -22,6 +30,7 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
         resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
         loadSessionStore: vi.fn(() => sessionStore),
         saveSessionStore: vi.fn(async () => {}),
+        updateSessionStore,
         resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
       },
       runEmbeddedPiAgent,

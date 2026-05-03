@@ -88,4 +88,26 @@ describe("discord setup account state", () => {
     expect(inspected.tokenStatus).toBe("missing");
     expect(inspected.configured).toBe(false);
   });
+
+  it("reports unresolved SecretRef account tokens as configured but unavailable", () => {
+    const inspected = inspectDiscordSetupAccount({
+      cfg: {
+        channels: {
+          discord: {
+            accounts: {
+              work: {
+                token: { source: "exec", provider: "vault", id: "discord/work" },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(inspected.token).toBe("");
+    expect(inspected.tokenSource).toBe("config");
+    expect(inspected.tokenStatus).toBe("configured_unavailable");
+    expect(inspected.configured).toBe(true);
+  });
 });

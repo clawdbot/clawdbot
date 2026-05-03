@@ -88,7 +88,7 @@ export async function runPostCompactionSideEffects(params: {
   if (!sessionFile) {
     return;
   }
-  emitSessionTranscriptUpdate(sessionFile);
+  emitSessionTranscriptUpdate({ sessionFile, sessionKey: params.sessionKey });
   await syncPostCompactionSessionMemory({
     config: params.config,
     sessionKey: params.sessionKey,

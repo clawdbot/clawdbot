@@ -2332,18 +2332,22 @@ describe("dispatchReplyFromConfig", () => {
       id: "acpx",
       runtime,
     });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    const boundConversationBinding = {
       bindingId: "binding-acp-current",
       targetSessionKey: boundSessionKey,
       targetKind: "session",
       conversation: {
-        channel: "slack",
+        channel: "discord",
         accountId: "default",
         conversationId: "C123",
       },
       status: "active",
       boundAt: Date.now(),
-    } satisfies SessionBindingRecord);
+    } satisfies SessionBindingRecord;
+    sessionBindingMocks.resolveByConversation.mockReturnValue(boundConversationBinding);
+    sessionBindingMocks.listBySession.mockImplementation((targetSessionKey: string) =>
+      targetSessionKey === boundSessionKey ? [boundConversationBinding] : [],
+    );
 
     const cfg = {
       acp: {
@@ -2355,13 +2359,13 @@ describe("dispatchReplyFromConfig", () => {
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "fallback reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      OriginatingChannel: "slack",
-      OriginatingTo: "slack:C123",
-      To: "slack:C123",
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:C123",
+      To: "discord:C123",
       AccountId: "default",
-      SessionKey: "agent:main:slack:C123",
+      SessionKey: "agent:main:discord:C123",
       BodyForAgent: "continue",
     });
 
@@ -2369,7 +2373,7 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result.queuedFinal).toBe(true);
     expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
-      channel: "slack",
+      channel: "discord",
       accountId: "default",
       conversationId: "C123",
     });

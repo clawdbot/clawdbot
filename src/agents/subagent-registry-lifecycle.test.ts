@@ -13,7 +13,7 @@ const taskExecutorMocks = vi.hoisted(() => ({
 }));
 
 const gatewayMocks = vi.hoisted(() => ({
-  callGateway: vi.fn(async () => ({})),
+  callGateway: vi.fn(async (_opts: CallGatewayOptions) => ({})),
 }));
 
 const helperMocks = vi.hoisted(() => ({
@@ -124,9 +124,8 @@ function createLifecycleController({
     emitSubagentEndedHookForRun: vi.fn(async () => {}),
     notifyContextEngineSubagentEnded: vi.fn(async () => {}),
     resumeSubagentRun: vi.fn(),
-    callGateway: gatewayMocks.callGateway as <T = Record<string, unknown>>(
-      opts: CallGatewayOptions,
-    ) => Promise<T>,
+    callGateway: async <T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> =>
+      (await gatewayMocks.callGateway(opts)) as T,
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     runSubagentAnnounceFlow: vi.fn(async () => true),
     warn: vi.fn(),

@@ -17,6 +17,8 @@ type VitestConfig = {
 };
 
 const PLUGIN_PRERELEASE_NPM_SPEC_TEST = "src/plugins/install.npm-spec.test.ts";
+const PLUGIN_NPM_INSTALL_SECURITY_SCAN_TEST =
+  "src/plugins/npm-install-security-scan.release.test.ts";
 const GATEWAY_SERVER_BACKED_HTTP_TESTS = new Set([
   "src/gateway/embeddings-http.test.ts",
   "src/gateway/models-http.test.ts",
@@ -330,6 +332,9 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     });
     expect(listMatchedTestFiles(createPluginsVitestConfig({}))).toContain(
       PLUGIN_PRERELEASE_NPM_SPEC_TEST,
+    );
+    expect(listMatchedTestFiles(createPluginsVitestConfig({}))).toContain(
+      PLUGIN_NPM_INSTALL_SECURITY_SCAN_TEST,
     );
   });
 

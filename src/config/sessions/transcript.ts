@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { SessionWriteLockAcquireTimeoutConfig } from "../../agents/session-write-lock.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
@@ -164,6 +165,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
+  config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -184,6 +186,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     storePath: params.storePath,
     idempotencyKey: params.idempotencyKey,
     updateMode: params.updateMode,
+    config: params.config,
     message: {
       role: "assistant" as const,
       content: [{ type: "text", text: mirrorText }],
@@ -217,6 +220,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   idempotencyKey?: string;
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
+  config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -283,6 +287,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   const { messageId } = await appendSessionTranscriptMessage({
     transcriptPath: sessionFile,
     message,
+    config: params.config,
   });
 
   switch (params.updateMode ?? "inline") {
@@ -290,7 +295,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       emitSessionTranscriptUpdate({ sessionFile, sessionKey, message, messageId });
       break;
     case "file-only":
-      emitSessionTranscriptUpdate(sessionFile);
+      emitSessionTranscriptUpdate({ sessionFile, sessionKey });
       break;
     case "none":
       break;

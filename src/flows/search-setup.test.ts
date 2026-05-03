@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { runSearchSetupFlow } from "./search-setup.js";
@@ -97,7 +97,45 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: () => [mockGrokProvider],
 }));
 
+const ensureOnboardingPluginInstalled = vi.hoisted(() =>
+  vi.fn(
+    async ({
+      cfg,
+      entry,
+    }: {
+      cfg: { plugins?: { installs?: Record<string, unknown> } };
+      entry: { pluginId: string; install: { npmSpec?: string } };
+    }) => ({
+      cfg: {
+        ...cfg,
+        plugins: {
+          ...cfg.plugins,
+          installs: {
+            ...cfg.plugins?.installs,
+            [entry.pluginId]: {
+              source: "npm",
+              spec: entry.install.npmSpec,
+              installPath: `/tmp/openclaw-plugins/${entry.pluginId}`,
+            },
+          },
+        },
+      },
+      installed: true,
+      pluginId: entry.pluginId,
+      status: "installed",
+    }),
+  ),
+);
+
+vi.mock("../commands/onboarding-plugin-install.js", () => ({
+  ensureOnboardingPluginInstalled,
+}));
+
 describe("runSearchSetupFlow", () => {
+  beforeEach(() => {
+    ensureOnboardingPluginInstalled.mockClear();
+  });
+
   it("runs provider-owned setup after selecting Grok web search", async () => {
     const select = vi
       .fn()
@@ -247,6 +285,92 @@ describe("runSearchSetupFlow", () => {
     expect(next.plugins?.entries?.xai?.config?.xSearch).toMatchObject({
       enabled: true,
       model: "grok-4-1-fast",
+    });
+  });
+
+  it("installs an external catalog search provider before enabling it", async () => {
+    const select = vi.fn().mockResolvedValueOnce("brave");
+    const text = vi.fn().mockResolvedValue("brave-test-key");
+    const prompter = createWizardPrompter({
+      select: select as never,
+      text: text as never,
+    });
+
+    const next = await runSearchSetupFlow({}, createNonExitingRuntime(), prompter);
+
+    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({
+          pluginId: "brave",
+          label: "Brave",
+          trustedSourceLinkedOfficialInstall: true,
+          install: expect.objectContaining({
+            npmSpec: "@openclaw/brave-plugin",
+          }),
+        }),
+        autoConfirmSingleSource: true,
+      }),
+    );
+    expect(next.tools?.web?.search).toMatchObject({
+      provider: "brave",
+      enabled: true,
+    });
+    expect(next.plugins?.entries?.brave?.config?.webSearch).toMatchObject({
+      apiKey: "brave-test-key",
+    });
+    expect(next.plugins?.installs?.brave).toMatchObject({
+      source: "npm",
+      spec: "@openclaw/brave-plugin",
+    });
+  });
+
+  it("installs an external catalog search provider when web search stays disabled", async () => {
+    const select = vi.fn().mockResolvedValueOnce("brave");
+    const text = vi.fn().mockResolvedValue("brave-disabled-key");
+    const prompter = createWizardPrompter({
+      select: select as never,
+      text: text as never,
+    });
+
+    const next = await runSearchSetupFlow(
+      {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              enabled: false,
+            },
+          },
+        },
+      },
+      createNonExitingRuntime(),
+      prompter,
+    );
+
+    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({
+          pluginId: "brave",
+          label: "Brave",
+          trustedSourceLinkedOfficialInstall: true,
+          install: expect.objectContaining({
+            npmSpec: "@openclaw/brave-plugin",
+          }),
+        }),
+        autoConfirmSingleSource: true,
+      }),
+    );
+    expect(next.tools?.web?.search).toMatchObject({
+      provider: "brave",
+      enabled: false,
+    });
+    expect(next.plugins?.entries?.brave?.config?.webSearch).toMatchObject({
+      apiKey: "brave-disabled-key",
+    });
+    expect(next.plugins?.entries?.brave?.enabled).toBeUndefined();
+    expect(next.plugins?.installs?.brave).toMatchObject({
+      source: "npm",
+      spec: "@openclaw/brave-plugin",
     });
   });
 });

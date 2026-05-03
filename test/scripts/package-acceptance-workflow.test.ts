@@ -92,6 +92,7 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("suite_profile:");
     expect(workflow).toContain("published_upgrade_survivor_baseline:");
     expect(workflow).toContain("published_upgrade_survivor_baselines:");
+    expect(workflow).toContain("all-since-2026.4.23");
     expect(workflow).toContain("published_upgrade_survivor_scenarios:");
     expect(workflow).toContain("scripts/resolve-upgrade-survivor-baselines.mjs");
     expect(workflow).toContain("--history-count 6");
@@ -143,6 +144,10 @@ describe("package acceptance workflow", () => {
     const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
 
     expect(workflow).toContain("TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}");
+    expect(workflow).toContain("package_acceptance_package_spec:");
+    expect(workflow).toContain(
+      'args+=(-f package_acceptance_package_spec="$PACKAGE_ACCEPTANCE_PACKAGE_SPEC")',
+    );
     expect(workflow).toContain("--json status,conclusion,url,attempt,headSha,jobs");
     expect(workflow).toContain("child run used ${head_sha}, expected ${TARGET_SHA}");
     expect(workflow).toContain(
@@ -150,6 +155,12 @@ describe("package acceptance workflow", () => {
     );
     expect(workflow).toContain("| Child | Result | Minutes | Head SHA | Run |");
     expect(releaseChecksWorkflow).toContain("refs/heads/release-ci/[0-9a-f]{12}-[0-9]+");
+    expect(releaseChecksWorkflow).toContain(
+      "source: ${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}",
+    );
+    expect(releaseChecksWorkflow).toContain(
+      "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || 'openclaw@beta' }}",
+    );
   });
 
   it("keeps exhaustive update migration as a separate manual package gate", () => {
@@ -209,6 +220,13 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("node .release-harness/scripts/test-docker-all.mjs --plan-json");
     expect(workflow).toContain("node .release-harness/scripts/docker-e2e.mjs github-outputs");
     expect(workflow).toContain("bash .release-harness/scripts/ci-docker-pull-retry.sh");
+    const prepareDockerImage = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
+    expect(workflowStep(prepareDockerImage, "Plan Docker E2E images").env).toMatchObject({
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "${{ inputs.published_upgrade_survivor_baseline }}",
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS:
+        "${{ inputs.published_upgrade_survivor_baselines }}",
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "${{ inputs.published_upgrade_survivor_scenarios }}",
+    });
     expect(workflow).toContain("plan_docker_lane_groups:");
     expect(workflow).toContain("targeted_docker_lane_group_size:");
     expect(workflow).toContain("Docker E2E targeted lanes (${{ matrix.group.label }})");
@@ -228,7 +246,9 @@ describe("package artifact reuse", () => {
     expect(scheduler).toContain('["OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS",');
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1");
     expect(publishedUpgradeSurvivor).toContain("validate_baseline_package_spec");
-    expect(publishedUpgradeSurvivor).toContain("openclaw@(beta|latest|");
+    expect(publishedUpgradeSurvivor).toContain("openclaw@(alpha|beta|latest|");
+    expect(publishedUpgradeSurvivor).toContain("plugin_deps_cleanup_plugin_dirs");
+    expect(publishedUpgradeSurvivor).toContain('"$(package_root)/extensions/$plugin"');
     expect(publishedUpgradeSurvivor).toContain("probe_gateway_endpoint");
     expect(publishedUpgradeSurvivor).toContain(
       "assert_legacy_plugin_dependency_debris_before_doctor",
@@ -296,7 +316,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id",
     );
-    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.5");
+    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
     expect((workflow.match(/service_tier=\\"fast\\"/g) ?? []).length).toBeGreaterThanOrEqual(2);
@@ -457,7 +477,12 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("include_release_path_suites: false");
     expect(workflow).toContain("include_release_path_suites: true");
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
-    expect(workflow).toContain("source: artifact");
+    expect(workflow).toContain(
+      "source: ${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}",
+    );
+    expect(workflow).toContain(
+      "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || 'openclaw@beta' }}",
+    );
     expect(workflow).toContain(".artifacts/docker-e2e-package/package-candidate.json");
     expect(workflow).toContain(
       "artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}",
@@ -469,7 +494,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "docker_lanes: doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update",
     );
-    expect(workflow).toContain("published_upgrade_survivor_baselines: release-history");
+    expect(workflow).toContain("published_upgrade_survivor_baselines: all-since-2026.4.23");
     expect(workflow).toContain("published_upgrade_survivor_scenarios: reported-issues");
     expect(workflow).toContain("telegram_mode: mock-openai");
     expect(workflow).toContain(
@@ -621,7 +646,7 @@ describe("package artifact reuse", () => {
     });
     expectTextToIncludeAll(validateStep.run, [
       'if [[ -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then',
-      "package_spec must be openclaw@beta",
+      "package_spec must be openclaw@alpha",
     ]);
     expectTextToIncludeAll(runStep.run, [
       'export OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ="${package_tgzs[0]}"',

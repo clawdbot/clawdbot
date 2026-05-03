@@ -1,4 +1,4 @@
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
 
@@ -93,6 +93,9 @@ export async function ensureConfigReady(params: {
     snapshot.legacyIssues.length > 0 ? formatConfigIssueLines(snapshot.legacyIssues, "-") : [];
 
   const invalid = snapshot.exists && !snapshot.valid;
+  if (!invalid) {
+    setRuntimeConfigSnapshot(snapshot.runtimeConfig ?? snapshot.config, snapshot.sourceConfig);
+  }
   if (!invalid) {
     return;
   }

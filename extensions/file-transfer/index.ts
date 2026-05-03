@@ -1,16 +1,42 @@
 import {
   definePluginEntry,
+  type AnyAgentTool,
   type OpenClawPluginNodeHostCommand,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { handleDirFetch } from "./src/node-host/dir-fetch.js";
-import { handleDirList } from "./src/node-host/dir-list.js";
-import { handleFileFetch } from "./src/node-host/file-fetch.js";
-import { handleFileWrite } from "./src/node-host/file-write.js";
 import { createFileTransferNodeInvokePolicy } from "./src/shared/node-invoke-policy.js";
-import { createDirFetchTool } from "./src/tools/dir-fetch-tool.js";
-import { createDirListTool } from "./src/tools/dir-list-tool.js";
-import { createFileFetchTool } from "./src/tools/file-fetch-tool.js";
-import { createFileWriteTool } from "./src/tools/file-write-tool.js";
+import {
+  DIR_FETCH_TOOL_DESCRIPTOR,
+  DIR_LIST_TOOL_DESCRIPTOR,
+  FILE_FETCH_TOOL_DESCRIPTOR,
+  FILE_WRITE_TOOL_DESCRIPTOR,
+} from "./src/tools/descriptors.js";
+
+type FileTransferToolDescriptor = Pick<
+  AnyAgentTool,
+  "label" | "name" | "description" | "parameters"
+>;
+
+function readNodeCommandParams(paramsJSON: string | null | undefined): unknown {
+  return paramsJSON ? JSON.parse(paramsJSON) : {};
+}
+
+function createLazyTool(
+  descriptor: FileTransferToolDescriptor,
+  loadTool: () => Promise<AnyAgentTool>,
+): AnyAgentTool {
+  let toolPromise: Promise<AnyAgentTool> | undefined;
+  const loadOnce = () => {
+    toolPromise ??= loadTool();
+    return toolPromise;
+  };
+  return {
+    ...descriptor,
+    async execute(toolCallId, args, signal, onUpdate) {
+      const tool = await loadOnce();
+      return await tool.execute(toolCallId, args, signal, onUpdate);
+    },
+  };
+}
 
 const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
@@ -18,7 +44,8 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
     cap: "file",
     dangerous: true,
     handle: async (paramsJSON) => {
-      const params = paramsJSON ? JSON.parse(paramsJSON) : {};
+      const { handleFileFetch } = await import("./src/node-host/file-fetch.js");
+      const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleFileFetch>[0];
       const result = await handleFileFetch(params);
       return JSON.stringify(result);
     },
@@ -28,7 +55,8 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
     cap: "file",
     dangerous: true,
     handle: async (paramsJSON) => {
-      const params = paramsJSON ? JSON.parse(paramsJSON) : {};
+      const { handleDirList } = await import("./src/node-host/dir-list.js");
+      const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleDirList>[0];
       const result = await handleDirList(params);
       return JSON.stringify(result);
     },
@@ -38,7 +66,8 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
     cap: "file",
     dangerous: true,
     handle: async (paramsJSON) => {
-      const params = paramsJSON ? JSON.parse(paramsJSON) : {};
+      const { handleDirFetch } = await import("./src/node-host/dir-fetch.js");
+      const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleDirFetch>[0];
       const result = await handleDirFetch(params);
       return JSON.stringify(result);
     },
@@ -48,7 +77,8 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
     cap: "file",
     dangerous: true,
     handle: async (paramsJSON) => {
-      const params = paramsJSON ? JSON.parse(paramsJSON) : {};
+      const { handleFileWrite } = await import("./src/node-host/file-write.js");
+      const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleFileWrite>[0];
       const result = await handleFileWrite(params);
       return JSON.stringify(result);
     },
@@ -62,9 +92,29 @@ export default definePluginEntry({
   nodeHostCommands: fileTransferNodeHostCommands,
   register(api) {
     api.registerNodeInvokePolicy(createFileTransferNodeInvokePolicy());
-    api.registerTool(createFileFetchTool());
-    api.registerTool(createDirListTool());
-    api.registerTool(createDirFetchTool());
-    api.registerTool(createFileWriteTool());
+    api.registerTool(
+      createLazyTool(FILE_FETCH_TOOL_DESCRIPTOR, async () => {
+        const { createFileFetchTool } = await import("./src/tools/file-fetch-tool.js");
+        return createFileFetchTool();
+      }),
+    );
+    api.registerTool(
+      createLazyTool(DIR_LIST_TOOL_DESCRIPTOR, async () => {
+        const { createDirListTool } = await import("./src/tools/dir-list-tool.js");
+        return createDirListTool();
+      }),
+    );
+    api.registerTool(
+      createLazyTool(DIR_FETCH_TOOL_DESCRIPTOR, async () => {
+        const { createDirFetchTool } = await import("./src/tools/dir-fetch-tool.js");
+        return createDirFetchTool();
+      }),
+    );
+    api.registerTool(
+      createLazyTool(FILE_WRITE_TOOL_DESCRIPTOR, async () => {
+        const { createFileWriteTool } = await import("./src/tools/file-write-tool.js");
+        return createFileWriteTool();
+      }),
+    );
   },
 });

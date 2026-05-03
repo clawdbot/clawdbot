@@ -13,8 +13,9 @@ describe("OpenClaw provider index", () => {
             id: "moonshot",
             package: " @openclaw/plugin-moonshot ",
             install: {
+              clawhubSpec: " clawhub:openclaw/moonshot@2026.5.2 ",
               npmSpec: " @openclaw/plugin-moonshot@1.2.3 ",
-              defaultChoice: "npm",
+              defaultChoice: "clawhub",
               expectedIntegrity: " sha512-moonshot ",
             },
           },
@@ -63,8 +64,9 @@ describe("OpenClaw provider index", () => {
             id: "moonshot",
             package: "@openclaw/plugin-moonshot",
             install: {
+              clawhubSpec: "clawhub:openclaw/moonshot@2026.5.2",
               npmSpec: "@openclaw/plugin-moonshot@1.2.3",
-              defaultChoice: "npm",
+              defaultChoice: "clawhub",
               expectedIntegrity: "sha512-moonshot",
             },
           },

@@ -16,6 +16,7 @@ import {
 } from "./accounts.js";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";
+import { isWhatsAppNewsletterJid } from "./normalize.js";
 import {
   normalizeWhatsAppPayloadText,
   prepareWhatsAppOutboundMedia,
@@ -142,7 +143,9 @@ export async function sendMessageWhatsApp(
     }
     outboundLog.info(`Sending message -> ${redactedJid}${primaryMediaUrl ? " (media)" : ""}`);
     logger.info({ jid: redactedJid, hasMedia: Boolean(primaryMediaUrl) }, "sending message");
-    await active.sendComposingTo(to);
+    if (!isWhatsAppNewsletterJid(jid)) {
+      await active.sendComposingTo(to);
+    }
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
@@ -192,7 +195,9 @@ export async function sendTypingWhatsApp(
     cfg,
     accountId: options.accountId,
   });
-  await active.sendComposingTo(to);
+  if (!isWhatsAppNewsletterJid(toWhatsappJid(to))) {
+    await active.sendComposingTo(to);
+  }
 }
 
 export async function sendReactionWhatsApp(

@@ -762,6 +762,13 @@ export async function runSetupWizard(
 
   // Plugin configuration (sandbox backends, tool plugins, etc.)
   if (flow !== "quickstart") {
+    const { setupOfficialPluginInstalls } = await import("./setup.official-plugins.js");
+    nextConfig = await setupOfficialPluginInstalls({
+      config: nextConfig,
+      prompter,
+      runtime,
+      workspaceDir,
+    });
     const { setupPluginConfig } = await import("./setup.plugin-config.js");
     nextConfig = await setupPluginConfig({
       config: nextConfig,

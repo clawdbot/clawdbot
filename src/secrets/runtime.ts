@@ -176,6 +176,16 @@ function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
   );
 }
 
+function hasConfiguredChannelEntries(config: OpenClawConfig): boolean {
+  const channels = config.channels;
+  return (
+    !!channels &&
+    typeof channels === "object" &&
+    !Array.isArray(channels) &&
+    Object.keys(channels).some((channelId) => channelId !== "defaults")
+  );
+}
+
 function createEmptyRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata {
   return {
     search: {
@@ -365,7 +375,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   } = await loadRuntimePrepareHelpers();
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??
-    (hasConfiguredPluginEntries(sourceConfig)
+    (hasConfiguredPluginEntries(sourceConfig) || hasConfiguredChannelEntries(sourceConfig)
       ? await resolveLoadablePluginOrigins({ config: sourceConfig, env: runtimeEnv })
       : new Map<string, PluginOrigin>());
   const context = createResolverContext({

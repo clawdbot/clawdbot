@@ -115,6 +115,67 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  it("keeps a successful staged swap when old package cleanup hits a transient Windows native module error", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-staged-cleanup-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      await writePackageRoot(packageRoot, "1.0.0");
+
+      const realRm = fs.rm;
+      const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        const targetPath = String(target);
+        if (
+          targetPath.includes(`${path.sep}.openclaw-`) &&
+          !targetPath.includes(".openclaw-update-stage-") &&
+          !targetPath.includes(".openclaw-shim-backup-")
+        ) {
+          throw Object.assign(new Error("EPERM: operation not permitted, unlink native.node"), {
+            code: "EPERM",
+          });
+        }
+        return realRm(target, options);
+      });
+
+      try {
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep: async ({ name, argv, cwd }) => {
+            const prefixIndex = argv.indexOf("--prefix");
+            const stagePrefix = argv[prefixIndex + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            await writePackageRoot(
+              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+              "2.0.0",
+            );
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+          timeoutMs: 1000,
+        });
+
+        expect(result.failedStep).toBeNull();
+        expect(result.afterVersion).toBe("2.0.0");
+        await expect(
+          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+        ).resolves.toContain('"version":"2.0.0"');
+      } finally {
+        rmSpy.mockRestore();
+      }
+    });
+  });
+
   it("does not run post-verify work when staged npm verification fails", async () => {
     await withTempDir({ prefix: "openclaw-package-update-verify-" }, async (base) => {
       const prefix = path.join(base, "prefix");

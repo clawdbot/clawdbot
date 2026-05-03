@@ -607,12 +607,23 @@ const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
 
 type DeleteConfirmSide = "left" | "right";
 
+const deleteConfirmDismissers = new WeakMap<Element, () => void>();
+
 function shouldSkipDeleteConfirm(): boolean {
   try {
     return getSafeLocalStorage()?.getItem(SKIP_DELETE_CONFIRM_KEY) === "1";
   } catch {
     return false;
   }
+}
+
+function dismissDeleteConfirm(element: Element) {
+  const dismiss = deleteConfirmDismissers.get(element);
+  if (dismiss) {
+    dismiss();
+    return;
+  }
+  element.remove();
 }
 
 function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
@@ -631,7 +642,7 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
           const wrap = btn.closest(".chat-delete-wrap") as HTMLElement;
           const existing = wrap?.querySelector(".chat-delete-confirm");
           if (existing) {
-            existing.remove();
+            dismissDeleteConfirm(existing);
             return;
           }
           const popover = document.createElement("div");
@@ -653,25 +664,41 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
           const yes = popover.querySelector(".chat-delete-confirm__yes")!;
           const check = popover.querySelector(".chat-delete-confirm__check") as HTMLInputElement;
 
-          cancel.addEventListener("click", () => popover.remove());
+          let dismissed = false;
+          function dismissPopover() {
+            if (dismissed) {
+              return;
+            }
+            dismissed = true;
+            document.removeEventListener("click", closeOnOutside, true);
+            deleteConfirmDismissers.delete(popover);
+            popover.remove();
+          }
+          function closeOnOutside(evt: MouseEvent) {
+            const target = evt.target;
+            if (target instanceof Node && !popover.contains(target) && !btn.contains(target)) {
+              dismissPopover();
+            }
+          }
+
+          deleteConfirmDismissers.set(popover, dismissPopover);
+
+          cancel.addEventListener("click", dismissPopover);
           yes.addEventListener("click", () => {
             if (check.checked) {
               try {
                 getSafeLocalStorage()?.setItem(SKIP_DELETE_CONFIRM_KEY, "1");
               } catch {}
             }
-            popover.remove();
+            dismissPopover();
             onDelete();
           });
 
-          // Close on click outside
-          const closeOnOutside = (evt: MouseEvent) => {
-            if (!popover.contains(evt.target as Node) && evt.target !== btn) {
-              popover.remove();
-              document.removeEventListener("click", closeOnOutside, true);
+          requestAnimationFrame(() => {
+            if (!dismissed && popover.isConnected) {
+              document.addEventListener("click", closeOnOutside, true);
             }
-          };
-          requestAnimationFrame(() => document.addEventListener("click", closeOnOutside, true));
+          });
         }}
       >
         ${icons.trash ?? icons.x}

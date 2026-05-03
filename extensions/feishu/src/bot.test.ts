@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage } from "./bot.js";
+import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
 
 type ConfiguredBindingRoute = ReturnType<typeof ConversationRuntime.resolveConfiguredBindingRoute>;
@@ -3000,6 +3001,58 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("dedupes Feishu media by message_id plus file_key", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+    const createAudioEvent = (fileKey: string): FeishuMessageEvent => ({
+      sender: {
+        sender_id: {
+          open_id: "ou-audio-dedup",
+        },
+      },
+      message: {
+        message_id: "msg-audio-reused-id",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "audio",
+        content: JSON.stringify({
+          file_key: fileKey,
+          duration: 1200,
+        }),
+      },
+    });
+
+    await dispatchMessage({ cfg, event: createAudioEvent("file_audio_first") });
+    await dispatchMessage({ cfg, event: createAudioEvent("file_audio_second") });
+    await dispatchMessage({ cfg, event: createAudioEvent("file_audio_first") });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(2);
+    expect(mockDownloadMessageResourceFeishu).toHaveBeenCalledTimes(2);
+    expect(mockDownloadMessageResourceFeishu).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        messageId: "msg-audio-reused-id",
+        fileKey: "file_audio_first",
+        type: "file",
+      }),
+    );
+    expect(mockDownloadMessageResourceFeishu).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        messageId: "msg-audio-reused-id",
+        fileKey: "file_audio_second",
+        type: "file",
+      }),
+    );
+  });
+
   it("skips empty-text messages with no media to prevent blank user turns in session (#74634)", async () => {
     // Feishu can deliver { "text": "" } events (empty-text or media-stripped
     // messages). Writing blank user content to the session causes downstream
@@ -3036,5 +3089,75 @@ describe("handleFeishuMessage command authorization", () => {
 
     // No reply should be dispatched: empty message is silently skipped
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+});
+
+describe("createFeishuMessageReceiveHandler media dedupe", () => {
+  it("keeps same-id media variants distinct at receive time", async () => {
+    const handleMessage = vi.fn(async () => undefined);
+    const core = {
+      channel: {
+        debounce: {
+          resolveInboundDebounceMs: vi.fn(() => 0),
+          createInboundDebouncer: vi.fn(
+            (options: { onFlush: (entries: FeishuMessageEvent[]) => Promise<void> | void }) => ({
+              enqueue: async (event: FeishuMessageEvent) => {
+                await options.onFlush([event]);
+              },
+            }),
+          ),
+        },
+        text: {
+          hasControlCommand: vi.fn(() => false),
+        },
+      },
+    } as unknown as PluginRuntime;
+    const createAudioEvent = (fileKey: string): FeishuMessageEvent => ({
+      sender: {
+        sender_id: {
+          open_id: "ou-audio-receive-dedup",
+        },
+      },
+      message: {
+        message_id: "msg-audio-receive-reused-id",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "audio",
+        content: JSON.stringify({
+          file_key: fileKey,
+          duration: 1200,
+        }),
+      },
+    });
+    const handler = createFeishuMessageReceiveHandler({
+      cfg: { channels: { feishu: { dmPolicy: "open" } } } as ClawdbotConfig,
+      core,
+      accountId: "receive-media-dedupe",
+      chatHistories: new Map(),
+      handleMessage,
+      resolveDebounceText: () => "",
+      hasProcessedMessage: vi.fn(async () => false),
+      recordProcessedMessage: vi.fn(async () => true),
+    });
+
+    await handler(createAudioEvent("file_audio_receive_first"));
+    await handler(createAudioEvent("file_audio_receive_second"));
+    await handler(createAudioEvent("file_audio_receive_first"));
+
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+    expect(handleMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        event: createAudioEvent("file_audio_receive_first"),
+        processingClaimHeld: true,
+      }),
+    );
+    expect(handleMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        event: createAudioEvent("file_audio_receive_second"),
+        processingClaimHeld: true,
+      }),
+    );
   });
 });

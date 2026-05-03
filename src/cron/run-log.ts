@@ -29,6 +29,7 @@ export type CronRunLogEntry = {
   delivery?: CronDeliveryTrace;
   sessionId?: string;
   sessionKey?: string;
+  runId?: string;
   runAtMs?: number;
   durationMs?: number;
   nextRunAtMs?: number;
@@ -310,6 +311,7 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
         status: obj.status,
         error: obj.error,
         summary: obj.summary,
+        runId: typeof obj.runId === "string" && obj.runId.trim() ? obj.runId : undefined,
         runAtMs: obj.runAtMs,
         durationMs: obj.durationMs,
         nextRunAtMs: obj.nextRunAtMs,

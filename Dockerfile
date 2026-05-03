@@ -15,6 +15,9 @@ ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
+# Keep in sync with .github/actions/setup-node-env/action.yml bun-version.
+# To update: docker buildx imagetools inspect oven/bun:<version> and use the manifest-list digest.
+ARG OPENCLAW_BUN_IMAGE="oven/bun:1.3.13@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e"
 
 # Base images are pinned to SHA256 digests for reproducible builds.
 # Dependabot refreshes these blessed digests; release builds consume the
@@ -37,22 +40,12 @@ RUN --mount=type=bind,source=${OPENCLAW_BUNDLED_PLUGIN_DIR},target=/tmp/${OPENCL
     done
 
 # ── Stage 2: Build ──────────────────────────────────────────────
+FROM ${OPENCLAW_BUN_IMAGE} AS bun-binary
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 
-# Install Bun (required for build scripts). Retry the whole bootstrap flow to
-# tolerate transient 5xx failures from bun.sh/GitHub during CI image builds.
-RUN set -eux; \
-    for attempt in 1 2 3 4 5; do \
-      if curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL https://bun.sh/install | bash; then \
-        break; \
-      fi; \
-      if [ "$attempt" -eq 5 ]; then \
-        exit 1; \
-      fi; \
-      sleep $((attempt * 2)); \
-    done
-ENV PATH="/root/.bun/bin:${PATH}"
+# Copy pinned Bun binary from the official image instead of fetching via curl.
+COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
 
 RUN corepack enable
 

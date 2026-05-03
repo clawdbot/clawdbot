@@ -1,8 +1,10 @@
 import type { Chat, Message } from "@grammyjs/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import type {
+  TelegramAccountConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
+  TelegramDmThreadReplies,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-types";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
@@ -74,6 +76,36 @@ export type TelegramThreadSpec = {
   id?: number;
   scope: "dm" | "forum" | "none";
 };
+
+function normalizeTelegramDmThreadReplies(value: unknown): TelegramDmThreadReplies | undefined {
+  return value === "off" || value === "inbound" || value === "always" ? value : undefined;
+}
+
+export function resolveTelegramDmThreadReplies(params: {
+  accountConfig?: TelegramAccountConfig;
+  directConfig?: TelegramDirectConfig;
+}): TelegramDmThreadReplies {
+  return (
+    normalizeTelegramDmThreadReplies(params.directConfig?.threadReplies) ??
+    normalizeTelegramDmThreadReplies(params.accountConfig?.dm?.threadReplies) ??
+    "off"
+  );
+}
+
+export function shouldUseTelegramDmThreadSession(params: {
+  dmThreadId?: number;
+  accountConfig?: TelegramAccountConfig;
+  directConfig?: TelegramDirectConfig;
+  topicConfig?: TelegramTopicConfig;
+}): boolean {
+  if (params.dmThreadId == null) {
+    return false;
+  }
+  if (params.directConfig?.requireTopic === true || params.topicConfig) {
+    return true;
+  }
+  return resolveTelegramDmThreadReplies(params) !== "off";
+}
 
 export function extractTelegramForumFlag(value: unknown): boolean | undefined {
   if (!value || typeof value !== "object" || !("is_forum" in value)) {

@@ -42,6 +42,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   messageChannelId: string;
   author: User;
   sender: DiscordSenderIdentity;
+  canonicalMessageId?: string;
   memberRoleIds: string[];
 
   channelInfo: DiscordChannelInfo | null;

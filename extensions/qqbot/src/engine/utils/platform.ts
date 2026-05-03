@@ -2,12 +2,10 @@
  * Cross-platform path and detection helpers for core/ modules.
  *
  * Provides home/data/media directory helpers, platform detection,
- * ffmpeg/silk-wasm availability checks — all without importing
- * `openclaw/plugin-sdk`. The temp-directory fallback is delegated
- * to the PlatformAdapter.
+ * silk-wasm availability checks — all without importing `openclaw/plugin-sdk`.
+ * The temp-directory fallback is delegated to the PlatformAdapter.
  */
 
-import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -107,82 +105,6 @@ export function isWindows(): boolean {
 /** Return the preferred temporary directory. */
 export function getTempDir(): string {
   return getPlatformAdapter().getTempDir();
-}
-
-// ---- ffmpeg detection ----
-
-let _ffmpegPath: string | null | undefined;
-let _ffmpegCheckPromise: Promise<string | null> | null = null;
-
-/** Detect ffmpeg and return an executable path when available. */
-export function detectFfmpeg(): Promise<string | null> {
-  if (_ffmpegPath !== undefined) {
-    return Promise.resolve(_ffmpegPath);
-  }
-  if (_ffmpegCheckPromise) {
-    return _ffmpegCheckPromise;
-  }
-
-  _ffmpegCheckPromise = (async () => {
-    const envPath = process.env.FFMPEG_PATH;
-    if (envPath) {
-      const ok = await testExecutable(envPath, ["-version"]);
-      if (ok) {
-        _ffmpegPath = envPath;
-        debugLog(`[platform] ffmpeg found via FFMPEG_PATH: ${envPath}`);
-        return _ffmpegPath;
-      }
-      debugWarn(`[platform] FFMPEG_PATH set but not working: ${envPath}`);
-    }
-
-    const cmd = isWindows() ? "ffmpeg.exe" : "ffmpeg";
-    const ok = await testExecutable(cmd, ["-version"]);
-    if (ok) {
-      _ffmpegPath = cmd;
-      debugLog(`[platform] ffmpeg detected in PATH`);
-      return _ffmpegPath;
-    }
-
-    const commonPaths = isWindows()
-      ? [
-          "C:\\ffmpeg\\bin\\ffmpeg.exe",
-          path.join(process.env.LOCALAPPDATA || "", "Programs", "ffmpeg", "bin", "ffmpeg.exe"),
-          path.join(process.env.ProgramFiles || "", "ffmpeg", "bin", "ffmpeg.exe"),
-        ]
-      : [
-          "/usr/local/bin/ffmpeg",
-          "/opt/homebrew/bin/ffmpeg",
-          "/usr/bin/ffmpeg",
-          "/snap/bin/ffmpeg",
-        ];
-
-    for (const p of commonPaths) {
-      if (p && fs.existsSync(p)) {
-        const works = await testExecutable(p, ["-version"]);
-        if (works) {
-          _ffmpegPath = p;
-          debugLog(`[platform] ffmpeg found at: ${p}`);
-          return _ffmpegPath;
-        }
-      }
-    }
-
-    _ffmpegPath = null;
-    return null;
-  })().finally(() => {
-    _ffmpegCheckPromise = null;
-  });
-
-  return _ffmpegCheckPromise;
-}
-
-/** Return true when an executable responds successfully to the given args. */
-function testExecutable(cmd: string, args: string[]): Promise<boolean> {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: 5000 }, (err) => {
-      resolve(!err);
-    });
-  });
 }
 
 // ---- silk-wasm detection ----

@@ -601,7 +601,7 @@ function logTrustedSourceLinkedOfficialInstall(params: {
   targetLabel: string;
 }) {
   params.logger.warn?.(
-    `WARNING: ${params.targetLabel} allowed because it is an official source-linked ClawHub package: ${buildCriticalDetails({ findings: params.findings })}`,
+    `WARNING: ${params.targetLabel} allowed because it is an official OpenClaw package: ${buildCriticalDetails({ findings: params.findings })}`,
   );
 }
 

@@ -183,6 +183,35 @@ describe("buildChatItems", () => {
       },
     });
   });
+
+  it("explains compaction boundaries and exposes the checkpoint action", () => {
+    const items = buildChatItems(
+      createProps({
+        messages: [
+          {
+            role: "system",
+            timestamp: 2_000,
+            __openclaw: {
+              kind: "compaction",
+              id: "checkpoint-1",
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "divider",
+      label: "Compacted history",
+      description:
+        "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
+      action: {
+        kind: "session-checkpoints",
+        label: "Open checkpoints",
+      },
+    });
+  });
 });
 
 function isCanvasBlock(block: unknown): boolean {

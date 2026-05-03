@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { buildChannelConfigSchema, emptyChannelConfigSchema } from "./config-schema.js";
+import {
+  buildChannelConfigSchema,
+  buildJsonChannelConfigSchema,
+  emptyChannelConfigSchema,
+} from "./config-schema.js";
 
 describe("buildChannelConfigSchema", () => {
   it("builds json schema when toJSONSchema is available", () => {
@@ -43,6 +47,37 @@ describe("buildChannelConfigSchema", () => {
     expect(result.runtime?.safeParse({})).toEqual({
       success: true,
       data: { enabled: true },
+    });
+  });
+});
+
+describe("buildJsonChannelConfigSchema", () => {
+  it("validates direct JSON schemas without zod conversion", () => {
+    const result = buildJsonChannelConfigSchema(
+      {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          enabled: { type: "boolean", default: true },
+        },
+      },
+      { cacheKey: "config-schema.test.json-channel" },
+    );
+
+    expect(result.schema).toEqual({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        enabled: { type: "boolean", default: true },
+      },
+    });
+    expect(result.runtime?.safeParse({})).toEqual({
+      success: true,
+      data: { enabled: true },
+    });
+    expect(result.runtime?.safeParse({ enabled: "yes" })).toEqual({
+      success: false,
+      issues: [{ path: ["enabled"], message: "must be boolean" }],
     });
   });
 });

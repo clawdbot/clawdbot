@@ -1,3 +1,4 @@
+import { cloneAuthProfileStore } from "./clone.js";
 import { hasUsableOAuthCredential as hasUsableStoredOAuthCredential } from "./credential-state.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
@@ -173,7 +174,7 @@ export function overlayRuntimeExternalOAuthProfiles(
   if (externalProfiles.length === 0) {
     return store;
   }
-  const next = structuredClone(store);
+  const next = cloneAuthProfileStore(store);
   for (const profile of externalProfiles) {
     next.profiles[profile.profileId] = profile.credential;
   }

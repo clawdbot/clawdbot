@@ -17,6 +17,10 @@ Remote `MEDIA:` attachments must be public `https:` URLs. Plain `http:`,
 loopback, link-local, private, and internal hostnames are ignored as attachment
 directives; server-side media fetchers still enforce their own network guards.
 
+Local `MEDIA:` attachments can use absolute paths, workspace-relative paths, or
+home-relative `~/` paths. They still pass through the agent file-read policy and
+media type checks before delivery.
+
 Plain Markdown image syntax stays text by default. Channels that intentionally
 map Markdown image replies to media attachments opt in at their outbound
 adapter; Telegram does this so `![alt](url)` can still become a media reply.

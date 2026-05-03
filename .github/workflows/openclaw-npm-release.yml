@@ -17,11 +17,12 @@ on:
         required: false
         type: string
       npm_dist_tag:
-        description: npm dist-tag to publish to for stable releases
+        description: npm dist-tag to publish to
         required: true
         default: beta
         type: choice
         options:
+          - alpha
           - beta
           - latest
 
@@ -54,12 +55,16 @@ jobs:
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_REF}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] && [[ ! "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+          if [[ ! "${RELEASE_REF}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] && [[ ! "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "Invalid release ref format: ${RELEASE_REF}"
             exit 1
           fi
           if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]] && [[ "${PREFLIGHT_ONLY}" != "true" ]]; then
             echo "Full commit SHA input is only supported for validation-only preflight runs."
+            exit 1
+          fi
+          if [[ "${RELEASE_REF}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" != "alpha" ]]; then
+            echo "Alpha prerelease tags must publish to npm dist-tag alpha."
             exit 1
           fi
           if [[ "${RELEASE_REF}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then
@@ -294,8 +299,12 @@ jobs:
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
             echo "Invalid release tag format: ${RELEASE_TAG}"
+            exit 1
+          fi
+          if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" != "alpha" ]]; then
+            echo "Alpha prerelease tags must publish to npm dist-tag alpha."
             exit 1
           fi
           if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then

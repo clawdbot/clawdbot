@@ -25,7 +25,7 @@ import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
-import { sendMediaFeishu } from "./media.js";
+import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import {
   resolveFeishuCardTemplate,
@@ -132,9 +132,10 @@ function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown
   if (!isRecord(button)) {
     return undefined;
   }
-  const text = isRecord(button.text) && typeof button.text.content === "string"
-    ? button.text.content
-    : undefined;
+  const text =
+    isRecord(button.text) && typeof button.text.content === "string"
+      ? button.text.content
+      : undefined;
   if (!text?.trim()) {
     return undefined;
   }
@@ -176,7 +177,9 @@ function sanitizeNativeFeishuCardElement(element: unknown): Record<string, unkno
   return undefined;
 }
 
-function sanitizeNativeFeishuCard(card: Record<string, unknown>): Record<string, unknown> | undefined {
+function sanitizeNativeFeishuCard(
+  card: Record<string, unknown>,
+): Record<string, unknown> | undefined {
   const body = isRecord(card.body) ? card.body : undefined;
   const rawElements = Array.isArray(body?.elements) ? body.elements : [];
   const elements = rawElements
@@ -187,9 +190,10 @@ function sanitizeNativeFeishuCard(card: Record<string, unknown>): Record<string,
   }
 
   const header = isRecord(card.header) ? card.header : undefined;
-  const title = isRecord(header?.title) && typeof header.title.content === "string"
-    ? header.title.content
-    : undefined;
+  const title =
+    isRecord(header?.title) && typeof header.title.content === "string"
+      ? header.title.content
+      : undefined;
   return markRenderedFeishuCard({
     schema: "2.0",
     config: { width_mode: "fill" },
@@ -668,8 +672,15 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         });
       }
 
-      // Send text first if provided
-      if (text?.trim()) {
+      const suppressTextForVoiceMedia =
+        mediaUrl !== undefined &&
+        shouldSuppressFeishuTextForVoiceMedia({
+          mediaUrl,
+          audioAsVoice,
+        });
+
+      // Send text first if provided, except for Feishu native voice bubbles.
+      if (text?.trim() && !suppressTextForVoiceMedia) {
         await sendOutboundText({
           cfg,
           to,
@@ -695,10 +706,11 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           // Log the error for debugging
           console.error(`[feishu] sendMediaFeishu failed:`, err);
           // Fallback to URL link if upload fails
+          const fallbackText = [text?.trim(), `📎 ${mediaUrl}`].filter(Boolean).join("\n\n");
           return await sendOutboundText({
             cfg,
             to,
-            text: `📎 ${mediaUrl}`,
+            text: fallbackText,
             accountId: accountId ?? undefined,
             replyToMessageId,
           });

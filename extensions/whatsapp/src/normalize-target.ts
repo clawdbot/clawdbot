@@ -5,6 +5,7 @@ const WHATSAPP_USER_JID_RE = /^(\d+)(?::\d+)?@s\.whatsapp\.net$/i;
 const WHATSAPP_LEGACY_USER_JID_RE = /^(\d+)@c\.us$/i;
 const WHATSAPP_LID_RE = /^(\d+)@lid$/i;
 const NON_WHATSAPP_PROVIDER_PREFIX_RE = /^[a-z][a-z0-9-]*:/i;
+const WHATSAPP_NEWSLETTER_JID_RE = /^([0-9]+)@newsletter$/i;
 
 function stripWhatsAppTargetPrefixes(value: string): string {
   let candidate = value.trim();
@@ -28,6 +29,11 @@ export function isWhatsAppGroupJid(value: string): boolean {
     return false;
   }
   return /^[0-9]+(-[0-9]+)*$/.test(localPart);
+}
+
+export function isWhatsAppNewsletterJid(value: string): boolean {
+  const candidate = stripWhatsAppTargetPrefixes(value);
+  return WHATSAPP_NEWSLETTER_JID_RE.test(candidate);
 }
 
 export function isWhatsAppUserTarget(value: string): boolean {
@@ -63,6 +69,10 @@ export function normalizeWhatsAppTarget(value: string): string | null {
   if (isWhatsAppGroupJid(candidate)) {
     const localPart = candidate.slice(0, candidate.length - "@g.us".length);
     return `${localPart}@g.us`;
+  }
+  if (isWhatsAppNewsletterJid(candidate)) {
+    const match = candidate.match(WHATSAPP_NEWSLETTER_JID_RE);
+    return match ? `${match[1]}@newsletter` : null;
   }
   if (isWhatsAppUserTarget(candidate)) {
     const phone = extractUserJidPhone(candidate);
@@ -106,6 +116,7 @@ export function looksLikeWhatsAppTargetId(raw: string): boolean {
   return (
     /^whatsapp:/i.test(trimmed) ||
     isWhatsAppGroupJid(trimmed) ||
+    isWhatsAppNewsletterJid(trimmed) ||
     isWhatsAppUserTarget(trimmed) ||
     normalizeWhatsAppTarget(trimmed) !== null
   );

@@ -107,6 +107,9 @@ export const healthHandlers: GatewayRequestHandlers = {
       !cachedDiffersFromRuntime &&
       now - cached.ts < HEALTH_REFRESH_INTERVAL_MS
     ) {
+      if (context.getEventLoopHealth) {
+        cached.eventLoop = context.getEventLoopHealth();
+      }
       respond(true, cached, undefined, { cached: true });
       void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err) =>
         logHealth.error(`background health refresh failed: ${formatError(err)}`),
@@ -120,12 +123,15 @@ export const healthHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  status: async ({ respond, client, params }) => {
+  status: async ({ respond, client, params, context }) => {
     const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     const status = await getStatusSummary({
       includeSensitive: scopes.includes(ADMIN_SCOPE),
       includeChannelSummary: params.includeChannelSummary !== false,
     });
+    if (context.getEventLoopHealth) {
+      status.eventLoop = context.getEventLoopHealth();
+    }
     respond(true, status, undefined);
   },
 };

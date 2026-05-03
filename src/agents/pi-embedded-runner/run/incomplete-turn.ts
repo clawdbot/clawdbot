@@ -34,7 +34,7 @@ type ReplayMetadataAttempt = Pick<
 type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
-  | "clientToolCall"
+  | "clientToolCalls"
   | "currentAttemptAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
@@ -52,7 +52,7 @@ type IncompleteTurnAttempt = Pick<
 type PlanningOnlyAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
-  | "clientToolCall"
+  | "clientToolCalls"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
   | "didSendViaMessagingTool"
@@ -68,7 +68,7 @@ type PlanningOnlyAttempt = Pick<
 
 type SilentToolResultAttempt = Pick<
   EmbeddedRunAttemptResult,
-  | "clientToolCall"
+  | "clientToolCalls"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
   | "lastToolError"
@@ -224,7 +224,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.payloadCount !== 0 ||
     params.aborted ||
     params.timedOut ||
-    params.attempt.clientToolCall ||
+    params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError
@@ -339,7 +339,7 @@ export function resolveSilentToolResultReplyPayload(params: {
     params.aborted ||
     params.timedOut ||
     (params.attempt.toolMetas?.length ?? 0) === 0 ||
-    params.attempt.clientToolCall ||
+    params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
@@ -468,7 +468,7 @@ function shouldSkipPlanningOnlyRetry(params: {
   return Boolean(
     params.aborted ||
     params.timedOut ||
-    params.attempt.clientToolCall ||
+    params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
@@ -819,7 +819,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     (typeof params.prompt === "string" && !isLikelyActionableUserPrompt(params.prompt)) ||
     params.aborted ||
     params.timedOut ||
-    params.attempt.clientToolCall ||
+    params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     hasMessagingToolDeliveryEvidence(params.attempt) ||

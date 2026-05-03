@@ -4,8 +4,6 @@ import {
   buildMemoryPromptSection,
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
-  getMemoryFlushPlanResolver,
-  getMemoryPromptSectionBuilder,
   getMemoryRuntime,
   hasMemoryRuntime,
   listMemoryCorpusSupplements,
@@ -54,10 +52,7 @@ function createMemoryStateSnapshot() {
   return {
     capability: getMemoryCapabilityRegistration(),
     corpusSupplements: listMemoryCorpusSupplements(),
-    promptBuilder: getMemoryPromptSectionBuilder(),
     promptSupplements: listMemoryPromptSupplements(),
-    flushPlanResolver: getMemoryFlushPlanResolver(),
-    runtime: getMemoryRuntime(),
   };
 }
 
@@ -66,16 +61,13 @@ function registerMemoryState(params: {
   relativePath?: string;
   runtime?: ReturnType<typeof createMemoryRuntime>;
 }) {
-  if (params.promptSection) {
-    registerMemoryPromptSection(() => params.promptSection ?? []);
-  }
-  if (params.relativePath) {
-    const relativePath = params.relativePath;
-    registerMemoryFlushPlanResolver(() => createMemoryFlushPlan(relativePath));
-  }
-  if (params.runtime) {
-    registerMemoryRuntime(params.runtime);
-  }
+  registerMemoryCapability("memory-core", {
+    ...(params.promptSection ? { promptBuilder: () => params.promptSection ?? [] } : {}),
+    ...(params.relativePath
+      ? { flushPlanResolver: () => createMemoryFlushPlan(params.relativePath ?? "") }
+      : {}),
+    ...(params.runtime ? { runtime: params.runtime } : {}),
+  });
 }
 
 describe("memory plugin state", () => {
@@ -102,7 +94,22 @@ describe("memory plugin state", () => {
     ]);
   });
 
-  it("prefers the registered memory capability over legacy split state", async () => {
+  it("adapts deprecated split registration to the unified memory capability", async () => {
+    const runtime = createMemoryRuntime();
+
+    registerMemoryPromptSection(() => ["legacy prompt"]);
+    registerMemoryFlushPlanResolver(() => createMemoryFlushPlan("memory/legacy.md"));
+    registerMemoryRuntime(runtime);
+
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["legacy prompt"]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/legacy.md");
+    expect(getMemoryRuntime()).toBe(runtime);
+    expect(getMemoryCapabilityRegistration()).toMatchObject({
+      pluginId: "legacy-memory-v1",
+    });
+  });
+
+  it("prefers the registered memory capability over earlier legacy split state", async () => {
     const runtime = createMemoryRuntime();
 
     registerMemoryPromptSection(() => ["legacy prompt"]);

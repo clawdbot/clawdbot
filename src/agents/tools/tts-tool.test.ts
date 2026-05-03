@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import * as ttsRuntime from "../../tts/tts.js";
 import { createTtsTool } from "./tts-tool.js";
 
@@ -11,10 +10,10 @@ describe("createTtsTool", () => {
     textToSpeechSpy = vi.spyOn(ttsRuntime, "textToSpeech");
   });
 
-  it("uses SILENT_REPLY_TOKEN in guidance text", () => {
+  it("does not hardcode silent-reply tokens in the tool description", () => {
     const tool = createTtsTool();
 
-    expect(tool.description).toContain(SILENT_REPLY_TOKEN);
+    expect(tool.description).not.toContain("NO_REPLY");
   });
 
   it("requires explicit user or config audio intent in guidance text", () => {

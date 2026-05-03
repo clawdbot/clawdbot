@@ -69,6 +69,14 @@ describe("CodexAppServerClient", () => {
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-value");
   });
 
+  it("redacts prefixed env credential names from app-server previews", () => {
+    expect(
+      __testing.redactCodexAppServerLinePreview(
+        "fatal OPENAI_API_KEY=sk-live ANTHROPIC_API_KEY='anthropic-secret' OTHER=value",
+      ),
+    ).toBe("fatal OPENAI_API_KEY=<redacted> ANTHROPIC_API_KEY='<redacted>' OTHER=value");
+  });
+
   it("recovers app-server messages split by raw newlines inside JSON strings", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createClientHarness();
@@ -305,9 +313,23 @@ describe("CodexAppServerClient", () => {
     // an unhandled exception tearing down the gateway.
     await expect(pending).rejects.toThrow("write EPIPE");
 
-    // Subsequent requests are rejected immediately (client is closed).
+    // Subsequent requests keep the original close reason so startup logs stay actionable.
+    await expect(harness.client.request("another/method")).rejects.toThrow("write EPIPE");
+  });
+
+  it("preserves redacted app-server stderr on exit errors", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const pending = harness.client.request("test/method");
+    harness.process.stderr.write('fatal token="secret-value" while booting\n');
+    harness.process.emit("exit", 1, null);
+
+    await expect(pending).rejects.toThrow(
+      'codex app-server exited: code=1 signal=null stderr="fatal token=\\"<redacted>\\" while booting"',
+    );
     await expect(harness.client.request("another/method")).rejects.toThrow(
-      "codex app-server client is closed",
+      "codex app-server exited: code=1 signal=null",
     );
   });
 

@@ -95,6 +95,9 @@ Lightweight and core-critical bundled plugins are shipped as part of OpenClaw.
 They should either have no heavy runtime dependency tree or be moved out to a
 downloadable package on ClawHub/npm.
 
+For the current generated list of plugins that ship in the core package, install
+externally, or stay source-only, see [Plugin inventory](/plugins/plugin-inventory).
+
 Bundled plugin manifests must not request dependency staging. Large or optional
 plugin functionality should be packaged as a normal plugin and installed through
 the same npm/git/ClawHub path as third-party plugins.

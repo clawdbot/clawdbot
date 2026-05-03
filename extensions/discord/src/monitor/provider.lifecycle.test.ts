@@ -175,12 +175,13 @@ describe("runDiscordGatewayLifecycle", () => {
     threadStop: ReturnType<typeof vi.fn>;
     waitCalls: number;
     gatewaySupervisor: { detachLifecycle: ReturnType<typeof vi.fn> };
+    detachCalls?: number;
   }) {
     expect(waitForDiscordGatewayStopMock).toHaveBeenCalledTimes(params.waitCalls);
     expect(unregisterGatewayMock).toHaveBeenCalledWith("default");
     expect(stopGatewayLoggingMock).toHaveBeenCalledTimes(1);
     expect(params.threadStop).toHaveBeenCalledTimes(1);
-    expect(params.gatewaySupervisor.detachLifecycle).toHaveBeenCalledTimes(1);
+    expect(params.gatewaySupervisor.detachLifecycle).toHaveBeenCalledTimes(params.detachCalls ?? 1);
   }
 
   it("resolves gateway READY timeouts from config, env, then defaults", () => {
@@ -506,6 +507,60 @@ describe("runDiscordGatewayLifecycle", () => {
       threadStop,
       waitCalls: 0,
       gatewaySupervisor,
+    });
+  });
+
+  it("treats abort-time live reconnect exhaustion as expected shutdown", async () => {
+    const abortController = new AbortController();
+    let liveGatewayHandler: ((event: DiscordGatewayEvent) => void) | undefined;
+    const { lifecycleParams, threadStop, runtimeLog, runtimeError, gatewaySupervisor } =
+      createLifecycleHarness();
+    lifecycleParams.abortSignal = abortController.signal;
+    gatewaySupervisor.attachLifecycle.mockImplementation(
+      (handler: (event: DiscordGatewayEvent) => void) => {
+        liveGatewayHandler = handler;
+      },
+    );
+    abortController.signal.addEventListener(
+      "abort",
+      () => {
+        if (!liveGatewayHandler) {
+          throw new Error("discord gateway lifecycle handler was not attached");
+        }
+        liveGatewayHandler(
+          createGatewayEvent(
+            "reconnect-exhausted",
+            "Max reconnect attempts (50) reached after close code 1005",
+          ),
+        );
+      },
+      { once: true },
+    );
+    waitForDiscordGatewayStopMock.mockImplementationOnce(async (waitParams) => {
+      const actual =
+        await vi.importActual<typeof import("../monitor.gateway.js")>("../monitor.gateway.js");
+      const waitPromise = actual.waitForDiscordGatewayStop(waitParams);
+      abortController.abort(new Error("shutdown"));
+      return await waitPromise;
+    });
+
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+
+    expect(gatewaySupervisor.attachLifecycle).toHaveBeenCalledTimes(1);
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("treating reconnect-exhausted during expected shutdown as clean"),
+    );
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("Max reconnect attempts (50) reached after close code 1005"),
+    );
+    expect(runtimeError).not.toHaveBeenCalledWith(
+      expect.stringContaining("discord gateway reconnect-exhausted"),
+    );
+    expectLifecycleCleanup({
+      threadStop,
+      waitCalls: 1,
+      gatewaySupervisor,
+      detachCalls: 2,
     });
   });
 

@@ -429,6 +429,35 @@ describe("EmbeddedTuiBackend", () => {
     expect(capturedSignal?.aborted).toBe(true);
   });
 
+  it("passes explicit chat timeouts to the agent command as seconds", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    agentCommandFromIngressMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello" }],
+      meta: {},
+    });
+
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    try {
+      await backend.sendChat({
+        sessionKey: "agent:main:main",
+        message: "Wake up, my friend!",
+        runId: "run-explicit-timeout",
+        timeoutMs: 300_000,
+      });
+      await flushMicrotasks();
+
+      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+      expect(agentCommandFromIngressMock.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({
+          timeout: "300",
+        }),
+      );
+    } finally {
+      backend.stop();
+    }
+  });
+
   it("restores embedded mode and runtime loggers on stop", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
 

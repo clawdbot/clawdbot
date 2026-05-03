@@ -261,14 +261,12 @@ describe("legacy migrate sandbox scope aliases", () => {
     expect(res.config?.agents?.defaults).toEqual({
       agentRuntime: {
         id: "claude-cli",
-        fallback: "none",
       },
     });
     expect(res.config?.agents?.list?.[0]).toEqual({
       id: "reviewer",
       agentRuntime: {
         id: "codex",
-        fallback: "pi",
       },
     });
   });

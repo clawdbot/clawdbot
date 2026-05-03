@@ -126,7 +126,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 
 ## Tests
 
-- Vitest. Colocated `*.test.ts`; e2e `*.e2e.test.ts`; example models `sonnet-4.6`, `gpt-5.5`; test GPT with 5.5 preferred, 5.4 ok, no GPT-4.x agent-smoke defaults.
+- Vitest. Colocated `*.test.ts`; e2e `*.e2e.test.ts`; example models `sonnet-4.6`, `gpt-5.5`; test GPT with 5.5 preferred, 5.4 ok; no GPT-4.x agent-smoke defaults.
 - Avoid brittle tests that grep workflow/docs strings for operator policy. Prefer executable behavior, parsed config/schema checks, or live run proof; put release/CI policy reminders in AGENTS/docs instead.
 - Clean timers/env/globals/mocks/sockets/temp dirs/module state; `--isolate=false` safe.
 - Hot tests: avoid per-test `vi.resetModules()` + heavy imports. Measure with `pnpm test:perf:imports <file>` / `pnpm test:perf:hotspots --limit N`.
@@ -141,13 +141,14 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Test workers max 16. Memory pressure: `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`.
 - Live: `OPENCLAW_LIVE_TEST=1 pnpm test:live`; verbose `OPENCLAW_LIVE_TEST_QUIET=0`.
 - Guide: `docs/help/testing.md`.
+- Package manifest plugin-local assertions must agree with `pnpm deps:root-ownership:check`; intentionally internalized bundled plugin runtime deps are root-owned while the package acceptance path needs them.
 
 ## Docs / Changelog
 
 - Docs change with behavior/API. Use docs list/read_when hints; docs links per `docs/AGENTS.md`.
 - Docs final answers: when doc files changed, end with the relevant full `https://docs.openclaw.ai/...` URL(s).
 - Changelog user-facing only; fixing an issue or landing/merging a PR needs one unless pure test/internal.
-- Changelog placement: active version `### Changes`/`### Fixes`; contributor-facing added entries should include at least one `Thanks @author` attribution, using credited human GitHub username(s). Never add `Thanks @codex`, `Thanks @openclaw`, `Thanks @clawsweeper`, or `Thanks @steipete`; for maintainer-owned or automation-only changes, omit the thanks instead of inventing credit.
+- Changelog placement: active version `### Changes`/`### Fixes`; contributor-facing added entries should include at least one `Thanks @author` attribution, using credited human GitHub username(s). Never add `Thanks @codex`, `Thanks @openclaw`, `Thanks @clawsweeper`, or `Thanks @steipete`; if the real credited human is unknown, leave attribution blank instead of guessing or adding a random person.
 - Changelog bullets are always single-line. No wrapping/continuation across multiple lines. Long entries stay on one long line so dedupe, PR-ref, and credit-audit tooling work and so the visual style stays uniform.
 
 ## Git

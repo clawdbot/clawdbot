@@ -65,6 +65,7 @@ export async function generateImage(
     parseModelRef: parseImageGenerationModelRef,
     agentDir: params.agentDir,
     listProviders,
+    autoProviderFallback: params.autoProviderFallback,
   });
   if (candidates.length === 0) {
     throw new Error(buildNoImageGenerationModelConfiguredMessage(params.cfg, deps));

@@ -1,16 +1,16 @@
 import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
-let dispatchAcpMediaRuntimePromise: Promise<
-  typeof import("./dispatch-acp-media.runtime.js")
-> | null = null;
+const dispatchAcpMediaRuntimeLoader = createLazyImportLoader(
+  () => import("./dispatch-acp-media.runtime.js"),
+);
 
 export function loadDispatchAcpMediaRuntime() {
-  dispatchAcpMediaRuntimePromise ??= import("./dispatch-acp-media.runtime.js");
-  return dispatchAcpMediaRuntimePromise;
+  return dispatchAcpMediaRuntimeLoader.load();
 }
 
 export type DispatchAcpAttachmentRuntime = Pick<

@@ -351,4 +351,104 @@ describe("before_tool_call hook integration for client tools", () => {
       extra: true,
     });
   });
+
+  it("preserves client tool source order when hooks resolve out of order", async () => {
+    let releaseFirstHook!: () => void;
+    const firstHookGate = new Promise<void>((resolve) => {
+      releaseFirstHook = resolve;
+    });
+    installBeforeToolCallHook({
+      runBeforeToolCallImpl: async (event: unknown) => {
+        const toolName = (event as { toolName?: string }).toolName;
+        if (toolName === "first_tool") {
+          await firstHookGate;
+        }
+        return { params: { marker: toolName } };
+      },
+    });
+
+    const slots: Array<{
+      toolCallId: string;
+      name: string;
+      params?: Record<string, unknown>;
+      completed: boolean;
+    }> = [];
+    const indexes = new Map<string, number>();
+    const reserve = (toolCallId: string, name: string) => {
+      indexes.set(toolCallId, slots.length);
+      slots.push({ toolCallId, name, completed: false });
+    };
+    const complete = (toolCallId: string, name: string, params: Record<string, unknown>) => {
+      const index = indexes.get(toolCallId);
+      if (index === undefined) {
+        throw new Error(`missing reserved client tool slot for ${toolCallId}`);
+      }
+      const slot = slots[index];
+      if (!slot) {
+        throw new Error(`missing client tool slot at ${index}`);
+      }
+      slot.name = name;
+      slot.params = params;
+      slot.completed = true;
+    };
+    const [firstTool, secondTool] = toClientToolDefinitions(
+      [
+        {
+          type: "function",
+          function: {
+            name: "first_tool",
+            description: "First client tool",
+            parameters: { type: "object", properties: { value: { type: "string" } } },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "second_tool",
+            description: "Second client tool",
+            parameters: { type: "object", properties: { value: { type: "string" } } },
+          },
+        },
+      ],
+      { reserve, complete },
+      { agentId: "main", sessionKey: "main" },
+    );
+    if (!firstTool || !secondTool) {
+      throw new Error("missing client tool definitions");
+    }
+    const extensionContext = {} as Parameters<typeof firstTool.execute>[4];
+
+    const firstRun = firstTool.execute(
+      "client-call-1",
+      { value: "first" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+    const secondRun = secondTool.execute(
+      "client-call-2",
+      { value: "second" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    await secondRun;
+    expect(slots.map((slot) => ({ name: slot.name, completed: slot.completed }))).toEqual([
+      { name: "first_tool", completed: false },
+      { name: "second_tool", completed: true },
+    ]);
+
+    releaseFirstHook();
+    await firstRun;
+
+    expect(slots.filter((slot) => slot.completed).map((slot) => slot.name)).toEqual([
+      "first_tool",
+      "second_tool",
+    ]);
+    expect(slots.map((slot) => slot.params)).toEqual([
+      { value: "first", marker: "first_tool" },
+      { value: "second", marker: "second_tool" },
+    ]);
+  });
 });

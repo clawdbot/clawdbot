@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -5,6 +7,7 @@ import {
   resolveGatewayInstallEntrypoint,
 } from "../../daemon/gateway-entrypoint.js";
 import {
+  collectMissingPluginInstallPayloads,
   resolvePostInstallDoctorEnv,
   shouldPrepareUpdatedInstallRestart,
   resolveUpdatedGatewayRestartPort,
@@ -146,6 +149,76 @@ describe("resolvePostInstallDoctorEnv", () => {
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
     expect(env.OPENCLAW_STATE_DIR).toBe("/caller/state");
     expect(env.OPENCLAW_PROFILE).toBe("caller");
+  });
+});
+
+describe("collectMissingPluginInstallPayloads", () => {
+  it("reports tracked npm install records whose package payload is absent", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
+    const presentDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "present");
+    const missingDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "missing");
+    const noPackageJsonDir = path.join(
+      tmpDir,
+      "state",
+      "npm",
+      "node_modules",
+      "@openclaw",
+      "no-package-json",
+    );
+    try {
+      await fs.mkdir(presentDir, { recursive: true });
+      await fs.writeFile(path.join(presentDir, "package.json"), '{"name":"@openclaw/present"}\n');
+      await fs.mkdir(noPackageJsonDir, { recursive: true });
+
+      await expect(
+        collectMissingPluginInstallPayloads({
+          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
+          records: {
+            present: {
+              source: "npm",
+              spec: "@openclaw/present@beta",
+              installPath: presentDir,
+            },
+            missing: {
+              source: "npm",
+              spec: "@openclaw/missing@beta",
+              installPath: missingDir,
+            },
+            "no-package-json": {
+              source: "npm",
+              spec: "@openclaw/no-package-json@beta",
+              installPath: noPackageJsonDir,
+            },
+            "missing-install-path": {
+              source: "npm",
+              spec: "@openclaw/missing-install-path@beta",
+            },
+            local: {
+              source: "path",
+              sourcePath: "/not/checked",
+              installPath: "/not/checked",
+            },
+          },
+        }),
+      ).resolves.toEqual([
+        {
+          pluginId: "missing",
+          installPath: missingDir,
+          reason: "missing-package-dir",
+        },
+        {
+          pluginId: "missing-install-path",
+          reason: "missing-install-path",
+        },
+        {
+          pluginId: "no-package-json",
+          installPath: noPackageJsonDir,
+          reason: "missing-package-json",
+        },
+      ]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 

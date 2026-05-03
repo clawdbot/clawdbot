@@ -99,6 +99,8 @@ export type GatewayControlUiConfig = {
    * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
    */
   allowExternalEmbedUrls?: boolean;
+  /** Optional max-width for grouped Control UI chat messages (default: min(900px, 68%)). */
+  chatMessageMaxWidth?: string;
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
   /**

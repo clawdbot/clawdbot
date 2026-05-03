@@ -1068,6 +1068,21 @@ describe("google-meet plugin", () => {
     });
   });
 
+  it("explains that Twilio joins need dial-in details", async () => {
+    const { tools } = setup({ defaultTransport: "twilio" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<{ details: { error?: string } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "join",
+      url: "https://meet.google.com/abc-defg-hij",
+    });
+
+    expect(result.details.error).toContain("Twilio transport requires a Meet dial-in phone number");
+    expect(result.details.error).toContain("Google Meet URLs do not include dial-in details");
+  });
+
   it("hangs up delegated Twilio calls on leave", async () => {
     const { tools } = setup({ defaultTransport: "twilio" });
     const tool = tools[0] as {
@@ -1614,6 +1629,98 @@ describe("google-meet plugin", () => {
         expect.objectContaining({
           id: "twilio-voice-call-credentials",
           ok: false,
+        }),
+      ]),
+    );
+  });
+
+  it("reports missing Twilio dial plan for explicit Twilio setup", async () => {
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "AC123");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "secret");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "+15550001234");
+    const { tools } = setup(
+      { defaultTransport: "chrome" },
+      {
+        fullConfig: {
+          plugins: {
+            allow: ["google-meet", "voice-call"],
+            entries: {
+              "voice-call": {
+                enabled: true,
+                config: {
+                  provider: "twilio",
+                  publicUrl: "https://voice.example.com/voice/webhook",
+                },
+              },
+            },
+          },
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
+    };
+
+    const result = await tool.execute("id", { action: "setup_status", transport: "twilio" });
+
+    expect(result.details.ok).toBe(false);
+    expect(result.details.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "twilio-dial-plan",
+          ok: false,
+          message: expect.stringContaining("dial-in phone number"),
+        }),
+      ]),
+    );
+  });
+
+  it("accepts request-provided Twilio dial-in details during setup", async () => {
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "AC123");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "secret");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "+15550001234");
+    const { tools } = setup(
+      { defaultTransport: "chrome" },
+      {
+        fullConfig: {
+          plugins: {
+            allow: ["google-meet", "voice-call"],
+            entries: {
+              "voice-call": {
+                enabled: true,
+                config: {
+                  provider: "twilio",
+                  publicUrl: "https://voice.example.com/voice/webhook",
+                },
+              },
+            },
+          },
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "setup_status",
+      transport: "twilio",
+      dialInNumber: "+15551234567",
+    });
+
+    expect(result.details.ok).toBe(true);
+    expect(result.details.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "twilio-dial-plan",
+          ok: true,
+          message: expect.stringContaining("request includes"),
         }),
       ]),
     );
@@ -2959,6 +3066,7 @@ describe("google-meet plugin", () => {
           resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
           loadSessionStore: vi.fn(() => sessionStore),
           saveSessionStore: vi.fn(async () => {}),
+          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
           resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
         },
         runEmbeddedPiAgent: vi.fn(async () => ({
@@ -3215,6 +3323,7 @@ describe("google-meet plugin", () => {
       },
     };
     let pullCount = 0;
+    const sessionStore: Record<string, unknown> = {};
     const runtime = {
       nodes: {
         invoke: vi.fn(async ({ params }: { params?: { action?: string; base64?: string } }) => {
@@ -3235,8 +3344,9 @@ describe("google-meet plugin", () => {
         ensureAgentWorkspace: vi.fn(async () => {}),
         session: {
           resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-          loadSessionStore: vi.fn(() => ({})),
+          loadSessionStore: vi.fn(() => sessionStore),
           saveSessionStore: vi.fn(async () => {}),
+          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
           resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
         },
         runEmbeddedPiAgent: vi.fn(async () => ({

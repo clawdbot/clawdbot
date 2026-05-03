@@ -294,6 +294,33 @@ describe("registerTelegramNativeCommands", () => {
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
   });
 
+  it("replies to unmatched plugin commands in the originating forum topic", async () => {
+    const { handler, sendMessage } = registerPlugCommand();
+    pluginCommandMocks.matchPluginCommand.mockReturnValue(null as never);
+
+    await handler({
+      match: "",
+      message: {
+        message_id: 2,
+        date: Math.floor(Date.now() / 1000),
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Forum Group",
+          is_forum: true,
+        },
+        message_thread_id: 77,
+        from: { id: 200, username: "bob" },
+      },
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      -1001234567890,
+      "Command not found.",
+      expect.objectContaining({ message_thread_id: 77 }),
+    );
+  });
+
   it("uses nested streaming.block.enabled for native command block-streaming behavior", () => {
     expect(
       resolveTelegramNativeCommandDisableBlockStreaming({

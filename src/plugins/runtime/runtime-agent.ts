@@ -10,7 +10,12 @@ import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionFilePath, resolveStorePath } from "../../config/sessions/paths.js";
-import { loadSessionStore, saveSessionStore } from "../../config/sessions/store.js";
+import {
+  loadSessionStore,
+  saveSessionStore,
+  updateSessionStore,
+  updateSessionStoreEntry,
+} from "../../config/sessions/store.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
@@ -68,6 +73,8 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveStorePath,
     loadSessionStore,
     saveSessionStore,
+    updateSessionStore,
+    updateSessionStoreEntry,
     resolveSessionFilePath,
   }));
 

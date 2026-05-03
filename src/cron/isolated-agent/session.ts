@@ -106,12 +106,13 @@ export function resolveCronSession(params: {
   nowMs: number;
   agentId: string;
   forceNew?: boolean;
+  store?: Record<string, SessionEntry>;
 }) {
   const sessionCfg = params.cfg.session;
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: params.agentId,
   });
-  const store = loadSessionStore(storePath);
+  const store = params.store ?? loadSessionStore(storePath);
   const entry = store[params.sessionKey];
 
   // Check if we can reuse an existing session

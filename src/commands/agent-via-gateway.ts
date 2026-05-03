@@ -201,7 +201,9 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   const payloads = result?.payloads ?? [];
 
   if (payloads.length === 0) {
-    runtime.log(response?.summary ? response.summary : "No reply from agent.");
+    if (response?.status !== "ok") {
+      runtime.log(response?.summary ? response.summary : "No reply from agent.");
+    }
     return response;
   }
 

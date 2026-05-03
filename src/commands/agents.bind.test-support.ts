@@ -1,6 +1,7 @@
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 type ReplaceConfigFileResult = Awaited<
@@ -44,11 +45,12 @@ vi.mock("./agents.command-shared.js", () => ({
 
 export const runtime = createTestRuntime();
 
-let agentsBindCommandModulePromise: Promise<typeof import("./agents.commands.bind.js")> | undefined;
+const agentsBindCommandModuleLoader = createLazyImportLoader(
+  () => import("./agents.commands.bind.js"),
+);
 
 export async function loadFreshAgentsBindCommandModuleForTest() {
-  agentsBindCommandModulePromise ??= import("./agents.commands.bind.js");
-  return await agentsBindCommandModulePromise;
+  return await agentsBindCommandModuleLoader.load();
 }
 
 export function resetAgentsBindTestHarness(): void {

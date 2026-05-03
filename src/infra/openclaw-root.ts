@@ -3,6 +3,9 @@ import { fileURLToPath } from "node:url";
 import { openClawRootFs, openClawRootFsSync } from "./openclaw-root.fs.runtime.js";
 
 const CORE_PACKAGE_NAMES = new Set(["openclaw"]);
+const packageNameCache = new Map<string, string | null>();
+const packageRootCache = new Map<string, string | null>();
+const argv1CandidateCache = new Map<string, string[]>();
 
 function parsePackageName(raw: string): string | null {
   const parsed = JSON.parse(raw) as { name?: unknown };
@@ -10,19 +13,31 @@ function parsePackageName(raw: string): string | null {
 }
 
 async function readPackageName(dir: string): Promise<string | null> {
+  const packageJsonPath = path.join(path.resolve(dir), "package.json");
+  if (packageNameCache.has(packageJsonPath)) {
+    return packageNameCache.get(packageJsonPath) ?? null;
+  }
   try {
-    return parsePackageName(await openClawRootFs.readFile(path.join(dir, "package.json"), "utf-8"));
+    const name = parsePackageName(await openClawRootFs.readFile(packageJsonPath, "utf-8"));
+    packageNameCache.set(packageJsonPath, name);
+    return name;
   } catch {
+    packageNameCache.set(packageJsonPath, null);
     return null;
   }
 }
 
 function readPackageNameSync(dir: string): string | null {
+  const packageJsonPath = path.join(path.resolve(dir), "package.json");
+  if (packageNameCache.has(packageJsonPath)) {
+    return packageNameCache.get(packageJsonPath) ?? null;
+  }
   try {
-    return parsePackageName(
-      openClawRootFsSync.readFileSync(path.join(dir, "package.json"), "utf-8"),
-    );
+    const name = parsePackageName(openClawRootFsSync.readFileSync(packageJsonPath, "utf-8"));
+    packageNameCache.set(packageJsonPath, name);
+    return name;
   } catch {
+    packageNameCache.set(packageJsonPath, null);
     return null;
   }
 }
@@ -60,6 +75,11 @@ function* iterAncestorDirs(startDir: string, maxDepth: number): Generator<string
 }
 
 function candidateDirsFromArgv1(argv1: string): string[] {
+  const cacheKey = path.resolve(argv1);
+  const cached = argv1CandidateCache.get(cacheKey);
+  if (cached) {
+    return [...cached];
+  }
   const normalized = path.resolve(argv1);
   const candidates = [path.dirname(normalized)];
 
@@ -81,7 +101,9 @@ function candidateDirsFromArgv1(argv1: string): string[] {
     const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
     candidates.push(path.join(nodeModulesDir, binName));
   }
-  return candidates;
+  const deduped = dedupeCandidates(candidates);
+  argv1CandidateCache.set(cacheKey, deduped);
+  return [...deduped];
 }
 
 export async function resolveOpenClawPackageRoot(opts: {
@@ -89,13 +111,20 @@ export async function resolveOpenClawPackageRoot(opts: {
   argv1?: string;
   moduleUrl?: string;
 }): Promise<string | null> {
-  for (const candidate of buildCandidates(opts)) {
+  const candidates = buildCandidates(opts);
+  const cacheKey = createPackageRootCacheKey(candidates);
+  if (packageRootCache.has(cacheKey)) {
+    return packageRootCache.get(cacheKey) ?? null;
+  }
+  for (const candidate of candidates) {
     const found = await findPackageRoot(candidate);
     if (found) {
+      packageRootCache.set(cacheKey, found);
       return found;
     }
   }
 
+  packageRootCache.set(cacheKey, null);
   return null;
 }
 
@@ -104,13 +133,20 @@ export function resolveOpenClawPackageRootSync(opts: {
   argv1?: string;
   moduleUrl?: string;
 }): string | null {
-  for (const candidate of buildCandidates(opts)) {
+  const candidates = buildCandidates(opts);
+  const cacheKey = createPackageRootCacheKey(candidates);
+  if (packageRootCache.has(cacheKey)) {
+    return packageRootCache.get(cacheKey) ?? null;
+  }
+  for (const candidate of candidates) {
     const found = findPackageRootSync(candidate);
     if (found) {
+      packageRootCache.set(cacheKey, found);
       return found;
     }
   }
 
+  packageRootCache.set(cacheKey, null);
   return null;
 }
 
@@ -131,5 +167,31 @@ function buildCandidates(opts: { cwd?: string; argv1?: string; moduleUrl?: strin
     candidates.push(opts.cwd);
   }
 
-  return candidates;
+  return dedupeCandidates(candidates);
 }
+
+function dedupeCandidates(candidates: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate);
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    deduped.push(resolved);
+  }
+  return deduped;
+}
+
+function createPackageRootCacheKey(candidates: readonly string[]): string {
+  return candidates.join("\0");
+}
+
+export const __testing = {
+  clearOpenClawPackageRootCaches(): void {
+    packageNameCache.clear();
+    packageRootCache.clear();
+    argv1CandidateCache.clear();
+  },
+};

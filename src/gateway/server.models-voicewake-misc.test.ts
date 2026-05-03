@@ -518,7 +518,7 @@ describe("gateway server models + voicewake", () => {
     );
   });
 
-  test("models.list configured view includes auth-backed provider catalog entries", async () => {
+  test("models.list configured view does not run runtime discovery without a read-only catalog", async () => {
     await withEnvAsync(
       {
         ANTHROPIC_API_KEY: undefined,
@@ -528,21 +528,11 @@ describe("gateway server models + voicewake", () => {
       async () => {
         await withModelsConfig({}, async () => {
           await seedPiCatalog();
+          const discoverCallsBefore = piSdkMock.discoverCalls;
           const res = await listModels({ view: "configured" });
           expect(res.ok).toBe(true);
-          expect(res.payload?.models).toEqual([
-            {
-              id: "gpt-test-a",
-              name: "A-Model",
-              provider: "openai",
-              contextWindow: 8000,
-            },
-            {
-              id: "gpt-test-z",
-              name: "gpt-test-z",
-              provider: "openai",
-            },
-          ]);
+          expect(res.payload?.models).toEqual([]);
+          expect(piSdkMock.discoverCalls).toBe(discoverCallsBefore);
         });
       },
     );
@@ -654,9 +644,8 @@ describe("gateway server models + voicewake", () => {
       expected: [
         {
           id: "claude-test-a",
-          name: "A-Model",
+          name: "claude-test-a",
           provider: "anthropic",
-          contextWindow: 200_000,
         },
         {
           id: "gpt-test-z",

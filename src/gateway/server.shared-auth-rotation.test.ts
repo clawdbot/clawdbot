@@ -217,7 +217,8 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
   it("disconnects shared-auth websocket sessions when config.apply rewrites a SecretRef token", async () => {
     const ws = await openSecretRefAuthenticatedWs();
     try {
-      const closed = waitForGatewayWsClose(ws);
+      const closed = waitForGatewayWsClose(ws, 30_000);
+      process.env[SECRET_REF_TOKEN_ID] = NEW_TOKEN;
       const res = await applyCurrentConfig(ws);
       expect(res.ok).toBe(true);
       await expect(closed).resolves.toEqual({

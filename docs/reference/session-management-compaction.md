@@ -85,7 +85,7 @@ Session persistence has automatic maintenance controls (`session.maintenance`) f
 - `maxDiskBytes`: optional sessions-directory budget
 - `highWaterBytes`: optional target after cleanup (default `80%` of `maxDiskBytes`)
 
-Normal Gateway writes batch `maxEntries` cleanup for production-sized caps, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it back down. Session store reads do not prune or cap entries during Gateway startup; use writes or `openclaw sessions cleanup --enforce` for cleanup. `openclaw sessions cleanup --enforce` still applies the configured cap immediately.
+Normal Gateway writes flow through a per-store session writer that serializes in-process mutations without taking a runtime file lock. Hot-path patch helpers borrow the validated mutable cache while they hold that writer slot, so large `sessions.json` files are not cloned or reread for every metadata update. Runtime code should prefer `updateSessionStore(...)` or `updateSessionStoreEntry(...)`; direct whole-store saves are compatibility and offline-maintenance tools. When a Gateway is reachable, non-dry-run `openclaw sessions cleanup` and `openclaw agents delete` delegate store mutations to the Gateway so cleanup joins the same writer queue; `--store <path>` is the explicit offline repair path for direct file maintenance. `maxEntries` cleanup is still batched for production-sized caps, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it back down. Session store reads do not prune or cap entries during Gateway startup; use writes or `openclaw sessions cleanup --enforce` for cleanup. `openclaw sessions cleanup --enforce` still applies the configured cap immediately.
 
 Maintenance keeps durable external conversation pointers such as group sessions
 and thread-scoped chat sessions, but synthetic runtime entries for cron, hooks,
@@ -93,6 +93,11 @@ heartbeat, ACP, and sub-agents can still be removed when they exceed the
 configured age, count, or disk budget.
 
 OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The legacy `session.maintenance.rotateBytes` key is ignored and `openclaw doctor --fix` removes it from older configs.
+
+Transcript mutations use a session write lock on the transcript file. Lock acquisition waits up to
+`session.writeLock.acquireTimeoutMs` before surfacing a busy-session error; the default is `60000`
+ms. Raise this only when legitimate prep, cleanup, compaction, or transcript mirror work contends
+longer on slow machines. Stale-lock detection and maximum hold warnings remain separate policies.
 
 Enforcement order for disk budget cleanup (`mode: "enforce"`):
 

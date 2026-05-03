@@ -51,6 +51,17 @@ describe("resolveFutureConfigActionBlock", () => {
     ).toBeNull();
   });
 
+  it("allows beta binaries to refresh services written by the same stable release", () => {
+    expect(
+      resolveFutureConfigActionBlock({
+        action: "install or rewrite the gateway service",
+        currentVersion: "2026.5.2-beta.3",
+        snapshot: snapshotWithTouchedVersion("2026.5.2"),
+        env: {},
+      }),
+    ).toBeNull();
+  });
+
   it("allows intentional downgrade override through env", () => {
     expect(
       resolveFutureConfigActionBlock({

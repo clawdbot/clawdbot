@@ -134,6 +134,23 @@ export function clearSharedCodexAppServerClient(): void {
   client?.close();
 }
 
+export function clearSharedCodexAppServerClientIfCurrent(
+  client: CodexAppServerClient | undefined,
+): boolean {
+  if (!client) {
+    return false;
+  }
+  const state = getSharedCodexAppServerClientState();
+  if (state.client !== client) {
+    return false;
+  }
+  state.client = undefined;
+  state.promise = undefined;
+  state.key = undefined;
+  client.close();
+  return true;
+}
+
 export async function clearSharedCodexAppServerClientAndWait(options?: {
   exitTimeoutMs?: number;
   forceKillDelayMs?: number;

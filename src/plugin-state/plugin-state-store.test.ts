@@ -12,6 +12,7 @@ import {
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
 import { resolvePluginStateDir, resolvePluginStateSqlitePath } from "./plugin-state-store.paths.js";
+import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -126,22 +127,38 @@ describe("plugin state keyed store", () => {
 
   it("rejects when the per-plugin live row ceiling would be exceeded without evicting siblings", async () => {
     await withOpenClawTestState({ label: "plugin-state-plugin-limit" }, async () => {
-      const stores = Array.from({ length: 10 }, (_, index) =>
-        createPluginStateKeyedStore("discord", {
-          namespace: `ns-${index}`,
-          maxEntries: 101,
-        }),
-      );
-      for (let namespaceIndex = 0; namespaceIndex < stores.length; namespaceIndex += 1) {
-        for (let entryIndex = 0; entryIndex < 100; entryIndex += 1) {
-          await stores[namespaceIndex].register(`k-${entryIndex}`, { namespaceIndex, entryIndex });
-        }
-      }
+      seedPluginStateEntriesForTests([
+        ...Array.from({ length: 999 }, (_, entryIndex) => ({
+          pluginId: "discord",
+          namespace: "limit",
+          key: `k-${entryIndex}`,
+          value: { namespaceIndex: 0, entryIndex },
+        })),
+        {
+          pluginId: "discord",
+          namespace: "sibling",
+          key: "k-0",
+          value: { namespaceIndex: 1, entryIndex: 0 },
+        },
+      ]);
 
-      await expect(stores[0].register("overflow", { overflow: true })).rejects.toMatchObject({
+      const limitStore = createPluginStateKeyedStore("discord", {
+        namespace: "limit",
+        maxEntries: 1_001,
+      });
+      const siblingStore = createPluginStateKeyedStore("discord", {
+        namespace: "sibling",
+        maxEntries: 10,
+      });
+
+      await expect(limitStore.register("overflow", { overflow: true })).rejects.toMatchObject({
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
-      await expect(stores[1].lookup("k-0")).resolves.toEqual({ namespaceIndex: 1, entryIndex: 0 });
+      await expect(siblingStore.lookup("k-0")).resolves.toEqual({
+        namespaceIndex: 1,
+        entryIndex: 0,
+      });
+      await expect(limitStore.lookup("overflow")).resolves.toBeUndefined();
     });
   });
 

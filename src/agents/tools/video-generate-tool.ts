@@ -47,7 +47,11 @@ import {
   resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import { type ToolModelConfig } from "./model-config.helpers.js";
+import {
+  coerceToolModelConfig,
+  hasToolModelConfig,
+  type ToolModelConfig,
+} from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -233,8 +237,12 @@ export function resolveVideoGenerationModelConfigForTool(params: {
     agentDir: params.agentDir,
     authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.videoGenerationModel,
-    providers: listRuntimeVideoGenerationProviders({ config: params.cfg }),
+    providers: () => listRuntimeVideoGenerationProviders({ config: params.cfg }),
   });
+}
+
+function hasExplicitVideoGenerationModelConfig(cfg?: OpenClawConfig): boolean {
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.videoGenerationModel));
 }
 
 function resolveAction(args: Record<string, unknown>): "generate" | "list" | "status" {
@@ -586,6 +594,7 @@ async function executeVideoGenerationJob(params: {
   loadedReferenceAudios: LoadedReferenceAsset[];
   taskHandle?: VideoGenerationTaskHandle | null;
   providerOptions?: Record<string, unknown>;
+  autoProviderFallback?: boolean;
   timeoutMs?: number;
 }): Promise<ExecutedVideoGeneration> {
   if (params.taskHandle) {
@@ -608,6 +617,7 @@ async function executeVideoGenerationJob(params: {
     inputImages: params.loadedReferenceImages.map((entry) => entry.sourceAsset),
     inputVideos: params.loadedReferenceVideos.map((entry) => entry.sourceAsset),
     inputAudios: params.loadedReferenceAudios.map((entry) => entry.sourceAsset),
+    autoProviderFallback: params.autoProviderFallback,
     providerOptions: params.providerOptions,
     timeoutMs: params.timeoutMs,
   });
@@ -857,6 +867,7 @@ export function createVideoGenerateTool(options?: {
       if (!videoGenerationModelConfig) {
         throw new ToolInputError("No video-generation model configured.");
       }
+      const explicitModelConfig = hasExplicitVideoGenerationModelConfig(cfg);
       const effectiveCfg =
         applyVideoGenerationModelConfigDefaults(cfg, videoGenerationModelConfig) ?? cfg;
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
@@ -1023,6 +1034,7 @@ export function createVideoGenerateTool(options?: {
                   loadedReferenceAudios,
                   taskHandle,
                   providerOptions,
+                  autoProviderFallback: explicitModelConfig ? false : undefined,
                   timeoutMs,
                 }),
             });
@@ -1120,6 +1132,7 @@ export function createVideoGenerateTool(options?: {
           loadedReferenceAudios,
           taskHandle,
           providerOptions,
+          autoProviderFallback: explicitModelConfig ? false : undefined,
           timeoutMs,
         });
         completeVideoGenerationTaskRun({

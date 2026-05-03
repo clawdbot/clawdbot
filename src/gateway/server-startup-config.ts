@@ -1,5 +1,7 @@
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
+  type ReadConfigFileSnapshotWithPluginMetadataResult,
   readConfigFileSnapshotWithPluginMetadata,
   recoverConfigFromLastKnownGood,
   recoverConfigFromJsonRootSuffix,
@@ -201,11 +203,14 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   minimalTestGateway: boolean;
   log: GatewayStartupLog;
   measure?: GatewayStartupConfigMeasure;
+  initialSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
 }): Promise<GatewayStartupConfigSnapshotLoadResult> {
   const measure = params.measure ?? (async (_name, run) => await run());
-  let snapshotRead = await measure("config.snapshot.read", () =>
-    readConfigFileSnapshotWithPluginMetadata({ measure }),
-  );
+  let snapshotRead =
+    params.initialSnapshotRead ??
+    (await measure("config.snapshot.read", () =>
+      readConfigFileSnapshotWithPluginMetadata({ measure }),
+    ));
   let configSnapshot = snapshotRead.snapshot;
   let pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
   let wroteConfig = false;
@@ -366,8 +371,13 @@ export function createRuntimeSecretsActivator(params: {
   return async (config, activationParams) =>
     await runWithSecretsActivationLock(async () => {
       try {
+        const startupPreflight =
+          activationParams.reason === "startup" || activationParams.reason === "restart-check";
         const prepared = await prepareRuntimeSecretsSnapshot({
           config: pruneSkippedStartupSecretSurfaces(config),
+          ...(startupPreflight
+            ? { loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles }
+            : {}),
         });
         assertRuntimeGatewayAuthNotKnownWeak(prepared.config);
         if (activationParams.activate) {

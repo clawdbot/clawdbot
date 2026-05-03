@@ -28,6 +28,7 @@ export type ResolveCronModelSelectionParams = {
   sessionEntry: CronSessionModelOverrides;
   payload: CronJob["payload"];
   isGmailHook: boolean;
+  agentId?: string;
 };
 
 export type ResolveCronModelSelectionResult =

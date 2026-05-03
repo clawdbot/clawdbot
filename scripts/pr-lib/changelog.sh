@@ -159,6 +159,20 @@ validate_changelog_attribution_policy() {
   node scripts/check-changelog-attributions.mjs CHANGELOG.md
 }
 
+changelog_thanks_required_for_contributor() {
+  local contrib="${1:-}"
+  local normalized
+  normalized=$(printf '%s' "$contrib" | tr '[:upper:]' '[:lower:]')
+
+  case "$normalized" in
+    ""|"null"|"app/"*|"codex"|"openclaw"|"clawsweeper"|"openclaw-clawsweeper"|"clawsweeper[bot]"|"openclaw-clawsweeper[bot]"|"steipete")
+      return 1
+      ;;
+  esac
+
+  return 0
+}
+
 validate_changelog_entry_for_pr() {
   local pr="$1"
   local contrib="$2"
@@ -314,7 +328,7 @@ END {
   rm -f "$diff_file"
   echo "changelog placement validated: PR-linked entries are appended at section tail"
 
-  if [ -n "$contrib" ] && [ "$contrib" != "null" ]; then
+  if changelog_thanks_required_for_contributor "$contrib"; then
     local with_pr_and_thanks
     with_pr_and_thanks=$(printf '%s\n' "$added_lines" | rg -in "$pr_pattern" | rg -i "thanks @$contrib" || true)
     if [ -z "$with_pr_and_thanks" ]; then
@@ -325,7 +339,7 @@ END {
     return 0
   fi
 
-  echo "changelog validated: found PR #$pr (contributor handle unavailable, skipping thanks check)"
+  echo "changelog validated: found PR #$pr (no eligible human contributor handle, skipping thanks check)"
 }
 
 validate_changelog_merge_hygiene() {

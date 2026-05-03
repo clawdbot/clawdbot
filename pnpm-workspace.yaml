@@ -48,3 +48,4 @@ onlyBuiltDependencies:
 
 ignoredBuiltDependencies:
   - koffi
+  - tree-sitter-bash

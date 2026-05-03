@@ -2,58 +2,57 @@ import { describe, expect, it } from "vitest";
 import {
   isParentOwnedBackgroundAcpSession,
   isRequesterParentOfBackgroundAcpSession,
-  resolveAcpSessionInteractionMode,
 } from "./session-interaction-mode.js";
 
 const parentKey = "agent:main:main";
 const otherKey = "agent:peer:some-other";
 
-describe("resolveAcpSessionInteractionMode", () => {
+describe("isParentOwnedBackgroundAcpSession", () => {
   it("returns interactive when entry is undefined", () => {
-    expect(resolveAcpSessionInteractionMode(undefined)).toBe("interactive");
+    expect(isParentOwnedBackgroundAcpSession(undefined)).toBe(false);
   });
 
   it("returns parent-owned-background for persistent sessions with spawnedBy set", () => {
     expect(
-      resolveAcpSessionInteractionMode({
+      isParentOwnedBackgroundAcpSession({
         acp: { mode: "persistent" } as never,
         spawnedBy: parentKey,
       }),
-    ).toBe("parent-owned-background");
+    ).toBe(true);
   });
 
   it("returns interactive for persistent ACP sessions without parent linkage", () => {
     expect(
-      resolveAcpSessionInteractionMode({
+      isParentOwnedBackgroundAcpSession({
         acp: { mode: "persistent" } as never,
       }),
-    ).toBe("interactive");
+    ).toBe(false);
   });
 
   it("returns parent-owned-background for oneshot sessions with spawnedBy set", () => {
     expect(
-      resolveAcpSessionInteractionMode({
+      isParentOwnedBackgroundAcpSession({
         acp: { mode: "oneshot" } as never,
         spawnedBy: parentKey,
       }),
-    ).toBe("parent-owned-background");
+    ).toBe(true);
   });
 
   it("returns parent-owned-background for oneshot sessions with parentSessionKey set", () => {
     expect(
-      resolveAcpSessionInteractionMode({
+      isParentOwnedBackgroundAcpSession({
         acp: { mode: "oneshot" } as never,
         parentSessionKey: parentKey,
       }),
-    ).toBe("parent-owned-background");
+    ).toBe(true);
   });
 
   it("returns interactive for a oneshot session without any parent linkage", () => {
     expect(
-      resolveAcpSessionInteractionMode({
+      isParentOwnedBackgroundAcpSession({
         acp: { mode: "oneshot" } as never,
       }),
-    ).toBe("interactive");
+    ).toBe(false);
   });
 });
 

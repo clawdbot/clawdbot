@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to validate for macOS release handoff (for example v2026.3.22 or v2026.3.22-beta.1)
+        description: Existing release tag to validate for macOS release handoff (for example v2026.3.22, v2026.3.22-alpha.1, or v2026.3.22-beta.1)
         required: true
         type: string
       preflight_only:
@@ -38,7 +38,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
             echo "Invalid release tag format: ${RELEASE_TAG}"
             exit 1
           fi

@@ -74,6 +74,15 @@ describe("isPathInside", () => {
     ["/workspace/root", "/workspace/root/nested/file.txt", true],
     ["/workspace/root", "/workspace/root/..file.txt", true],
     ["/workspace/root", "/workspace/root/../escape.txt", false],
+    ["/workspace/root", "/workspace/rootless/file.txt", false],
+    ["/workspace/root", "/workspace/root/a/b/c/d/e/file.txt", true],
+    ["/workspace/root", "/workspace/root/a/..", true],
+    ["/workspace/root", "/workspace/root/a/../..", false],
+    ["/workspace/root", "/workspace/root/a/b/../../../escape", false],
+    ["/", "/anything/at/all", true],
+    ["/", "/", true],
+    ["foo", "foo/bar", true],
+    ["foo", "../escape", false],
   ])("checks posix containment %s -> %s", (basePath, targetPath, expected) => {
     expect(isPathInside(basePath, targetPath)).toBe(expected);
   });

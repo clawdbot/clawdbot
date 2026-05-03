@@ -36,6 +36,10 @@ node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-tgz --runtime --json >/tmp/pl
 
 node scripts/e2e/lib/plugins/assertions.mjs plugin-tgz
 
+run_logged uninstall-tgz node "$OPENCLAW_ENTRY" plugins uninstall demo-plugin-tgz --force
+node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins2-uninstalled.json
+node scripts/e2e/lib/plugins/assertions.mjs plugin-tgz-removed
+
 echo "Testing install from local folder (plugins.load.paths)..."
 dir_plugin="$(mktemp -d "/tmp/openclaw-plugin-dir.XXXXXX")"
 write_fixture_plugin "$dir_plugin" demo-plugin-dir 0.0.1 demo.dir "Demo Plugin DIR"
@@ -44,10 +48,14 @@ run_logged install-dir node "$OPENCLAW_ENTRY" plugins install "$dir_plugin"
 node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins3.json
 node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-dir --runtime --json >/tmp/plugins3-inspect.json
 
-node scripts/e2e/lib/plugins/assertions.mjs plugin-dir
+node scripts/e2e/lib/plugins/assertions.mjs plugin-dir "$dir_plugin"
 
 node "$OPENCLAW_ENTRY" plugins update demo-plugin-dir >/tmp/plugins-dir-update.log 2>&1
 node scripts/e2e/lib/plugins/assertions.mjs plugin-dir-update-skipped
+
+run_logged uninstall-dir node "$OPENCLAW_ENTRY" plugins uninstall demo-plugin-dir --force
+node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins3-uninstalled.json
+node scripts/e2e/lib/plugins/assertions.mjs plugin-dir-removed
 
 echo "Testing install from local folder with preinstalled dependencies..."
 dir_deps_plugin="$(mktemp -d "/tmp/openclaw-plugin-dir-deps.XXXXXX")"
@@ -59,6 +67,10 @@ node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-dir-deps --runtime --json >/t
 
 node scripts/e2e/lib/plugins/assertions.mjs plugin-dir-deps "$dir_deps_plugin"
 
+run_logged uninstall-dir-deps node "$OPENCLAW_ENTRY" plugins uninstall demo-plugin-dir-deps --force
+node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-dir-deps-uninstalled.json
+node scripts/e2e/lib/plugins/assertions.mjs plugin-dir-deps-removed
+
 echo "Testing install from npm spec (file:)..."
 file_pack_dir="$(mktemp -d "/tmp/openclaw-plugin-filepack.XXXXXX")"
 write_fixture_plugin "$file_pack_dir/package" demo-plugin-file 0.0.1 demo.file "Demo Plugin FILE"
@@ -67,7 +79,11 @@ run_logged install-file node "$OPENCLAW_ENTRY" plugins install "file:$file_pack_
 node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins4.json
 node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-file --runtime --json >/tmp/plugins4-inspect.json
 
-node scripts/e2e/lib/plugins/assertions.mjs plugin-file
+node scripts/e2e/lib/plugins/assertions.mjs plugin-file "$file_pack_dir/package"
+
+run_logged uninstall-file node "$OPENCLAW_ENTRY" plugins uninstall demo-plugin-file --force
+node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins4-uninstalled.json
+node scripts/e2e/lib/plugins/assertions.mjs plugin-file-removed
 
 echo "Testing install and update from npm registry..."
 npm_pack_dir="$(mktemp -d "/tmp/openclaw-plugin-npm-pack.XXXXXX")"
@@ -87,6 +103,10 @@ node scripts/e2e/lib/plugins/assertions.mjs plugin-npm
 node "$OPENCLAW_ENTRY" plugins update demo-plugin-npm >/tmp/plugins-npm-update.log 2>&1
 node scripts/e2e/lib/plugins/assertions.mjs plugin-npm-update
 
+run_logged uninstall-npm node "$OPENCLAW_ENTRY" plugins uninstall demo-plugin-npm --force
+node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-npm-uninstalled.json
+node scripts/e2e/lib/plugins/assertions.mjs plugin-npm-removed
+
 echo "Testing install from git repo and plugin CLI execution..."
 git_fixture_root="$(mktemp -d "/tmp/openclaw-plugin-git.XXXXXX")"
 git_repo="$git_fixture_root/repo"
@@ -105,6 +125,10 @@ node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-git --runtime --json >/tmp/pl
 run_logged exec-git-plugin-cli bash -c 'node "$OPENCLAW_ENTRY" demo-git ping >/tmp/plugins-git-cli.txt'
 
 node scripts/e2e/lib/plugins/assertions.mjs plugin-git "$git_repo_url" "$git_ref"
+
+run_logged uninstall-git node "$OPENCLAW_ENTRY" plugins uninstall demo-plugin-git --force
+node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-git-uninstalled.json
+node scripts/e2e/lib/plugins/assertions.mjs plugin-git-removed
 
 echo "Testing git plugin update from moving ref..."
 git_update_fixture_root="$(mktemp -d "/tmp/openclaw-plugin-git-update.XXXXXX")"

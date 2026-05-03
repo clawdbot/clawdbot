@@ -71,6 +71,20 @@ describe("memory embedding policy", () => {
     expect(waits).toEqual([500, 1000]);
   });
 
+  it("retries transient socket/network embedding errors", async () => {
+    const messages = [
+      "TypeError: fetch failed | other side closed",
+      "undici error: UND_ERR_SOCKET",
+      "read ECONNRESET",
+      "socket hang up",
+      "ETIMEDOUT",
+    ];
+
+    for (const message of messages) {
+      expect(isRetryableMemoryEmbeddingError(message)).toBe(true);
+    }
+  });
+
   it("retries too-many-tokens-per-day errors", async () => {
     let calls = 0;
     const waits: number[] = [];

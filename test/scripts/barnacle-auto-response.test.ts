@@ -204,7 +204,7 @@ describe("barnacle-auto-response", () => {
     expect(managedLabelSpecs["r: support"].description).toContain("support requests");
     expect(managedLabelSpecs["r: false-positive"].description).toContain("false positive");
     expect(managedLabelSpecs["r: third-party-extension"].description).toContain("ClawHub");
-    expect(managedLabelSpecs["r: too-many-prs"].description).toContain("ten active PRs");
+    expect(managedLabelSpecs["r: too-many-prs"].description).toContain("twenty active PRs");
 
     for (const label of Object.values(candidateLabels)) {
       expect(managedLabelSpecs[label]).toBeDefined();
@@ -495,7 +495,7 @@ describe("barnacle-auto-response", () => {
       );
       expect(calls.createComment).not.toContainEqual(
         expect.objectContaining({
-          body: expect.stringContaining("more than 10 active PRs"),
+          body: expect.stringContaining("more than 20 active PRs"),
         }),
       );
       expect(calls.update).not.toContainEqual(expect.objectContaining({ state: "closed" }));

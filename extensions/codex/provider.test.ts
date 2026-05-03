@@ -300,6 +300,24 @@ describe("codex provider", () => {
     });
   });
 
+  it("exposes a setup auth choice for installing Codex as an external provider", async () => {
+    const provider = buildCodexProvider();
+
+    expect(provider.auth[0]).toMatchObject({
+      id: "app-server",
+      kind: "custom",
+      wizard: {
+        choiceId: "codex",
+        choiceLabel: "Codex app-server",
+        onboardingScopes: ["text-inference"],
+      },
+    });
+    await expect(provider.auth[0].run({} as never)).resolves.toMatchObject({
+      profiles: [],
+      defaultModel: "codex/gpt-5.5",
+    });
+  });
+
   it("exposes a lightweight provider-discovery entry for model list/status", async () => {
     expect(codexProviderDiscovery.id).toBe("codex");
     expect(codexProviderDiscovery.resolveSyntheticAuth?.({ provider: "codex" })).toEqual({

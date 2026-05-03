@@ -41,6 +41,7 @@ describe("status-json-payload", () => {
     expect(mocks.normalizeUpdateChannel).toHaveBeenCalledWith("beta");
     expect(mocks.resolveUpdateChannelDisplay).toHaveBeenCalledWith({
       configChannel: "beta",
+      currentVersion: expect.any(String),
       installKind: "package",
       gitTag: "v1.2.3",
       gitBranch: "main",

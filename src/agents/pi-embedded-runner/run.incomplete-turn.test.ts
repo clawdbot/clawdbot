@@ -1899,7 +1899,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
         messagingToolSentTexts: [],
         messagingToolSentMediaUrls: [],
       }),
-      clientToolCall: null,
+      clientToolCalls: undefined,
       yieldDetected: false,
       didSendDeterministicApprovalPrompt: false,
       didSendViaMessagingTool: false,

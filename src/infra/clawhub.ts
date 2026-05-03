@@ -39,6 +39,93 @@ export type ClawHubPackageEnvironmentSummary = {
   supportsRemoteHost?: boolean;
   knownUnsupported?: string[];
 };
+export type ClawHubPackageArtifactSummary = {
+  kind?: string | null;
+  sha256?: string | null;
+  size?: number | null;
+  format?: string | null;
+  npmIntegrity?: string | null;
+  npmShasum?: string | null;
+  npmTarballName?: string | null;
+  npmUnpackedSize?: number | null;
+  npmFileCount?: number | null;
+  downloadUrl?: string | null;
+  tarballUrl?: string | null;
+  legacyDownloadUrl?: string | null;
+};
+export type ClawHubArtifactKind = "legacy-zip" | "npm-pack";
+export type ClawHubArtifactScanState =
+  | "pending"
+  | "clean"
+  | "suspicious"
+  | "malicious"
+  | "not-run"
+  | (string & {});
+export type ClawHubArtifactModerationState = "approved" | "quarantined" | "revoked" | (string & {});
+export type ClawHubPackageSecurityState =
+  | "pending"
+  | "approved"
+  | "limited"
+  | "quarantined"
+  | "rejected"
+  | "revoked"
+  | (string & {});
+export type ClawHubResolvedArtifact =
+  | {
+      source: "clawhub";
+      artifactKind: "legacy-zip";
+      packageName: string;
+      version: string;
+      downloadUrl?: string | null;
+      artifactSha256?: string | null;
+      scanState?: ClawHubArtifactScanState | null;
+      moderationState?: ClawHubArtifactModerationState | null;
+    }
+  | {
+      source: "clawhub";
+      artifactKind: "npm-pack";
+      packageName: string;
+      version: string;
+      downloadUrl?: string | null;
+      npmIntegrity: string;
+      npmShasum?: string | null;
+      artifactSha256?: string | null;
+      scanState?: ClawHubArtifactScanState | null;
+      moderationState?: ClawHubArtifactModerationState | null;
+    };
+export type ClawHubPackageArtifactResolverResponse = {
+  package?: {
+    name?: string | null;
+    displayName?: string | null;
+    family?: ClawHubPackageFamily | (string & {}) | null;
+  } | null;
+  version?:
+    | ({
+        version?: string | null;
+        createdAt?: number | null;
+        changelog?: string | null;
+        distTags?: string[];
+        files?: unknown[];
+        sha256hash?: string | null;
+        compatibility?: ClawHubPackageCompatibility | null;
+        artifact?: ClawHubPackageArtifactSummary | null;
+        clawpack?: ClawHubPackageClawPackSummary | null;
+      } & Record<string, unknown>)
+    | string
+    | null;
+  artifact?: ClawHubResolvedArtifact | null;
+};
+export type ClawHubPackageSecurityResponse = {
+  packageId?: string | null;
+  releaseId?: string | null;
+  state: ClawHubPackageSecurityState;
+  reasonCode?: string | null;
+  moderatorNote?: string | null;
+  actorId?: string | null;
+  createdAt?: number | null;
+  scanState?: ClawHubArtifactScanState | null;
+  moderationState?: ClawHubArtifactModerationState | null;
+};
 export type ClawHubPackageClawPackSummary = {
   available: boolean;
   specVersion?: number | null;
@@ -47,11 +134,41 @@ export type ClawHubPackageClawPackSummary = {
   size?: number | null;
   fileCount?: number | null;
   manifestSha256?: string | null;
+  npmIntegrity?: string | null;
+  npmShasum?: string | null;
+  npmTarballName?: string | null;
   builtAt?: number | null;
   buildVersion?: string | null;
   hostTargets?: ClawHubPackageHostTarget[];
   environment?: ClawHubPackageEnvironmentSummary | null;
   runtimeBundles?: unknown[];
+};
+export type ClawHubPackageReadinessPhase =
+  | "planned"
+  | "published"
+  | "clawpack-ready"
+  | "legacy-zip-only"
+  | "metadata-ready"
+  | "blocked"
+  | "ready-for-openclaw"
+  | (string & {});
+export type ClawHubPackageReadiness = {
+  ready?: boolean | null;
+  readyForOpenClaw?: boolean | null;
+  installReady?: boolean | null;
+  phase?: ClawHubPackageReadinessPhase | null;
+  status?: ClawHubPackageReadinessPhase | null;
+  package?: {
+    name?: string | null;
+    family?: ClawHubPackageFamily | (string & {}) | null;
+    channel?: ClawHubPackageChannel | (string & {}) | null;
+    isOfficial?: boolean | null;
+  } | null;
+  packageName?: string | null;
+  artifactKind?: ClawHubArtifactKind | (string & {}) | null;
+  blockers?: string[];
+  scanState?: ClawHubArtifactScanState | null;
+  moderationState?: ClawHubArtifactModerationState | null;
 };
 export type ClawHubPackageListItem = {
   name: string;
@@ -71,6 +188,7 @@ export type ClawHubPackageListItem = {
   clawpackAvailable?: boolean;
   hostTargetKeys?: string[];
   environmentFlags?: string[];
+  artifact?: ClawHubPackageArtifactSummary | null;
   clawpack?: ClawHubPackageClawPackSummary;
 };
 export type ClawHubPackageDetail = {
@@ -99,6 +217,7 @@ export type ClawHubPackageDetail = {
           hasProvenance?: boolean;
           scanStatus?: string;
         } | null;
+        artifact?: ClawHubPackageArtifactSummary | null;
         clawpack?: ClawHubPackageClawPackSummary;
       })
     | null;
@@ -122,7 +241,7 @@ export type ClawHubPackageVersion = {
     distTags?: string[];
     files?: Array<{
       path: string;
-      size: number;
+      size?: number;
       sha256: string;
       contentType?: string;
     }>;
@@ -138,6 +257,7 @@ export type ClawHubPackageVersion = {
         ? C
         : never
       : never;
+    artifact?: ClawHubPackageArtifactSummary | null;
     clawpack?: ClawHubPackageClawPackSummary;
   } | null;
 };
@@ -209,6 +329,9 @@ export type ClawHubDownloadResult = {
   artifact: "archive" | "clawpack";
   clawpackHeaderSha256?: string;
   clawpackHeaderSpecVersion?: number;
+  npmIntegrity?: string;
+  npmShasum?: string;
+  npmTarballName?: string;
   cleanup: () => Promise<void>;
 };
 
@@ -321,12 +444,25 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
   return undefined;
 }
 
+function normalizePartialComparableVersion(version: string): {
+  version: string;
+  isPartial: boolean;
+} {
+  const trimmed = version.trim();
+  return /^[vV]?[0-9]+\.[0-9]+$/.test(trimmed)
+    ? { version: `${trimmed}.0`, isPartial: true }
+    : { version: trimmed, isPartial: false };
+}
+
 function compareSemver(left: string, right: string): number | null {
-  return compareComparableSemver(parseComparableSemver(left), parseComparableSemver(right));
+  return compareComparableSemver(
+    parseComparableSemver(normalizePartialComparableVersion(left).version),
+    parseComparableSemver(normalizePartialComparableVersion(right).version),
+  );
 }
 
 function upperBoundForCaret(version: string): string | null {
-  const parsed = parseComparableSemver(version);
+  const parsed = parseComparableSemver(normalizePartialComparableVersion(version).version);
   if (!parsed) {
     return null;
   }
@@ -369,12 +505,13 @@ function satisfiesComparator(version: string, token: string): boolean {
   if (!match) {
     return false;
   }
-  const operator = match[1] ?? "=";
+  const operator = match[1];
   const target = match[2]?.trim();
   if (!target) {
     return false;
   }
-  const cmp = compareSemver(version, target);
+  const normalizedTarget = normalizePartialComparableVersion(target);
+  const cmp = compareSemver(version, normalizedTarget.version);
   if (cmp == null) {
     return false;
   }
@@ -389,7 +526,7 @@ function satisfiesComparator(version: string, token: string): boolean {
       return cmp < 0;
     case "=":
     default:
-      return cmp === 0;
+      return normalizedTarget.isPartial && !operator ? cmp >= 0 : cmp === 0;
   }
 }
 
@@ -476,6 +613,28 @@ function formatSha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function formatSha512Integrity(bytes: Uint8Array): string {
+  const digest = createHash("sha512").update(bytes).digest("base64");
+  return `sha512-${digest}`;
+}
+
+function formatSha1Hex(bytes: Uint8Array): string {
+  return createHash("sha1").update(bytes).digest("hex");
+}
+
+function normalizeHeaderValue(value: string | null): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function safePackageTarballName(name: string, version: string): string {
+  const base = name
+    .replace(/^@/, "")
+    .replace(/[\\/]+/g, "-")
+    .replace(/[^A-Za-z0-9._-]/g, "-");
+  return `${base || "package"}-${version}.tgz`;
+}
+
 export function normalizeClawHubSha256Integrity(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -540,6 +699,60 @@ export async function fetchClawHubPackageVersion(params: {
     path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
       params.version,
     )}`,
+    token: params.token,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+  });
+}
+
+export async function fetchClawHubPackageArtifact(params: {
+  name: string;
+  version: string;
+  baseUrl?: string;
+  token?: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<ClawHubPackageArtifactResolverResponse> {
+  return await fetchJson<ClawHubPackageArtifactResolverResponse>({
+    baseUrl: params.baseUrl,
+    path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
+      params.version,
+    )}/artifact`,
+    token: params.token,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+  });
+}
+
+export async function fetchClawHubPackageSecurity(params: {
+  name: string;
+  version: string;
+  baseUrl?: string;
+  token?: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<ClawHubPackageSecurityResponse> {
+  return await fetchJson<ClawHubPackageSecurityResponse>({
+    baseUrl: params.baseUrl,
+    path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
+      params.version,
+    )}/security`,
+    token: params.token,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+  });
+}
+
+export async function fetchClawHubPackageReadiness(params: {
+  name: string;
+  baseUrl?: string;
+  token?: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<ClawHubPackageReadiness> {
+  return await fetchJson<ClawHubPackageReadiness>({
+    baseUrl: params.baseUrl,
+    path: `/api/v1/packages/${encodeURIComponent(params.name)}/readiness`,
     token: params.token,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
@@ -645,7 +858,7 @@ export async function downloadClawHubPackageArchive(params: {
       baseUrl: params.baseUrl,
       path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
         params.version,
-      )}/clawpack`,
+      )}/artifact/download`,
       token: params.token,
       timeoutMs: params.timeoutMs,
       fetchImpl: params.fetchImpl,
@@ -659,12 +872,16 @@ export async function downloadClawHubPackageArchive(params: {
     }
     const bytes = new Uint8Array(await response.arrayBuffer());
     const sha256Hex = formatSha256Hex(bytes);
+    const npmIntegrity = formatSha512Integrity(bytes);
+    const npmShasum = formatSha1Hex(bytes);
     const headerSha256 = normalizeClawHubSha256Hex(
-      response.headers.get("X-ClawHub-ClawPack-Sha256") ?? "",
+      response.headers.get("X-ClawHub-Artifact-Sha256") ??
+        response.headers.get("X-ClawHub-ClawPack-Sha256") ??
+        "",
     );
     if (!headerSha256) {
       throw new Error(
-        `ClawHub ClawPack download for "${params.name}@${params.version}" is missing X-ClawHub-ClawPack-Sha256.`,
+        `ClawHub ClawPack download for "${params.name}@${params.version}" is missing X-ClawHub-Artifact-Sha256.`,
       );
     }
     if (headerSha256 !== sha256Hex) {
@@ -672,11 +889,28 @@ export async function downloadClawHubPackageArchive(params: {
         `ClawHub ClawPack download for "${params.name}@${params.version}" declared sha256 ${headerSha256}, got ${sha256Hex}.`,
       );
     }
+    const headerNpmIntegrity = normalizeHeaderValue(
+      response.headers.get("X-ClawHub-Npm-Integrity"),
+    );
+    if (headerNpmIntegrity && headerNpmIntegrity !== npmIntegrity) {
+      throw new Error(
+        `ClawHub ClawPack download for "${params.name}@${params.version}" declared npm integrity ${headerNpmIntegrity}, got ${npmIntegrity}.`,
+      );
+    }
+    const headerNpmShasum = normalizeHeaderValue(response.headers.get("X-ClawHub-Npm-Shasum"));
+    if (headerNpmShasum && headerNpmShasum !== npmShasum) {
+      throw new Error(
+        `ClawHub ClawPack download for "${params.name}@${params.version}" declared npm shasum ${headerNpmShasum}, got ${npmShasum}.`,
+      );
+    }
+    const npmTarballName =
+      normalizeHeaderValue(response.headers.get("X-ClawHub-Npm-Tarball-Name")) ??
+      safePackageTarballName(params.name, params.version);
     const rawSpecVersion = response.headers.get("X-ClawHub-ClawPack-Spec-Version");
     const specVersion = rawSpecVersion ? Number.parseInt(rawSpecVersion, 10) : undefined;
     const target = await createTempDownloadTarget({
       prefix: "openclaw-clawhub-clawpack",
-      fileName: `${params.name}.clawpack.zip`,
+      fileName: npmTarballName,
       tmpDir: os.tmpdir(),
     });
     await fs.writeFile(target.path, bytes);
@@ -689,6 +923,9 @@ export async function downloadClawHubPackageArchive(params: {
       ...(typeof specVersion === "number" && Number.isSafeInteger(specVersion) && specVersion >= 0
         ? { clawpackHeaderSpecVersion: specVersion }
         : {}),
+      npmIntegrity,
+      npmShasum,
+      npmTarballName,
       cleanup: target.cleanup,
     };
   }

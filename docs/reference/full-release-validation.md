@@ -27,6 +27,12 @@ Child workflows use the trusted workflow ref for the harness and the input
 `ref` for the candidate under test. That keeps new validation logic available
 when validating an older release branch or tag.
 
+Package Acceptance normally builds the candidate tarball from the resolved
+`ref`, including full-SHA runs dispatched with `pnpm ci:full-release`. After
+publish, pass `package_acceptance_package_spec=openclaw@YYYY.M.D` (or
+`openclaw@beta`/`openclaw@latest`) to run the same package/update matrix against
+the shipped npm package instead.
+
 ## Top-level stages
 
 | Stage                | Details                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -57,7 +63,7 @@ or Docker-facing stages need it.
 | Cross-OS            | **Job:** `cross_os_release_checks`<br />**Backing workflow:** `OpenClaw Cross-OS Release Checks (Reusable)`<br />**Tests:** fresh and upgrade lanes on Linux, Windows, and macOS for the selected provider and mode, using the candidate tarball plus a baseline package.<br />**Rerun:** `rerun_group=cross-os`.                                                                               |
 | Repo and live E2E   | **Job:** `Run repo/live E2E validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** repository E2E, live cache, OpenAI websocket streaming, native live provider and plugin shards, and Docker-backed live model/backend/gateway harnesses selected by `release_profile`.<br />**Rerun:** `rerun_group=live-e2e`, optionally with `live_suite_filter`. |
 | Docker release path | **Job:** `Run Docker release-path validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** release-path Docker chunks against the shared package artifact.<br />**Rerun:** `rerun_group=live-e2e`.                                                                                                                                                      |
-| Package Acceptance  | **Job:** `Run package acceptance`<br />**Backing workflow:** `Package Acceptance`<br />**Tests:** offline plugin package fixtures, plugin update, and mock-OpenAI Telegram package acceptance against the same tarball.<br />**Rerun:** `rerun_group=package`.                                                                                                                                  |
+| Package Acceptance  | **Job:** `Run package acceptance`<br />**Backing workflow:** `Package Acceptance`<br />**Tests:** offline plugin package fixtures, plugin update, mock-OpenAI Telegram package acceptance, and published-upgrade survivor checks from every stable npm release at or after `2026.4.23` against the same tarball.<br />**Rerun:** `rerun_group=package`.                                         |
 | QA parity           | **Job:** `Run QA Lab parity lane` and `Run QA Lab parity report`<br />**Backing workflow:** direct jobs<br />**Tests:** candidate and baseline agentic parity packs, then the parity report.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                       |
 | QA live Matrix      | **Job:** `Run QA Lab live Matrix lane`<br />**Backing workflow:** direct job<br />**Tests:** fast live Matrix QA profile in the `qa-live-shared` environment.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`.                                                                                                                                                                        |
 | QA live Telegram    | **Job:** `Run QA Lab live Telegram lane`<br />**Backing workflow:** direct job<br />**Tests:** live Telegram QA with Convex CI credential leases.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`.                                                                                                                                                                                    |

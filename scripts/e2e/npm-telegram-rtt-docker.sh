@@ -13,10 +13,10 @@ OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-r
 
 validate_openclaw_package_spec() {
   local spec="$1"
-  if [[ "$spec" =~ ^openclaw@(main|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$ ]]; then
+  if [[ "$spec" =~ ^openclaw@(main|alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
     return 0
   fi
-  echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC must be openclaw@main, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: $spec" >&2
+  echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC must be openclaw@main, openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: $spec" >&2
   exit 1
 }
 

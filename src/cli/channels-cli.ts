@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { danger } from "../globals.js";
 import { listBundledPackageChannelMetadata } from "../plugins/bundled-package-channel-metadata.js";
 import { defaultRuntime } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
@@ -15,11 +16,12 @@ type ChannelsCommandsModule = typeof import("../commands/channels.js");
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
 
-let channelsCommandsPromise: Promise<ChannelsCommandsModule> | undefined;
+const channelsCommandsLoader = createLazyImportLoader<ChannelsCommandsModule>(
+  () => import("../commands/channels.js"),
+);
 
 function loadChannelsCommands(): Promise<ChannelsCommandsModule> {
-  channelsCommandsPromise ??= import("../commands/channels.js");
-  return channelsCommandsPromise;
+  return channelsCommandsLoader.load();
 }
 
 function runChannelsCommand(action: () => Promise<void>) {

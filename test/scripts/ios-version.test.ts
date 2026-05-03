@@ -55,6 +55,10 @@ describe("gateway version normalization", () => {
     expect(normalizeGatewayVersionToPinnedIosVersion("2026.4.6-beta.2")).toBe("2026.4.6");
   });
 
+  it("strips alpha suffixes when pinning from gateway version", () => {
+    expect(normalizeGatewayVersionToPinnedIosVersion("2026.4.6-alpha.2")).toBe("2026.4.6");
+  });
+
   it("strips fallback correction suffixes when pinning from gateway version", () => {
     expect(normalizeGatewayVersionToPinnedIosVersion("2026.4.6-3")).toBe("2026.4.6");
   });

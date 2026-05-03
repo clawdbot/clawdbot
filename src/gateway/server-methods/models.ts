@@ -26,11 +26,11 @@ async function loadModelsListCatalog(
   view: ModelsListView,
 ): Promise<GatewayModelCatalog> {
   if (view === "all") {
-    return await context.loadGatewayModelCatalog();
+    return await context.loadGatewayModelCatalog({ readOnly: false });
   }
   let timeout: NodeJS.Timeout | undefined;
   const timedOut = Symbol("models-list-catalog-timeout");
-  const catalogPromise = context.loadGatewayModelCatalog();
+  const catalogPromise = context.loadGatewayModelCatalog({ readOnly: true });
   const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
     timeout = setTimeout(() => resolve(timedOut), MODELS_LIST_CATALOG_TIMEOUT_MS);
     timeout.unref?.();
@@ -85,6 +85,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
         defaultProvider: DEFAULT_PROVIDER,
         workspaceDir,
         view,
+        runtimeAuthDiscovery: false,
       });
       respond(true, { models }, undefined);
     } catch (err) {

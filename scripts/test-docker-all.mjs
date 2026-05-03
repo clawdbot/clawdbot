@@ -194,16 +194,38 @@ function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
+function githubWorkflowRef() {
+  const explicit = process.env.OPENCLAW_DOCKER_E2E_WORKFLOW_REF;
+  if (explicit) {
+    return explicit;
+  }
+  const refName = process.env.GITHUB_REF_NAME;
+  if (refName) {
+    return refName;
+  }
+  const ref = process.env.GITHUB_REF;
+  if (ref?.startsWith("refs/heads/")) {
+    return ref.slice("refs/heads/".length);
+  }
+  if (ref?.startsWith("refs/tags/")) {
+    return ref.slice("refs/tags/".length);
+  }
+  return undefined;
+}
+
 function githubWorkflowRerunCommand(laneNames, ref) {
+  const workflowRef = githubWorkflowRef();
+  const releasePath = process.env.OPENCLAW_DOCKER_ALL_PROFILE === RELEASE_PATH_PROFILE;
   const fields = [
     "gh workflow run",
     shellQuote(process.env.OPENCLAW_DOCKER_E2E_WORKFLOW || DEFAULT_GITHUB_WORKFLOW),
+    ...(workflowRef ? ["--ref", shellQuote(workflowRef)] : []),
     "-f",
     `ref=${shellQuote(ref)}`,
     "-f",
     "include_repo_e2e=false",
     "-f",
-    "include_release_path_suites=false",
+    `include_release_path_suites=${releasePath ? "true" : "false"}`,
     "-f",
     "include_openwebui=false",
     "-f",

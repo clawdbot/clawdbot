@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   PluginLruCache,
+  createConfigScopedPromiseLoader,
   resolveConfigScopedRuntimeCacheValue,
   type ConfigScopedRuntimeCache,
 } from "./plugin-cache-primitives.js";
@@ -82,5 +83,66 @@ describe("resolveConfigScopedRuntimeCacheValue", () => {
       undefined,
     );
     expect(load).toHaveBeenCalledOnce();
+  });
+});
+
+describe("createConfigScopedPromiseLoader", () => {
+  it("dedupes concurrent default loads", async () => {
+    let calls = 0;
+    const loader = createConfigScopedPromiseLoader(async () => `loaded-${++calls}`);
+
+    await expect(Promise.all([loader.load(), loader.load()])).resolves.toEqual([
+      "loaded-1",
+      "loaded-1",
+    ]);
+    await expect(loader.load()).resolves.toBe("loaded-1");
+    expect(calls).toBe(1);
+  });
+
+  it("caches loads by config object", async () => {
+    const firstConfig = { plugins: { load: { disabled: true } } } as OpenClawConfig;
+    const secondConfig = { plugins: { load: { disabled: false } } } as OpenClawConfig;
+    const load = vi.fn(async (config?: OpenClawConfig) =>
+      config === firstConfig ? "first" : "second",
+    );
+    const loader = createConfigScopedPromiseLoader(load);
+
+    await expect(loader.load(firstConfig)).resolves.toBe("first");
+    await expect(loader.load(firstConfig)).resolves.toBe("first");
+    await expect(loader.load(secondConfig)).resolves.toBe("second");
+
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("evicts rejected loads so retries can recover", async () => {
+    const config = {} as OpenClawConfig;
+    let calls = 0;
+    const loader = createConfigScopedPromiseLoader(async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error("transient");
+      }
+      return "recovered";
+    });
+
+    await expect(loader.load(config)).rejects.toThrow("transient");
+    await expect(loader.load(config)).resolves.toBe("recovered");
+    expect(calls).toBe(2);
+  });
+
+  it("clears default and config-scoped entries", async () => {
+    const config = {} as OpenClawConfig;
+    let calls = 0;
+    const loader = createConfigScopedPromiseLoader(
+      async (owner?: OpenClawConfig) => `${owner ? "config" : "default"}-${++calls}`,
+    );
+
+    await expect(loader.load()).resolves.toBe("default-1");
+    await expect(loader.load(config)).resolves.toBe("config-2");
+
+    loader.clear();
+
+    await expect(loader.load()).resolves.toBe("default-3");
+    await expect(loader.load(config)).resolves.toBe("config-4");
   });
 });

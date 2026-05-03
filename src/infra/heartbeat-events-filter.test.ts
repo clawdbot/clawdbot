@@ -110,6 +110,22 @@ describe("heartbeat event prompts", () => {
     expect(prompt).toContain("[truncated]");
     expect(prompt.length).toBeLessThan(8_500);
   });
+
+  it("uses heartbeat_respond for empty cron events in response-tool mode", () => {
+    const prompt = buildCronEventPrompt([""], { useHeartbeatResponseTool: true });
+
+    expect(prompt).toContain("heartbeat_respond");
+    expect(prompt).toContain("notify=false");
+    expect(prompt).not.toContain("HEARTBEAT_OK");
+  });
+
+  it("uses heartbeat_respond for quiet exec completion events in response-tool mode", () => {
+    const prompt = buildExecEventPrompt([""], { useHeartbeatResponseTool: true });
+
+    expect(prompt).toContain("heartbeat_respond");
+    expect(prompt).toContain("notify=false");
+    expect(prompt).not.toContain("HEARTBEAT_OK");
+  });
 });
 
 describe("heartbeat event classification", () => {

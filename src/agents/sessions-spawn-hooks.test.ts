@@ -65,12 +65,12 @@ async function spawn(params?: {
   runTimeoutSeconds?: number;
   thread?: boolean;
   mode?: "run" | "session";
+  context?: "isolated" | "fork";
   agentSessionKey?: string;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
-  context?: "isolated";
 }) {
   return await spawnSubagentDirect(
     {
@@ -81,7 +81,7 @@ async function spawn(params?: {
         : {}),
       ...(params?.thread ? { thread: true } : {}),
       ...(params?.mode ? { mode: params.mode } : {}),
-      ...(params?.context ? { context: params.context } : {}),
+      context: params?.context ?? "isolated",
     },
     {
       agentSessionKey: params?.agentSessionKey ?? "main",
@@ -170,6 +170,9 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       session: {
         mainKey: "main",
         scope: "per-sender",
+        threadBindings: {
+          defaultSpawnContext: "isolated",
+        },
       },
     });
     const store: Record<string, Record<string, unknown>> = {};

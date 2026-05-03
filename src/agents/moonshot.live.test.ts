@@ -38,21 +38,34 @@ describeLive("moonshot live", () => {
       maxTokens: 8192,
     };
 
-    const res = await completeSimple(
-      model,
-      {
-        messages: createSingleUserPromptMessage(),
-      },
-      {
-        apiKey: MOONSHOT_KEY,
-        maxTokens: 64,
-        onPayload: (payload) => {
-          forceMoonshotInstantMode(payload);
+    let lastContent: unknown = null;
+    let text = "";
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const res = await completeSimple(
+        model,
+        {
+          messages: createSingleUserPromptMessage(),
         },
-      },
-    );
+        {
+          apiKey: MOONSHOT_KEY,
+          maxTokens: 64,
+          onPayload: (payload) => {
+            forceMoonshotInstantMode(payload);
+          },
+        },
+      );
 
-    const text = extractNonEmptyAssistantText(res.content);
-    expect(text.length).toBeGreaterThan(0);
+      lastContent = res.content;
+      text = extractNonEmptyAssistantText(res.content);
+      if (text.length > 0) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+    }
+
+    expect(
+      text.length,
+      `Moonshot returned no visible text: ${JSON.stringify(lastContent)}`,
+    ).toBeGreaterThan(0);
   }, 30000);
 });

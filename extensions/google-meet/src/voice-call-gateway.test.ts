@@ -21,27 +21,31 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
 
 describe("Google Meet voice-call gateway", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     gatewayMocks.request.mockReset();
     gatewayMocks.request.mockResolvedValue({ callId: "call-1" });
     gatewayMocks.stopAndWait.mockClear();
     gatewayMocks.startGatewayClientWhenEventLoopReady.mockClear();
   });
 
-  it("starts Twilio Meet calls with pre-connect DTMF and intro metadata", async () => {
+  it("starts Twilio Meet calls, sends delayed DTMF, then speaks the intro", async () => {
     const config = resolveGoogleMeetConfig({
       voiceCall: {
         gatewayUrl: "ws://127.0.0.1:18789",
         dtmfDelayMs: 1,
+        postDtmfSpeechDelayMs: 2,
       },
       realtime: { introMessage: "Say exactly: I'm here and listening." },
     });
 
-    await joinMeetViaVoiceCallGateway({
+    const join = joinMeetViaVoiceCallGateway({
       config,
       dialInNumber: "+15551234567",
       dtmfSequence: "123456#",
       message: "Say exactly: I'm here and listening.",
     });
+
+    await join;
 
     expect(gatewayMocks.request).toHaveBeenNthCalledWith(
       1,
@@ -49,11 +53,27 @@ describe("Google Meet voice-call gateway", () => {
       {
         to: "+15551234567",
         mode: "conversation",
-        message: "Say exactly: I'm here and listening.",
-        dtmfSequence: "123456#",
       },
       { timeoutMs: 30_000 },
     );
-    expect(gatewayMocks.request).toHaveBeenCalledTimes(1);
+    expect(gatewayMocks.request).toHaveBeenNthCalledWith(
+      2,
+      "voicecall.dtmf",
+      {
+        callId: "call-1",
+        digits: "123456#",
+      },
+      { timeoutMs: 30_000 },
+    );
+    expect(gatewayMocks.request).toHaveBeenNthCalledWith(
+      3,
+      "voicecall.speak",
+      {
+        callId: "call-1",
+        message: "Say exactly: I'm here and listening.",
+      },
+      { timeoutMs: 30_000 },
+    );
+    expect(gatewayMocks.request).toHaveBeenCalledTimes(3);
   });
 });

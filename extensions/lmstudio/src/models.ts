@@ -43,6 +43,19 @@ type LmstudioConfiguredCatalogEntry = {
   compat?: ModelDefinitionConfig["compat"];
 };
 
+const LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+
+const LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS = [
+  "none",
+  ...LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS,
+] as const;
+
 function normalizeReasoningOption(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -72,36 +85,92 @@ function normalizeReasoningOptions(value: unknown): string[] {
   ];
 }
 
-function resolveLmstudioReasoningDefault(
-  reasoning: LmstudioReasoningCapabilityWire,
-): string | null {
-  const normalizedDefault = normalizeReasoningOption(reasoning.default);
-  return normalizedDefault && isReasoningEnabledOption(normalizedDefault)
-    ? normalizedDefault
-    : null;
+function isLmstudioBinaryReasoningOptions(allowedOptions: readonly string[]): boolean {
+  return (
+    allowedOptions.some((option) => option === "on") &&
+    allowedOptions.every((option) => option === "on" || option === "off")
+  );
 }
 
-function resolveLmstudioEnabledReasoningOption(
-  allowedOptions: readonly string[],
-  reasoning: LmstudioReasoningCapabilityWire,
-): string | undefined {
-  const normalizedDefault = resolveLmstudioReasoningDefault(reasoning);
-  if (normalizedDefault && allowedOptions.includes(normalizedDefault)) {
-    return normalizedDefault;
+function resolveLmstudioTransportReasoningEfforts(allowedOptions: readonly string[]): string[] {
+  if (isLmstudioBinaryReasoningOptions(allowedOptions)) {
+    return allowedOptions.includes("off")
+      ? [...LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS]
+      : [...LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS];
   }
+  return [
+    ...new Set(
+      allowedOptions
+        .map((option) => (option === "off" ? "none" : option))
+        .filter((option) => option !== "on"),
+    ),
+  ];
+}
+
+function resolveLmstudioEnabledTransportReasoningOption(
+  supportedReasoningEfforts: readonly string[],
+): string | undefined {
   return (
-    allowedOptions.find((option) => option === "on" || option === "default") ??
-    allowedOptions.find((option) => isReasoningEnabledOption(option))
+    supportedReasoningEfforts.find((option) => option === "xhigh") ??
+    supportedReasoningEfforts.find((option) => option === "high") ??
+    supportedReasoningEfforts.find((option) => option !== "none")
   );
 }
 
-function resolveLmstudioDisabledReasoningOption(
+function buildLmstudioReasoningEffortMap(
+  supportedReasoningEfforts: readonly string[],
+): Record<string, string> | undefined {
+  const disabled = supportedReasoningEfforts.includes("none") ? "none" : undefined;
+  const max = resolveLmstudioEnabledTransportReasoningOption(supportedReasoningEfforts);
+  const map = {
+    ...(disabled ? { off: disabled, none: disabled } : {}),
+    ...(max ? { adaptive: max, max } : {}),
+  };
+  return Object.keys(map).length > 0 ? map : undefined;
+}
+
+function buildLmstudioReasoningCompat(
   allowedOptions: readonly string[],
-): string | undefined {
-  return (
-    allowedOptions.find((option) => option === "off") ??
-    allowedOptions.find((option) => option === "none")
-  );
+): ModelDefinitionConfig["compat"] | undefined {
+  const supportedReasoningEfforts = resolveLmstudioTransportReasoningEfforts(allowedOptions);
+  if (supportedReasoningEfforts.length === 0) {
+    return undefined;
+  }
+  if (!supportedReasoningEfforts.some((option) => option !== "none")) {
+    return undefined;
+  }
+  return {
+    supportsReasoningEffort: true,
+    supportedReasoningEfforts,
+    reasoningEffortMap: buildLmstudioReasoningEffortMap(supportedReasoningEfforts),
+  };
+}
+
+function normalizeLmstudioTransportReasoningCompat(
+  compat: NonNullable<ModelDefinitionConfig["compat"]>,
+): NonNullable<ModelDefinitionConfig["compat"]> {
+  const supportedReasoningEfforts = compat.supportedReasoningEfforts;
+  const map = compat.reasoningEffortMap;
+  const hasBinarySupported =
+    Array.isArray(supportedReasoningEfforts) &&
+    supportedReasoningEfforts.some((option) => option === "on");
+  const hasBinaryMapValue =
+    map !== undefined && Object.values(map).some((value) => value === "on" || value === "off");
+  if (!hasBinarySupported && !hasBinaryMapValue) {
+    return compat;
+  }
+  const hasDisabled =
+    supportedReasoningEfforts?.includes("off") === true ||
+    supportedReasoningEfforts?.includes("none") === true ||
+    Object.values(map ?? {}).some((value) => value === "off" || value === "none");
+  const normalizedSupportedReasoningEfforts = hasDisabled
+    ? [...LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS]
+    : [...LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS];
+  return {
+    ...compat,
+    supportedReasoningEfforts: normalizedSupportedReasoningEfforts,
+    reasoningEffortMap: buildLmstudioReasoningEffortMap(normalizedSupportedReasoningEfforts),
+  };
 }
 
 export function resolveLmstudioReasoningCompat(
@@ -115,25 +184,7 @@ export function resolveLmstudioReasoningCompat(
   if (allowedOptions.length === 0) {
     return undefined;
   }
-  const enabled = resolveLmstudioEnabledReasoningOption(allowedOptions, reasoning);
-  if (!enabled) {
-    return undefined;
-  }
-  const disabled = resolveLmstudioDisabledReasoningOption(allowedOptions);
-  return {
-    supportsReasoningEffort: true,
-    supportedReasoningEfforts: allowedOptions,
-    reasoningEffortMap: {
-      ...(disabled ? { off: disabled, none: disabled } : {}),
-      minimal: enabled,
-      low: enabled,
-      medium: enabled,
-      high: enabled,
-      xhigh: enabled,
-      adaptive: enabled,
-      max: enabled,
-    },
-  };
+  return buildLmstudioReasoningCompat(allowedOptions);
 }
 
 /**
@@ -235,7 +286,9 @@ function normalizeLmstudioConfiguredCompat(value: unknown): ModelDefinitionConfi
   if (reasoningEffortMap) {
     compat.reasoningEffortMap = reasoningEffortMap;
   }
-  return Object.keys(compat).length > 0 ? compat : undefined;
+  return Object.keys(compat).length > 0
+    ? normalizeLmstudioTransportReasoningCompat(compat)
+    : undefined;
 }
 
 function toFetchableLmstudioBaseUrl(value: string): string {

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import {
@@ -10,6 +10,7 @@ import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plug
 import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { __testing, createOpenClawTools } from "./openclaw-tools.js";
 
@@ -141,8 +142,13 @@ function installSnapshot(
 }
 
 describe("optional media tool factory planning", () => {
+  beforeEach(() => {
+    clearSecretsRuntimeSnapshot();
+  });
+
   afterEach(() => {
     clearCurrentPluginMetadataSnapshot();
+    clearSecretsRuntimeSnapshot();
     setBundledPluginsDirOverrideForTest(undefined);
     vi.unstubAllEnvs();
   });
@@ -500,6 +506,7 @@ describe("optional media tool factory planning", () => {
 
   it("does not count unresolved SecretRef config signals as configured", () => {
     vi.stubEnv("COMFY_TEST_API_KEY", "");
+    const workspaceDir = process.cwd();
     const config: OpenClawConfig = {
       plugins: {
         entries: {
@@ -525,29 +532,35 @@ describe("optional media tool factory planning", () => {
         required: ["promptNodeId", "apiKey"],
       },
     ];
-    installSnapshot(config, [
-      createPlugin({
-        id: "comfy",
-        contracts: {
-          imageGenerationProviders: ["comfy"],
-          videoGenerationProviders: ["comfy"],
-          musicGenerationProviders: ["comfy"],
-        },
-        imageGenerationProviderMetadata: {
-          comfy: { configSignals },
-        },
-        videoGenerationProviderMetadata: {
-          comfy: { configSignals },
-        },
-        musicGenerationProviderMetadata: {
-          comfy: { configSignals },
-        },
-      }),
-    ]);
+    installSnapshot(
+      config,
+      [
+        createPlugin({
+          id: "comfy",
+          contracts: {
+            imageGenerationProviders: ["comfy"],
+            videoGenerationProviders: ["comfy"],
+            musicGenerationProviders: ["comfy"],
+          },
+          imageGenerationProviderMetadata: {
+            comfy: { configSignals },
+          },
+          videoGenerationProviderMetadata: {
+            comfy: { configSignals },
+          },
+          musicGenerationProviderMetadata: {
+            comfy: { configSignals },
+          },
+        }),
+      ],
+      undefined,
+      workspaceDir,
+    );
 
     expect(
       __testing.resolveOptionalMediaToolFactoryPlan({
         config,
+        workspaceDir,
         authStore: createAuthStore(),
       }),
     ).toEqual({
@@ -559,6 +572,7 @@ describe("optional media tool factory planning", () => {
     expect(
       createOpenClawTools({
         config,
+        workspaceDir,
         authProfileStore: createAuthStore(),
         pluginToolAllowlist: ["image_generate", "video_generate", "music_generate"],
       }).map((tool) => tool.name),

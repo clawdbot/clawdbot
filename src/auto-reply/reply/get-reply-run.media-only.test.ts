@@ -857,6 +857,32 @@ describe("runPreparedReply media-only handling", () => {
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
+  it("treats reset-triggered steer mode as interrupt when the session lane is empty", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const commandQueue = await import("../../process/command-queue.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "steer" });
+    vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(0);
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue("session-active");
+    vi.mocked(piRuntime.abortEmbeddedPiRun).mockReturnValue(true);
+
+    const result = await runPreparedReply(
+      baseParams({
+        resetTriggered: true,
+        isNewSession: true,
+        sessionId: "session-reset-new",
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
+    expect(piRuntime.abortEmbeddedPiRun).toHaveBeenCalledWith("session-active");
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.shouldSteer).toBe(false);
+    expect(call?.shouldFollowup).toBe(false);
+    expect(call?.resetTriggered).toBe(true);
+  });
   it("rechecks same-session ownership after async prep before registering a new reply operation", async () => {
     const { resolveSessionAuthProfileOverride } =
       await import("../../agents/auth-profiles/session-override.js");

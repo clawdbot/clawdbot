@@ -448,7 +448,6 @@ describe("applyPluginAutoEnable core", () => {
             model: "openai/gpt-5.5",
             agentRuntime: {
               id: "codex",
-              fallback: "none",
             },
           },
         },
@@ -480,7 +479,6 @@ describe("applyPluginAutoEnable core", () => {
           defaults: {
             agentRuntime: {
               id: "codex",
-              fallback: "none",
             },
           },
         },
@@ -508,7 +506,6 @@ describe("applyPluginAutoEnable core", () => {
           defaults: {
             agentRuntime: {
               id: "claude-cli",
-              fallback: "none",
             },
           },
         },

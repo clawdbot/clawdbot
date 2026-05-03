@@ -9,17 +9,17 @@ import {
   isValidFileSecretRefId,
   resolveDefaultSecretProviderAlias,
 } from "../secrets/ref-contract.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
-let secretResolvePromise: Promise<typeof import("../secrets/resolve.js")> | undefined;
+const secretResolveLoader = createLazyImportLoader(() => import("../secrets/resolve.js"));
 
 function loadSecretResolve() {
-  secretResolvePromise ??= import("../secrets/resolve.js");
-  return secretResolvePromise;
+  return secretResolveLoader.load();
 }
 
 const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;

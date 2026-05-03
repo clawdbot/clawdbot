@@ -29,6 +29,11 @@ export const InstallRecordShape = {
   clawhubChannel: z
     .union([z.literal("official"), z.literal("community"), z.literal("private")])
     .optional(),
+  artifactKind: z.union([z.literal("legacy-zip"), z.literal("npm-pack")]).optional(),
+  artifactFormat: z.union([z.literal("zip"), z.literal("tgz")]).optional(),
+  npmIntegrity: z.string().optional(),
+  npmShasum: z.string().optional(),
+  npmTarballName: z.string().optional(),
   clawpackSha256: z.string().optional(),
   clawpackSpecVersion: z.number().int().nonnegative().optional(),
   clawpackManifestSha256: z.string().optional(),

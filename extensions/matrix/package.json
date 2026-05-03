@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.5.1-beta.2",
+  "version": "2026.5.3",
   "description": "OpenClaw Matrix channel plugin",
   "repository": {
     "type": "git",
@@ -21,7 +21,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.25"
+    "openclaw": ">=2026.5.3"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -79,20 +79,7 @@
       }
     },
     "install": {
-      "npmSpec": "@openclaw/matrix",
-      "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10",
-      "allowInvalidConfigRecovery": true
-    },
-    "compat": {
-      "pluginApi": ">=2026.4.25"
-    },
-    "build": {
-      "openclawVersion": "2026.5.1-beta.2"
-    },
-    "release": {
-      "publishToClawHub": true,
-      "publishToNpm": true
+      "minHostVersion": ">=2026.4.10"
     }
   }
 }

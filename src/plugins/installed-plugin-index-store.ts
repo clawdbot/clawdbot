@@ -50,6 +50,12 @@ const InstalledPluginIndexStartupSchema = z.object({
   agentHarnesses: StringArraySchema,
 });
 
+const InstalledPluginFileSignatureSchema = z.object({
+  size: z.number(),
+  mtimeMs: z.number(),
+  ctimeMs: z.number().optional(),
+});
+
 const InstalledPluginIndexRecordSchema = z.object({
   pluginId: z.string(),
   packageName: z.string().optional(),
@@ -60,6 +66,7 @@ const InstalledPluginIndexRecordSchema = z.object({
   packageChannel: z.unknown().optional(),
   manifestPath: z.string(),
   manifestHash: z.string(),
+  manifestFile: InstalledPluginFileSignatureSchema.optional(),
   format: z.string().optional(),
   bundleFormat: z.string().optional(),
   source: z.string().optional(),
@@ -68,6 +75,7 @@ const InstalledPluginIndexRecordSchema = z.object({
     .object({
       path: z.string(),
       hash: z.string(),
+      fileSignature: InstalledPluginFileSignatureSchema.optional(),
     })
     .optional(),
   rootDir: z.string(),

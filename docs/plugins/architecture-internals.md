@@ -64,6 +64,12 @@ to narrow plugin loading before broader registry materialization:
   imports and startup opt-outs; plugins without startup metadata load only
   through narrower activation triggers
 
+Request-time runtime preloads that ask for the broad `all` scope still derive an
+explicit effective plugin id set from config, startup planning, configured
+channels, slots, and auto-enable rules. If that derived set is empty, OpenClaw
+loads an empty runtime registry instead of widening to every discoverable
+plugin.
+
 The activation planner exposes both an ids-only API for existing callers and a
 plan API for new diagnostics. Plan entries report why a plugin was selected,
 separating explicit `activation.*` planner hints from manifest ownership

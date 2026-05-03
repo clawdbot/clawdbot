@@ -3,9 +3,13 @@ import { ChannelType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
+const fetchPluralKitMessageInfoMock = vi.hoisted(() => vi.fn());
 const resolveDiscordDmCommandAccessMock = vi.hoisted(() => vi.fn());
 const handleDiscordDmCommandDecisionMock = vi.hoisted(() => vi.fn(async () => {}));
 
+vi.mock("../pluralkit.js", () => ({
+  fetchPluralKitMessageInfo: (...args: unknown[]) => fetchPluralKitMessageInfoMock(...args),
+}));
 vi.mock("./preflight-audio.runtime.js", () => ({
   transcribeFirstAudio: transcribeFirstAudioMock,
 }));
@@ -43,6 +47,10 @@ beforeAll(async () => {
   } = await import("./message-handler.preflight.js"));
   ({ __testing: threadBindingTesting, createThreadBindingManager } =
     await import("./thread-bindings.js"));
+});
+
+beforeEach(() => {
+  fetchPluralKitMessageInfoMock.mockReset();
 });
 
 function createThreadBinding(
@@ -715,6 +723,77 @@ describe("preflightDiscordMessage", () => {
     });
 
     expect(result).toBeNull();
+  });
+
+  it("canonicalizes PluralKit webhook messages to the original Discord message id", async () => {
+    fetchPluralKitMessageInfoMock.mockResolvedValue({
+      id: "proxy-456",
+      original: "orig-123",
+      member: { id: "member-1", name: "Echo" },
+      system: { id: "system-1", name: "System" },
+    });
+
+    const result = await runGuildPreflight({
+      channelId: "c1",
+      guildId: "g1",
+      message: createDiscordMessage({
+        id: "proxy-456",
+        channelId: "c1",
+        content: "<@openclaw-bot> hello",
+        webhookId: "pluralkit-webhook-1",
+        author: {
+          id: "webhook-author",
+          bot: true,
+          username: "PluralKit",
+        },
+        mentionedUsers: [{ id: "openclaw-bot" }],
+      }),
+      discordConfig: {
+        pluralkit: { enabled: true },
+      } as DiscordConfig,
+    });
+
+    expect(fetchPluralKitMessageInfoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "proxy-456",
+        config: expect.objectContaining({ enabled: true }),
+      }),
+    );
+    expect(result).not.toBeNull();
+    expect(result?.sender.isPluralKit).toBe(true);
+    expect(result?.canonicalMessageId).toBe("orig-123");
+  });
+
+  it("skips PluralKit lookup for bound-thread webhook echoes", async () => {
+    const threadBinding = createThreadBinding({
+      targetKind: "session",
+      targetSessionKey: "agent:main:acp:discord-thread-1",
+    });
+    const threadId = "thread-webhook-pk-echo-1";
+    const parentId = "channel-parent-webhook-pk-echo-1";
+
+    const result = await runThreadBoundPreflight({
+      threadId,
+      parentId,
+      threadBinding,
+      message: createDiscordMessage({
+        id: "m-webhook-pk-echo-1",
+        channelId: threadId,
+        content: "proxied user message",
+        webhookId: "pluralkit-webhook-1",
+        author: {
+          id: "relay-bot-1",
+          bot: true,
+          username: "Proxy",
+        },
+      }),
+      discordConfig: {
+        pluralkit: { enabled: true },
+      } as DiscordConfig,
+    });
+
+    expect(result).toBeNull();
+    expect(fetchPluralKitMessageInfoMock).not.toHaveBeenCalled();
   });
 
   it("bypasses mention gating in bound threads for allowed bot senders", async () => {

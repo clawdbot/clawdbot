@@ -77,6 +77,21 @@ function formatInstallLines(install: PluginInstallRecord | undefined): string[] 
   if (install.clawhubChannel) {
     lines.push(`ClawHub channel: ${install.clawhubChannel}`);
   }
+  if (install.artifactKind) {
+    lines.push(`Artifact kind: ${install.artifactKind}`);
+  }
+  if (install.artifactFormat) {
+    lines.push(`Artifact format: ${install.artifactFormat}`);
+  }
+  if (install.npmIntegrity) {
+    lines.push(`Npm integrity: ${install.npmIntegrity}`);
+  }
+  if (install.npmShasum) {
+    lines.push(`Npm shasum: ${install.npmShasum}`);
+  }
+  if (install.npmTarballName) {
+    lines.push(`Npm tarball: ${install.npmTarballName}`);
+  }
   if (install.clawpackSha256) {
     lines.push(`ClawPack sha256: ${install.clawpackSha256}`);
   }

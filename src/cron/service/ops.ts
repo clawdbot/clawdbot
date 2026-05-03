@@ -439,6 +439,7 @@ type PreparedManualRun =
       ok: true;
       ran: true;
       jobId: string;
+      runId?: string;
       taskRunId?: string;
       startedAt: number;
       executionJob: CronJob;
@@ -630,6 +631,7 @@ async function prepareManualRun(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
+  opts?: { runId?: string },
 ): Promise<PreparedManualRun> {
   const preflight = await inspectManualRunPreflight(state, id, mode);
   if (!preflight.ok) {
@@ -665,6 +667,7 @@ async function prepareManualRun(
       ok: true,
       ran: true,
       jobId: job.id,
+      runId: opts?.runId ?? taskRunId,
       taskRunId,
       startedAt: preflight.now,
       executionJob,
@@ -681,6 +684,7 @@ async function finishPreparedManualRun(
   const startedAt = prepared.startedAt;
   const jobId = prepared.jobId;
   const taskRunId = prepared.taskRunId;
+  const runId = prepared.runId;
 
   let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
@@ -728,6 +732,7 @@ async function finishPreparedManualRun(
       delivery: coreResult.delivery,
       sessionId: coreResult.sessionId,
       sessionKey: coreResult.sessionKey,
+      runId,
       runAtMs: startedAt,
       durationMs: job.state.lastDurationMs,
       nextRunAtMs: job.state.nextRunAtMs,
@@ -767,8 +772,13 @@ async function finishPreparedManualRun(
   });
 }
 
-export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
-  const prepared = await prepareManualRun(state, id, mode);
+export async function run(
+  state: CronServiceState,
+  id: string,
+  mode?: "due" | "force",
+  opts?: { runId?: string },
+) {
+  const prepared = await prepareManualRun(state, id, mode, opts);
   if (!prepared.ok || !prepared.ran) {
     return prepared;
   }
@@ -786,7 +796,7 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   void enqueueCommandInLane(
     CommandLane.Cron,
     async () => {
-      const result = await run(state, id, mode);
+      const result = await run(state, id, mode, { runId });
       if (result.ok && "ran" in result && !result.ran) {
         state.deps.log.info(
           { jobId: id, runId, reason: result.reason },

@@ -79,10 +79,11 @@ the maintainer-only release runbook.
    the matching `release/YYYY.M.D` branch. It verifies `pnpm plugins:sync:check`,
    publishes all publishable plugin packages to npm first, publishes the same
    set to ClawHub second, and then promotes the prepared OpenClaw npm preflight
-   artifact with dist-tag `beta`. After publish, run post-publish package
-   acceptance against the published `openclaw@YYYY.M.D-beta.N` or `openclaw@beta`
-   package. If a pushed or published beta needs a fix, cut the next `-beta.N`;
-   do not delete or rewrite the old beta.
+   artifact with the matching dist-tag. After publish, run post-publish package
+   acceptance against the published `openclaw@YYYY.M.D-beta.N` or
+   `openclaw@beta` package. If a pushed or published prerelease needs a fix,
+   cut the next matching prerelease number; do not delete or rewrite the old
+   prerelease.
 10. For stable, continue only after the vetted beta or release candidate has the
     required validation evidence. Stable npm publish also goes through
     `OpenClaw Release Publish`, reusing the successful preflight artifact via
@@ -118,6 +119,9 @@ the maintainer-only release runbook.
   Telegram E2E against the `release-package-under-test` artifact from release
   checks. Provide `npm_telegram_package_spec` after publishing when the same
   Telegram E2E should prove the published npm package too. Provide
+  `package_acceptance_package_spec` after publishing when Package Acceptance
+  should run its package/update matrix against the shipped npm package instead
+  of the SHA-built artifact. Provide
   `evidence_package_spec` when the private evidence report should prove that the
   validation matches a published npm package without forcing Telegram E2E.
   Example:
@@ -165,7 +169,7 @@ the maintainer-only release runbook.
   plugins.
 - Release checks now run in a separate manual workflow:
   `OpenClaw Release Checks`
-- `OpenClaw Release Checks` also runs the QA Lab mock parity gate plus the fast
+- `OpenClaw Release Checks` also runs the QA Lab mock parity lane plus the fast
   live Matrix profile and Telegram QA lane before release approval. The live
   lanes use the `qa-live-shared` environment; Telegram also uses Convex CI
   credential leases. Run the manual `QA-Lab - All Lanes` workflow with
@@ -316,7 +320,7 @@ ref once as `release-package-under-test` and reuses that artifact in both
 release-path Docker checks and Package Acceptance. This keeps all
 package-facing boxes on the same bytes and avoids repeated package builds.
 The cross-OS OpenAI install smoke uses `OPENCLAW_CROSS_OS_OPENAI_MODEL` when the
-repo/org variable is set, otherwise `openai/gpt-5.5`, because this lane is
+repo/org variable is set, otherwise `openai/gpt-5.4`, because this lane is
 proving package install, onboarding, gateway startup, and one live agent turn
 rather than benchmarking the slowest default model. The broader live provider
 matrix remains the place for model-specific coverage.
@@ -435,7 +439,7 @@ package mechanics.
 
 Release QA Lab coverage includes:
 
-- mock parity gate comparing the OpenAI candidate lane against the Opus 4.6
+- mock parity lane comparing the OpenAI candidate lane against the Opus 4.6
   baseline using the agentic parity pack
 - fast live Matrix QA profile using the `qa-live-shared` environment
 - live Telegram QA lane using Convex CI credential leases
@@ -467,11 +471,14 @@ Supported candidate sources:
 `OpenClaw Release Checks` runs Package Acceptance with `source=artifact`, the
 prepared release package artifact, `suite_profile=custom`,
 `docker_lanes=doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update`,
-`published_upgrade_survivor_baselines=release-history`,
+`published_upgrade_survivor_baselines=all-since-2026.4.23`,
 `published_upgrade_survivor_scenarios=reported-issues`, and
 `telegram_mode=mock-openai`. Package Acceptance keeps migration, update, stale
 plugin dependency cleanup, offline plugin fixtures, plugin update, and Telegram
-package QA against the same resolved tarball. It is the GitHub-native
+package QA against the same resolved tarball. The upgrade matrix covers every stable npm-published baseline from `2026.4.23` through `latest`; use
+Package Acceptance with `source=npm` for an already shipped candidate, or
+`source=ref`/`source=artifact` for a SHA-backed local npm tarball before
+publish. It is the GitHub-native
 replacement for most of the package/update coverage that previously required
 Parallels. Cross-OS release checks still matter for OS-specific onboarding,
 installer, and platform behavior, but package/update product validation should

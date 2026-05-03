@@ -191,6 +191,32 @@ merge_author_email_candidates() {
     "${reviewer}@users.noreply.github.com" | awk 'NF && !seen[$0]++'
 }
 
+pr_contributor_allows_human_trailers() {
+  local contrib="${1:-}"
+  local normalized
+  normalized=$(printf '%s' "$contrib" | tr '[:upper:]' '[:lower:]')
+
+  case "$normalized" in
+    ""|"null"|"app/"*|"codex"|"openclaw"|"clawsweeper"|"openclaw-clawsweeper"|"clawsweeper[bot]"|"openclaw-clawsweeper[bot]"|"steipete")
+      return 1
+      ;;
+  esac
+
+  return 0
+}
+
+resolve_contributor_coauthor_email() {
+  local contrib="${1:-}"
+
+  if ! pr_contributor_allows_human_trailers "$contrib"; then
+    return 1
+  fi
+
+  local contrib_id
+  contrib_id=$(gh api "users/$contrib" --jq .id) || return 1
+  printf '%s+%s@users.noreply.github.com\n' "$contrib_id" "$contrib"
+}
+
 common_repo_root() {
   if command -v repo_root >/dev/null 2>&1; then
     repo_root

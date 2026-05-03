@@ -300,6 +300,9 @@ function getGoogleThinkingBudget(
   if (modelId.includes("2.5-pro")) {
     return { minimal: 128, low: 2048, medium: 8192, high: 32768 }[normalizedEffort];
   }
+  if (modelId.includes("2.5-flash-lite")) {
+    return { minimal: 512, low: 2048, medium: 8192, high: 24576 }[normalizedEffort];
+  }
   if (modelId.includes("2.5-flash")) {
     return { minimal: 128, low: 2048, medium: 8192, high: 24576 }[normalizedEffort];
   }
@@ -794,8 +797,11 @@ function createGoogleTransportStreamFn(kind: GoogleTransportApi): StreamFn {
           const candidate = chunk.candidates?.[0];
           if (candidate?.content?.parts) {
             for (const part of candidate.content.parts) {
-              if (typeof part.text === "string") {
-                const isThinking = part.thought === true;
+              const hasThoughtSignature =
+                typeof part.thoughtSignature === "string" && part.thoughtSignature.length > 0;
+              const hasText = typeof part.text === "string";
+              if (hasText || (hasThoughtSignature && !part.functionCall)) {
+                const isThinking = part.thought === true || !hasText;
                 const currentBlock = output.content[currentBlockIndex];
                 if (
                   currentBlockIndex < 0 ||
@@ -826,7 +832,8 @@ function createGoogleTransportStreamFn(kind: GoogleTransportApi): StreamFn {
                 }
                 const activeBlock = output.content[currentBlockIndex];
                 if (activeBlock?.type === "thinking") {
-                  activeBlock.thinking += part.text;
+                  const delta = hasText ? part.text : "";
+                  activeBlock.thinking += delta;
                   activeBlock.thinkingSignature = retainThoughtSignature(
                     activeBlock.thinkingSignature,
                     part.thoughtSignature,
@@ -834,7 +841,7 @@ function createGoogleTransportStreamFn(kind: GoogleTransportApi): StreamFn {
                   stream.push({
                     type: "thinking_delta",
                     contentIndex: currentBlockIndex,
-                    delta: part.text,
+                    delta,
                     partial: output as never,
                   });
                 } else if (activeBlock?.type === "text") {

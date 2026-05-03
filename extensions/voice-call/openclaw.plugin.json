@@ -45,6 +45,11 @@
       "label": "Inbound Greeting",
       "advanced": true
     },
+    "numbers": {
+      "label": "Per-number Routing",
+      "help": "Inbound overrides keyed by dialed E.164 number.",
+      "advanced": true
+    },
     "telnyx.apiKey": {
       "label": "Telnyx API Key",
       "sensitive": true
@@ -278,6 +283,38 @@
       },
       "inboundGreeting": {
         "type": "string"
+      },
+      "numbers": {
+        "type": "object",
+        "propertyNames": {
+          "pattern": "^\\+[1-9]\\d{1,14}$"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "inboundGreeting": {
+              "type": "string"
+            },
+            "tts": {
+              "$ref": "#/properties/tts"
+            },
+            "agentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "responseModel": {
+              "type": "string"
+            },
+            "responseSystemPrompt": {
+              "type": "string"
+            },
+            "responseTimeoutMs": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
       },
       "outbound": {
         "type": "object",

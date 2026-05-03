@@ -152,6 +152,7 @@ Notes:
 - `main` cannot be deleted.
 - Without `--force`, interactive confirmation is required.
 - Workspace, agent state, and session transcript directories are moved to Trash, not hard-deleted.
+- When the Gateway is reachable, deletion is sent through the Gateway so config and session-store cleanup share the same writer as runtime traffic. If the Gateway cannot be reached, the CLI falls back to the offline local path.
 - If another agent's workspace is the same path, inside this workspace, or contains this workspace,
   the workspace is retained and `--json` reports `workspaceRetained`,
   `workspaceRetainedReason`, and `workspaceSharedWith`.

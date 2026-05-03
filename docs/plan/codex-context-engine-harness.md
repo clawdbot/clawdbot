@@ -143,14 +143,14 @@ For engines like lossless-claw, the assembled context should be deterministic
 for unchanged inputs. Do not add timestamps, random ids, or nondeterministic
 ordering to generated context text.
 
-### PI fallback semantics do not change
+### Runtime selection semantics do not change
 
 Harness selection remains as-is:
 
 - `runtime: "pi"` forces PI
 - `runtime: "codex"` selects the registered Codex harness
 - `runtime: "auto"` lets plugin harnesses claim supported providers
-- `fallback: "none"` disables PI fallback when no plugin harness matches
+- unmatched `auto` runs use PI
 
 This work changes what happens after the Codex harness is selected.
 

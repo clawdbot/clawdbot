@@ -44,10 +44,12 @@ export function createRegistryModelListSourcePlan(): ModelListSourcePlan {
 
 export async function planAllModelListSources(params: {
   all?: boolean;
+  enableCascade?: boolean;
   providerFilter?: string;
   cfg: OpenClawConfig;
 }): Promise<ModelListSourcePlan> {
-  if (!params.all) {
+  const enableCascade = params.enableCascade ?? params.all;
+  if (!enableCascade) {
     return createRegistryModelListSourcePlan();
   }
 

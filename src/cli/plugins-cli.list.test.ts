@@ -130,6 +130,11 @@ describe("plugins cli list", () => {
         version: "2026.5.1",
         clawhubPackage: "openclaw-mem0",
         clawhubChannel: "official",
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        npmIntegrity: "sha512-clawpack",
+        npmShasum: "1".repeat(40),
+        npmTarballName: "openclaw-mem0-2026.5.1.tgz",
         clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         clawpackSpecVersion: 1,
         clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -175,6 +180,8 @@ describe("plugins cli list", () => {
     expect(runtimeLogs.join("\n")).toContain("Policy");
     expect(runtimeLogs.join("\n")).toContain("allowConversationAccess: true");
     expect(runtimeLogs.join("\n")).toContain("ClawHub package: openclaw-mem0");
+    expect(runtimeLogs.join("\n")).toContain("Artifact kind: npm-pack");
+    expect(runtimeLogs.join("\n")).toContain("Npm integrity: sha512-clawpack");
     expect(runtimeLogs.join("\n")).toContain(
       "ClawPack sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     );

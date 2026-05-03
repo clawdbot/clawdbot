@@ -7,7 +7,10 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
 import { loadSessionStore } from "./store-load.js";
-import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
+import {
+  resolveAgentSessionStoreTargetsSync,
+  resolveAllAgentSessionStoreTargetsSync,
+} from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
 function isStorePathTemplate(store?: string): boolean {
@@ -25,25 +28,39 @@ function mergeSessionEntryIntoCombined(params: {
   const existing = combined[canonicalKey];
 
   if (existing && (existing.updatedAt ?? 0) > (entry.updatedAt ?? 0)) {
+    const spawnedBy = canonicalizeSpawnedByForAgent(
+      cfg,
+      agentId,
+      existing.spawnedBy ?? entry.spawnedBy,
+    );
     combined[canonicalKey] = {
       ...entry,
       ...existing,
-      spawnedBy: canonicalizeSpawnedByForAgent(cfg, agentId, existing.spawnedBy ?? entry.spawnedBy),
+      spawnedBy,
     };
+    return;
+  }
+
+  const spawnedBy = canonicalizeSpawnedByForAgent(
+    cfg,
+    agentId,
+    entry.spawnedBy ?? existing?.spawnedBy,
+  );
+  if (!existing && entry.spawnedBy === spawnedBy) {
+    combined[canonicalKey] = entry;
   } else {
     combined[canonicalKey] = {
       ...existing,
       ...entry,
-      spawnedBy: canonicalizeSpawnedByForAgent(
-        cfg,
-        agentId,
-        entry.spawnedBy ?? existing?.spawnedBy,
-      ),
+      spawnedBy,
     };
   }
 }
 
-export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
+export function loadCombinedSessionStoreForGateway(
+  cfg: OpenClawConfig,
+  opts: { agentId?: string } = {},
+): {
   storePath: string;
   store: Record<string, SessionEntry>;
 } {
@@ -70,7 +87,13 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
     return { storePath, store: combined };
   }
 
-  const targets = resolveAllAgentSessionStoreTargetsSync(cfg);
+  const requestedAgentId =
+    typeof opts.agentId === "string" && opts.agentId.trim()
+      ? normalizeAgentId(opts.agentId)
+      : undefined;
+  const targets = requestedAgentId
+    ? resolveAgentSessionStoreTargetsSync(cfg, requestedAgentId)
+    : resolveAllAgentSessionStoreTargetsSync(cfg);
   const combined: Record<string, SessionEntry> = {};
   for (const target of targets) {
     const agentId = target.agentId;
@@ -93,6 +116,10 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
   }
 
   const storePath =
-    typeof storeConfig === "string" && storeConfig.trim() ? storeConfig.trim() : "(multiple)";
+    targets.length === 1
+      ? targets[0].storePath
+      : typeof storeConfig === "string" && storeConfig.trim()
+        ? storeConfig.trim()
+        : "(multiple)";
   return { storePath, store: combined };
 }

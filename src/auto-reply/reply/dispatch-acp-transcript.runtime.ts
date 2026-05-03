@@ -52,5 +52,6 @@ export async function persistAcpDispatchTranscript(params: {
     sessionAgentId,
     threadId: params.threadId,
     sessionCwd: resolveAcpSessionCwd(params.meta) ?? process.cwd(),
+    config: params.cfg,
   });
 }

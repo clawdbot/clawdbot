@@ -84,6 +84,7 @@ export type AppViewState = {
   localMediaPreviewRoots: string[];
   embedSandboxMode: EmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
+  chatMessageMaxWidth?: string | null;
   sessionKey: string;
   chatLoading: boolean;
   chatSending: boolean;

@@ -1389,6 +1389,11 @@ describe("runHeartbeatOnce", () => {
       .mockResolvedValue({ messageId: "m1", toJid: "jid" });
     const res = await runHeartbeatOnce({
       cfg,
+      ...(params.reason === "wake"
+        ? { source: "hook" as const, intent: "immediate" as const }
+        : params.reason === "interval"
+          ? { source: "interval" as const, intent: "scheduled" as const }
+          : {}),
       reason: params.reason,
       deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
     });
@@ -1736,6 +1741,8 @@ tasks:
     try {
       const res = await runHeartbeatOnce({
         cfg,
+        source: "interval",
+        intent: "scheduled",
         reason: "interval",
         deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
       });
@@ -1791,6 +1798,8 @@ tasks:
     try {
       const res = await runHeartbeatOnce({
         cfg,
+        source: "exec-event",
+        intent: "event",
         reason: "exec-event",
         deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
       });

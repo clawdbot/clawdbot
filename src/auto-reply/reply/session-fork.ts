@@ -1,4 +1,5 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
 /**
  * Default max parent token count beyond which thread/session parent forking is skipped.
@@ -6,7 +7,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
  * See #26905.
  */
 const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
-let sessionForkRuntimePromise: Promise<typeof import("./session-fork.runtime.js")> | null = null;
+const sessionForkRuntimeLoader = createLazyImportLoader(() => import("./session-fork.runtime.js"));
 
 export type ParentForkDecision =
   | {
@@ -23,8 +24,7 @@ export type ParentForkDecision =
     };
 
 function loadSessionForkRuntime(): Promise<typeof import("./session-fork.runtime.js")> {
-  sessionForkRuntimePromise ??= import("./session-fork.runtime.js");
-  return sessionForkRuntimePromise;
+  return sessionForkRuntimeLoader.load();
 }
 
 function formatParentForkTooLargeMessage(params: {

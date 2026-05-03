@@ -1,5 +1,6 @@
 import { t } from "../../i18n/index.ts";
 import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
+import { getCronJobPayload, hasCronJobPayload } from "../cron-payload.ts";
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
@@ -42,6 +43,7 @@ export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
 export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron";
 export type CronJobsLastStatusFilter = "all" | "ok" | "error" | "skipped";
+export type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
 export type CronState = {
   client: GatewayBrowserClient | null;
@@ -299,14 +301,15 @@ export async function loadCronJobsPage(state: CronState, opts?: { append?: boole
       sortBy: state.cronJobsSortBy,
       sortDir: state.cronJobsSortDir,
     });
-    const jobs = Array.isArray(res.jobs) ? res.jobs : [];
+    const rawJobs = Array.isArray(res.jobs) ? res.jobs : [];
+    const jobs = rawJobs.filter(hasCronJobPayload);
     state.cronJobs = append ? [...state.cronJobs, ...jobs] : jobs;
     const meta = normalizeCronPageMeta({
       totalRaw: res.total,
       offsetRaw: res.offset,
       nextOffsetRaw: res.nextOffset,
       hasMoreRaw: res.hasMore,
-      pageCount: jobs.length,
+      pageCount: rawJobs.length,
     });
     state.cronJobsTotal = Math.max(meta.total, state.cronJobs.length);
     state.cronJobsHasMore = meta.hasMore;
@@ -439,6 +442,7 @@ function parseStaggerSchedule(
 
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = job.failureAlert;
+  const payload = getCronJobPayload(job);
   const next: CronFormState = {
     ...prev,
     name: job.name,
@@ -459,12 +463,11 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     staggerUnit: "seconds",
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
-    payloadKind: job.payload.kind,
-    payloadText: job.payload.kind === "systemEvent" ? job.payload.text : job.payload.message,
-    payloadModel: job.payload.kind === "agentTurn" ? (job.payload.model ?? "") : "",
-    payloadThinking: job.payload.kind === "agentTurn" ? (job.payload.thinking ?? "") : "",
-    payloadLightContext:
-      job.payload.kind === "agentTurn" ? job.payload.lightContext === true : false,
+    payloadKind: payload?.kind ?? DEFAULT_CRON_FORM.payloadKind,
+    payloadText: payload?.kind === "systemEvent" ? payload.text : (payload?.message ?? ""),
+    payloadModel: payload?.kind === "agentTurn" ? (payload.model ?? "") : "",
+    payloadThinking: payload?.kind === "agentTurn" ? (payload.thinking ?? "") : "",
+    payloadLightContext: payload?.kind === "agentTurn" ? payload.lightContext === true : false,
     deliveryMode: job.delivery?.mode ?? "none",
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",
@@ -498,8 +501,8 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     failureAlertAccountId:
       failureAlert && typeof failureAlert === "object" ? (failureAlert.accountId ?? "") : "",
     timeoutSeconds:
-      job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
-        ? String(job.payload.timeoutSeconds)
+      payload?.kind === "agentTurn" && typeof payload.timeoutSeconds === "number"
+        ? String(payload.timeoutSeconds)
         : "",
   };
 
@@ -657,9 +660,10 @@ export async function addCronJob(state: CronState) {
     const editingJob = state.cronEditingJobId
       ? state.cronJobs.find((job) => job.id === state.cronEditingJobId)
       : undefined;
+    const editingPayload = editingJob ? getCronJobPayload(editingJob) : null;
     if (payload.kind === "agentTurn") {
       const existingLightContext =
-        editingJob?.payload.kind === "agentTurn" ? editingJob.payload.lightContext : undefined;
+        editingPayload?.kind === "agentTurn" ? editingPayload.lightContext : undefined;
       if (
         !form.payloadLightContext &&
         state.cronEditingJobId &&
@@ -762,19 +766,19 @@ export async function loadCronRuns(
   state: CronState,
   jobId: string | null,
   opts?: { append?: boolean },
-) {
+): Promise<CronRunsLoadStatus> {
   if (!state.client || !state.connected) {
-    return;
+    return "skipped";
   }
   const scope = state.cronRunsScope;
   const activeJobId = jobId ?? state.cronRunsJobId;
   if (scope === "job" && !activeJobId) {
     clearCronRunsPage(state);
-    return;
+    return "skipped";
   }
   const append = opts?.append === true;
   if (append && !state.cronRunsHasMore) {
-    return;
+    return "skipped";
   }
   try {
     if (append) {
@@ -811,8 +815,10 @@ export async function loadCronRuns(
     state.cronRunsTotal = Math.max(meta.total, state.cronRuns.length);
     state.cronRunsHasMore = meta.hasMore;
     state.cronRunsNextOffset = meta.nextOffset;
+    return "ok";
   } catch (err) {
     state.cronError = String(err);
+    return "error";
   } finally {
     if (append) {
       state.cronRunsLoadingMore = false;

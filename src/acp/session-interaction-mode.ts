@@ -5,7 +5,7 @@ type AcpSessionInteractionMode = "interactive" | "parent-owned-background";
 
 type SessionInteractionEntry = Pick<SessionEntry, "spawnedBy" | "parentSessionKey" | "acp">;
 
-export function resolveAcpSessionInteractionMode(
+function resolveAcpSessionInteractionMode(
   entry?: SessionInteractionEntry | null,
 ): AcpSessionInteractionMode {
   // Parent-owned ACP sessions are background work delegated from another session.

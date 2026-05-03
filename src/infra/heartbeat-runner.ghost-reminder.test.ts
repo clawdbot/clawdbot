@@ -511,6 +511,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
       const result = await runHeartbeatOnce({
         cfg,
         agentId: "main",
+        source: "hook",
+        intent: "immediate",
         reason: "wake",
         deps: {
           getReplyFromConfig: replySpy,
@@ -551,6 +553,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
       const result = await runHeartbeatOnce({
         cfg,
         agentId: "main",
+        source: "hook",
+        intent: "immediate",
         reason: "wake",
         deps: {
           getReplyFromConfig: replySpy,

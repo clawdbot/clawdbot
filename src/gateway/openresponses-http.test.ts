@@ -936,6 +936,152 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(events.some((event) => event.data === "[DONE]")).toBe(true);
   });
 
+  it("returns every client tool call when an agent invokes multiple tools in one turn (#52288)", async () => {
+    // Pre-fix: the non-streaming `/v1/responses` handler read only
+    // `pendingToolCalls[0]`, so a turn that called three client tools
+    // collapsed to a single `function_call` item. Here we mock three pending
+    // calls and assert the response surfaces all three in arrival order
+    // alongside the assistant text. This locks in the contract for callers
+    // who run multi-tool agents (graph orchestration, planners, etc.).
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "Calling all three tools now." }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [
+          { id: "call_1", name: "create_graph", arguments: '{"nodes":["a","b"]}' },
+          { id: "call_2", name: "activate_graph", arguments: "{}" },
+          { id: "call_3", name: "get_status", arguments: "{}" },
+        ],
+      },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      input: "call all three tools",
+      tools: [
+        { type: "function", name: "create_graph", description: "Create graph" },
+        { type: "function", name: "activate_graph", description: "Activate graph" },
+        { type: "function", name: "get_status", description: "Get status" },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      status?: string;
+      output?: Array<Record<string, unknown>>;
+    };
+    expect(json.status).toBe("incomplete");
+    expect(json.output?.map((item) => item.type)).toEqual([
+      "message",
+      "function_call",
+      "function_call",
+      "function_call",
+    ]);
+    expect(json.output?.slice(1).map((item) => item.name)).toEqual([
+      "create_graph",
+      "activate_graph",
+      "get_status",
+    ]);
+    expect(json.output?.slice(1).map((item) => item.call_id)).toEqual([
+      "call_1",
+      "call_2",
+      "call_3",
+    ]);
+    expect(json.output?.[1]?.arguments).toBe('{"nodes":["a","b"]}');
+    await ensureResponseConsumed(res);
+  });
+
+  it("emits one SSE function_call per pending call at incrementing output_index (#52288)", async () => {
+    // Streaming counterpart to the non-streaming regression above. Pre-fix
+    // the streaming branch hard-coded `output_index: 1` and only emitted
+    // one `output_item.added`/`done` pair, so multi-tool turns silently
+    // dropped every call past the first. Verify that:
+    //   - we get one `output_item.added` and one `output_item.done` for
+    //     each pending call,
+    //   - their `output_index` values count up monotonically from 1 (the
+    //     assistant message owns index 0), and
+    //   - the final `response.completed` payload contains the assistant
+    //     message followed by all three function_call items in order.
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "Calling all three tools now." }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [
+          { id: "call_1", name: "create_graph", arguments: '{"nodes":["a","b"]}' },
+          { id: "call_2", name: "activate_graph", arguments: "{}" },
+          { id: "call_3", name: "get_status", arguments: "{}" },
+        ],
+      },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "call all three tools",
+      tools: [
+        { type: "function", name: "create_graph", description: "Create graph" },
+        { type: "function", name: "activate_graph", description: "Activate graph" },
+        { type: "function", name: "get_status", description: "Get status" },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const events = parseSseEvents(text);
+
+    type FunctionCallEvent = {
+      output_index: number;
+      item: { type: string; name?: string; call_id?: string; arguments?: string };
+    };
+    const addedFunctionCalls = events
+      .filter((e) => e.event === "response.output_item.added")
+      .map((e) => JSON.parse(e.data) as FunctionCallEvent)
+      .filter((evt) => evt.item.type === "function_call");
+    expect(addedFunctionCalls.map((evt) => evt.item.name)).toEqual([
+      "create_graph",
+      "activate_graph",
+      "get_status",
+    ]);
+    expect(addedFunctionCalls.map((evt) => evt.output_index)).toEqual([1, 2, 3]);
+    expect(addedFunctionCalls.map((evt) => evt.item.call_id)).toEqual([
+      "call_1",
+      "call_2",
+      "call_3",
+    ]);
+
+    const doneFunctionCalls = events
+      .filter((e) => e.event === "response.output_item.done")
+      .map((e) => JSON.parse(e.data) as FunctionCallEvent)
+      .filter((evt) => evt.item.type === "function_call");
+    expect(doneFunctionCalls.map((evt) => evt.output_index)).toEqual([1, 2, 3]);
+
+    const completed = events.find((event) => event.event === "response.completed");
+    expect(completed).toBeTruthy();
+    const response = (
+      JSON.parse(completed?.data ?? "{}") as {
+        response?: { status?: string; output?: Array<Record<string, unknown>> };
+      }
+    ).response;
+    expect(response?.status).toBe("incomplete");
+    expect(response?.output?.map((item) => item.type)).toEqual([
+      "message",
+      "function_call",
+      "function_call",
+      "function_call",
+    ]);
+    expect(response?.output?.slice(1).map((item) => item.name)).toEqual([
+      "create_graph",
+      "activate_graph",
+      "get_status",
+    ]);
+    expect(events.some((event) => event.data === "[DONE]")).toBe(true);
+  });
+
   it("reuses the prior session when previous_response_id is provided", async () => {
     const port = enabledPort;
     agentCommand.mockClear();

@@ -39,7 +39,10 @@ export type {
   ConfigWriteFollowUp,
   RuntimeConfigSnapshotMetadata,
 } from "./runtime-snapshot.js";
-export type { ConfigWriteNotification } from "./io.js";
+export type {
+  ConfigWriteNotification,
+  ReadConfigFileSnapshotWithPluginMetadataResult,
+} from "./io.js";
 export { ConfigMutationConflictError, mutateConfigFile, replaceConfigFile } from "./mutate.js";
 export * from "./paths.js";
 export * from "./recovery-policy.js";

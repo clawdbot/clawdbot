@@ -115,6 +115,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       sessionFile: "/tmp/session.jsonl",
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
+      config: undefined,
       request: {
         replacements: [
           { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
@@ -357,6 +358,7 @@ describe("runContextEngineMaintenance", () => {
       reason: "turn",
       executionMode: "background",
       sessionManager,
+      config: { session: { writeLock: { acquireTimeoutMs: 75_000 } } },
     });
 
     expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
@@ -364,6 +366,7 @@ describe("runContextEngineMaintenance", () => {
       sessionFile: "/tmp/session-background-file-rewrite.jsonl",
       sessionId: "session-background-file-rewrite",
       sessionKey: "agent:main:session-background-file-rewrite",
+      config: { session: { writeLock: { acquireTimeoutMs: 75_000 } } },
       request: {
         replacements: [
           {
@@ -397,11 +400,27 @@ describe("runContextEngineMaintenance", () => {
         });
         await Promise.resolve();
 
-        const maintain = vi.fn(async (_params?: unknown) => ({
-          changed: false,
-          bytesFreed: 0,
-          rewrittenEntries: 0,
-        }));
+        const maintain = vi.fn(async (params?: unknown) => {
+          await (
+            params as { runtimeContext?: ContextEngineRuntimeContext } | undefined
+          )?.runtimeContext?.rewriteTranscriptEntries?.({
+            replacements: [
+              {
+                entryId: "entry-1",
+                message: castAgentMessage({
+                  role: "assistant",
+                  content: [{ type: "text", text: "done" }],
+                  timestamp: 2,
+                }),
+              },
+            ],
+          });
+          return {
+            changed: false,
+            bytesFreed: 0,
+            rewrittenEntries: 0,
+          };
+        });
 
         const backgroundEngine = {
           info: {
@@ -429,6 +448,7 @@ describe("runContextEngineMaintenance", () => {
             tokenBudget: 2048,
             currentTokenCount: 1536,
           },
+          config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
         });
 
         expect(result).toBeUndefined();
@@ -460,6 +480,24 @@ describe("runContextEngineMaintenance", () => {
             tokenBudget: 2048,
             currentTokenCount: 1536,
           }),
+        });
+        expect(rewriteTranscriptEntriesInSessionFileMock).toHaveBeenCalledWith({
+          sessionFile: "/tmp/session.jsonl",
+          sessionId: "session-1",
+          sessionKey,
+          config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
+          request: {
+            replacements: [
+              {
+                entryId: "entry-1",
+                message: castAgentMessage({
+                  role: "assistant",
+                  content: [{ type: "text", text: "done" }],
+                  timestamp: 2,
+                }),
+              },
+            ],
+          },
         });
 
         const completedTask = getTaskById(queuedTasks[0].taskId);

@@ -951,14 +951,17 @@ describeLive("gateway live (ACP bind)", () => {
           logLiveStep("bound session classified the probe image");
         }
 
-        const cronProbe = createLiveCronProbeSpec({
-          agentId: liveAgent,
-          sessionKey: spawnedSessionKey,
-        });
         const requireCronMcpProbe = shouldRequireCronMcpProbe();
         let cronJobId: string | undefined;
         let lastCronAssistantText = "";
+        let lastCronProbeName = "";
+        let lastCronMismatch = "";
         for (let attempt = 0; attempt < ACP_CRON_MCP_PROBE_MAX_ATTEMPTS; attempt += 1) {
+          const cronProbe = createLiveCronProbeSpec({
+            agentId: liveAgent,
+            sessionKey: spawnedSessionKey,
+          });
+          lastCronProbeName = cronProbe.name;
           await sendChatAndWait({
             client,
             sessionKey: originalSessionKey,
@@ -998,13 +1001,26 @@ describeLive("gateway live (ACP bind)", () => {
           });
           const createdJob = verifyResult.job;
           if (createdJob) {
-            assertCronJobMatches({
-              job: createdJob,
-              expectedName: cronProbe.name,
-              expectedMessage: cronProbe.message,
-              expectedSessionKey: spawnedSessionKey,
-              expectedAgentId: liveAgent,
-            });
+            try {
+              assertCronJobMatches({
+                job: createdJob,
+                expectedName: cronProbe.name,
+                expectedMessage: cronProbe.message,
+                expectedSessionKey: spawnedSessionKey,
+                expectedAgentId: liveAgent,
+              });
+            } catch (error) {
+              lastCronMismatch = error instanceof Error ? error.message : String(error);
+              logLiveStep(
+                `cron mcp job ${cronProbe.name} mismatch after attempt ${String(
+                  attempt + 1,
+                )}: ${lastCronMismatch}`,
+              );
+              if (attempt === ACP_CRON_MCP_PROBE_MAX_ATTEMPTS - 1 && requireCronMcpProbe) {
+                throw error;
+              }
+              continue;
+            }
             cronJobId = createdJob.id;
             if (cronHistory) {
               expect(cronHistory.lastAssistantText.trim().length).toBeGreaterThan(0);
@@ -1019,14 +1035,16 @@ describeLive("gateway live (ACP bind)", () => {
           if (attempt === ACP_CRON_MCP_PROBE_MAX_ATTEMPTS - 1) {
             if (!requireCronMcpProbe) {
               logLiveStep(
-                `cron mcp job ${cronProbe.name} not observed; continuing after bind/image verification`,
+                `cron mcp job ${lastCronProbeName} not observed; continuing after bind/image verification${
+                  lastCronMismatch ? `; last mismatch=${lastCronMismatch}` : ""
+                }`,
               );
               break;
             }
             throw new Error(
-              `acp cron cli verify could not find job ${cronProbe.name}: reply=${JSON.stringify(
+              `acp cron cli verify could not find job ${lastCronProbeName}: reply=${JSON.stringify(
                 lastCronAssistantText,
-              )}`,
+              )}${lastCronMismatch ? ` mismatch=${lastCronMismatch}` : ""}`,
             );
           }
         }
@@ -1034,7 +1052,7 @@ describeLive("gateway live (ACP bind)", () => {
           if (!requireCronMcpProbe) {
             return;
           }
-          throw new Error(`acp cron cli verify did not create job ${cronProbe.name}`);
+          throw new Error(`acp cron cli verify did not create job ${lastCronProbeName}`);
         }
         await runOpenClawCliJson(
           ["cron", "rm", cronJobId, "--json", "--url", `ws://127.0.0.1:${port}`, "--token", token],

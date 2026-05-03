@@ -399,6 +399,39 @@ cd "$tmp_dir"
 if [ "${OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG:-0}" = "1" ]; then
   node --import tsx "$trusted_scripts_dir/prepare-codex-ci-config.ts" "$HOME/.codex/config.toml" "$tmp_dir"
 fi
+if [ "$provider" = "codex-cli" ] && [ "${OPENCLAW_LIVE_CLI_BACKEND_AUTH:-auto}" = "api-key" ]; then
+  codex_probe_model="${OPENCLAW_LIVE_CLI_BACKEND_MODEL#*/}"
+  codex_probe_token="OPENCLAW-CODEX-DIRECT-PROBE"
+  codex_probe_stdout="$tmp_dir/codex-direct-probe.stdout"
+  codex_probe_stderr="$tmp_dir/codex-direct-probe.stderr"
+  if ! timeout --foreground --kill-after=10s 180s \
+    "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-codex}" \
+    exec \
+    --json \
+    --color \
+    never \
+    --sandbox \
+    danger-full-access \
+    -c \
+    'service_tier="fast"' \
+    --skip-git-repo-check \
+    --model \
+    "$codex_probe_model" \
+    "Reply exactly: $codex_probe_token" \
+    >"$codex_probe_stdout" 2>"$codex_probe_stderr" </dev/null; then
+    echo "ERROR: direct Codex CLI probe failed before OpenClaw gateway smoke." >&2
+    sed -n '1,120p' "$codex_probe_stdout" >&2 || true
+    sed -n '1,120p' "$codex_probe_stderr" >&2 || true
+    exit 1
+  fi
+  if ! grep -q "$codex_probe_token" "$codex_probe_stdout"; then
+    echo "ERROR: direct Codex CLI probe did not return expected token." >&2
+    sed -n '1,120p' "$codex_probe_stdout" >&2 || true
+    sed -n '1,120p' "$codex_probe_stderr" >&2 || true
+    exit 1
+  fi
+  echo "==> Direct Codex CLI probe ok"
+fi
 pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
 EOF
 

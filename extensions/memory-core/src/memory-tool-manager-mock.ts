@@ -52,7 +52,7 @@ const stubManager = {
   close: vi.fn(),
 };
 
-const getMemorySearchManagerMock = vi.fn(async (_params: { cfg?: unknown }) => ({
+const getMemorySearchManagerMock = vi.fn(async (_params: { cfg?: unknown; agentId?: string }) => ({
   manager: stubManager,
 }));
 const readAgentMemoryFileMock = vi.fn(
@@ -116,6 +116,10 @@ export function getMemorySearchManagerMockCalls(): number {
 
 export function getMemorySearchManagerMockConfigs(): unknown[] {
   return getMemorySearchManagerMock.mock.calls.map(([params]) => params.cfg);
+}
+
+export function getMemorySearchManagerMockParams(): Array<{ cfg?: unknown; agentId?: string }> {
+  return getMemorySearchManagerMock.mock.calls.map(([params]) => params);
 }
 
 export function getReadAgentMemoryFileMockCalls(): number {

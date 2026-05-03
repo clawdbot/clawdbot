@@ -53,6 +53,11 @@ function createConfigOverride(overrides?: Record<string, unknown>) {
         },
       ],
     },
+    session: {
+      threadBindings: {
+        defaultSpawnContext: "isolated",
+      },
+    },
     ...overrides,
   });
 }

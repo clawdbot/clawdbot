@@ -60,6 +60,17 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
+async function removePathBestEffort(targetPath: string): Promise<void> {
+  await fs
+    .rm(targetPath, {
+      recursive: true,
+      force: true,
+      maxRetries: process.platform === "win32" ? 5 : 2,
+      retryDelay: 100,
+    })
+    .catch(() => undefined);
+}
+
 async function readPackageVersionIfPresent(packageRoot: string | null): Promise<string | null> {
   if (!packageRoot) {
     return null;
@@ -129,12 +140,12 @@ async function cleanupStagedNpmInstall(stage: StagedNpmInstall | null): Promise<
   if (!stage) {
     return;
   }
-  await fs.rm(stage.prefix, { recursive: true, force: true }).catch(() => undefined);
+  await removePathBestEffort(stage.prefix);
 }
 
 async function copyPathEntry(source: string, destination: string): Promise<void> {
   const stat = await fs.lstat(source);
-  await fs.rm(destination, { recursive: true, force: true }).catch(() => undefined);
+  await removePathBestEffort(destination);
   if (stat.isSymbolicLink()) {
     await fs.symlink(await fs.readlink(source), destination);
     return;
@@ -201,7 +212,7 @@ async function replaceNpmBinShims(params: {
     await restoreNpmBinShimBackup(backup);
     throw err;
   } finally {
-    await fs.rm(backup.backupDir, { recursive: true, force: true }).catch(() => undefined);
+    await removePathBestEffort(backup.backupDir);
   }
 }
 
@@ -209,7 +220,7 @@ async function restoreNpmBinShimBackup(backup: NpmBinShimBackup): Promise<void> 
   await fs.mkdir(backup.targetBinDir, { recursive: true });
   for (const entry of backup.entries) {
     const destination = path.join(backup.targetBinDir, entry.name);
-    await fs.rm(destination, { recursive: true, force: true }).catch(() => undefined);
+    await removePathBestEffort(destination);
     if (entry.hadExisting) {
       await copyPathEntry(path.join(backup.backupDir, entry.name), destination);
     }
@@ -253,7 +264,7 @@ async function swapStagedNpmInstall(params: {
       packageName: params.packageName,
     });
     if (movedExisting) {
-      await fs.rm(backupRoot, { recursive: true, force: true });
+      await removePathBestEffort(backupRoot);
     }
     return {
       name: "global install swap",
@@ -268,7 +279,7 @@ async function swapStagedNpmInstall(params: {
     };
   } catch (err) {
     if (movedStaged) {
-      await fs.rm(targetPackageRoot, { recursive: true, force: true }).catch(() => undefined);
+      await removePathBestEffort(targetPackageRoot);
     }
     if (movedExisting) {
       await fs.rename(backupRoot, targetPackageRoot).catch(() => undefined);

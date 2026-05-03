@@ -223,7 +223,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           typeof marker.id === "string"
             ? `divider:compaction:${marker.id}`
             : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: "Compaction",
+        label: "Compacted history",
+        description:
+          "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
+        action: {
+          kind: "session-checkpoints",
+          label: "Open checkpoints",
+        },
         timestamp: normalized.timestamp ?? Date.now(),
       });
       continue;

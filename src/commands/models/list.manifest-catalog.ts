@@ -4,8 +4,8 @@ import {
   planManifestModelCatalogRows,
 } from "../../model-catalog/index.js";
 import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   getPluginRecord,
   isPluginEnabled,
@@ -98,7 +98,7 @@ function loadManifestCatalogRowsForList(params: {
     ? normalizeModelCatalogProviderId(params.providerFilter)
     : undefined;
   const mode = params.mode ?? "static-authoritative";
-  const snapshot = loadPluginMetadataSnapshot({
+  const snapshot = loadManifestMetadataSnapshot({
     config: params.cfg,
     env: params.env ?? process.env,
   });

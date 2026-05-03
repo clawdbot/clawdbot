@@ -14,6 +14,8 @@ import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import {
   loadSessionStore,
+  runSessionsCleanup,
+  serializeSessionCleanupResult,
   resolveMainSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -47,6 +49,7 @@ import {
   ErrorCodes,
   errorShape,
   validateSessionsAbortParams,
+  validateSessionsCleanupParams,
   validateSessionsCompactParams,
   validateSessionsCompactionBranchParams,
   validateSessionsCompactionGetParams,
@@ -54,6 +57,7 @@ import {
   validateSessionsCompactionRestoreParams,
   validateSessionsCreateParams,
   validateSessionsDeleteParams,
+  validateSessionsDescribeParams,
   validateSessionsListParams,
   validateSessionsMessagesSubscribeParams,
   validateSessionsMessagesUnsubscribeParams,
@@ -73,6 +77,7 @@ import {
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
+  buildGatewaySessionRow,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadGatewaySessionRow,
@@ -219,7 +224,10 @@ function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: bool
 }
 
 function emitSessionsChanged(
-  context: Pick<GatewayRequestContext, "broadcastToConnIds" | "getSessionEventSubscriberConnIds">,
+  context: Pick<
+    GatewayRequestContext,
+    "broadcastToConnIds" | "chatAbortControllers" | "getSessionEventSubscriberConnIds"
+  >,
   payload: { sessionKey?: string; reason: string; compacted?: boolean },
 ) {
   const connIds = context.getSessionEventSubscriberConnIds();
@@ -277,6 +285,11 @@ function emitSessionsChanged(
             modelProvider: sessionRow.modelProvider,
             model: sessionRow.model,
             status: sessionRow.status,
+            hasActiveRun: hasTrackedActiveSessionRun({
+              context,
+              requestedKey: payload.sessionKey ?? sessionRow.key,
+              canonicalKey: sessionRow.key,
+            }),
             startedAt: sessionRow.startedAt,
             endedAt: sessionRow.endedAt,
             runtimeMs: sessionRow.runtimeMs,
@@ -422,10 +435,13 @@ function resolveAbortSessionKey(params: {
 }
 
 function hasTrackedActiveSessionRun(params: {
-  context: Pick<GatewayRequestContext, "chatAbortControllers">;
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
   requestedKey: string;
   canonicalKey: string;
 }): boolean {
+  if (!(params.context.chatAbortControllers instanceof Map)) {
+    return false;
+  }
   for (const active of params.context.chatAbortControllers.values()) {
     if (active.sessionKey === params.canonicalKey || active.sessionKey === params.requestedKey) {
       return true;
@@ -652,7 +668,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
     const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
     const result = await listSessionsFromStoreAsync({
       cfg,
@@ -661,7 +677,58 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       modelCatalog,
       opts: p,
     });
-    respond(true, result, undefined);
+    respond(
+      true,
+      {
+        ...result,
+        sessions: result.sessions.map((session) =>
+          Object.assign({}, session, {
+            hasActiveRun: hasTrackedActiveSessionRun({
+              context,
+              requestedKey: session.key,
+              canonicalKey: session.key,
+            }),
+          }),
+        ),
+      },
+      undefined,
+    );
+  },
+  "sessions.cleanup": async ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {
+      return;
+    }
+    try {
+      const { mode, appliedSummaries } = await runSessionsCleanup({
+        cfg: context.getRuntimeConfig(),
+        opts: {
+          agent: params.agent,
+          allAgents: params.allAgents,
+          enforce: params.enforce,
+          activeKey: params.activeKey,
+          fixMissing: params.fixMissing,
+        },
+      });
+      const result = serializeSessionCleanupResult({
+        mode,
+        dryRun: false,
+        summaries: appliedSummaries,
+      });
+      respond(true, result, undefined);
+      for (const summary of appliedSummaries) {
+        emitSessionsChanged(context, {
+          reason: "cleanup",
+          sessionKey: undefined,
+        });
+        if (summary.wouldMutate) {
+          context.logGateway.debug(
+            `sessions.cleanup applied ${summary.storePath}: ${summary.beforeCount} -> ${summary.afterCount}`,
+          );
+        }
+      }
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
+    }
   },
   "sessions.subscribe": ({ client, context, respond }) => {
     const connId = client?.connId?.trim();
@@ -784,6 +851,34 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
+  },
+  "sessions.describe": ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSessionsDescribeParams, "sessions.describe", respond)) {
+      return;
+    }
+    const key = requireSessionKey(params.key, respond);
+    if (!key) {
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg);
+    const store = loadSessionStore(storePath);
+    const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+    if (!entry) {
+      respond(true, { session: null }, undefined);
+      return;
+    }
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath,
+      store,
+      key: target.canonicalKey,
+      entry,
+      includeDerivedTitles: params.includeDerivedTitles,
+      includeLastMessage: params.includeLastMessage,
+      transcriptUsageMaxBytes: 64 * 1024,
+    });
+    respond(true, { session: row }, undefined);
   },
   "sessions.resolve": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {

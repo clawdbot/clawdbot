@@ -1,8 +1,10 @@
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import { normalizeToolList } from "../../agents/tool-policy.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronJob } from "../types.js";
 import {
   resolveCronChannelOutputPolicy,
@@ -36,17 +38,19 @@ type CronPromptRunResult = Awaited<ReturnType<typeof runCliAgent>>;
 type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
 type CronSubagentRegistryRuntime = typeof import("./run-subagent-registry.runtime.js");
 
-let cronEmbeddedRuntimePromise: Promise<CronEmbeddedRuntime> | undefined;
-let cronSubagentRegistryRuntimePromise: Promise<CronSubagentRegistryRuntime> | undefined;
+const cronEmbeddedRuntimeLoader = createLazyImportLoader<CronEmbeddedRuntime>(
+  () => import("./run-embedded.runtime.js"),
+);
+const cronSubagentRegistryRuntimeLoader = createLazyImportLoader<CronSubagentRegistryRuntime>(
+  () => import("./run-subagent-registry.runtime.js"),
+);
 
 async function loadCronEmbeddedRuntime() {
-  cronEmbeddedRuntimePromise ??= import("./run-embedded.runtime.js");
-  return await cronEmbeddedRuntimePromise;
+  return await cronEmbeddedRuntimeLoader.load();
 }
 
 async function loadCronSubagentRegistryRuntime() {
-  cronSubagentRegistryRuntimePromise ??= import("./run-subagent-registry.runtime.js");
-  return await cronSubagentRegistryRuntimePromise;
+  return await cronSubagentRegistryRuntimeLoader.load();
 }
 
 function resolveCronOwnerOnlyToolAllowlist(toolsAllow: string[] | undefined): string[] | undefined {
@@ -132,12 +136,18 @@ export function createCronPromptExecutor(params: {
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
         }
+        const executionProvider =
+          resolveCliRuntimeExecutionProvider({
+            provider: providerOverride,
+            cfg: params.cfgWithAgentDefaults,
+            agentId: params.agentId,
+          }) ?? providerOverride;
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-        if (isCliProvider(providerOverride, params.cfgWithAgentDefaults)) {
+        if (isCliProvider(executionProvider, params.cfgWithAgentDefaults)) {
           const cliSessionId = params.cronSession.isNewSession
             ? undefined
-            : await getCliSessionId(params.cronSession.sessionEntry, providerOverride);
+            : await getCliSessionId(params.cronSession.sessionEntry, executionProvider);
           const result = await runCliAgent({
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
@@ -148,7 +158,7 @@ export function createCronPromptExecutor(params: {
             workspaceDir: params.workspaceDir,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
-            provider: providerOverride,
+            provider: executionProvider,
             model: modelOverride,
             thinkLevel: params.thinkLevel,
             timeoutMs: params.timeoutMs,

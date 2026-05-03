@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { RunEmbeddedPiAgentParams } from "../agents/pi-embedded-runner/run/params.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import {
@@ -54,20 +55,19 @@ export async function consultRealtimeVoiceAgent(params: {
   const storePath = params.agentRuntime.session.resolveStorePath(params.cfg.session?.store, {
     agentId,
   });
-  const sessionStore = params.agentRuntime.session.loadSessionStore(storePath);
   const now = Date.now();
-  const existing = sessionStore[params.sessionKey] as
-    | { sessionId?: string; updatedAt?: number }
-    | undefined;
-  const sessionId = existing?.sessionId?.trim() || randomUUID();
-  sessionStore[params.sessionKey] = { ...existing, sessionId, updatedAt: now };
-  await params.agentRuntime.session.saveSessionStore(storePath, sessionStore);
+  const sessionEntry = await params.agentRuntime.session.updateSessionStore(storePath, (store) => {
+    const existing = store[params.sessionKey] as SessionEntry | undefined;
+    const sessionId = existing?.sessionId?.trim() || randomUUID();
+    const next: SessionEntry = { ...existing, sessionId, updatedAt: now };
+    store[params.sessionKey] = next;
+    return next;
+  });
+  const sessionId = sessionEntry.sessionId;
 
-  const sessionFile = params.agentRuntime.session.resolveSessionFilePath(
-    sessionId,
-    sessionStore[params.sessionKey],
-    { agentId },
-  );
+  const sessionFile = params.agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
+    agentId,
+  });
   const result = await params.agentRuntime.runEmbeddedPiAgent({
     sessionId,
     sessionKey: params.sessionKey,

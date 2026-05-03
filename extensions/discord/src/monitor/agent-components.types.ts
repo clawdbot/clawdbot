@@ -26,6 +26,7 @@ export type AgentComponentInteraction = AgentComponentMessageInteraction | Modal
 export type DiscordChannelContext = {
   channelName: string | undefined;
   channelSlug: string;
+  displayChannelSlug: string;
   channelType: number | undefined;
   isThread: boolean;
   parentId: string | undefined;

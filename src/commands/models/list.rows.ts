@@ -9,6 +9,7 @@ import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ModelListAuthIndex } from "./list.auth-index.js";
 import type { ListRowModel } from "./list.model-row.js";
 import { toModelRow } from "./list.model-row.js";
@@ -36,23 +37,26 @@ export type RowBuilderContext = {
   skipRuntimeModelSuppression?: boolean;
 };
 
-let modelCatalogModulePromise: Promise<ModelCatalogModule> | undefined;
-let modelResolverModulePromise: Promise<ModelResolverModule> | undefined;
-let providerCatalogModulePromise: Promise<ProviderCatalogModule> | undefined;
+const modelCatalogModuleLoader = createLazyImportLoader<ModelCatalogModule>(
+  () => import("../../agents/model-catalog.js"),
+);
+const modelResolverModuleLoader = createLazyImportLoader<ModelResolverModule>(
+  () => import("../../agents/pi-embedded-runner/model.js"),
+);
+const providerCatalogModuleLoader = createLazyImportLoader<ProviderCatalogModule>(
+  () => import("./list.provider-catalog.js"),
+);
 
 function loadModelCatalogModule(): Promise<ModelCatalogModule> {
-  modelCatalogModulePromise ??= import("../../agents/model-catalog.js");
-  return modelCatalogModulePromise;
+  return modelCatalogModuleLoader.load();
 }
 
 function loadModelResolverModule(): Promise<ModelResolverModule> {
-  modelResolverModulePromise ??= import("../../agents/pi-embedded-runner/model.js");
-  return modelResolverModulePromise;
+  return modelResolverModuleLoader.load();
 }
 
 function loadProviderCatalogModule(): Promise<ProviderCatalogModule> {
-  providerCatalogModulePromise ??= import("./list.provider-catalog.js");
-  return providerCatalogModulePromise;
+  return providerCatalogModuleLoader.load();
 }
 
 function matchesRowFilter(filter: RowFilter, model: { provider: string; baseUrl?: string }) {

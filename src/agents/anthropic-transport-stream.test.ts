@@ -533,6 +533,65 @@ describe("anthropic transport stream", () => {
     expect(result.usage.output).toBe(9);
   });
 
+  it("recovers orphan text deltas when an Anthropic-compatible provider omits block start", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "你好" },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 6, output_tokens: 1 },
+        },
+      ]),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        makeAnthropicTransportModel({
+          provider: "kimi-coding",
+          baseUrl: "https://api.kimi.com/coding/",
+        }),
+        {
+          messages: [{ role: "user", content: "hello" }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "kimi-key",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const events: Array<{ type?: string; delta?: string; content?: string }> = [];
+    for await (const event of stream as AsyncIterable<{
+      type?: string;
+      delta?: string;
+      content?: string;
+    }>) {
+      events.push(event);
+    }
+    const result = await stream.result();
+
+    expect(result.content).toEqual([{ type: "text", text: "你好" }]);
+    expect(result.stopReason).toBe("stop");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "text_start" }),
+        expect.objectContaining({ type: "text_delta", delta: "你好" }),
+        expect.objectContaining({ type: "text_end", content: "你好" }),
+      ]),
+    );
+  });
+
   it("skips malformed tools when building Anthropic payloads", async () => {
     await runTransportStream(
       makeAnthropicTransportModel(),

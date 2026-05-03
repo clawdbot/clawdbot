@@ -56,13 +56,13 @@ describe("sessions_yield orchestration", () => {
     expect(queueEmbeddedPiMessage(sessionId, "subagent result")).toBe(false);
   });
 
-  it("clientToolCall takes precedence over yieldDetected", async () => {
-    // Edge case: both flags set (shouldn't happen, but clientToolCall wins)
+  it("clientToolCalls takes precedence over yieldDetected", async () => {
+    // Edge case: both flags set (shouldn't happen, but clientToolCalls wins)
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         promptError: null,
         yieldDetected: true,
-        clientToolCall: { name: "hosted_tool", params: { arg: "value" } },
+        clientToolCalls: [{ name: "hosted_tool", params: { arg: "value" } }],
       }),
     );
 
@@ -71,10 +71,42 @@ describe("sessions_yield orchestration", () => {
       runId: "run-yield-vs-client-tool",
     });
 
-    // clientToolCall wins — tool_calls stopReason, pendingToolCalls populated
+    // clientToolCalls wins — tool_calls stopReason, pendingToolCalls populated
     expect(result.meta.stopReason).toBe("tool_calls");
     expect(result.meta.pendingToolCalls).toHaveLength(1);
     expect(result.meta.pendingToolCalls![0].name).toBe("hosted_tool");
+  });
+
+  it("preserves order across multiple client tool calls in one attempt (#52288)", async () => {
+    // Regression: a turn that invokes three client tools must surface all
+    // three through `pendingToolCalls`, in the order the LLM emitted them.
+    // Pre-fix this slot was a single variable that only kept the last call.
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        clientToolCalls: [
+          { name: "create_graph", params: { nodes: ["a", "b"] } },
+          { name: "activate_graph", params: {} },
+          { name: "get_status", params: {} },
+        ],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-multi-client-tool",
+    });
+
+    expect(result.meta.stopReason).toBe("tool_calls");
+    expect(result.meta.pendingToolCalls).toHaveLength(3);
+    expect(result.meta.pendingToolCalls!.map((c) => c.name)).toEqual([
+      "create_graph",
+      "activate_graph",
+      "get_status",
+    ]);
+    expect(JSON.parse(result.meta.pendingToolCalls![0].arguments)).toEqual({
+      nodes: ["a", "b"],
+    });
   });
 
   it("normal attempt without yield has no stopReason override", async () => {

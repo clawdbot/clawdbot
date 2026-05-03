@@ -18,8 +18,16 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, posix, relative } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  posix,
+  relative,
+  resolve as pathResolve,
+} from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -27,6 +35,7 @@ const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
+const LEGACY_PLUGIN_RUNTIME_DEPS_DIR = "plugin-runtime-deps";
 const BAILEYS_MEDIA_FILE = join(
   "node_modules",
   "@whiskeysockets",
@@ -105,6 +114,30 @@ function hasEnvFlag(env, key) {
 
 function normalizeRelativePath(filePath) {
   return filePath.replace(/\\/g, "/");
+}
+
+function resolvePostinstallOsHomeDir(env, getHomedir = homedir) {
+  return env?.HOME?.trim() || env?.USERPROFILE?.trim() || getHomedir();
+}
+
+function resolvePostinstallTildePath(input, homeDir) {
+  if (input === "~") {
+    return homeDir;
+  }
+  if (input.startsWith("~/") || input.startsWith("~\\")) {
+    return join(homeDir, input.slice(2));
+  }
+  return input;
+}
+
+function resolvePostinstallOpenClawHomeDir(env, getHomedir = homedir) {
+  const osHome = resolvePostinstallOsHomeDir(env, getHomedir);
+  const override = env?.OPENCLAW_HOME?.trim();
+  return override ? pathResolve(resolvePostinstallTildePath(override, osHome)) : osHome;
+}
+
+function resolvePostinstallUserPath(input, openClawHome) {
+  return pathResolve(resolvePostinstallTildePath(input, openClawHome));
 }
 
 function readInstalledDistInventory(params = {}) {
@@ -293,6 +326,75 @@ function pruneLegacyInstalledPluginDependencyDirs(params) {
       removePath(join(safePluginDir, childEntry.name), { recursive: true, force: true });
       removed.push(relativePath);
     }
+  }
+
+  return removed;
+}
+
+function splitPostinstallPathList(value) {
+  return value
+    ? value
+        .split(pathDelimiter)
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    : [];
+}
+
+const pathDelimiter = process.platform === "win32" ? ";" : ":";
+
+export function collectLegacyPluginRuntimeDepsStateRoots(params = {}) {
+  const env = params.env ?? process.env;
+  const getHomedir = params.homedir ?? homedir;
+  const openClawHome = resolvePostinstallOpenClawHomeDir(env, getHomedir);
+  const stateRoots = [];
+  const addStateRoot = (root) => {
+    if (root) {
+      stateRoots.push(join(root, LEGACY_PLUGIN_RUNTIME_DEPS_DIR));
+    }
+  };
+
+  const stateOverride = env?.OPENCLAW_STATE_DIR?.trim();
+  if (stateOverride) {
+    addStateRoot(resolvePostinstallUserPath(stateOverride, openClawHome));
+  }
+  const configPath = env?.OPENCLAW_CONFIG_PATH?.trim();
+  if (configPath) {
+    addStateRoot(dirname(resolvePostinstallUserPath(configPath, openClawHome)));
+  }
+  addStateRoot(join(openClawHome, ".openclaw"));
+  addStateRoot(join(openClawHome, ".clawdbot"));
+
+  for (const entry of splitPostinstallPathList(env?.STATE_DIRECTORY)) {
+    addStateRoot(resolvePostinstallUserPath(entry, openClawHome));
+  }
+
+  return [...new Set(stateRoots.map((root) => pathResolve(root)))].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+}
+
+export function pruneLegacyPluginRuntimeDepsState(params = {}) {
+  const pathExists = params.existsSync ?? existsSync;
+  const removePath = params.rmSync ?? rmSync;
+  const log = params.log ?? console;
+  const removed = [];
+
+  for (const root of collectLegacyPluginRuntimeDepsStateRoots(params)) {
+    if (!pathExists(root)) {
+      continue;
+    }
+    try {
+      removePath(root, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
+      removed.push(root);
+    } catch (error) {
+      log.warn?.(
+        `[postinstall] could not prune legacy plugin runtime deps ${root}: ${String(error)}`,
+      );
+    }
+  }
+
+  if (removed.length > 0) {
+    log.log?.(`[postinstall] pruned legacy plugin runtime deps: ${removed.join(", ")}`);
   }
 
   return removed;
@@ -713,22 +815,10 @@ export async function runPluginRegistryPostinstallMigration(params = {}) {
 
 export function isSourceCheckoutRoot(params) {
   const pathExists = params.existsSync ?? existsSync;
-  const readFile = params.readFileSync ?? readFileSync;
   const hasPostinstallInventory = pathExists(join(params.packageRoot, DIST_INVENTORY_PATH));
-  let hasDeclaredMirroredPackageRuntimeDeps = false;
-  try {
-    const packageJson = JSON.parse(readFile(join(params.packageRoot, "package.json"), "utf8"));
-    const mirrored = packageJson?.openclaw?.bundle?.mirroredRootRuntimeDependencies;
-    hasDeclaredMirroredPackageRuntimeDeps = Array.isArray(mirrored) && mirrored.length > 0;
-  } catch {
-    hasDeclaredMirroredPackageRuntimeDeps = false;
-  }
-  const hasPackagedRuntimeDepsLayout =
-    hasPostinstallInventory || hasDeclaredMirroredPackageRuntimeDeps;
   return (
     (pathExists(join(params.packageRoot, ".git")) ||
-      (pathExists(join(params.packageRoot, "pnpm-workspace.yaml")) &&
-        !hasPackagedRuntimeDepsLayout)) &&
+      (pathExists(join(params.packageRoot, "pnpm-workspace.yaml")) && !hasPostinstallInventory)) &&
     pathExists(join(params.packageRoot, "src")) &&
     pathExists(join(params.packageRoot, "extensions"))
   );
@@ -840,6 +930,13 @@ export function runBundledPluginPostinstall(params = {}) {
     });
     return;
   }
+  pruneLegacyPluginRuntimeDepsState({
+    env,
+    existsSync: pathExists,
+    rmSync: params.rmSync,
+    log,
+    homedir: params.homedir,
+  });
   pruneInstalledPackageDist({
     packageRoot,
     existsSync: pathExists,

@@ -8,6 +8,7 @@ import type {
   CronJobsLastStatusFilter,
   CronJobsScheduleKindFilter,
 } from "../controllers/cron.ts";
+import { getCronJobPayload } from "../cron-payload.ts";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { pathForTab } from "../navigation.ts";
@@ -1580,10 +1581,14 @@ function renderJob(job: CronJob, props: CronProps) {
 }
 
 function renderJobPayload(job: CronJob) {
-  if (job.payload.kind === "systemEvent") {
+  const payload = getCronJobPayload(job);
+  if (!payload) {
+    return html``;
+  }
+  if (payload.kind === "systemEvent") {
     return html`<div class="cron-job-detail">
       <span class="cron-job-detail-label">${t("cron.jobDetail.system")}</span>
-      <span class="muted cron-job-detail-value">${job.payload.text}</span>
+      <span class="muted cron-job-detail-value">${payload.text}</span>
     </div>`;
   }
 
@@ -1602,7 +1607,7 @@ function renderJobPayload(job: CronJob) {
       <div class="cron-job-detail-section">
         <span class="cron-job-detail-label">${t("cron.jobDetail.prompt")}</span>
         <div class="muted cron-job-detail-value chat-text" @click=${stopPropagationForInteractive}>
-          ${unsafeHTML(toSanitizedMarkdownHtml(job.payload.message))}
+          ${unsafeHTML(toSanitizedMarkdownHtml(payload.message))}
         </div>
       </div>
       ${delivery

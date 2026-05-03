@@ -244,6 +244,42 @@ describe("gateway startup config recovery", () => {
     expect(log.info).not.toHaveBeenCalled();
   });
 
+  it("reuses a CLI preflight snapshot without rereading config", async () => {
+    const snapshot = buildTestConfigSnapshot({
+      path: configPath,
+      exists: true,
+      raw: `${JSON.stringify(validConfig)}\n`,
+      parsed: validConfig,
+      valid: true,
+      config: validConfig,
+      issues: [],
+      legacyIssues: [],
+    });
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    await expect(
+      loadGatewayStartupConfigSnapshot({
+        minimalTestGateway: false,
+        log,
+        initialSnapshotRead: {
+          snapshot,
+          pluginMetadataSnapshot,
+        },
+      }),
+    ).resolves.toEqual({
+      snapshot,
+      wroteConfig: false,
+      pluginMetadataSnapshot,
+    });
+
+    expect(configIo.readConfigFileSnapshotWithPluginMetadata).not.toHaveBeenCalled();
+    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: validConfig,
+      env: process.env,
+      manifestRegistry: pluginManifestRegistry,
+    });
+  });
+
   it("preserves empty model allowlist entries through startup auto-enable writes", async () => {
     const sourceConfig = {
       agents: {

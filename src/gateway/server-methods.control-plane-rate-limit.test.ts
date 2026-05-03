@@ -3,8 +3,10 @@ import {
   __testing as controlPlaneRateLimitTesting,
   resolveControlPlaneRateLimitKey,
 } from "./control-plane-rate-limit.js";
+import { isRetryableGatewayStartupUnavailableError } from "./protocol/startup-unavailable.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 
 const noWebchat = () => false;
 
@@ -131,32 +133,37 @@ describe("gateway control-plane write rate limit", () => {
     expect(handlerCalls).toHaveBeenCalledTimes(4);
   });
 
-  it("blocks startup-gated methods before dispatch", async () => {
-    const handlerCalls = vi.fn();
-    const handler: GatewayRequestHandler = (opts) => {
-      handlerCalls(opts);
-      opts.respond(true, undefined, undefined);
-    };
-    const context = {
-      ...buildContext(),
-      unavailableGatewayMethods: new Set(["chat.history", "models.list"]),
-    } as Parameters<typeof handleGatewayRequest>[0]["context"];
-    const client = buildClient();
+  it.each(STARTUP_UNAVAILABLE_GATEWAY_METHODS)(
+    "blocks startup-gated method %s before dispatch with a retryable startup error",
+    async (method) => {
+      const handlerCalls = vi.fn();
+      const handler: GatewayRequestHandler = (opts) => {
+        handlerCalls(opts);
+        opts.respond(true, undefined, undefined);
+      };
+      const context = {
+        ...buildContext(),
+        unavailableGatewayMethods: new Set(STARTUP_UNAVAILABLE_GATEWAY_METHODS),
+      } as Parameters<typeof handleGatewayRequest>[0]["context"];
+      const client = buildClient();
 
-    const blocked = await runRequest({ method: "models.list", context, client, handler });
+      const blocked = await runRequest({ method, context, client, handler });
 
-    expect(handlerCalls).not.toHaveBeenCalled();
-    expect(blocked).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        retryable: true,
-        retryAfterMs: 500,
-        details: { method: "models.list" },
-      }),
-    );
-  });
+      expect(handlerCalls).not.toHaveBeenCalled();
+      expect(blocked).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          retryable: true,
+          retryAfterMs: 500,
+          details: { reason: "startup-sidecars", method },
+        }),
+      );
+      const error = blocked.mock.calls[0]?.[2];
+      expect(isRetryableGatewayStartupUnavailableError(error)).toBe(true);
+    },
+  );
 
   it("uses connId fallback when both device and client IP are unknown", () => {
     const key = resolveControlPlaneRateLimitKey({

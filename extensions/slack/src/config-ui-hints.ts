@@ -111,7 +111,7 @@ export const slackChannelConfigUiHints = {
   },
   "streaming.nativeTransport": {
     label: "Slack Native Streaming",
-    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Requires a reply thread target; top-level DMs stay on the non-thread fallback path.",
+    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Native streaming and Slack assistant thread status require a reply thread target; top-level DMs can still use draft post-and-edit preview streaming.",
   },
   "streaming.preview.toolProgress": {
     label: "Slack Draft Tool Progress",

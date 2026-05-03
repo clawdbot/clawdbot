@@ -1,15 +1,29 @@
 import type { WebClient } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
-import { reactSlackMessage } from "./actions.js";
+import { reactSlackMessage, removeOwnSlackReactions, removeSlackReaction } from "./actions.js";
 
 function createClient() {
   return {
+    auth: {
+      test: vi.fn(async () => ({ user_id: "UBOT" })),
+    },
     reactions: {
       add: vi.fn(async () => ({})),
+      get: vi.fn(async () => ({
+        message: {
+          reactions: [],
+        },
+      })),
+      remove: vi.fn(async () => ({})),
     },
   } as unknown as WebClient & {
+    auth: {
+      test: ReturnType<typeof vi.fn>;
+    };
     reactions: {
       add: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
+      remove: ReturnType<typeof vi.fn>;
     };
   };
 }
@@ -55,6 +69,79 @@ describe("reactSlackMessage", () => {
       data: {
         error: "invalid_name",
       },
+    });
+  });
+});
+
+describe("removeSlackReaction", () => {
+  it("treats no_reaction as idempotent success", async () => {
+    const client = createClient();
+    client.reactions.remove.mockRejectedValueOnce(slackPlatformError("no_reaction"));
+
+    await expect(
+      removeSlackReaction("C1", "123.456", ":white_check_mark:", {
+        client,
+        token: "xoxb-test",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(client.reactions.remove).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "123.456",
+      name: "white_check_mark",
+    });
+  });
+
+  it("propagates unrelated reaction remove errors", async () => {
+    const client = createClient();
+    client.reactions.remove.mockRejectedValueOnce(slackPlatformError("invalid_name"));
+
+    await expect(
+      removeSlackReaction("C1", "123.456", "not-an-emoji", {
+        client,
+        token: "xoxb-test",
+      }),
+    ).rejects.toMatchObject({
+      data: {
+        error: "invalid_name",
+      },
+    });
+  });
+});
+
+describe("removeOwnSlackReactions", () => {
+  it("removes own reactions through the idempotent remove helper", async () => {
+    const client = createClient();
+    client.reactions.get.mockResolvedValueOnce({
+      message: {
+        reactions: [
+          { name: "thumbsup", users: ["UBOT", "U1"] },
+          { name: "eyes", users: ["U2", "UBOT"] },
+          { name: "wave", users: ["U2"] },
+        ],
+      },
+    });
+    client.reactions.remove
+      .mockRejectedValueOnce(slackPlatformError("no_reaction"))
+      .mockResolvedValueOnce({});
+
+    await expect(
+      removeOwnSlackReactions("C1", "123.456", {
+        client,
+        token: "xoxb-test",
+      }),
+    ).resolves.toEqual(["thumbsup", "eyes"]);
+
+    expect(client.reactions.remove).toHaveBeenCalledTimes(2);
+    expect(client.reactions.remove).toHaveBeenNthCalledWith(1, {
+      channel: "C1",
+      timestamp: "123.456",
+      name: "thumbsup",
+    });
+    expect(client.reactions.remove).toHaveBeenNthCalledWith(2, {
+      channel: "C1",
+      timestamp: "123.456",
+      name: "eyes",
     });
   });
 });

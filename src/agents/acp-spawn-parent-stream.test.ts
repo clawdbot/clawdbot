@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const enqueueSystemEventMock = vi.fn();
-const requestHeartbeatNowMock = vi.fn();
+const requestHeartbeatMock = vi.fn();
 const readAcpSessionEntryMock = vi.fn();
 const resolveSessionFilePathMock = vi.fn();
 const resolveSessionFilePathOptionsMock = vi.fn();
@@ -17,7 +17,7 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
       "../infra/heartbeat-wake.js",
     ),
     () => ({
-      requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+      requestHeartbeat: (...args: unknown[]) => requestHeartbeatMock(...args),
     }),
   );
 });
@@ -63,7 +63,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
-    requestHeartbeatNowMock.mockClear();
+    requestHeartbeatMock.mockClear();
     readAcpSessionEntryMock.mockReset();
     resolveSessionFilePathMock.mockReset();
     resolveSessionFilePathOptionsMock.mockReset();
@@ -129,7 +129,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         trusted: false,
       }),
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(
       expect.objectContaining({
         reason: "acp:spawn:stream",
         sessionKey: "agent:main:main",
@@ -255,7 +255,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
 
     expect(collectedTexts()).toEqual([]);
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
     relay.dispose();
   });
 

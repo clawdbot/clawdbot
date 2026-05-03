@@ -4,6 +4,7 @@ import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTelegramActionGate,
+  listEnabledTelegramAccounts,
   listTelegramAccountIds,
   mergeTelegramAccountConfig,
   resolveTelegramMediaRuntimeOptions,
@@ -122,6 +123,27 @@ describe("resolveTelegramAccount", () => {
     const lines = warnMock.mock.calls.map(([line]) => String(line));
     expect(lines).toContain("listTelegramAccountIds [ 'work' ]");
     expect(lines).toContain("resolve { accountId: 'work', enabled: true, tokenSource: 'config' }");
+  });
+
+  it("does not resolve disabled account tokens when listing enabled accounts", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            disabled: {
+              enabled: false,
+              botToken: { source: "exec", provider: "vault", id: "telegram/disabled" },
+            },
+            work: { botToken: "tok-work" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const accounts = listEnabledTelegramAccounts(cfg);
+
+    expect(accounts.map((account) => account.accountId)).toEqual(["work"]);
+    expect(accounts[0]?.token).toBe("tok-work");
   });
 });
 

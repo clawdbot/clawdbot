@@ -432,6 +432,16 @@ describe("BlueBubbles webhook monitor", () => {
       );
     });
 
+    it("rejects unresolved SecretRef webhook passwords without crashing", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          password: { source: "exec", provider: "vault", id: "bluebubbles/webhook" } as never,
+        }),
+      });
+
+      await expectProtectedPasswordQueryRequestStatus(401);
+    });
+
     it("rate limits repeated invalid password guesses from the same client", async () => {
       setupWebhookTarget({
         account: createMockAccount({

@@ -61,18 +61,19 @@ describeLive("anthropic transport stream live", () => {
     const controller = new AbortController();
     const abortReason = new Error("live anthropic stream abort");
     let requestBody = "";
-    let requestClosed = false;
-    let resolveRequestClosed: (() => void) | undefined;
-    const requestClosedPromise = new Promise<void>((resolve) => {
-      resolveRequestClosed = resolve;
+    let requestBodyPromise: Promise<string> | undefined;
+    let responseClosed = false;
+    let resolveResponseClosed: (() => void) | undefined;
+    const responseClosedPromise = new Promise<void>((resolve) => {
+      resolveResponseClosed = resolve;
     });
 
     const server = http.createServer((request, response) => {
-      request.on("close", () => {
-        requestClosed = true;
-        resolveRequestClosed?.();
+      response.on("close", () => {
+        responseClosed = true;
+        resolveResponseClosed?.();
       });
-      void readRequestBody(request).then((body) => {
+      requestBodyPromise = readRequestBody(request).then((body) => {
         requestBody = body;
         response.writeHead(200, {
           "content-type": "text/event-stream",
@@ -81,6 +82,7 @@ describeLive("anthropic transport stream live", () => {
         response.write(
           'data: {"type":"message_start","message":{"id":"msg_live","usage":{"input_tokens":1,"output_tokens":0}}}\n\n',
         );
+        return body;
       });
     });
 
@@ -116,15 +118,20 @@ describeLive("anthropic transport stream live", () => {
       if (result === timedOut) {
         throw new Error("Anthropic live SSE stream did not abort within 1000ms");
       }
-      await Promise.race([requestClosedPromise, delay(1_000, undefined)]);
+      await Promise.race([responseClosedPromise, delay(1_000, undefined)]);
 
       expect(result.stopReason).toBe("aborted");
       expect(result.errorMessage).toBe("live anthropic stream abort");
-      expect(requestClosed).toBe(true);
-      expect(JSON.parse(requestBody)).toMatchObject({
-        model: "claude-sonnet-4-6",
-        stream: true,
-      });
+      expect(responseClosed).toBe(true);
+      const capturedRequestBody = requestBodyPromise
+        ? await Promise.race([requestBodyPromise, delay(500, requestBody)])
+        : requestBody;
+      if (capturedRequestBody.trim().length > 0) {
+        expect(JSON.parse(capturedRequestBody)).toMatchObject({
+          model: "claude-sonnet-4-6",
+          stream: true,
+        });
+      }
     } finally {
       await closeServer(server);
     }

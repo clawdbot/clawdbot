@@ -18,33 +18,42 @@ for (let index = 0; index < packageArgs.length; index += 3) {
   const version = packageArgs[index + 1];
   const tarballPath = packageArgs[index + 2];
   const archive = fs.readFileSync(tarballPath);
-  packages.set(packageName, {
+  const existing = packages.get(packageName) ?? {
+    encodedPackageName: encodeURIComponent(packageName).replace("%40", "@"),
+    packageName,
+    latestVersion: version,
+    versions: new Map(),
+  };
+  existing.latestVersion = version;
+  existing.versions.set(version, {
     archive,
     dependencies: packageName === "@openclaw/demo-plugin-npm" ? { "is-number": "7.0.0" } : {},
-    encodedPackageName: encodeURIComponent(packageName).replace("%40", "@"),
     integrity: `sha512-${crypto.createHash("sha512").update(archive).digest("base64")}`,
-    packageName,
     shasum: crypto.createHash("sha1").update(archive).digest("hex"),
     tarballName: path.basename(tarballPath),
     version,
   });
+  packages.set(packageName, existing);
 }
 
 const metadataFor = (entry, baseUrl) => ({
   name: entry.packageName,
-  "dist-tags": { latest: entry.version },
-  versions: {
-    [entry.version]: {
-      dependencies: entry.dependencies,
-      name: entry.packageName,
-      version: entry.version,
-      dist: {
-        integrity: entry.integrity,
-        shasum: entry.shasum,
-        tarball: `${baseUrl}/${entry.encodedPackageName}/-/${entry.tarballName}`,
+  "dist-tags": { latest: entry.latestVersion },
+  versions: Object.fromEntries(
+    [...entry.versions.entries()].map(([version, versionEntry]) => [
+      version,
+      {
+        dependencies: versionEntry.dependencies,
+        name: entry.packageName,
+        version,
+        dist: {
+          integrity: versionEntry.integrity,
+          shasum: versionEntry.shasum,
+          tarball: `${baseUrl}/${entry.encodedPackageName}/-/${versionEntry.tarballName}`,
+        },
       },
-    },
-  },
+    ]),
+  ),
 });
 
 function findPackageForPath(pathname) {
@@ -54,11 +63,13 @@ function findPackageForPath(pathname) {
 function findTarballForPath(pathname) {
   for (const entry of packages.values()) {
     const prefix = `/${entry.encodedPackageName}/-/`;
-    if (
-      pathname.toLowerCase().startsWith(prefix.toLowerCase()) &&
-      pathname.endsWith(`/${entry.tarballName}`)
-    ) {
-      return entry;
+    if (!pathname.toLowerCase().startsWith(prefix.toLowerCase())) {
+      continue;
+    }
+    for (const versionEntry of entry.versions.values()) {
+      if (pathname.endsWith(`/${versionEntry.tarballName}`)) {
+        return versionEntry;
+      }
     }
   }
   return undefined;

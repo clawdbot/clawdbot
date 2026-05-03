@@ -3,9 +3,16 @@
  */
 
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { type SessionEntry, loadSessionStore, updateSessionStore } from "../config/sessions.js";
+import {
+  type SessionEntry,
+  loadSessionStore,
+  resolveSessionFilePath,
+  resolveSessionTranscriptPathInDir,
+  updateSessionStore,
+} from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -32,13 +39,38 @@ function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolea
   );
 }
 
-function sessionIdFromLockPath(lockPath: string): string | undefined {
-  const fileName = path.basename(lockPath);
-  if (!fileName.endsWith(".jsonl.lock")) {
+function normalizeTranscriptLockPath(lockPath: string): string | undefined {
+  const trimmed = lockPath.trim();
+  if (!path.basename(trimmed).endsWith(".jsonl.lock")) {
     return undefined;
   }
-  const sessionId = fileName.slice(0, -".jsonl.lock".length).trim();
-  return sessionId || undefined;
+  const resolved = path.resolve(trimmed);
+  try {
+    return path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
+  } catch {
+    return resolved;
+  }
+}
+
+function resolveEntryTranscriptLockPaths(params: {
+  entry: SessionEntry;
+  sessionsDir: string;
+}): string[] {
+  const paths = new Set<string>();
+  const push = (resolvePath: () => string) => {
+    try {
+      paths.add(path.resolve(`${resolvePath()}.lock`));
+    } catch {
+      // Keep restart recovery best-effort when session metadata is stale.
+    }
+  };
+  push(() =>
+    resolveSessionFilePath(params.entry.sessionId, params.entry, {
+      sessionsDir: params.sessionsDir,
+    }),
+  );
+  push(() => resolveSessionTranscriptPathInDir(params.entry.sessionId, params.sessionsDir));
+  return [...paths];
 }
 
 function getMessageRole(message: unknown): string | undefined {
@@ -157,16 +189,17 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
   cleanedLocks: SessionLockInspection[];
 }): Promise<{ marked: number; skipped: number }> {
   const result = { marked: 0, skipped: 0 };
-  const interruptedSessionIds = new Set(
+  const sessionsDir = path.resolve(params.sessionsDir);
+  const interruptedLockPaths = new Set(
     params.cleanedLocks
-      .map((lock) => sessionIdFromLockPath(lock.lockPath))
-      .filter((sessionId): sessionId is string => Boolean(sessionId)),
+      .map((lock) => normalizeTranscriptLockPath(lock.lockPath))
+      .filter((lockPath): lockPath is string => Boolean(lockPath)),
   );
-  if (interruptedSessionIds.size === 0) {
+  if (interruptedLockPaths.size === 0) {
     return result;
   }
 
-  const storePath = path.join(path.resolve(params.sessionsDir), "sessions.json");
+  const storePath = path.join(sessionsDir, "sessions.json");
   await updateSessionStore(
     storePath,
     (store) => {
@@ -178,7 +211,8 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
           result.skipped++;
           continue;
         }
-        if (!interruptedSessionIds.has(entry.sessionId)) {
+        const entryLockPaths = resolveEntryTranscriptLockPaths({ entry, sessionsDir });
+        if (!entryLockPaths.some((lockPath) => interruptedLockPaths.has(lockPath))) {
           continue;
         }
         entry.abortedLastRun = true;

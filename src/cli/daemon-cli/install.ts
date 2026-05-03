@@ -31,7 +31,7 @@ import {
 } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
-function mergeInstallInvocationEnv(params: {
+export function mergeInstallInvocationEnv(params: {
   env: NodeJS.ProcessEnv;
   existingServiceEnv?: Record<string, string>;
 }): NodeJS.ProcessEnv {

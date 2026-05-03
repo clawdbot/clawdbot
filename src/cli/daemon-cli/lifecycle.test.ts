@@ -52,6 +52,7 @@ const probeGateway = vi.fn<
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
 const recoverInstalledLaunchAgent = vi.hoisted(() => vi.fn());
+const repairLoadedGatewayServiceForStart = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => loadConfig(),
@@ -87,6 +88,10 @@ vi.mock("../../daemon/service.js", () => ({
 vi.mock("./launchd-recovery.js", () => ({
   recoverInstalledLaunchAgent: (args: { result: "started" | "restarted" }) =>
     recoverInstalledLaunchAgent(args),
+}));
+
+vi.mock("./start-repair.js", () => ({
+  repairLoadedGatewayServiceForStart: (args: unknown) => repairLoadedGatewayServiceForStart(args),
 }));
 
 vi.mock("./restart-health.js", () => ({
@@ -160,6 +165,7 @@ describe("runDaemonRestart health checks", () => {
     isRestartEnabled.mockReset();
     loadConfig.mockReset();
     recoverInstalledLaunchAgent.mockReset();
+    repairLoadedGatewayServiceForStart.mockReset();
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
@@ -222,6 +228,46 @@ describe("runDaemonRestart health checks", () => {
     await runDaemonStart({ json: true });
 
     expect(recoverInstalledLaunchAgent).toHaveBeenCalledWith({ result: "started" });
+  });
+
+  it("repairs stale loaded service definitions from gateway start", async () => {
+    repairLoadedGatewayServiceForStart.mockResolvedValue({
+      result: "started",
+      message: "Gateway service definition repaired and started.",
+      loaded: true,
+    });
+    runServiceStart.mockImplementation(
+      async (params: {
+        repairLoadedService?: (args: {
+          json: boolean;
+          stdout: NodeJS.WritableStream;
+          state: unknown;
+          issues: unknown[];
+        }) => Promise<unknown>;
+      }) => {
+        await params.repairLoadedService?.({
+          json: true,
+          stdout: process.stdout,
+          state: { command: { environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" } } },
+          issues: [{ code: "version-mismatch", message: "old service" }],
+        });
+      },
+    );
+
+    await runDaemonStart({ json: true });
+
+    expect(repairLoadedGatewayServiceForStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        service,
+        json: true,
+        state: expect.objectContaining({
+          command: expect.objectContaining({
+            environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
+          }),
+        }),
+        issues: [expect.objectContaining({ code: "version-mismatch" })],
+      }),
+    );
   });
 
   it("kills stale gateway pids and retries restart", async () => {

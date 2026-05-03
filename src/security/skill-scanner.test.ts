@@ -168,6 +168,14 @@ cp.spawn("node", ["server.js"]);
       expected: { ruleId: "dangerous-exec", severity: "critical" as const },
     },
     {
+      name: "detects child_process namespaced exec usage",
+      source: `
+const cp = require("child_process");
+cp.exec("node server.js");
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
       name: "detects eval usage",
       source: `
 const code = "1+1";
@@ -245,6 +253,25 @@ const options: ExecOptions = { timeout: 5000 };
 `;
     const findings = scanSource(source, "plugin.ts");
     expect(findings.some((f) => f.ruleId === "dangerous-exec")).toBe(false);
+  });
+
+  it("does not flag RegExp.exec when child_process appears elsewhere", () => {
+    const source = `
+import type { ExecOptions } from "child_process";
+const options: ExecOptions = {};
+const match = /^keychain:(.+)$/.exec(value);
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "dangerous-exec")).toBe(false);
+  });
+
+  it("does not use full-line comments as source-rule context", () => {
+    const source = `
+const env = process.env;
+// fetch() can reach the endpoint later.
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(false);
   });
 
   it("returns empty array for clean plugin code", () => {

@@ -60,6 +60,28 @@ describe("addGatewayServiceCommands", () => {
       },
     },
     {
+      name: "forwards restart force and wait controls",
+      argv: ["restart", "--wait", "30s"],
+      assert: () => {
+        expect(runDaemonRestart).toHaveBeenCalledWith(
+          expect.objectContaining({
+            wait: "30s",
+          }),
+        );
+      },
+    },
+    {
+      name: "forwards restart force control",
+      argv: ["restart", "--force"],
+      assert: () => {
+        expect(runDaemonRestart).toHaveBeenCalledWith(
+          expect.objectContaining({
+            force: true,
+          }),
+        );
+      },
+    },
+    {
       name: "forwards status auth collisions from parent gateway command",
       argv: ["status", "--token", "tok_status", "--password", "pw_status"],
       assert: () => {

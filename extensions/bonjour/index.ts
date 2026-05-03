@@ -1,9 +1,4 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  registerUncaughtExceptionHandler,
-  registerUnhandledRejectionHandler,
-} from "openclaw/plugin-sdk/runtime";
-import { startGatewayBonjourAdvertiser } from "./src/advertiser.js";
 
 function formatBonjourInstanceName(displayName: string) {
   const trimmed = displayName.trim();
@@ -24,6 +19,13 @@ export default definePluginEntry({
     api.registerGatewayDiscoveryService({
       id: "bonjour",
       advertise: async (ctx) => {
+        const [
+          { startGatewayBonjourAdvertiser },
+          { registerUncaughtExceptionHandler, registerUnhandledRejectionHandler },
+        ] = await Promise.all([
+          import("./src/advertiser.js"),
+          import("openclaw/plugin-sdk/runtime"),
+        ]);
         const advertiser = await startGatewayBonjourAdvertiser(
           {
             instanceName: formatBonjourInstanceName(ctx.machineDisplayName),

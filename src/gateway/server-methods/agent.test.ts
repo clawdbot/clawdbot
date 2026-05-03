@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   loadConfigReturn: {} as Record<string, unknown>,
   loadVoiceWakeRoutingConfig: vi.fn(),
   resolveVoiceWakeRouteByTrigger: vi.fn(),
+  resolveSendPolicy: vi.fn(() => "allow"),
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -128,7 +129,8 @@ vi.mock("../../infra/voicewake-routing.js", () => ({
 }));
 
 vi.mock("../../sessions/send-policy.js", () => ({
-  resolveSendPolicy: () => "allow",
+  resolveSendPolicy: (...args: unknown[]) =>
+    (mocks.resolveSendPolicy as (...args: unknown[]) => unknown)(...args),
 }));
 
 vi.mock("../../utils/delivery-context.js", async () => {
@@ -410,6 +412,7 @@ describe("gateway agent handler", () => {
     mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
     mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
+    mocks.resolveSendPolicy.mockReset().mockReturnValue("allow");
   });
 
   it("preserves ACP metadata from the current stored session entry", async () => {
@@ -1036,6 +1039,52 @@ describe("gateway agent handler", () => {
       }),
     );
     expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("logs attachment parse failures with stack details", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const context = makeContext();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "inspect this",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-agent-attachment-parse-stack",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "image/png",
+            fileName: "broken.png",
+            content: "not-base64",
+          },
+        ],
+      },
+      { respond, context, reqId: "agent-attachment-parse-stack", flushDispatch: false },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("attachment broken.png: invalid base64 content"),
+      }),
+    );
+    expect(context.logGateway.error).toHaveBeenCalledWith(
+      "agent attachment parse failed",
+      expect.objectContaining({
+        consoleMessage: expect.stringContaining(
+          "agent attachment parse failed: Error: attachment broken.png",
+        ),
+        error: expect.stringContaining("Error: attachment broken.png: invalid base64 content"),
+      }),
+    );
+    const logMeta = (context.logGateway.error as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[1] as { error?: string } | undefined;
+    expect(logMeta?.error).toContain("\n    at ");
   });
 
   it("keeps model-run gateway prompts undecorated and forwards raw-run flags", async () => {
@@ -2744,6 +2793,53 @@ describe("gateway agent handler", () => {
       }),
       undefined,
     );
+  });
+
+  it("allows non-delivery agent invocations when sendPolicy is deny", async () => {
+    mocks.agentCommand.mockClear();
+    primeMainAgentRun();
+    mocks.resolveSendPolicy.mockReturnValue("deny");
+
+    const respond = await runMainAgent("smoke", "non-delivery-deny");
+
+    expect(mocks.resolveSendPolicy).not.toHaveBeenCalled();
+    expect(respond).not.toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "send blocked by session policy" }),
+    );
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalledTimes(1));
+  });
+
+  it("blocks delivery agent invocations when sendPolicy is deny", async () => {
+    primeMainAgentRun();
+    mocks.resolveSendPolicy.mockReturnValue("deny");
+    mocks.agentCommand.mockClear();
+
+    const respond = vi.fn();
+    await invokeAgent(
+      {
+        message: "smoke",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "delivery-deny",
+        deliver: true,
+      },
+      { respond, reqId: "delivery-deny" },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "send blocked by session policy" }),
+    );
+    expect(mocks.resolveSendPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({ sessionId: "existing-session-id" }),
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
   describe("groupId session-entry persistence validation", () => {

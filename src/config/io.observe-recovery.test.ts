@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { CONFIG_CLOBBER_SNAPSHOT_LIMIT } from "./io.clobber-snapshot.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   maybeRecoverSuspiciousConfigReadSync,
@@ -69,6 +70,12 @@ describe("config observe recovery", () => {
     return lines
       .map((line) => JSON.parse(line) as Record<string, unknown>)
       .filter((line) => line.event === "config.observe");
+  }
+
+  async function listClobberFiles(configPath: string): Promise<string[]> {
+    const entries = await fsp.readdir(path.dirname(configPath));
+    const prefix = `${path.basename(configPath)}.clobbered.`;
+    return entries.filter((entry) => entry.startsWith(prefix));
   }
 
   async function readLastObserveEvent(
@@ -406,6 +413,31 @@ describe("config observe recovery", () => {
 
       const observeEvents = await readObserveEvents(auditPath);
       expect(observeEvents).toHaveLength(1);
+    });
+  });
+
+  it("caps concurrent recovery clobber snapshots while preserving audit records", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, auditPath, warn } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeClobberedUpdateChannel(configPath);
+
+      await Promise.all(
+        Array.from({ length: CONFIG_CLOBBER_SNAPSHOT_LIMIT + 18 }, async () => {
+          await recoverClobberedUpdateChannel({ deps, configPath });
+        }),
+      );
+
+      const clobberFiles = await listClobberFiles(configPath);
+      expect(clobberFiles.length).toBeLessThanOrEqual(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
+      const observeEvents = await readObserveEvents(auditPath);
+      expect(observeEvents.length).toBeGreaterThan(0);
+      expect(observeEvents.at(-1)).toHaveProperty("clobberedPath");
+      const capWarnings = warn.mock.calls.filter(
+        ([message]) =>
+          typeof message === "string" && message.includes("Config clobber snapshot cap reached"),
+      );
+      expect(capWarnings.length).toBeLessThanOrEqual(1);
     });
   });
 

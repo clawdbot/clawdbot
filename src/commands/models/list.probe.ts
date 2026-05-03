@@ -28,16 +28,18 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { redactSecrets } from "../status-all/format.js";
 import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
 
 const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 
-let embeddedRunnerModulePromise: Promise<typeof import("../../agents/pi-embedded.js")> | undefined;
+const embeddedRunnerModuleLoader = createLazyImportLoader(
+  () => import("../../agents/pi-embedded.js"),
+);
 
 function loadEmbeddedRunnerModule() {
-  embeddedRunnerModulePromise ??= import("../../agents/pi-embedded.js");
-  return embeddedRunnerModulePromise;
+  return embeddedRunnerModuleLoader.load();
 }
 
 export type AuthProbeStatus =

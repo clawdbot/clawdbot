@@ -5,8 +5,13 @@ import type {
   WAPresence,
 } from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { isWhatsAppNewsletterJid } from "../normalize.js";
 import { buildQuotedMessageOptions } from "../quoted-message.js";
 import { toWhatsappJid } from "../text-runtime.js";
+import {
+  addWhatsAppOutboundMentionsToContent,
+  type WhatsAppOutboundMentionResolution,
+} from "./outbound-mentions.js";
 import {
   combineWhatsAppSendResults,
   normalizeWhatsAppSendResult,
@@ -32,7 +37,19 @@ export function createWebSendApi(params: {
     sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
   };
   defaultAccountId: string;
+  resolveOutboundMentions?: (params: {
+    jid: string;
+    text: string;
+  }) => Promise<WhatsAppOutboundMentionResolution> | WhatsAppOutboundMentionResolution;
 }) {
+  const resolveMentions = async (
+    jid: string,
+    text: string,
+  ): Promise<WhatsAppOutboundMentionResolution> =>
+    params.resolveOutboundMentions
+      ? await params.resolveOutboundMentions({ jid, text })
+      : { text, mentionedJids: [] };
+
   return {
     sendMessage: async (
       to: string,
@@ -46,11 +63,17 @@ export function createWebSendApi(params: {
       if (mediaBuffer) {
         mediaType ??= "application/octet-stream";
       }
+      const shouldSendAudioText = Boolean(
+        mediaBuffer && mediaType?.startsWith("audio/") && text.trim(),
+      );
+      const resolvedPayloadText = shouldSendAudioText
+        ? { text, mentionedJids: [] }
+        : await resolveMentions(jid, text);
       if (mediaBuffer && mediaType) {
         if (mediaType.startsWith("image/")) {
           payload = {
             image: mediaBuffer,
-            caption: text || undefined,
+            caption: resolvedPayloadText.text || undefined,
             mimetype: mediaType,
           };
         } else if (mediaType.startsWith("audio/")) {
@@ -59,7 +82,7 @@ export function createWebSendApi(params: {
           const gifPlayback = sendOptions?.gifPlayback;
           payload = {
             video: mediaBuffer,
-            caption: text || undefined,
+            caption: resolvedPayloadText.text || undefined,
             mimetype: mediaType,
             ...(gifPlayback ? { gifPlayback: true } : {}),
           };
@@ -68,13 +91,14 @@ export function createWebSendApi(params: {
           payload = {
             document: mediaBuffer,
             fileName,
-            caption: text || undefined,
+            caption: resolvedPayloadText.text || undefined,
             mimetype: mediaType,
           };
         }
       } else {
-        payload = { text };
+        payload = { text: resolvedPayloadText.text };
       }
+      payload = addWhatsAppOutboundMentionsToContent(payload, resolvedPayloadText.mentionedJids);
       const quotedOpts = buildQuotedMessageOptions({
         messageId: sendOptions?.quotedMessageKey?.id,
         remoteJid: sendOptions?.quotedMessageKey?.remoteJid,
@@ -86,8 +110,12 @@ export function createWebSendApi(params: {
         ? await params.sock.sendMessage(jid, payload, quotedOpts)
         : await params.sock.sendMessage(jid, payload);
       const results = [normalizeWhatsAppSendResult(result, mediaBuffer ? "media" : "text")];
-      if (mediaBuffer && mediaType?.startsWith("audio/") && text.trim()) {
-        const textPayload: AnyMessageContent = { text };
+      if (shouldSendAudioText) {
+        const resolvedAudioText = await resolveMentions(jid, text);
+        const textPayload = addWhatsAppOutboundMentionsToContent(
+          { text: resolvedAudioText.text },
+          resolvedAudioText.mentionedJids,
+        );
         const textResult = quotedOpts
           ? await params.sock.sendMessage(jid, textPayload, quotedOpts)
           : await params.sock.sendMessage(jid, textPayload);
@@ -135,6 +163,9 @@ export function createWebSendApi(params: {
     },
     sendComposingTo: async (to: string): Promise<void> => {
       const jid = toWhatsappJid(to);
+      if (isWhatsAppNewsletterJid(jid)) {
+        return;
+      }
       await params.sock.sendPresenceUpdate("composing", jid);
     },
   } as const;

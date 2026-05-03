@@ -8,14 +8,14 @@ export { normalizeVerboseLevel } from "../../auto-reply/thinking.shared.js";
 export { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
 export { registerAgentRunContext } from "../../infra/agent-events.js";
 export { logWarn } from "../../logger.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
-let cronExecutionCliRuntimePromise:
-  | Promise<typeof import("./run-execution-cli.runtime.js")>
-  | undefined;
+const cronExecutionCliRuntimeLoader = createLazyImportLoader(
+  () => import("./run-execution-cli.runtime.js"),
+);
 
 async function loadCronExecutionCliRuntime() {
-  cronExecutionCliRuntimePromise ??= import("./run-execution-cli.runtime.js");
-  return await cronExecutionCliRuntimePromise;
+  return await cronExecutionCliRuntimeLoader.load();
 }
 
 export async function getCliSessionId(

@@ -239,8 +239,15 @@ const GoogleMeetToolSchema = Type.Object({
         "Join mode. realtime starts live listen/talk-back through the realtime voice model; transcribe joins without the realtime talk-back bridge.",
     }),
   ),
-  dialInNumber: Type.Optional(Type.String({ description: "Meet dial-in number for Twilio" })),
-  pin: Type.Optional(Type.String({ description: "Meet phone PIN for Twilio" })),
+  dialInNumber: Type.Optional(
+    Type.String({
+      description:
+        "Meet dial-in phone number for Twilio. Required for Twilio unless twilio.defaultDialInNumber is configured; Meet URLs cannot be dialed directly.",
+    }),
+  ),
+  pin: Type.Optional(
+    Type.String({ description: "Meet phone PIN for Twilio; # is appended if omitted" }),
+  ),
   dtmfSequence: Type.Optional(Type.String({ description: "Explicit DTMF sequence for Twilio" })),
   sessionId: Type.Optional(Type.String({ description: "Meet session ID" })),
   message: Type.Optional(Type.String({ description: "Realtime instructions to speak now" })),
@@ -776,6 +783,7 @@ export default definePluginEntry({
             await rt.setupStatus({
               transport: normalizeTransport(params?.transport),
               mode: normalizeMode(params?.mode),
+              dialInNumber: normalizeOptionalString(params?.dialInNumber),
             }),
           );
         } catch (err) {
@@ -986,7 +994,7 @@ export default definePluginEntry({
       name: "google_meet",
       label: "Google Meet",
       description:
-        "Join and track Google Meet sessions through Chrome or Twilio. Call setup_status before join/create/test_listen/test_speech; if it reports a Chrome node offline or local audio missing, surface that blocker instead of retrying or switching transports. Offline nodes are diagnostics only, not usable candidates. If local Chrome realtime audio is unsupported on this OS, use mode=transcribe, transport=twilio, or a macOS chrome-node for realtime Chrome. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
+        "Join and track Google Meet sessions through Chrome or Twilio. Call setup_status before join/create/test_listen/test_speech; if it reports a Chrome node offline, local audio missing, or missing Twilio dial plan, surface that blocker instead of retrying or switching transports. Twilio cannot dial a Meet URL directly: provide dialInNumber plus optional pin/dtmfSequence, or configure twilio.defaultDialInNumber. Offline nodes are diagnostics only, not usable candidates. If local Chrome realtime audio is unsupported on this OS, use mode=transcribe, transport=twilio, or a macOS chrome-node for realtime Chrome. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
       parameters: GoogleMeetToolSchema,
       async execute(_toolCallId, params) {
         const raw = asParamRecord(params);

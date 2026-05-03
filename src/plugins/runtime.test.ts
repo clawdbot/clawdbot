@@ -117,10 +117,10 @@ describe("plugin runtime route registry", () => {
 
   it.each([
     {
-      name: "falls back to the provided registry when the pinned route registry has no routes",
+      name: "keeps an explicitly pinned empty route registry authoritative",
       pinnedRegistry: createEmptyPluginRegistry(),
       explicitRegistry: createRegistryWithRoute("/demo"),
-      expected: "explicit",
+      expected: "pinned",
     },
     {
       name: "prefers the pinned route registry when it already owns routes",

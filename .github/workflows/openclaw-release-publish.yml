@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to publish, for example v2026.5.1-beta.1
+        description: Release tag to publish, for example v2026.5.1-alpha.1 or v2026.5.1-beta.1
         required: true
         type: string
       preflight_run_id:
@@ -17,6 +17,7 @@ on:
         default: beta
         type: choice
         options:
+          - alpha
           - beta
           - latest
       plugin_publish_scope:
@@ -69,8 +70,12 @@ jobs:
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
             echo "Invalid release tag: ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+          if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" != "alpha" ]]; then
+            echo "Alpha prerelease tags must publish OpenClaw to npm dist-tag alpha." >&2
             exit 1
           fi
           if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then

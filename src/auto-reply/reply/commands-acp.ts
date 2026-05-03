@@ -1,4 +1,5 @@
 import { logVerbose } from "../../globals.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import {
   COMMAND,
@@ -18,16 +19,17 @@ type AcpActionHandler = (
   tokens: string[],
 ) => Promise<CommandHandlerResult>;
 
-let lifecycleHandlersPromise: Promise<typeof import("./commands-acp/lifecycle.js")> | undefined;
-let runtimeOptionHandlersPromise:
-  | Promise<typeof import("./commands-acp/runtime-options.js")>
-  | undefined;
-let diagnosticHandlersPromise: Promise<typeof import("./commands-acp/diagnostics.js")> | undefined;
+const lifecycleHandlersLoader = createLazyImportLoader(() => import("./commands-acp/lifecycle.js"));
+const runtimeOptionHandlersLoader = createLazyImportLoader(
+  () => import("./commands-acp/runtime-options.js"),
+);
+const diagnosticHandlersLoader = createLazyImportLoader(
+  () => import("./commands-acp/diagnostics.js"),
+);
 
 async function loadAcpActionHandler(action: Exclude<AcpAction, "help">): Promise<AcpActionHandler> {
   if (action === "spawn" || action === "cancel" || action === "steer" || action === "close") {
-    lifecycleHandlersPromise ??= import("./commands-acp/lifecycle.js");
-    const handlers = await lifecycleHandlersPromise;
+    const handlers = await lifecycleHandlersLoader.load();
     return {
       spawn: handlers.handleAcpSpawnAction,
       cancel: handlers.handleAcpCancelAction,
@@ -46,8 +48,7 @@ async function loadAcpActionHandler(action: Exclude<AcpAction, "help">): Promise
     action === "model" ||
     action === "reset-options"
   ) {
-    runtimeOptionHandlersPromise ??= import("./commands-acp/runtime-options.js");
-    const handlers = await runtimeOptionHandlersPromise;
+    const handlers = await runtimeOptionHandlersLoader.load();
     return {
       status: handlers.handleAcpStatusAction,
       "set-mode": handlers.handleAcpSetModeAction,
@@ -60,8 +61,7 @@ async function loadAcpActionHandler(action: Exclude<AcpAction, "help">): Promise
     }[action];
   }
 
-  diagnosticHandlersPromise ??= import("./commands-acp/diagnostics.js");
-  const handlers = await diagnosticHandlersPromise;
+  const handlers = await diagnosticHandlersLoader.load();
   const diagnosticHandlers: Record<"doctor" | "install" | "sessions", AcpActionHandler> = {
     doctor: handlers.handleAcpDoctorAction,
     install: async (params, tokens) => handlers.handleAcpInstallAction(params, tokens),

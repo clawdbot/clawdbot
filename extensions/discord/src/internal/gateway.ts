@@ -46,6 +46,9 @@ type GatewayPluginOptions = {
 
 const READY_STATE_OPEN = 1;
 const DEFAULT_GATEWAY_URL = "wss://gateway.discord.gg/";
+const DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES = 4096;
+const INVALID_SESSION_MIN_DELAY_MS = 1_000;
+const INVALID_SESSION_JITTER_MS = 4_000;
 
 function ensureGatewayParams(url: string): string {
   const parsed = new URL(url);
@@ -274,7 +277,11 @@ export class GatewayPlugin extends Plugin {
         if (!payload.d) {
           this.resetSessionState();
         }
-        this.scheduleReconnect(payload.d);
+        this.scheduleReconnect(
+          payload.d,
+          undefined,
+          INVALID_SESSION_MIN_DELAY_MS + Math.floor(Math.random() * INVALID_SESSION_JITTER_MS),
+        );
         break;
       case GatewayOpcodes.Reconnect:
         this.scheduleReconnect(true);
@@ -347,6 +354,15 @@ export class GatewayPlugin extends Plugin {
       throw new Error("Discord gateway socket is not open");
     }
     const serialized = JSON.stringify(payload);
+    const payloadSize =
+      typeof Buffer !== "undefined"
+        ? Buffer.byteLength(serialized, "utf8")
+        : new TextEncoder().encode(serialized).byteLength;
+    if (payloadSize > DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES) {
+      throw new Error(
+        `Discord gateway payload exceeds ${DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES}-byte limit`,
+      );
+    }
     this.outboundLimiter.send(serialized, { critical: skipRateLimit });
   }
 
@@ -386,7 +402,7 @@ export class GatewayPlugin extends Plugin {
     this.sequence = null;
   }
 
-  private scheduleReconnect(resume: boolean, closeCode?: number): void {
+  private scheduleReconnect(resume: boolean, closeCode?: number, minDelayMs = 0): void {
     if (!this.shouldReconnect) {
       return;
     }
@@ -408,7 +424,10 @@ export class GatewayPlugin extends Plugin {
       );
       return;
     }
-    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(this.reconnectAttempts, 5));
+    const delay = Math.max(
+      minDelayMs,
+      Math.min(30_000, 1_000 * 2 ** Math.min(this.reconnectAttempts, 5)),
+    );
     this.reconnectTimer.schedule(delay, () => {
       this.connect(resume);
     });
@@ -423,6 +442,15 @@ export class GatewayPlugin extends Plugin {
   }
 
   requestGuildMembers(data: RequestGuildMembersData): void {
+    if (!this.hasIntent(GatewayIntentBits.GuildMembers)) {
+      throw new Error("GUILD_MEMBERS intent is required for requestGuildMembers");
+    }
+    if (data.presences && !this.hasIntent(GatewayIntentBits.GuildPresences)) {
+      throw new Error("GUILD_PRESENCES intent is required when requesting presences");
+    }
+    if (!data.query && data.query !== "" && !data.user_ids) {
+      throw new Error("Either query or user_ids is required for requestGuildMembers");
+    }
     this.send({ op: GatewayOpcodes.RequestGuildMembers, d: data } as GatewaySendPayload);
   }
 

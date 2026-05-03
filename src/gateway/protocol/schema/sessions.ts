@@ -60,11 +60,31 @@ export const SessionsListParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsCleanupParamsSchema = Type.Object(
+  {
+    agent: Type.Optional(NonEmptyString),
+    allAgents: Type.Optional(Type.Boolean()),
+    enforce: Type.Optional(Type.Boolean()),
+    activeKey: Type.Optional(NonEmptyString),
+    fixMissing: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsPreviewParamsSchema = Type.Object(
   {
     keys: Type.Array(NonEmptyString, { minItems: 1 }),
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     maxChars: Type.Optional(Type.Integer({ minimum: 20 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsDescribeParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    includeDerivedTitles: Type.Optional(Type.Boolean()),
+    includeLastMessage: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

@@ -4,6 +4,7 @@ import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/ne
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -81,19 +82,21 @@ type WebGuardedFetchModule = Pick<
   "fetchWithWebToolsNetworkGuard"
 >;
 
-let webFetchRuntimePromise: Promise<WebFetchRuntimeModule> | null = null;
-let webGuardedFetchPromise: Promise<WebGuardedFetchModule> | null = null;
+const webFetchRuntimeLoader = createLazyImportLoader<WebFetchRuntimeModule>(
+  () => import("../../web-fetch/runtime.js"),
+);
+const webGuardedFetchLoader = createLazyImportLoader<WebGuardedFetchModule>(
+  () => import("./web-guarded-fetch.js"),
+);
 
 async function loadWebFetchRuntime(): Promise<WebFetchRuntimeModule> {
-  webFetchRuntimePromise ??= import("../../web-fetch/runtime.js");
-  return await webFetchRuntimePromise;
+  return await webFetchRuntimeLoader.load();
 }
 
 async function loadWebGuardedFetch(): Promise<
   WebGuardedFetchModule["fetchWithWebToolsNetworkGuard"]
 > {
-  webGuardedFetchPromise ??= import("./web-guarded-fetch.js");
-  return (await webGuardedFetchPromise).fetchWithWebToolsNetworkGuard;
+  return (await webGuardedFetchLoader.load()).fetchWithWebToolsNetworkGuard;
 }
 
 function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {

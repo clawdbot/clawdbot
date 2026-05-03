@@ -77,12 +77,19 @@ describe("shouldWarnOnTouchedVersion", () => {
     expect(shouldWarnOnTouchedVersion("2026.3.23-beta.1", "2026.3.23-1")).toBe(false);
   });
 
+  it("skips same-base stable configs when current is a beta", () => {
+    expect(shouldWarnOnTouchedVersion("2026.5.2-beta.3", "2026.5.2")).toBe(false);
+  });
+
   it("skips same-base prerelease configs when current is newer", () => {
     expect(shouldWarnOnTouchedVersion("2026.3.23", "2026.3.23-beta.1")).toBe(false);
   });
 
+  it("still warns when the touched prerelease is newer", () => {
+    expect(shouldWarnOnTouchedVersion("2026.5.2-beta.2", "2026.5.2-beta.3")).toBe(true);
+  });
+
   it("warns when the touched config is newer", () => {
-    expect(shouldWarnOnTouchedVersion("2026.3.23-beta.1", "2026.3.23")).toBe(true);
     expect(shouldWarnOnTouchedVersion("2026.3.23", "2026.3.24")).toBe(true);
     expect(shouldWarnOnTouchedVersion("2026.3.23", "2027.1.1")).toBe(true);
   });

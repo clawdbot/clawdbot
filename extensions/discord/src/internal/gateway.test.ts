@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import {
   GatewayCloseCodes,
   GatewayDispatchEvents,
+  GatewayIntentBits,
   GatewayOpcodes,
   InteractionType,
   PresenceUpdateStatus,
@@ -270,6 +271,29 @@ describe("GatewayPlugin", () => {
     );
   });
 
+  it("rejects gateway payloads that exceed Discord's size limit", () => {
+    const gateway = new GatewayPlugin({ autoInteractions: false });
+    const send = attachOpenSocket(gateway);
+
+    expect(() =>
+      gateway.send({
+        op: GatewayOpcodes.PresenceUpdate,
+        d: {
+          since: null,
+          activities: [
+            {
+              name: "x".repeat(4_100),
+              type: 0,
+            },
+          ],
+          status: PresenceUpdateStatus.Online,
+          afk: false,
+        },
+      } as GatewaySendPayload),
+    ).toThrow(/4096-byte limit/);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("ignores stale socket close events after reconnecting", () => {
     const gateway = new TestGatewayPlugin({
       autoInteractions: false,
@@ -330,6 +354,7 @@ describe("GatewayPlugin", () => {
 
   it("clears resume state after invalid session false", async () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
     const gateway = new TestGatewayPlugin({
       autoInteractions: false,
       url: "wss://gateway.example.test",
@@ -352,6 +377,29 @@ describe("GatewayPlugin", () => {
     expect(sessionState.sessionId).toBeNull();
     expect(sessionState.resumeGatewayUrl).toBeNull();
     expect(sessionState.sequence).toBeNull();
+  });
+
+  it("delays invalid-session reconnects by Discord's randomized cooldown floor", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.75);
+    const gateway = new TestGatewayPlugin({
+      autoInteractions: false,
+      url: "wss://gateway.example.test",
+    });
+
+    gateway.connect(false);
+    gateway.sockets[0]?.emit("open");
+    (
+      gateway as unknown as {
+        handlePayload(payload: { op: number; d: unknown }, resume: boolean): void;
+      }
+    ).handlePayload({ op: GatewayOpcodes.InvalidSession, d: true }, true);
+
+    await vi.advanceTimersByTimeAsync(3_999);
+    expect(gateway.connectCalls).toEqual([false]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(gateway.connectCalls).toEqual([false, true]);
   });
 
   it("includes close code details when reconnect attempts are exhausted", async () => {
@@ -507,5 +555,49 @@ describe("GatewayPlugin", () => {
     expect(secondSend).toHaveBeenCalledWith(
       expect.stringContaining(`"op":${GatewayOpcodes.Identify}`),
     );
+  });
+
+  it("validates requestGuildMembers before sending", () => {
+    const withoutMembersIntent = new GatewayPlugin({ autoInteractions: false });
+    attachOpenSocket(withoutMembersIntent);
+
+    expect(() =>
+      withoutMembersIntent.requestGuildMembers({ guild_id: "guild1", query: "", limit: 0 }),
+    ).toThrow(/GUILD_MEMBERS intent/);
+
+    const withoutPresenceIntent = new GatewayPlugin({
+      autoInteractions: false,
+      intents: GatewayIntentBits.GuildMembers,
+    });
+    attachOpenSocket(withoutPresenceIntent);
+
+    expect(() =>
+      withoutPresenceIntent.requestGuildMembers({
+        guild_id: "guild1",
+        query: "",
+        limit: 0,
+        presences: true,
+      }),
+    ).toThrow(/GUILD_PRESENCES intent/);
+
+    const valid = new GatewayPlugin({
+      autoInteractions: false,
+      intents: GatewayIntentBits.GuildMembers | GatewayIntentBits.GuildPresences,
+    });
+    const send = attachOpenSocket(valid);
+
+    expect(() =>
+      valid.requestGuildMembers({
+        guild_id: "guild1",
+        limit: 1,
+      }),
+    ).toThrow(/query or user_ids/);
+
+    valid.requestGuildMembers({ guild_id: "guild1", query: "", limit: 0, presences: true });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(send.mock.calls[0]?.[0] as string)).toEqual({
+      op: GatewayOpcodes.RequestGuildMembers,
+      d: { guild_id: "guild1", query: "", limit: 0, presences: true },
+    });
   });
 });

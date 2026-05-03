@@ -76,7 +76,7 @@ echo "Resolved source ref: ${source_ref:-<missing>}"
 echo "Resolved ClawHub workdir: ${clawhub_workdir}"
 echo "Publish auth: GitHub Actions OIDC via ClawHub short-lived token"
 
-printf 'Publish command:'
+printf 'Publish command: CLAWHUB_WORKDIR=%q' "${clawhub_workdir}"
 printf ' %q' "${publish_cmd[@]}"
 printf '\n'
 

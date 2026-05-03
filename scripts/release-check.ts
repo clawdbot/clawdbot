@@ -27,7 +27,10 @@ import {
   type BundledExtension,
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
-import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import {
+  collectRootPackageExcludedExtensionDirs,
+  listBundledPluginPackArtifacts,
+} from "./lib/bundled-plugin-build-entries.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
@@ -45,16 +48,23 @@ export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mjs"
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
 
+const rootPackageExcludedExtensionDirs = collectRootPackageExcludedExtensionDirs();
 const requiredPathGroups = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
   ...listBundledPluginPackArtifacts(),
-  ...listStaticExtensionAssetOutputs(),
+  ...listStaticExtensionAssetOutputs().filter((relativePath) => {
+    const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
+    return !match || !rootPackageExcludedExtensionDirs.has(match[1]);
+  }),
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
   "scripts/npm-runner.mjs",
   "scripts/preinstall-package-manager-warning.mjs",
+  "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/official-external-plugin-catalog.json",
+  "scripts/lib/official-external-provider-catalog.json",
   "scripts/lib/package-dist-imports.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
@@ -115,6 +125,11 @@ export const PACKED_CLI_SMOKE_COMMANDS = [
   ["status", "--json", "--timeout", "1"],
   ["config", "schema"],
   ["models", "list", "--provider", "amazon-bedrock"],
+] as const;
+export const PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS = [
+  "doctor",
+  "--fix",
+  "--non-interactive",
 ] as const;
 export const PACKED_COMPLETION_SMOKE_ARGS = [
   "completion",
@@ -287,6 +302,7 @@ export function createPackedCliSmokeEnv(
     AWS_CONFIG_FILE: homeDir ? join(homeDir, ".aws", "config") : undefined,
     OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
     OPENCLAW_NO_ONBOARD: "1",
+    OPENCLAW_SERVICE_REPAIR_POLICY: "external",
     OPENCLAW_SUPPRESS_NOTES: "1",
     ...overrides,
   };
@@ -313,7 +329,7 @@ function runPackedBundledPluginPostinstall(packageRoot: string): void {
   });
 }
 
-function writePackedBundledPluginActivationConfig(homeDir: string): void {
+export function writePackedBundledPluginActivationConfig(homeDir: string): void {
   const configPath = join(homeDir, ".openclaw", "openclaw.json");
   mkdirSync(join(homeDir, ".openclaw"), { recursive: true });
   writeFileSync(
@@ -326,7 +342,7 @@ function writePackedBundledPluginActivationConfig(homeDir: string): void {
           },
         },
         channels: {
-          feishu: {
+          matrix: {
             enabled: true,
           },
         },
@@ -342,7 +358,7 @@ function writePackedBundledPluginActivationConfig(homeDir: string): void {
         plugins: {
           enabled: true,
           entries: {
-            feishu: {
+            matrix: {
               enabled: true,
             },
           },
@@ -364,6 +380,15 @@ function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: str
   });
 
   writePackedBundledPluginActivationConfig(homeDir);
+  execFileSync(
+    process.execPath,
+    [join(packageRoot, "openclaw.mjs"), ...PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS],
+    {
+      cwd: packageRoot,
+      stdio: "inherit",
+      env,
+    },
+  );
   execFileSync(process.execPath, [join(packageRoot, "openclaw.mjs"), "plugins", "doctor"], {
     cwd: packageRoot,
     stdio: "inherit",

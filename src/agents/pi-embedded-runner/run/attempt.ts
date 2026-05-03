@@ -101,11 +101,13 @@ import {
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "../../pi-embedded-helpers.js";
+import { countActiveToolExecutions } from "../../pi-embedded-subscribe.handlers.tools.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import {
   applyPiAutoCompactionGuard,
   applyPiCompactionSettingsFromConfig,
+  isSilentOverflowProneModel,
 } from "../../pi-settings.js";
 import {
   createClientToolNameConflictError,
@@ -138,6 +140,7 @@ import {
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
+  resolveSessionWriteLockAcquireTimeoutMs,
 } from "../../session-write-lock.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import {
@@ -172,6 +175,8 @@ import {
   applyExtraParamsToAgent,
   resolveAgentTransportOverride,
   resolveExplicitSettingsTransport,
+  resolveExtraParams,
+  resolvePreparedExtraParams,
 } from "../extra-params.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
@@ -292,7 +297,7 @@ import {
   composeSystemPromptWithHookContext,
   resolveAttemptSpawnWorkspaceDir,
   shouldPersistCompletedBootstrapTurn,
-  shouldUseOpenAIWebSocketTransport,
+  shouldUseOpenAIWebSocketTransportForAttempt,
 } from "./attempt.thread-helpers.js";
 import {
   shouldRepairMalformedToolCallArguments,
@@ -780,6 +785,7 @@ export async function runEmbeddedAttempt(
   let timedOut = false;
   let idleTimedOut = false;
   let timedOutDuringCompaction = false;
+  let timedOutDuringToolExecution = false;
   let promptError: unknown = null;
   let emitDiagnosticRunCompleted:
     | ((outcome: "completed" | "aborted" | "error", err?: unknown) => void)
@@ -1377,6 +1383,7 @@ export async function runEmbeddedAttempt(
     // from taking over the same session when a gateway run stalls before model I/O.
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
+      timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
         timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
           runTimeoutMs: params.timeoutMs,
@@ -1393,6 +1400,7 @@ export async function runEmbeddedAttempt(
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
+        debug: (message) => log.debug(message),
         warn: (message) => log.warn(message),
       });
       const hadSessionFile = await fs
@@ -1449,6 +1457,7 @@ export async function runEmbeddedAttempt(
             reason: contextParams.reason,
             sessionManager: contextParams.sessionManager as never,
             runtimeContext: contextParams.runtimeContext,
+            config: params.config,
           }),
         warn: (message) => log.warn(message),
       });
@@ -1467,10 +1476,16 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
         contextTokenBudget: params.contextTokenBudget,
       });
-      applyPiAutoCompactionGuard({
+      const piAutoCompactionGuardArgs = {
         settingsManager,
         contextEngineInfo: activeContextEngine?.info,
-      });
+        silentOverflowProneProvider: isSilentOverflowProneModel({
+          provider: params.provider,
+          modelId: params.modelId,
+          baseUrl: params.model.baseUrl ?? undefined,
+        }),
+      };
+      applyPiAutoCompactionGuard(piAutoCompactionGuardArgs);
 
       // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
@@ -1489,12 +1504,15 @@ export async function runEmbeddedAttempt(
       });
       await resourceLoader.reload();
       // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
-      // compaction overrides applied in createPreparedEmbeddedPiSettingsManager.
+      // compaction overrides applied in createPreparedEmbeddedPiSettingsManager — same
+      // rehydration also restores Pi's auto-compaction (openclaw#75799), so re-apply
+      // both guards.
       applyPiCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
         contextTokenBudget: params.contextTokenBudget,
       });
+      applyPiAutoCompactionGuard(piAutoCompactionGuardArgs);
       prepStages.mark("session-resource-loader");
 
       // Get hook runner early so it's available when creating tools
@@ -1505,8 +1523,28 @@ export async function runEmbeddedAttempt(
         sandboxEnabled: !!sandbox?.enabled,
       });
 
-      // Add client tools (OpenResponses hosted tools) to customTools
-      let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
+      // Add client tools (OpenResponses hosted tools) to customTools.
+      // Reserve slots synchronously at tool execution entry, before async
+      // before_tool_call hooks run, so parallel client-tool batches preserve
+      // assistant source order even when later hooks finish first.
+      const clientToolCallSlots: Array<{
+        toolCallId: string;
+        name: string;
+        params?: Record<string, unknown>;
+        completed: boolean;
+      }> = [];
+      const clientToolCallSlotIndexes = new Map<string, number>();
+      const reserveClientToolCallSlot = (toolCallId: string, toolName: string) => {
+        if (clientToolCallSlotIndexes.has(toolCallId)) {
+          return;
+        }
+        clientToolCallSlotIndexes.set(toolCallId, clientToolCallSlots.length);
+        clientToolCallSlots.push({
+          toolCallId,
+          name: toolName,
+          completed: false,
+        });
+      };
       const clientToolLoopDetection = resolveToolLoopDetectionConfig({
         cfg: params.config,
         agentId: sessionAgentId,
@@ -1545,8 +1583,33 @@ export async function runEmbeddedAttempt(
       const clientToolDefs = clientTools
         ? toClientToolDefinitions(
             clientTools,
-            (toolName, toolParams) => {
-              clientToolCallDetected = { name: toolName, params: toolParams };
+            {
+              reserve: reserveClientToolCallSlot,
+              complete: (toolCallId, toolName, toolParams) => {
+                reserveClientToolCallSlot(toolCallId, toolName);
+                const slotIndex = clientToolCallSlotIndexes.get(toolCallId);
+                if (slotIndex === undefined) {
+                  return;
+                }
+                const slot = clientToolCallSlots[slotIndex];
+                if (!slot) {
+                  return;
+                }
+                slot.name = toolName;
+                slot.params = toolParams;
+                slot.completed = true;
+              },
+              discard: (toolCallId) => {
+                const slotIndex = clientToolCallSlotIndexes.get(toolCallId);
+                if (slotIndex === undefined) {
+                  return;
+                }
+                const slot = clientToolCallSlots[slotIndex];
+                if (slot) {
+                  slot.completed = false;
+                  slot.params = undefined;
+                }
+              },
             },
             {
               agentId: sessionAgentId,
@@ -1769,25 +1832,57 @@ export async function runEmbeddedAttempt(
       const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
         session: activeSession,
       });
+      const resolvedTransport = resolveExplicitSettingsTransport({
+        settingsManager,
+        sessionTransport: activeSession.agent.transport,
+      });
+      const streamExtraParamsOverride = {
+        ...params.streamParams,
+        fastMode: params.fastMode,
+      };
+      const preparedRuntimeExtraParams = params.runtimePlan?.transport.resolveExtraParams({
+        extraParamsOverride: streamExtraParamsOverride,
+        thinkingLevel: params.thinkLevel,
+        agentId: sessionAgentId,
+        workspaceDir: effectiveWorkspace,
+        model: params.model,
+        resolvedTransport,
+      });
+      const resolvedExtraParams = resolveExtraParams({
+        cfg: params.config,
+        provider: params.provider,
+        modelId: params.modelId,
+        agentId: sessionAgentId,
+      });
+      const effectiveExtraParams =
+        preparedRuntimeExtraParams ??
+        resolvePreparedExtraParams({
+          cfg: params.config,
+          provider: params.provider,
+          modelId: params.modelId,
+          extraParamsOverride: streamExtraParamsOverride,
+          thinkingLevel: params.thinkLevel,
+          agentId: sessionAgentId,
+          agentDir,
+          workspaceDir: effectiveWorkspace,
+          resolvedExtraParams,
+          model: params.model,
+          resolvedTransport,
+        });
       const providerStreamFn = registerProviderStreamForModel({
         model: params.model,
         cfg: params.config,
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
-      const hasExplicitSseTransport = [
-        (params.streamParams as { transport?: unknown } | undefined)?.transport,
-        (params.model as { params?: { transport?: unknown } }).params?.transport,
-      ]
-        .map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""))
-        .includes("sse");
-      const shouldUseWebSocketTransport =
-        !hasExplicitSseTransport &&
-        shouldUseOpenAIWebSocketTransport({
-          provider: params.provider,
-          modelApi: params.model.api,
-          modelBaseUrl: params.model.baseUrl,
-        });
+      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransportForAttempt({
+        provider: params.provider,
+        modelApi: params.model.api,
+        modelBaseUrl: params.model.baseUrl,
+        streamParams: params.streamParams,
+        effectiveExtraParams,
+        modelParams: (params.model as { params?: Record<string, unknown> }).params,
+      });
       const wsApiKey = shouldUseWebSocketTransport
         ? await resolveEmbeddedAgentApiKey({
             provider: params.provider,
@@ -1832,23 +1927,7 @@ export async function runEmbeddedAttempt(
         });
       }
 
-      const resolvedTransport = resolveExplicitSettingsTransport({
-        settingsManager,
-        sessionTransport: activeSession.agent.transport,
-      });
-      const streamExtraParamsOverride = {
-        ...params.streamParams,
-        fastMode: params.fastMode,
-      };
-      const preparedRuntimeExtraParams = params.runtimePlan?.transport.resolveExtraParams({
-        extraParamsOverride: streamExtraParamsOverride,
-        thinkingLevel: params.thinkLevel,
-        agentId: sessionAgentId,
-        workspaceDir: effectiveWorkspace,
-        model: params.model,
-        resolvedTransport,
-      });
-      const { effectiveExtraParams } = applyExtraParamsToAgent(
+      applyExtraParamsToAgent(
         activeSession.agent,
         params.config,
         params.provider,
@@ -1860,9 +1939,7 @@ export async function runEmbeddedAttempt(
         params.model,
         agentDir,
         resolvedTransport,
-        preparedRuntimeExtraParams
-          ? { preparedExtraParams: preparedRuntimeExtraParams }
-          : undefined,
+        { preparedExtraParams: effectiveExtraParams },
       );
       const effectivePromptCacheRetention = resolveCacheRetention(
         effectiveExtraParams,
@@ -2234,6 +2311,9 @@ export async function runEmbeddedAttempt(
         aborted = true;
         if (isTimeout) {
           timedOut = true;
+          if (!timedOutDuringCompaction && countActiveToolExecutions(params.runId) > 0) {
+            timedOutDuringToolExecution = true;
+          }
         }
         if (isTimeout) {
           runAbortController.abort(reason ?? makeTimeoutAbortReason());
@@ -3223,8 +3303,10 @@ export async function runEmbeddedAttempt(
                 reason: contextParams.reason,
                 sessionManager: contextParams.sessionManager as never,
                 runtimeContext: contextParams.runtimeContext,
+                config: params.config,
               }),
             sessionManager,
+            config: params.config,
             warn: (message) => log.warn(message),
           });
         }
@@ -3440,6 +3522,7 @@ export async function runEmbeddedAttempt(
         timedOut,
         idleTimedOut,
         timedOutDuringCompaction,
+        timedOutDuringToolExecution,
         promptError: promptError ? formatErrorMessage(promptError) : undefined,
         promptErrorSource,
         usage: attemptUsage,
@@ -3458,6 +3541,7 @@ export async function runEmbeddedAttempt(
           timedOut,
           idleTimedOut,
           timedOutDuringCompaction,
+          timedOutDuringToolExecution,
           promptError: promptError ? formatErrorMessage(promptError) : undefined,
           promptErrorSource,
           usage: attemptUsage,
@@ -3482,9 +3566,21 @@ export async function runEmbeddedAttempt(
         timedOut,
         idleTimedOut,
         timedOutDuringCompaction,
+        timedOutDuringToolExecution,
         promptError: promptError ? formatErrorMessage(promptError) : undefined,
       });
       trajectoryEndRecorded = true;
+
+      const completedClientToolCalls = clientToolCallSlots.flatMap((slot) =>
+        slot.completed && slot.params
+          ? [
+              {
+                name: slot.name,
+                params: slot.params,
+              },
+            ]
+          : [],
+      );
 
       return {
         replayMetadata,
@@ -3495,6 +3591,7 @@ export async function runEmbeddedAttempt(
         timedOut,
         idleTimedOut,
         timedOutDuringCompaction,
+        timedOutDuringToolExecution,
         promptError,
         promptErrorSource,
         preflightRecovery,
@@ -3526,8 +3623,10 @@ export async function runEmbeddedAttempt(
         promptCache,
         compactionCount: getCompactionCount(),
         compactionTokensAfter: getLastCompactionTokensAfter(),
-        // Client tool call detected (OpenResponses hosted tools)
-        clientToolCall: clientToolCallDetected ?? undefined,
+        // Client tool calls detected (OpenResponses hosted tools).
+        // Stay `undefined` (not `[]`) when none were detected so downstream
+        // truthiness predicates keep working without a `.length` check.
+        clientToolCalls: completedClientToolCalls.length > 0 ? completedClientToolCalls : undefined,
         yieldDetected: yieldDetected || undefined,
       };
     } finally {
@@ -3539,6 +3638,7 @@ export async function runEmbeddedAttempt(
           timedOut,
           idleTimedOut,
           timedOutDuringCompaction,
+          timedOutDuringToolExecution,
           promptError: promptError ? formatErrorMessage(promptError) : undefined,
         });
       }

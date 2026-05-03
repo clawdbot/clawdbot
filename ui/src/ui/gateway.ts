@@ -136,6 +136,8 @@ export type GatewayHelloOk = {
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
+  method: string;
+  startedAtMs: number;
 };
 
 type SelectedConnectAuth = {
@@ -226,9 +228,20 @@ export type GatewayBrowserClientOptions = {
   onEvent?: (evt: GatewayEventFrame) => void;
   onClose?: (info: { code: number; reason: string; error?: GatewayErrorInfo }) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+  onRequestTiming?: (timing: GatewayRequestTiming) => void;
 };
 
 export type GatewayEventListener = (evt: GatewayEventFrame) => void;
+
+export type GatewayRequestTiming = {
+  id: string;
+  method: string;
+  ok: boolean;
+  durationMs: number;
+  startedAtMs: number;
+  endedAtMs: number;
+  errorCode?: string;
+};
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
@@ -397,10 +410,34 @@ export class GatewayBrowserClient {
   }
 
   private flushPending(err: Error) {
-    for (const [, p] of this.pending) {
+    for (const [id, p] of this.pending) {
+      this.emitRequestTiming(id, p, false, "CLIENT_CLOSED");
       p.reject(err);
     }
     this.pending.clear();
+  }
+
+  private nowMs(): number {
+    return typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+  }
+
+  private emitRequestTiming(id: string, pending: Pending, ok: boolean, errorCode?: string): void {
+    const endedAtMs = this.nowMs();
+    try {
+      this.opts.onRequestTiming?.({
+        id,
+        method: pending.method,
+        ok,
+        durationMs: Math.max(0, endedAtMs - pending.startedAtMs),
+        startedAtMs: pending.startedAtMs,
+        endedAtMs,
+        errorCode,
+      });
+    } catch (err) {
+      console.error("[gateway] request timing handler error:", err);
+    }
   }
 
   private buildConnectClient(): GatewayConnectClientInfo {
@@ -631,8 +668,10 @@ export class GatewayBrowserClient {
       }
       this.pending.delete(res.id);
       if (res.ok) {
+        this.emitRequestTiming(res.id, pending, true);
         pending.resolve(res.payload);
       } else {
+        this.emitRequestTiming(res.id, pending, false, res.error?.code);
         pending.reject(
           new GatewayRequestError({
             code: res.error?.code ?? "UNAVAILABLE",
@@ -697,8 +736,9 @@ export class GatewayBrowserClient {
     }
     const id = generateUUID();
     const frame = { type: "req", id, method, params };
+    const startedAtMs = this.nowMs();
     const p = new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: (v) => resolve(v as T), reject });
+      this.pending.set(id, { resolve: (v) => resolve(v as T), reject, method, startedAtMs });
     });
     ws.send(JSON.stringify(frame));
     return p;

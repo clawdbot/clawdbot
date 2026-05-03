@@ -50,7 +50,11 @@ import {
   resolveMediaToolLocalRoots,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import { type ToolModelConfig } from "./model-config.helpers.js";
+import {
+  coerceToolModelConfig,
+  hasToolModelConfig,
+  type ToolModelConfig,
+} from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -203,8 +207,12 @@ export function resolveImageGenerationModelConfigForTool(params: {
     agentDir: params.agentDir,
     authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.imageGenerationModel,
-    providers: listRuntimeImageGenerationProviders({ config: params.cfg }),
+    providers: () => listRuntimeImageGenerationProviders({ config: params.cfg }),
   });
+}
+
+function hasExplicitImageGenerationModelConfig(cfg?: OpenClawConfig): boolean {
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.imageGenerationModel));
 }
 
 function resolveAction(args: Record<string, unknown>): "generate" | "list" {
@@ -673,6 +681,7 @@ export function createImageGenerateTool(options?: {
       if (!imageGenerationModelConfig) {
         throw new ToolInputError("No image-generation model configured.");
       }
+      const explicitModelConfig = hasExplicitImageGenerationModelConfig(cfg);
       const effectiveCfg =
         applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
@@ -730,6 +739,7 @@ export function createImageGenerateTool(options?: {
         prompt,
         agentDir: options?.agentDir,
         modelOverride: model,
+        autoProviderFallback: explicitModelConfig ? false : undefined,
         size,
         aspectRatio,
         resolution,

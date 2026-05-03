@@ -4,6 +4,7 @@ import type {
   WAMessage,
 } from "@whiskeysockets/baileys";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";
 
 const recordChannelActivity = vi.hoisted(() => vi.fn());
@@ -86,6 +87,31 @@ describe("createWebSendApi", () => {
     });
   });
 
+  it("adds native mention metadata to group text sends", async () => {
+    api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      resolveOutboundMentions: ({ jid, text }) =>
+        resolveWhatsAppOutboundMentions({
+          chatJid: jid,
+          text,
+          participants: [
+            {
+              id: "277038292303944:4@lid",
+              phoneNumber: "5511976136970@s.whatsapp.net",
+            },
+          ],
+        }),
+    });
+
+    await api.sendMessage("120363000000000000@g.us", "ping @+5511976136970");
+
+    expect(sendMessage).toHaveBeenCalledWith("120363000000000000@g.us", {
+      text: "ping @277038292303944",
+      mentions: ["277038292303944@lid"],
+    });
+  });
+
   it("supports image media with caption", async () => {
     const payload = Buffer.from("img");
     await api.sendMessage("+1555", "cap", payload, "image/jpeg");
@@ -95,6 +121,32 @@ describe("createWebSendApi", () => {
         image: payload,
         caption: "cap",
         mimetype: "image/jpeg",
+      }),
+    );
+  });
+
+  it("adds native mention metadata to group media captions", async () => {
+    api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      resolveOutboundMentions: ({ jid, text }) =>
+        resolveWhatsAppOutboundMentions({
+          chatJid: jid,
+          text,
+          participants: [{ id: "15551234567@s.whatsapp.net" }],
+        }),
+    });
+    const payload = Buffer.from("img");
+
+    await api.sendMessage("120363000000000000@g.us", "cap @15551234567", payload, "image/jpeg");
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "120363000000000000@g.us",
+      expect.objectContaining({
+        image: payload,
+        caption: "cap @15551234567",
+        mimetype: "image/jpeg",
+        mentions: ["15551234567@s.whatsapp.net"],
       }),
     );
   });
@@ -258,6 +310,18 @@ describe("createWebSendApi", () => {
   it("sends composing presence updates to the recipient JID", async () => {
     await api.sendComposingTo("+1555");
     expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "1555@s.whatsapp.net");
+  });
+
+  it("does not send composing presence to newsletter JIDs", async () => {
+    await api.sendComposingTo("120363401234567890@newsletter");
+    expect(sendPresenceUpdate).not.toHaveBeenCalled();
+  });
+
+  it("preserves newsletter JIDs for outbound sends", async () => {
+    await api.sendMessage("120363401234567890@newsletter", "hello");
+    expect(sendMessage).toHaveBeenCalledWith("120363401234567890@newsletter", {
+      text: "hello",
+    });
   });
 
   it("sends media as document when mediaType is undefined", async () => {

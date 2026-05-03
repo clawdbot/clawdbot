@@ -7,6 +7,7 @@ import { captureEnv } from "../test-utils/env.js";
 import type { GatewayService } from "./service.js";
 import {
   describeGatewayServiceRestart,
+  formatGatewayServiceStartRepairIssues,
   readGatewayServiceState,
   resolveGatewayService,
   startGatewayService,
@@ -166,6 +167,55 @@ describe("startGatewayService", () => {
     expect(result.state.installed).toBe(true);
     expect(result.state.loaded).toBe(true);
     expect(result.state.running).toBe(true);
+  });
+
+  it("requests repair before start when the loaded service version is stale", async () => {
+    const service = createService({
+      readCommand: vi.fn(async () => ({
+        programArguments: ["openclaw", "gateway", "run"],
+        environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
+      })),
+      isLoaded: vi.fn(async () => true),
+      readRuntime: vi.fn(async () => ({ status: "stopped" })),
+    });
+
+    const result = await startGatewayService(service, {
+      env: {},
+      stdout: process.stdout,
+    });
+
+    expect(result.outcome).toBe("repair-required");
+    if (result.outcome === "repair-required") {
+      expect(formatGatewayServiceStartRepairIssues(result.issues)).toContain(
+        "service was installed by OpenClaw 2026.4.24",
+      );
+    }
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("requests repair before start when the loaded service points at temporary install paths", async () => {
+    const service = createService({
+      readCommand: vi.fn(async () => ({
+        programArguments: [
+          "/private/tmp/openclaw-ai-install-cli-pr118/tools/node/bin/node",
+          "/tmp/openclaw-ai-install-cli-pr118/lib/node_modules/openclaw/dist/index.js",
+          "gateway",
+        ],
+        environment: {},
+      })),
+      isLoaded: vi.fn(async () => true),
+    });
+
+    const result = await startGatewayService(service, {
+      env: {},
+      stdout: process.stdout,
+    });
+
+    expect(result.outcome).toBe("repair-required");
+    if (result.outcome === "repair-required") {
+      expect(result.issues.map((issue) => issue.code)).toContain("temporary-program");
+    }
+    expect(service.restart).not.toHaveBeenCalled();
   });
 
   it("falls back to missing-install when restart fails and install artifacts are gone", async () => {

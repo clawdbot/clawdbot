@@ -378,6 +378,9 @@ export async function applyAuthChoiceLoadedPluginProvider(
         pluginId: installCatalogEntry.pluginId,
         label: installCatalogEntry.label,
         install: installCatalogEntry.install,
+        ...(installCatalogEntry.origin === "bundled"
+          ? { trustedSourceLinkedOfficialInstall: true }
+          : {}),
       },
       prompter: params.prompter,
       runtime: params.runtime,

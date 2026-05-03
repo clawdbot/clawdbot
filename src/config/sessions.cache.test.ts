@@ -108,6 +108,30 @@ describe("Session Store Cache", () => {
     expect(loaded2["session:1"].skillsSnapshot?.skills?.[0]?.name).toBe("alpha");
   });
 
+  it("honors explicit clone:false on cache hits", async () => {
+    const testStore = createSingleSessionStore(
+      createSessionEntry({
+        origin: { provider: "openai" },
+      }),
+    );
+
+    await saveSessionStore(storePath, testStore);
+
+    const parseSpy = vi.spyOn(JSON, "parse");
+
+    const loaded1 = loadSessionStore(storePath, { clone: false });
+    expect(parseSpy).not.toHaveBeenCalled();
+
+    loaded1["session:1"].origin = { provider: "mutated" };
+
+    const loaded2 = loadSessionStore(storePath, { clone: false });
+    expect(loaded2).toBe(loaded1);
+    expect(loaded2["session:1"].origin?.provider).toBe("mutated");
+    expect(parseSpy).not.toHaveBeenCalled();
+
+    parseSpy.mockRestore();
+  });
+
   it("does not cache pre-migration or pre-normalization disk JSON", () => {
     fs.writeFileSync(
       storePath,

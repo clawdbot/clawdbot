@@ -39,9 +39,46 @@ function formatChannelsStatusError(err: unknown): string {
   return redactGatewayUrlSecretsInText(formatErrorMessage(err));
 }
 
+function formatEventLoopBits(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.degraded !== true) {
+    return null;
+  }
+  const reasons = Array.isArray(record.reasons)
+    ? record.reasons.filter((reason): reason is string => typeof reason === "string")
+    : [];
+  const delayMaxMs =
+    typeof record.delayMaxMs === "number" && Number.isFinite(record.delayMaxMs)
+      ? Math.round(record.delayMaxMs)
+      : null;
+  const utilization =
+    typeof record.utilization === "number" && Number.isFinite(record.utilization)
+      ? record.utilization
+      : null;
+  const cpuCoreRatio =
+    typeof record.cpuCoreRatio === "number" && Number.isFinite(record.cpuCoreRatio)
+      ? record.cpuCoreRatio
+      : null;
+  return [
+    reasons.length ? `reasons=${reasons.join(",")}` : null,
+    delayMaxMs != null ? `eventLoopDelayMaxMs=${delayMaxMs}` : null,
+    utilization != null ? `eventLoopUtilization=${utilization}` : null,
+    cpuCoreRatio != null ? `cpuCoreRatio=${cpuCoreRatio}` : null,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
+}
+
 export function formatGatewayChannelsStatusLines(payload: Record<string, unknown>): string[] {
   const lines: string[] = [];
   lines.push(theme.success("Gateway reachable."));
+  const eventLoopLine = formatEventLoopBits(payload.eventLoop);
+  if (eventLoopLine) {
+    lines.push(theme.warn(`Gateway event loop degraded: ${eventLoopLine}`));
+  }
   const channelLabels =
     payload.channelLabels && typeof payload.channelLabels === "object"
       ? (payload.channelLabels as Record<string, unknown>)
@@ -107,6 +144,9 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       }
       if (account.allowUnmentionedGroups === true) {
         bits.push("groups:unmentioned");
+      }
+      if (typeof account.healthState === "string" && account.healthState) {
+        bits.push(`health:${account.healthState}`);
       }
       appendBaseUrlBit(bits, account);
       const probe = account.probe as { ok?: boolean } | undefined;

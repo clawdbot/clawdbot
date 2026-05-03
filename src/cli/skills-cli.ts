@@ -37,6 +37,7 @@ type ResolveSkillsWorkspaceOptions = {
 function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   config: ReturnType<typeof getRuntimeConfig>;
   workspaceDir: string;
+  agentId: string;
 } {
   const config = getRuntimeConfig();
   const explicitAgentId = normalizeOptionalString(options?.agentId);
@@ -46,6 +47,7 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   const agentId = explicitAgentId ?? inferredAgentId ?? resolveDefaultAgentId(config);
   return {
     config,
+    agentId,
     workspaceDir: resolveAgentWorkspaceDir(config, agentId),
   };
 }
@@ -60,9 +62,9 @@ function resolveAgentOption(
 async function loadSkillsStatusReport(
   options?: ResolveSkillsWorkspaceOptions,
 ): Promise<SkillStatusReport> {
-  const { config, workspaceDir } = resolveSkillsWorkspace(options);
+  const { config, workspaceDir, agentId } = resolveSkillsWorkspace(options);
   const { buildWorkspaceSkillStatus } = await import("../agents/skills-status.js");
-  return buildWorkspaceSkillStatus(workspaceDir, { config });
+  return buildWorkspaceSkillStatus(workspaceDir, { config, agentId });
 }
 
 async function runSkillsAction(
@@ -72,6 +74,7 @@ async function runSkillsAction(
   try {
     const report = await loadSkillsStatusReport(options);
     defaultRuntime.writeStdout(render(report));
+    defaultRuntime.exit(0);
   } catch (err) {
     defaultRuntime.error(String(err));
     defaultRuntime.exit(1);
@@ -256,9 +259,9 @@ export function registerSkillsCli(program: Command) {
 
   skills
     .command("check")
-    .description("Check which skills are ready vs missing requirements")
-    .option("--json", "Output as JSON", false)
+    .description("Check which skills are ready, visible, or missing requirements")
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
+    .option("--json", "Output as JSON", false)
     .action(async (opts: { json?: boolean; agent?: string }, command: Command) => {
       await runSkillsAction((report) => formatSkillsCheck(report, opts), {
         agentId: resolveAgentOption(command, opts),

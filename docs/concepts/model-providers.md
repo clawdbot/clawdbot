@@ -157,7 +157,7 @@ Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so Ope
   agents: {
     defaults: {
       model: { primary: "openai/gpt-5.5" },
-      agentRuntime: { id: "codex", fallback: "none" },
+      agentRuntime: { id: "codex" },
     },
   },
 }

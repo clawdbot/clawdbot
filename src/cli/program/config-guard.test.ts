@@ -3,6 +3,7 @@ import { ensureConfigReady, __test__ } from "./config-guard.js";
 
 const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
+const setRuntimeConfigSnapshotMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../commands/doctor-config-preflight.js", () => ({
   runDoctorConfigPreflight: loadAndMaybeMigrateDoctorConfigMock,
@@ -10,6 +11,7 @@ vi.mock("../../commands/doctor-config-preflight.js", () => ({
 
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
+  setRuntimeConfigSnapshot: setRuntimeConfigSnapshotMock,
 }));
 
 function makeSnapshot() {
@@ -103,6 +105,23 @@ describe("ensureConfigReady", () => {
         invalidConfigNote: false,
       });
     }
+  });
+
+  it("pins a valid preflight snapshot for command code reuse", async () => {
+    const snapshot = {
+      ...makeSnapshot(),
+      config: { runtime: true },
+      runtimeConfig: { runtime: true, materialized: true },
+      sourceConfig: { source: true },
+    };
+    readConfigFileSnapshotMock.mockResolvedValue(snapshot);
+
+    await runEnsureConfigReady(["status"]);
+
+    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
+      snapshot.runtimeConfig,
+      snapshot.sourceConfig,
+    );
   });
 
   it("exits for invalid config on non-allowlisted commands", async () => {

@@ -13,7 +13,11 @@ import {
   requestBodyErrorToText,
 } from "../api.js";
 import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
-import { normalizeVoiceCallConfig, type VoiceCallConfig } from "./config.js";
+import {
+  normalizeVoiceCallConfig,
+  resolveVoiceCallEffectiveConfig,
+  type VoiceCallConfig,
+} from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { getHeader } from "./http-headers.js";
 import type { CallManager } from "./manager.js";
@@ -873,9 +877,12 @@ export class VoiceCallWebhookServer {
 
     try {
       const { generateVoiceResponse } = await loadResponseGeneratorModule();
+      const numberRouteKey =
+        typeof call.metadata?.numberRouteKey === "string" ? call.metadata.numberRouteKey : call.to;
+      const effectiveConfig = resolveVoiceCallEffectiveConfig(this.config, numberRouteKey).config;
 
       const result = await generateVoiceResponse({
-        voiceConfig: this.config,
+        voiceConfig: effectiveConfig,
         coreConfig: this.coreConfig,
         agentRuntime: this.agentRuntime,
         callId,

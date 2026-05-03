@@ -18,10 +18,23 @@ describe("resolveTelegramRequestTimeoutMs", () => {
   });
 
   it("bounds outbound delivery methods", () => {
-    expect(resolveTelegramRequestTimeoutMs("sendmessage")).toBe(20_000);
-    expect(resolveTelegramRequestTimeoutMs("sendchataction")).toBe(10_000);
+    expect(resolveTelegramRequestTimeoutMs("sendmessage")).toBe(60_000);
+    expect(resolveTelegramRequestTimeoutMs("sendchataction")).toBe(60_000);
+    expect(resolveTelegramRequestTimeoutMs("sendmessagedraft")).toBe(60_000);
     expect(resolveTelegramRequestTimeoutMs("editmessagetext")).toBe(15_000);
     expect(resolveTelegramRequestTimeoutMs("sendphoto")).toBe(30_000);
+  });
+
+  it("honors higher configured timeoutSeconds except for long polling", () => {
+    expect(resolveTelegramRequestTimeoutMs("sendmessage", 90)).toBe(90_000);
+    expect(resolveTelegramRequestTimeoutMs("sendchataction", 90)).toBe(90_000);
+    expect(resolveTelegramRequestTimeoutMs("editmessagetext", 90)).toBe(90_000);
+    expect(resolveTelegramRequestTimeoutMs("getupdates", 90)).toBe(45_000);
+  });
+
+  it("does not let low timeoutSeconds shorten method guards", () => {
+    expect(resolveTelegramRequestTimeoutMs("sendmessage", 10)).toBe(60_000);
+    expect(resolveTelegramRequestTimeoutMs("getme", 10)).toBe(15_000);
   });
 
   it("does not assign hard timeouts to unrelated Telegram methods", () => {

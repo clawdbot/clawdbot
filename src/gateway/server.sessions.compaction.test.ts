@@ -23,6 +23,7 @@ const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 test("sessions.compaction.* lists checkpoints and branches or restores from pre-compaction snapshots", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   const fixture = await createCheckpointFixture(dir);
+  const checkpointCreatedAt = Date.now();
   const { SessionManager } = await getSessionManagerModule();
   await writeSessionStore({
     entries: {
@@ -33,7 +34,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
             checkpointId: "checkpoint-1",
             sessionKey: "agent:main:main",
             sessionId: fixture.sessionId,
-            createdAt: Date.now(),
+            createdAt: checkpointCreatedAt,
             reason: "manual",
             tokensBefore: 123,
             tokensAfter: 45,
@@ -64,7 +65,9 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
       compactionCheckpointCount?: number;
       latestCompactionCheckpoint?: {
         checkpointId: string;
+        createdAt: number;
         reason: string;
+        summary?: string;
         tokensBefore?: number;
         tokensAfter?: number;
       };
@@ -75,8 +78,11 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
     (session) => session.key === "agent:main:main",
   );
   expect(main?.compactionCheckpointCount).toBe(1);
-  expect(main?.latestCompactionCheckpoint?.checkpointId).toBe("checkpoint-1");
-  expect(main?.latestCompactionCheckpoint?.reason).toBe("manual");
+  expect(main?.latestCompactionCheckpoint).toEqual({
+    checkpointId: "checkpoint-1",
+    createdAt: checkpointCreatedAt,
+    reason: "manual",
+  });
 
   const listedCheckpoints = await rpcReq<{
     ok: true;

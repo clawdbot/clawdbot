@@ -47,6 +47,7 @@ export async function generateMusic(
     parseModelRef: parseMusicGenerationModelRef,
     agentDir: params.agentDir,
     listProviders,
+    autoProviderFallback: params.autoProviderFallback,
   });
   if (candidates.length === 0) {
     throw new Error(

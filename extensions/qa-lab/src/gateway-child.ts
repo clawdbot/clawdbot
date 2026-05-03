@@ -216,6 +216,7 @@ export function buildQaRuntimeEnv(params: {
     OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_TEST_FAST: "1",
+    OPENCLAW_QA_PARENT_PID: String(process.pid),
     OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER: "1",
     // QA uses the fast runtime envelope for speed, but it still exercises
     // normal config-driven heartbeats and runtime config writes.

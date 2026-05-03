@@ -109,6 +109,7 @@ export type ChatProps = {
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSend: () => void;
   onCompact?: () => void | Promise<void>;
+  onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -906,10 +907,35 @@ export function renderChat(props: ChatProps) {
           (item) => {
             if (item.kind === "divider") {
               return html`
-                <div class="chat-divider" role="separator" data-ts=${String(item.timestamp)}>
-                  <span class="chat-divider__line"></span>
-                  <span class="chat-divider__label">${item.label}</span>
-                  <span class="chat-divider__line"></span>
+                <div class="chat-divider" data-ts=${String(item.timestamp)}>
+                  <div class="chat-divider__rule" role="separator" aria-label=${item.label}>
+                    <span class="chat-divider__line"></span>
+                    <span class="chat-divider__label">${item.label}</span>
+                    <span class="chat-divider__line"></span>
+                  </div>
+                  ${item.description || item.action
+                    ? html`
+                        <div class="chat-divider__details">
+                          ${item.description
+                            ? html`<span class="chat-divider__description">
+                                ${item.description}
+                              </span>`
+                            : nothing}
+                          ${item.action?.kind === "session-checkpoints" &&
+                          props.onOpenSessionCheckpoints
+                            ? html`
+                                <button
+                                  type="button"
+                                  class="btn btn--subtle btn--sm chat-divider__action"
+                                  @click=${() => props.onOpenSessionCheckpoints?.()}
+                                >
+                                  ${item.action.label}
+                                </button>
+                              `
+                            : nothing}
+                        </div>
+                      `
+                    : nothing}
                 </div>
               `;
             }

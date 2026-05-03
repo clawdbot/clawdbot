@@ -8,6 +8,7 @@ import {
 } from "../../infra/update-channels.js";
 import { formatGitInstallLabel, type UpdateCheckResult } from "../../infra/update-check.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { VERSION } from "../../version.js";
 import { formatUpdateOneLiner, resolveUpdateAvailability } from "../status.update.js";
 
 export { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
@@ -68,6 +69,7 @@ export function resolveStatusUpdateChannelInfo(params: {
 }) {
   return resolveUpdateChannelDisplay({
     configChannel: normalizeUpdateChannel(params.updateConfigChannel),
+    currentVersion: VERSION,
     installKind: params.update.installKind ?? "unknown",
     gitTag: params.update.git?.tag ?? null,
     gitBranch: params.update.git?.branch ?? null,

@@ -119,16 +119,83 @@ function mockLocalPairingFallback(message?: string) {
 }
 
 describe("devices cli approve", () => {
-  it("approves an explicit request id without listing", async () => {
-    callGateway.mockResolvedValueOnce({ device: { deviceId: "device-1" } });
+  it("uses admin scope when approving an admin-scope request", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [pendingDevice({ requestId: "req-123", scopes: ["operator.admin"] })],
+        paired: [],
+      })
+      .mockResolvedValueOnce({ device: { deviceId: "device-1" } });
 
     await runDevicesApprove(["req-123"]);
 
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(callGateway).toHaveBeenCalledWith(
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "device.pair.list",
+      }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         method: "device.pair.approve",
         params: { requestId: "req-123" },
+        scopes: ["operator.admin"],
+      }),
+    );
+  });
+
+  it("keeps pairing scope for non-admin device approvals", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [
+          pendingDevice({
+            requestId: "req-pairing",
+            scopes: ["operator.pairing"],
+          }),
+        ],
+        paired: [],
+      })
+      .mockResolvedValueOnce({ device: { deviceId: "device-1" } });
+
+    await runDevicesApprove(["req-pairing"]);
+
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "device.pair.approve",
+        params: { requestId: "req-pairing" },
+        scopes: ["operator.pairing"],
+      }),
+    );
+  });
+
+  it("uses admin scope when a repair approval would inherit an admin token", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [
+          pendingDevice({
+            requestId: "req-repair",
+            scopes: [],
+          }),
+        ],
+        paired: [
+          pairedDevice({
+            tokens: [{ role: "operator", scopes: ["operator.admin"] }],
+          }),
+        ],
+      })
+      .mockResolvedValueOnce({ device: { deviceId: "device-1" } });
+
+    await runDevicesApprove(["req-repair"]);
+
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "device.pair.approve",
+        params: { requestId: "req-repair" },
+        scopes: ["operator.admin"],
       }),
     );
   });
@@ -462,6 +529,7 @@ describe("devices cli local fallback", () => {
   });
 
   it("falls back to local approve when gateway returns pairing required on loopback", async () => {
+    mockLocalPairingFallback();
     rejectGatewayForLocalFallback();
     approveDevicePairing.mockResolvedValueOnce({
       requestId: "req-latest",

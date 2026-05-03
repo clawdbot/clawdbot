@@ -25,6 +25,7 @@ export type GenerateVideoParams = {
   inputImages?: VideoGenerationSourceAsset[];
   inputVideos?: VideoGenerationSourceAsset[];
   inputAudios?: VideoGenerationSourceAsset[];
+  autoProviderFallback?: boolean;
   /** Arbitrary provider-specific options forwarded as-is to provider.generateVideo. */
   providerOptions?: Record<string, unknown>;
   /** Optional per-request provider timeout in milliseconds. */

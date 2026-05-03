@@ -19,6 +19,17 @@ vi.mock("../../plugins/plugin-registry.js", () => ({
     plugins: pdfMetadataPlugins,
     diagnostics: [],
   }),
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
+}));
+
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => ({
+    plugins: pdfMetadataPlugins,
+  }),
 }));
 
 import {

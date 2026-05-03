@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { shouldUseOpenAIWebSocketTransport } from "./attempt.thread-helpers.js";
+import {
+  shouldUseOpenAIWebSocketTransport,
+  shouldUseOpenAIWebSocketTransportForAttempt,
+} from "./attempt.thread-helpers.js";
 
 describe("openai websocket transport selection", () => {
   it("accepts direct OpenAI Responses endpoints", () => {
@@ -75,5 +78,25 @@ describe("openai websocket transport selection", () => {
         modelApi: "openai-responses",
       }),
     ).toBe(false);
+  });
+
+  it("honors prepared SSE transport params before selecting websocket", () => {
+    expect(
+      shouldUseOpenAIWebSocketTransportForAttempt({
+        provider: "openai",
+        modelApi: "openai-responses",
+        modelBaseUrl: "https://api.openai.com/v1",
+        effectiveExtraParams: { transport: "sse" },
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldUseOpenAIWebSocketTransportForAttempt({
+        provider: "openai",
+        modelApi: "openai-responses",
+        modelBaseUrl: "https://api.openai.com/v1",
+        effectiveExtraParams: { transport: "auto" },
+      }),
+    ).toBe(true);
   });
 });

@@ -43,4 +43,16 @@ export async function refreshPluginRegistryAfterConfigMutation(params: {
   } catch (error) {
     params.logger?.warn?.(`Plugin registry refresh failed: ${formatErrorMessage(error)}`);
   }
+  await invalidatePluginRuntimeDiscoveryAfterConfigMutation(params);
+}
+
+async function invalidatePluginRuntimeDiscoveryAfterConfigMutation(params: {
+  logger?: PluginRegistryRefreshLogger;
+}): Promise<void> {
+  try {
+    const { clearPluginRegistryLoadCache } = await import("../plugins/loader.js");
+    clearPluginRegistryLoadCache();
+  } catch (error) {
+    params.logger?.warn?.(`Plugin runtime cache invalidation failed: ${formatErrorMessage(error)}`);
+  }
 }

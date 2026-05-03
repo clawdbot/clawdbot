@@ -7,6 +7,7 @@ import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -40,18 +41,17 @@ import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 
-let commandsRegistryPromise: Promise<typeof import("../commands-registry.runtime.js")> | null =
-  null;
-let skillCommandsPromise: Promise<typeof import("../skill-commands.runtime.js")> | null = null;
+const commandsRegistryLoader = createLazyImportLoader(
+  () => import("../commands-registry.runtime.js"),
+);
+const skillCommandsLoader = createLazyImportLoader(() => import("../skill-commands.runtime.js"));
 
 function loadCommandsRegistry() {
-  commandsRegistryPromise ??= import("../commands-registry.runtime.js");
-  return commandsRegistryPromise;
+  return commandsRegistryLoader.load();
 }
 
 function loadSkillCommands() {
-  skillCommandsPromise ??= import("../skill-commands.runtime.js");
-  return skillCommandsPromise;
+  return skillCommandsLoader.load();
 }
 
 function canUseFastExplicitModelDirective(params: {

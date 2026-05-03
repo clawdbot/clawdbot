@@ -6,10 +6,15 @@ const mocks = vi.hoisted(() => ({
   resolvePluginWebSearchProviders: vi.fn<
     (params?: { config?: OpenClawConfig }) => PluginWebSearchProviderEntry[]
   >(() => []),
+  resolveWebSearchInstallCatalogEntries: vi.fn(() => []),
 }));
 
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: mocks.resolvePluginWebSearchProviders,
+}));
+
+vi.mock("../plugins/web-search-install-catalog.js", () => ({
+  resolveWebSearchInstallCatalogEntries: mocks.resolveWebSearchInstallCatalogEntries,
 }));
 
 function createCustomProviderEntry(): PluginWebSearchProviderEntry {

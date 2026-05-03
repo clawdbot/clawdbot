@@ -141,6 +141,7 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
 
       expect(entry?.install.npmSpec).toBe(params.npmSpec);
       expect(entry?.pluginId).toBeUndefined();
+      expect(entry?.trustedSourceLinkedOfficialInstall).toBe(true);
     });
 
     it("lets external catalogs override shipped fallback channel metadata", () => {
@@ -217,6 +218,7 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
       expect(entry?.install.npmSpec).toBe(params.externalNpmSpec);
       expect(entry?.meta.label).toBe(params.externalLabel);
       expect(entry?.pluginId).toBeUndefined();
+      expect(entry?.trustedSourceLinkedOfficialInstall).toBeUndefined();
     });
 
     it("surfaces package-name drift in external channel catalog install metadata", () => {

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
+import { normalizeCompatibilityConfigValues } from "../commands/doctor-legacy-config.js";
 import { createConfigIO } from "./io.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -155,7 +155,7 @@ describe("config io paths", () => {
   });
 
   it("moves WhatsApp shared access defaults into accounts.default during runtime compat", () => {
-    const migrated = applyRuntimeLegacyConfigMigrations({
+    const migrated = normalizeCompatibilityConfigValues({
       channels: {
         whatsapp: {
           enabled: true,
@@ -171,9 +171,8 @@ describe("config io paths", () => {
           },
         },
       },
-    });
-    const next = migrated.next as OpenClawConfig | null;
-    expect(next?.channels?.whatsapp?.accounts?.default).toMatchObject({
+    } as OpenClawConfig);
+    expect(migrated.config.channels?.whatsapp?.accounts?.default).toMatchObject({
       dmPolicy: "allowlist",
       allowFrom: ["+15550001111"],
       groupPolicy: "open",

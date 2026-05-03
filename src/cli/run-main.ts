@@ -265,6 +265,7 @@ function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.
 
 async function bootstrapCliProxyCaptureAndDispatcher(
   startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
+  options: { ensureDispatcher?: boolean } = {},
 ): Promise<void> {
   const [
     { initializeDebugProxyCapture, finalizeDebugProxyCapture },
@@ -276,7 +277,9 @@ async function bootstrapCliProxyCaptureAndDispatcher(
   process.once("exit", () => {
     finalizeDebugProxyCapture();
   });
-  await startupTrace.measure("proxy-dispatcher", () => ensureCliEnvProxyDispatcher());
+  if (options.ensureDispatcher !== false) {
+    await startupTrace.measure("proxy-dispatcher", () => ensureCliEnvProxyDispatcher());
+  }
   maybeWarnAboutDebugProxyCoverage();
 }
 
@@ -440,7 +443,9 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
-    const bootstrapProxyBeforeFastPath = shouldBootstrapCliProxyBeforeFastPath();
+    const shouldUseCliEnvProxy = shouldStartProxyForCli(normalizedArgv);
+    const bootstrapProxyBeforeFastPath =
+      shouldUseCliEnvProxy && shouldBootstrapCliProxyBeforeFastPath();
     if (
       !bootstrapProxyBeforeFastPath &&
       (await tryRunGatewayRunFastPath(normalizedArgv, startupTrace))
@@ -448,7 +453,9 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
-    await bootstrapCliProxyCaptureAndDispatcher(startupTrace);
+    await bootstrapCliProxyCaptureAndDispatcher(startupTrace, {
+      ensureDispatcher: shouldUseCliEnvProxy,
+    });
 
     if (
       bootstrapProxyBeforeFastPath &&

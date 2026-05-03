@@ -362,6 +362,9 @@ describe("runCli exit behavior", () => {
     ["agents list", ["node", "openclaw", "agents", "list"]],
     ["models list", ["node", "openclaw", "models", "list"]],
     ["models status without live probe", ["node", "openclaw", "models", "status"]],
+    ["skills check", ["node", "openclaw", "skills", "check"]],
+    ["skills info", ["node", "openclaw", "skills", "info", "weather"]],
+    ["skills list", ["node", "openclaw", "skills", "list"]],
     ["tasks list", ["node", "openclaw", "tasks", "list"]],
     ["legacy singular tool namespace", ["node", "openclaw", "tool", "image_generate"]],
     ["gateway tools namespace typo", ["node", "openclaw", "tools", "effective"]],
@@ -386,7 +389,18 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 
+  it("does not install the env proxy dispatcher for bypassed skills inspection commands", async () => {
+    hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(true);
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await runCli(["node", "openclaw", "skills", "check"]);
+
+    expect(hasEnvHttpProxyAgentConfiguredMock).not.toHaveBeenCalled();
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
+  });
+
   it.each([
+    ["auth", ["node", "openclaw", "auth", "--help"]],
     ["tool", ["node", "openclaw", "tool", "image_generate"]],
     ["tools", ["node", "openclaw", "tools", "effective"]],
   ])("keeps reserved %s command roots out of plugin command discovery", async (_name, argv) => {

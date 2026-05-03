@@ -60,7 +60,7 @@ export async function formatConfigChannelsStatusLines(
   const sourceConfig = opts?.sourceConfig ?? cfg;
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
-    includeSetupFallbackPlugins: false,
+    includeSetupFallbackPlugins: true,
   });
   for (const plugin of plugins) {
     const accountIds = plugin.config.listAccountIds(cfg);

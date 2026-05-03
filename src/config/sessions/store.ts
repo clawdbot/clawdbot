@@ -1,9 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  acquireSessionWriteLock,
-  resolveSessionLockMaxHoldFromTimeout,
-} from "../../agents/session-write-lock.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -22,18 +18,11 @@ import {
   getSerializedSessionStore,
   isSessionStoreCacheEnabled,
   setSerializedSessionStore,
+  takeMutableSessionStoreCache,
   writeSessionStoreCache,
 } from "./store-cache.js";
 import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 import { loadSessionStore, normalizeSessionStore } from "./store-load.js";
-import {
-  clearSessionStoreCacheForTest,
-  drainSessionStoreLockQueuesForTest,
-  getSessionStoreLockQueueSizeForTest,
-  LOCK_QUEUES,
-  type SessionStoreLockQueue,
-  type SessionStoreLockTask,
-} from "./store-lock-state.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -43,6 +32,7 @@ import {
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
 } from "./store-maintenance.js";
+import { runExclusiveSessionStoreWrite } from "./store-writer.js";
 import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
@@ -51,9 +41,10 @@ import {
 
 export {
   clearSessionStoreCacheForTest,
-  drainSessionStoreLockQueuesForTest,
-  getSessionStoreLockQueueSizeForTest,
-} from "./store-lock-state.js";
+  drainSessionStoreWriterQueuesForTest,
+  getSessionStoreWriterQueueSizeForTest,
+} from "./store-writer-state.js";
+export { withSessionStoreWriterForTest } from "./store-writer.js";
 export { loadSessionStore } from "./store-load.js";
 export { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 
@@ -63,7 +54,6 @@ let sessionArchiveRuntimePromise: Promise<
 > | null = null;
 let trajectoryCleanupRuntimePromise: Promise<typeof import("../../trajectory/cleanup.js")> | null =
   null;
-let sessionWriteLockAcquirerForTests: typeof acquireSessionWriteLock | null = null;
 
 function loadSessionArchiveRuntime() {
   sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
@@ -82,24 +72,6 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
   const next: DeliveryContext = { ...context };
   delete next.threadId;
   return next;
-}
-
-export function setSessionWriteLockAcquirerForTests(
-  acquirer: typeof acquireSessionWriteLock | null,
-): void {
-  sessionWriteLockAcquirerForTests = acquirer;
-}
-
-export function resetSessionStoreLockRuntimeForTests(): void {
-  sessionWriteLockAcquirerForTests = null;
-}
-
-export async function withSessionStoreLockForTest<T>(
-  storePath: string,
-  fn: () => Promise<T>,
-  opts: SessionStoreLockOptions = {},
-): Promise<T> {
-  return await withSessionStoreLock(storePath, fn, opts);
 }
 
 export function readSessionUpdatedAt(params: {
@@ -175,6 +147,21 @@ function updateSessionStoreWriteCaches(params: {
     sizeBytes: fileStat?.sizeBytes,
     serialized: params.serialized,
   });
+}
+
+function loadMutableSessionStoreForWriter(storePath: string): Record<string, SessionEntry> {
+  if (isSessionStoreCacheEnabled()) {
+    const currentFileStat = getFileStatSnapshot(storePath);
+    const cached = takeMutableSessionStoreCache({
+      storePath,
+      mtimeMs: currentFileStat?.mtimeMs,
+      sizeBytes: currentFileStat?.sizeBytes,
+    });
+    if (cached) {
+      return cached;
+    }
+  }
+  return loadSessionStore(storePath, { skipCache: true, clone: false });
 }
 
 function resolveMutableSessionStoreKey(
@@ -403,7 +390,7 @@ async function saveSessionStoreUnlocked(
           await new Promise((r) => setTimeout(r, 50 * (i + 1)));
           continue;
         }
-        // Final attempt failed — skip this save. The write lock ensures
+        // Final attempt failed - skip this save. The writer queue ensures
         // the next save will retry with fresh data. Log for diagnostics.
         log.warn(`atomic write failed after 5 attempts: ${storePath}`);
       }
@@ -440,7 +427,7 @@ export async function saveSessionStore(
   store: Record<string, SessionEntry>,
   opts?: SaveSessionStoreOptions,
 ): Promise<void> {
-  await withSessionStoreLock(storePath, async () => {
+  await runExclusiveSessionStoreWrite(storePath, async () => {
     await saveSessionStoreUnlocked(storePath, store, opts);
   });
 }
@@ -450,9 +437,8 @@ export async function updateSessionStore<T>(
   mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
   opts?: SaveSessionStoreOptions,
 ): Promise<T> {
-  return await withSessionStoreLock(storePath, async () => {
-    // Always re-read inside the lock to avoid clobbering concurrent writers.
-    const store = loadSessionStore(storePath, { skipCache: true, clone: false });
+  return await runExclusiveSessionStoreWrite(storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(storePath);
     const previousAcpByKey = collectAcpMetadataSnapshot(store);
     const result = await mutator(store);
     preserveExistingAcpMetadata({
@@ -464,15 +450,6 @@ export async function updateSessionStore<T>(
     return result;
   });
 }
-
-type SessionStoreLockOptions = {
-  timeoutMs?: number;
-  pollIntervalMs?: number;
-  staleMs?: number;
-};
-
-const SESSION_STORE_LOCK_MIN_HOLD_MS = 5_000;
-const SESSION_STORE_LOCK_TIMEOUT_GRACE_MS = 5_000;
 
 function getErrorCode(error: unknown): string | null {
   if (!error || typeof error !== "object" || !("code" in error)) {
@@ -546,136 +523,14 @@ async function persistResolvedSessionEntry(params: {
   return params.next;
 }
 
-function lockTimeoutError(storePath: string): Error {
-  return new Error(`timeout waiting for session store lock: ${storePath}`);
-}
-
-function resolveSessionStoreLockMaxHoldMs(timeoutMs: number | undefined): number | undefined {
-  if (timeoutMs == null || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return undefined;
-  }
-  return resolveSessionLockMaxHoldFromTimeout({
-    timeoutMs,
-    graceMs: SESSION_STORE_LOCK_TIMEOUT_GRACE_MS,
-    minMs: SESSION_STORE_LOCK_MIN_HOLD_MS,
-  });
-}
-
-function getOrCreateLockQueue(storePath: string): SessionStoreLockQueue {
-  const existing = LOCK_QUEUES.get(storePath);
-  if (existing) {
-    return existing;
-  }
-  const created: SessionStoreLockQueue = { running: false, pending: [], drainPromise: null };
-  LOCK_QUEUES.set(storePath, created);
-  return created;
-}
-
-async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
-  const queue = LOCK_QUEUES.get(storePath);
-  if (!queue) {
-    return;
-  }
-  if (queue.drainPromise) {
-    await queue.drainPromise;
-    return;
-  }
-  queue.running = true;
-  queue.drainPromise = (async () => {
-    try {
-      while (queue.pending.length > 0) {
-        const task = queue.pending.shift();
-        if (!task) {
-          continue;
-        }
-
-        const remainingTimeoutMs = task.timeoutMs ?? Number.POSITIVE_INFINITY;
-        if (task.timeoutMs != null && remainingTimeoutMs <= 0) {
-          task.reject(lockTimeoutError(storePath));
-          continue;
-        }
-
-        let lock: { release: () => Promise<void> } | undefined;
-        let result: unknown;
-        let failed: unknown;
-        let hasFailure = false;
-        try {
-          lock = await (sessionWriteLockAcquirerForTests ?? acquireSessionWriteLock)({
-            sessionFile: storePath,
-            timeoutMs: remainingTimeoutMs,
-            staleMs: task.staleMs,
-            maxHoldMs: resolveSessionStoreLockMaxHoldMs(task.timeoutMs),
-          });
-          result = await task.fn();
-        } catch (err) {
-          hasFailure = true;
-          failed = err;
-        } finally {
-          await lock?.release().catch(() => undefined);
-        }
-        if (hasFailure) {
-          task.reject(failed);
-          continue;
-        }
-        task.resolve(result);
-      }
-    } finally {
-      queue.running = false;
-      queue.drainPromise = null;
-      if (queue.pending.length === 0) {
-        LOCK_QUEUES.delete(storePath);
-      } else {
-        queueMicrotask(() => {
-          void drainSessionStoreLockQueue(storePath);
-        });
-      }
-    }
-  })();
-  await queue.drainPromise;
-}
-
-async function withSessionStoreLock<T>(
-  storePath: string,
-  fn: () => Promise<T>,
-  opts: SessionStoreLockOptions = {},
-): Promise<T> {
-  if (!storePath || typeof storePath !== "string") {
-    throw new Error(
-      `withSessionStoreLock: storePath must be a non-empty string, got ${JSON.stringify(storePath)}`,
-    );
-  }
-  const timeoutMs = opts.timeoutMs ?? 10_000;
-  const staleMs = opts.staleMs ?? 30_000;
-  // `pollIntervalMs` is retained for API compatibility with older lock options.
-  void opts.pollIntervalMs;
-
-  const hasTimeout = timeoutMs > 0 && Number.isFinite(timeoutMs);
-  const queue = getOrCreateLockQueue(storePath);
-
-  const promise = new Promise<T>((resolve, reject) => {
-    const task: SessionStoreLockTask = {
-      fn: async () => await fn(),
-      resolve: (value) => resolve(value as T),
-      reject,
-      timeoutMs: hasTimeout ? timeoutMs : undefined,
-      staleMs,
-    };
-
-    queue.pending.push(task);
-    void drainSessionStoreLockQueue(storePath);
-  });
-
-  return await promise;
-}
-
 export async function updateSessionStoreEntry(params: {
   storePath: string;
   sessionKey: string;
   update: (entry: SessionEntry) => Promise<Partial<SessionEntry> | null>;
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, update } = params;
-  return await withSessionStoreLock(storePath, async () => {
-    const store = loadSessionStore(storePath, { skipCache: true, clone: false });
+  return await runExclusiveSessionStoreWrite(storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(storePath);
     const resolved = resolveSessionStoreEntry({ store, sessionKey });
     const existing = resolved.existing;
     if (!existing) {
@@ -756,8 +611,8 @@ export async function updateLastRoute(params: {
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, channel, to, accountId, threadId, ctx } = params;
   const createIfMissing = params.createIfMissing ?? true;
-  return await withSessionStoreLock(storePath, async () => {
-    const store = loadSessionStore(storePath);
+  return await runExclusiveSessionStoreWrite(storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(storePath);
     const resolved = resolveSessionStoreEntry({ store, sessionKey });
     const existing = resolved.existing;
     if (!existing && !createIfMissing) {

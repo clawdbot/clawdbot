@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
 function hasConfiguredCredentialValue(value: unknown): boolean {
   if (typeof value === "string") {
@@ -42,7 +42,7 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
   if (!env) {
     return false;
   }
-  return loadPluginMetadataSnapshot({
+  return loadManifestMetadataSnapshot({
     config: params.config,
     env,
   }).plugins.some((plugin) => {

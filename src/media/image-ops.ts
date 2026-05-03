@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runExec } from "../process/exec.js";
+import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 
 export type ImageMetadata = {
   width: number;
@@ -54,8 +55,6 @@ function prefersSips(): boolean {
   );
 }
 
-let mediaAttachmentImageOpsPromise: Promise<MediaAttachmentImageOps> | null = null;
-
 function isMediaAttachmentImageOps(value: unknown): value is MediaAttachmentImageOps {
   if (!value || typeof value !== "object") {
     return false;
@@ -71,30 +70,24 @@ function isMediaAttachmentImageOps(value: unknown): value is MediaAttachmentImag
   );
 }
 
-async function loadMediaAttachmentImageOps(): Promise<MediaAttachmentImageOps> {
-  if (!mediaAttachmentImageOpsPromise) {
-    mediaAttachmentImageOpsPromise = Promise.resolve()
-      .then(async () => {
-        const { loadBundledPluginPublicArtifactModuleSync } =
-          await import("../plugins/public-surface-loader.js");
-        const mod = loadBundledPluginPublicArtifactModuleSync<MediaAttachmentImageOpsModule>({
-          dirName: MEDIA_UNDERSTANDING_CORE_PLUGIN_ID,
-          artifactBasename: MEDIA_UNDERSTANDING_CORE_IMAGE_OPS_ARTIFACT,
-        });
-        const ops = mod.createMediaAttachmentImageOps?.({
-          maxInputPixels: MAX_IMAGE_INPUT_PIXELS,
-        });
-        if (!isMediaAttachmentImageOps(ops)) {
-          throw new Error("Media understanding core did not expose image ops");
-        }
-        return ops;
-      })
-      .catch((err) => {
-        mediaAttachmentImageOpsPromise = null;
-        throw err;
-      });
+const mediaAttachmentImageOpsLoader = createLazyPromiseLoader(async () => {
+  const { loadBundledPluginPublicArtifactModuleSync } =
+    await import("../plugins/public-surface-loader.js");
+  const mod = loadBundledPluginPublicArtifactModuleSync<MediaAttachmentImageOpsModule>({
+    dirName: MEDIA_UNDERSTANDING_CORE_PLUGIN_ID,
+    artifactBasename: MEDIA_UNDERSTANDING_CORE_IMAGE_OPS_ARTIFACT,
+  });
+  const ops = mod.createMediaAttachmentImageOps?.({
+    maxInputPixels: MAX_IMAGE_INPUT_PIXELS,
+  });
+  if (!isMediaAttachmentImageOps(ops)) {
+    throw new Error("Media understanding core did not expose image ops");
   }
-  return await mediaAttachmentImageOpsPromise;
+  return ops;
+});
+
+async function loadMediaAttachmentImageOps(): Promise<MediaAttachmentImageOps> {
+  return await mediaAttachmentImageOpsLoader.load();
 }
 
 function isPositiveImageDimension(value: number): boolean {

@@ -1,5 +1,5 @@
 import { mergeMissing } from "../../../config/legacy.shared.js";
-import { loadPluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
+import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import {
   cloneRecord,
   ensureRecord,
@@ -17,7 +17,7 @@ const LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID = "brave";
 
 function getBundledLegacyWebSearchOwners(): ReadonlyMap<string, string> {
   const owners = new Map<string, string>();
-  for (const plugin of loadPluginMetadataSnapshot({ config: {}, env: process.env }).plugins) {
+  for (const plugin of loadManifestMetadataSnapshot({ config: {}, env: process.env }).plugins) {
     if (plugin.origin !== "bundled") {
       continue;
     }

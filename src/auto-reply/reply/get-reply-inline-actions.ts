@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -40,30 +41,34 @@ type OpenClawToolsRuntime = typeof import("../../agents/openclaw-tools.runtime.j
 type AbortCutoffRuntime = typeof import("./abort-cutoff.runtime.js");
 type CommandsRuntime = typeof import("./commands.runtime.js");
 
-let skillCommandsRuntimePromise: Promise<SkillCommandsRuntime> | undefined;
-let openClawToolsRuntimePromise: Promise<OpenClawToolsRuntime> | undefined;
-let abortCutoffRuntimePromise: Promise<AbortCutoffRuntime> | undefined;
-let commandsRuntimePromise: Promise<CommandsRuntime> | undefined;
+const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
+  () => import("../skill-commands.runtime.js"),
+);
+const openClawToolsRuntimeLoader = createLazyImportLoader<OpenClawToolsRuntime>(
+  () => import("../../agents/openclaw-tools.runtime.js"),
+);
+const abortCutoffRuntimeLoader = createLazyImportLoader<AbortCutoffRuntime>(
+  () => import("./abort-cutoff.runtime.js"),
+);
+const commandsRuntimeLoader = createLazyImportLoader<CommandsRuntime>(
+  () => import("./commands.runtime.js"),
+);
 let builtinSlashCommands: Set<string> | null = null;
 
 function loadSkillCommandsRuntime(): Promise<SkillCommandsRuntime> {
-  skillCommandsRuntimePromise ??= import("../skill-commands.runtime.js");
-  return skillCommandsRuntimePromise;
+  return skillCommandsRuntimeLoader.load();
 }
 
 function loadOpenClawToolsRuntime(): Promise<OpenClawToolsRuntime> {
-  openClawToolsRuntimePromise ??= import("../../agents/openclaw-tools.runtime.js");
-  return openClawToolsRuntimePromise;
+  return openClawToolsRuntimeLoader.load();
 }
 
 function loadAbortCutoffRuntime(): Promise<AbortCutoffRuntime> {
-  abortCutoffRuntimePromise ??= import("./abort-cutoff.runtime.js");
-  return abortCutoffRuntimePromise;
+  return abortCutoffRuntimeLoader.load();
 }
 
 function loadCommandsRuntime(): Promise<CommandsRuntime> {
-  commandsRuntimePromise ??= import("./commands.runtime.js");
-  return commandsRuntimePromise;
+  return commandsRuntimeLoader.load();
 }
 
 function getBuiltinSlashCommands(): Set<string> {

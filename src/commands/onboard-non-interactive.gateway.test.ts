@@ -141,6 +141,7 @@ vi.mock("./health.js", () => ({
 }));
 
 vi.mock("../plugins/migration-provider-runtime.js", () => ({
+  ensureStandaloneMigrationProviderRegistryLoaded: vi.fn(),
   resolvePluginMigrationProviders: () => [migrationProviderMock],
   resolvePluginMigrationProvider: ({ providerId }: { providerId: string }) =>
     providerId === migrationProviderMock.id ? migrationProviderMock : undefined,

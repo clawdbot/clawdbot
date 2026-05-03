@@ -230,6 +230,7 @@ export async function compactEmbeddedPiSession(
             sessionFile: postCompactionSessionFile,
             reason: "compaction",
             runtimeContext,
+            config: params.config,
           });
         }
         if (engineOwnsCompaction && result.ok && result.compacted) {

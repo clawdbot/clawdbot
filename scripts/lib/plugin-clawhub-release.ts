@@ -46,8 +46,8 @@ export type PublishablePluginPackage = {
   packageDir: string;
   packageName: string;
   version: string;
-  channel: "stable" | "beta";
-  publishTag: "latest" | "beta";
+  channel: "stable" | "alpha" | "beta";
+  publishTag: "latest" | "alpha" | "beta";
 };
 
 type PluginReleasePlanItem = PublishablePluginPackage & {
@@ -154,7 +154,12 @@ export function collectClawHubPublishablePluginPackages(
       packageName,
       version,
       channel: parsedVersion.channel,
-      publishTag: parsedVersion.channel === "beta" ? "beta" : "latest",
+      publishTag:
+        parsedVersion.channel === "alpha"
+          ? "alpha"
+          : parsedVersion.channel === "beta"
+            ? "beta"
+            : "latest",
     });
   }
 

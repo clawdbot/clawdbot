@@ -128,6 +128,7 @@ export function createTypingController(params: {
     try {
       await startGuard.run(async () => {
         await onReplyStart?.();
+        refreshTypingTtl();
       });
     } catch (err) {
       log?.(`typing start failed: ${String(err)}`);

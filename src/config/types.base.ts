@@ -183,6 +183,8 @@ export type SessionConfig = {
   typingMode?: TypingMode;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
+  /** Session transcript write-lock acquisition policy. */
+  writeLock?: SessionWriteLockConfig;
   agentToAgent?: {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;
@@ -191,6 +193,11 @@ export type SessionConfig = {
   threadBindings?: SessionThreadBindingsConfig;
   /** Automatic session store maintenance (pruning, capping, archive retention, disk budget). */
   maintenance?: SessionMaintenanceConfig;
+};
+
+export type SessionWriteLockConfig = {
+  /** How long to wait while acquiring a session transcript write lock. Default: 60000. */
+  acquireTimeoutMs?: number;
 };
 
 export type SessionMaintenanceMode = "enforce" | "warn";

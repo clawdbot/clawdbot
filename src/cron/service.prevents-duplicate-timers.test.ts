@@ -17,7 +17,7 @@ describe("CronService", () => {
   it("avoids duplicate runs when two services share a store", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
 
     const cronA = new CronService({
@@ -25,7 +25,7 @@ describe("CronService", () => {
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
       runIsolatedAgentJob,
     });
 
@@ -45,7 +45,7 @@ describe("CronService", () => {
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
       runIsolatedAgentJob,
     });
 
@@ -57,7 +57,7 @@ describe("CronService", () => {
     await cronB.status();
 
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeatNow).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeat).toHaveBeenCalledTimes(1);
 
     cronA.stop();
     cronB.stop();

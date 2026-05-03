@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { ApplicationCommandType, type APIApplicationCommand } from "discord-api-types/v10";
 import {
   createApplicationCommand,
@@ -20,12 +22,14 @@ type SerializedCommand = ReturnType<BaseCommand["serialize"]>;
 
 export class DiscordCommandDeployer {
   private readonly hashes = new Map<string, string>();
+  private hashesLoaded = false;
 
   constructor(
     private readonly params: {
       clientId: string;
       commands: BaseCommand[];
       devGuilds?: string[];
+      hashStorePath?: string;
       rest: () => RequestClient;
     },
   ) {}
@@ -124,11 +128,67 @@ export class DiscordCommandDeployer {
     options: { force?: boolean },
   ): Promise<void> {
     const hash = stableCommandSetHash(commands);
+    await this.loadPersistedHashes();
     if (!options.force && this.hashes.get(key) === hash) {
       return;
     }
     await deploy();
     this.hashes.set(key, hash);
+    await this.persistHashes();
+  }
+
+  private async loadPersistedHashes(): Promise<void> {
+    if (this.hashesLoaded) {
+      return;
+    }
+    this.hashesLoaded = true;
+    const storePath = this.params.hashStorePath;
+    if (!storePath) {
+      return;
+    }
+    try {
+      const raw = await fs.readFile(storePath, "utf8");
+      const parsed = JSON.parse(raw) as { hashes?: unknown };
+      if (!parsed.hashes || typeof parsed.hashes !== "object") {
+        return;
+      }
+      for (const [key, value] of Object.entries(parsed.hashes)) {
+        if (typeof value === "string" && key.trim() && value.trim()) {
+          this.hashes.set(key, value);
+        }
+      }
+    } catch {
+      // Best-effort cache only. A corrupt or missing file should never block startup.
+    }
+  }
+
+  private async persistHashes(): Promise<void> {
+    const storePath = this.params.hashStorePath;
+    if (!storePath) {
+      return;
+    }
+    try {
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      const tmpPath = `${storePath}.${process.pid}.${Date.now()}.tmp`;
+      await fs.writeFile(
+        tmpPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: new Date().toISOString(),
+            hashes: Object.fromEntries(
+              [...this.hashes.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
+            ),
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await fs.rename(tmpPath, storePath);
+    } catch {
+      // The cache is only an optimization to avoid redundant Discord writes.
+    }
   }
 
   private get rest(): RequestClient {
@@ -157,12 +217,15 @@ function comparableCommand(value: unknown): unknown {
     return value;
   }
   const omit = new Set([
-    "id",
     "application_id",
+    "description_localized",
+    "dm_permission",
     "guild_id",
+    "id",
+    "name_localized",
+    "nsfw",
     "version",
     "default_permission",
-    "nsfw",
   ]);
   return stableComparableObject(
     Object.fromEntries(
@@ -171,18 +234,50 @@ function comparableCommand(value: unknown): unknown {
   );
 }
 
-function stableComparableObject(value: unknown): unknown {
+const unorderedCommandArrayFields = new Set(["channel_types", "contexts", "integration_types"]);
+const optionComparisonOmittedFields = new Set([
+  "contexts",
+  "default_member_permissions",
+  "description_localized",
+  "integration_types",
+  "name_localized",
+]);
+
+function stableComparableObject(value: unknown, path: string[] = []): unknown {
   if (Array.isArray(value)) {
-    return value.map((entry) => stableComparableObject(entry));
+    const normalized = value.map((entry) => stableComparableObject(entry, path));
+    const key = path.at(-1);
+    if (
+      key &&
+      unorderedCommandArrayFields.has(key) &&
+      normalized.every(
+        (entry) =>
+          typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean",
+      )
+    ) {
+      return normalized.toSorted((left, right) => String(left).localeCompare(String(right)));
+    }
+    return normalized;
   }
   if (!value || typeof value !== "object") {
     return value;
   }
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
+      .filter(([key, entry]) => {
+        if (entry === undefined) {
+          return false;
+        }
+        if (path.includes("options") && optionComparisonOmittedFields.has(key)) {
+          return false;
+        }
+        if ((key === "required" || key === "autocomplete") && entry === false) {
+          return false;
+        }
+        return true;
+      })
       .toSorted(([a], [b]) => a.localeCompare(b))
-      .map(([key, entry]) => [key, stableComparableObject(entry)]),
+      .map(([key, entry]) => [key, stableComparableObject(entry, [...path, key])]),
   );
 }
 

@@ -299,6 +299,25 @@ describe("cron view", () => {
     expect(container.textContent).toContain("https://example.invalid/cron");
   });
 
+  it("does not throw when a stale cron job has no payload", () => {
+    const container = document.createElement("div");
+    const job = {
+      ...createJob("job-broken"),
+      payload: undefined,
+    } as unknown as CronJob;
+
+    expect(() =>
+      render(
+        renderCron(
+          createProps({
+            jobs: [job],
+          }),
+        ),
+        container,
+      ),
+    ).not.toThrow();
+  });
+
   it("renders cron job prompts and run summaries as sanitized markdown", () => {
     const container = document.createElement("div");
     const onLoadRuns = vi.fn();

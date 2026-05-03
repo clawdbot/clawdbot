@@ -14,7 +14,7 @@ import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
   enqueueSystemEventMock,
-  requestHeartbeatNowMock,
+  requestHeartbeatMock,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
@@ -235,7 +235,9 @@ describe("runCliAgent reliability", () => {
     expect(String(notice)).toContain("produced no output");
     expect(String(notice)).toContain("interactive input or an approval prompt");
     expect(opts).toMatchObject({ sessionKey: "agent:main:main" });
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+      source: "cli-watchdog",
+      intent: "event",
       reason: "cli:watchdog:stall",
       sessionKey: "agent:main:main",
     });

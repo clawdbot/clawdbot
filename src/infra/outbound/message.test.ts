@@ -330,7 +330,7 @@ describe("sendMessage", () => {
     }
   });
 
-  it("recovers plugin resolution after registry refresh", async () => {
+  it("does not load registries while resolving outbound plugins", async () => {
     const forumPlugin = {
       outbound: { deliveryMode: "direct" },
     };
@@ -352,6 +352,6 @@ describe("sendMessage", () => {
       via: "direct",
     });
 
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
   });
 });

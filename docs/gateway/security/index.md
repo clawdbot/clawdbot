@@ -92,6 +92,8 @@ Treat Gateway and node as one operator trust domain, with different roles:
 - **Gateway** is the control plane and policy surface (`gateway.auth`, tool policy, routing).
 - **Node** is remote execution surface paired to that Gateway (commands, device actions, host-local capabilities).
 - A caller authenticated to the Gateway is trusted at Gateway scope. After pairing, node actions are trusted operator actions on that node.
+- Operator scope levels and approval-time checks are summarized in
+  [Operator scopes](/gateway/operator-scopes).
 - Direct loopback backend clients authenticated with the shared gateway
   token/password can make internal control-plane RPCs without presenting a user
   device identity. This is not a remote or browser pairing bypass: network
@@ -1293,38 +1295,14 @@ If your AI does something bad:
 - What the attacker sent + what the agent did
 - Whether the Gateway was exposed beyond loopback (LAN/Tailscale Funnel/Serve)
 
-## Secret scanning with detect-secrets
+## Secret scanning
 
-CI runs the `detect-secrets` pre-commit hook in the `secrets` job.
-Pushes to `main` always run an all-files scan. Pull requests use a changed-file
-fast path when a base commit is available, and fall back to an all-files scan
-otherwise. If it fails, there are new candidates not yet in the baseline.
+CI runs the pre-commit `detect-private-key` hook over the repository. If it
+fails, remove or rotate the committed key material, then reproduce locally:
 
-### If CI fails
-
-1. Reproduce locally:
-
-   ```bash
-   pre-commit run --all-files detect-secrets
-   ```
-
-2. Understand the tools:
-   - `detect-secrets` in pre-commit runs `detect-secrets-hook` with the repo's
-     baseline and excludes.
-   - `detect-secrets audit` opens an interactive review to mark each baseline
-     item as real or false positive.
-3. For real secrets: rotate/remove them, then re-run the scan to update the baseline.
-4. For false positives: run the interactive audit and mark them as false:
-
-   ```bash
-   detect-secrets audit .secrets.baseline
-   ```
-
-5. If you need new excludes, add them to `.detect-secrets.cfg` and regenerate the
-   baseline with matching `--exclude-files` / `--exclude-lines` flags (the config
-   file is reference-only; detect-secrets doesn’t read it automatically).
-
-Commit the updated `.secrets.baseline` once it reflects the intended state.
+```bash
+pre-commit run --all-files detect-private-key
+```
 
 ## Reporting security issues
 

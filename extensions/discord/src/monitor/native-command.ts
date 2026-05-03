@@ -53,6 +53,7 @@ import {
 import { buildDiscordNativeCommandContext } from "./native-command-context.js";
 import type { DispatchDiscordCommandInteractionResult } from "./native-command-dispatch.js";
 import {
+  DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
   deliverDiscordInteractionReply,
   hasRenderableReplyPayload,
   safeDiscordInteractionCall,
@@ -540,7 +541,7 @@ async function dispatchDiscordCommandInteraction(params: {
       threadParentId: pluginThreadParentId,
     });
     if (!hasRenderableReplyPayload(pluginReply)) {
-      await respond("Done.");
+      await respond(DISCORD_EMPTY_VISIBLE_REPLY_WARNING);
       return { accepted: true, effectiveRoute };
     }
     await deliverDiscordInteractionReply({

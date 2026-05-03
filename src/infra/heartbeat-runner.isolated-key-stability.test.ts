@@ -24,7 +24,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
   /**
    * Simulates the wake-request feedback loop:
    *   1. Normal heartbeat tick produces sessionKey "agent:main:main:heartbeat"
-   *   2. An exec/subagent event during that tick calls requestHeartbeatNow()
+   *   2. An exec/subagent event during that tick calls requestHeartbeat()
    *      with the already-suffixed key "agent:main:main:heartbeat"
    *   3. The wake handler passes that key back into runHeartbeatOnce(sessionKey: ...)
    *

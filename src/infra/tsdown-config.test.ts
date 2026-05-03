@@ -26,10 +26,18 @@ type TsdownOnLog = (
 ) => void;
 
 type TsdownInputOptions = (
-  options: { onLog?: TsdownOnLog },
+  options: { external?: TsdownExternalOption; onLog?: TsdownOnLog },
   format?: unknown,
   context?: unknown,
-) => { onLog?: TsdownOnLog } | undefined;
+) => { external?: TsdownExternalOption; onLog?: TsdownOnLog } | undefined;
+
+type TsdownExternalOption = string | RegExp | Array<string | RegExp> | TsdownExternalFunction;
+
+type TsdownExternalFunction = (
+  id: string,
+  parentId: string | undefined,
+  isResolved: boolean,
+) => boolean | null | undefined;
 
 function asConfigArray(config: unknown): TsdownConfigEntry[] {
   return Array.isArray(config) ? (config as TsdownConfigEntry[]) : [config as TsdownConfigEntry];
@@ -135,15 +143,28 @@ describe("tsdown config", () => {
   it("externalizes known heavy native dependencies", () => {
     const unifiedGraph = unifiedDistGraph();
     const neverBundle = unifiedGraph?.deps?.neverBundle;
+    const external = unifiedGraph?.inputOptions?.({})?.external;
 
     if (typeof neverBundle === "function") {
       expect(neverBundle("@lancedb/lancedb")).toBe(true);
+      expect(neverBundle("@larksuiteoapi/node-sdk")).toBe(true);
       expect(neverBundle("@matrix-org/matrix-sdk-crypto-nodejs")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
+      expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
     } else {
-      expect(neverBundle).toEqual(expect.arrayContaining(["@lancedb/lancedb", "matrix-js-sdk"]));
+      expect(neverBundle).toEqual(
+        expect.arrayContaining([
+          "@lancedb/lancedb",
+          "@larksuiteoapi/node-sdk",
+          "matrix-js-sdk",
+          "qrcode-terminal",
+        ]),
+      );
     }
+    expect(typeof external).toBe("function");
+    const externalize = external as TsdownExternalFunction;
+    expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
   });
 
   it("suppresses unresolved imports from extension source", () => {

@@ -1,9 +1,7 @@
 import fs from "node:fs";
 import { buildNpmInstallRecordFields } from "../../cli/npm-resolution.js";
 import {
-  buildPreferredClawHubSpec,
   createPluginInstallLogger,
-  decidePreferredClawHubFallback,
   resolveFileNpmSpecToLocalPath,
 } from "../../cli/plugins-command-helpers.js";
 import { persistPluginInstall } from "../../cli/plugins-install-persist.js";
@@ -256,36 +254,6 @@ async function installPluginFromPluginsCommand(params: {
     return { ok: true, pluginId: result.pluginId };
   }
 
-  const preferredClawHubSpec = buildPreferredClawHubSpec(params.raw);
-  if (preferredClawHubSpec) {
-    const clawhubResult = await installPluginFromClawHub({
-      spec: preferredClawHubSpec,
-      logger: createPluginInstallLogger(),
-    });
-    if (clawhubResult.ok) {
-      await persistPluginInstall({
-        snapshot: params.snapshot,
-        pluginId: clawhubResult.pluginId,
-        install: {
-          source: "clawhub",
-          spec: preferredClawHubSpec,
-          installPath: clawhubResult.targetDir,
-          version: clawhubResult.version,
-          integrity: clawhubResult.clawhub.integrity,
-          resolvedAt: clawhubResult.clawhub.resolvedAt,
-          clawhubUrl: clawhubResult.clawhub.clawhubUrl,
-          clawhubPackage: clawhubResult.clawhub.clawhubPackage,
-          clawhubFamily: clawhubResult.clawhub.clawhubFamily,
-          clawhubChannel: clawhubResult.clawhub.clawhubChannel,
-        },
-      });
-      return { ok: true, pluginId: clawhubResult.pluginId };
-    }
-    if (decidePreferredClawHubFallback(clawhubResult) !== "fallback_to_npm") {
-      return { ok: false, error: clawhubResult.error };
-    }
-  }
-
   const result = await installPluginFromNpmSpec({
     spec: params.raw,
     logger: createPluginInstallLogger(),
@@ -424,7 +392,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     return {
       shouldContinue: false,
       reply: {
-        text: `🔌 Installed plugin "${installed.pluginId}". Restart the gateway to load plugins.`,
+        text: `🔌 Installed plugin "${installed.pluginId}". Gateway restart will load the new plugin source.`,
       },
     };
   }
@@ -531,7 +499,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     shouldContinue: false,
     reply: {
       text:
-        `🔌 Plugin "${plugin.id}" ${pluginsCommand.action}d in ${loaded.path}. Restart the gateway to apply.` +
+        `🔌 Plugin "${plugin.id}" ${pluginsCommand.action}d in ${loaded.path}. Gateway reload will apply it to new agent turns.` +
         (registryWarning ? `\n${registryWarning}` : ""),
     },
   };

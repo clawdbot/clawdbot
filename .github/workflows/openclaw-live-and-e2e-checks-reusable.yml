@@ -978,6 +978,7 @@ jobs:
         env:
           LANES: ${{ matrix.group.docker_lanes }}
           INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
+          INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include_release_path_suites }}
         run: |
           set -euo pipefail
           if [[ -z "$LANES" ]]; then
@@ -988,6 +989,9 @@ jobs:
           mkdir -p .artifacts/docker-tests
           export OPENCLAW_DOCKER_ALL_LANES="$LANES"
           export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="$INCLUDE_OPENWEBUI"
+          if [[ "$INCLUDE_RELEASE_PATH_SUITES" == "true" ]]; then
+            export OPENCLAW_DOCKER_ALL_PROFILE=release-path
+          fi
 
           plan_path=".artifacts/docker-tests/targeted-plan.json"
           node .release-harness/scripts/test-docker-all.mjs --plan-json > "$plan_path"
@@ -1043,6 +1047,9 @@ jobs:
           export OPENCLAW_DOCKER_ALL_PREFLIGHT=0
           export OPENCLAW_DOCKER_ALL_FAIL_FAST=0
           export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="${INCLUDE_OPENWEBUI}"
+          if [[ "${{ inputs.include_release_path_suites }}" == "true" ]]; then
+            export OPENCLAW_DOCKER_ALL_PROFILE=release-path
+          fi
           export OPENCLAW_DOCKER_ALL_LOG_DIR=".artifacts/docker-tests/targeted-${{ steps.plan.outputs.artifact_suffix }}"
           export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/targeted-${{ steps.plan.outputs.artifact_suffix }}-timings.json"
           export OPENCLAW_DOCKER_ALL_PNPM_COMMAND="$(command -v pnpm)"
@@ -1241,6 +1248,9 @@ jobs:
           LANES: ${{ inputs.docker_lanes }}
           INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include_release_path_suites }}
           INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
         run: |
           set -euo pipefail
           mkdir -p .artifacts/docker-tests
@@ -2076,7 +2086,7 @@ jobs:
           fi
           case "${{ matrix.suite_id }}" in
             live-cli-backend-docker)
-              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.5" >> "$GITHUB_ENV"
+              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4" >> "$GITHUB_ENV"
               # Keep the release-blocking CI lane on Codex API-key auth. The
               # staged auth-file path remains supported for local maintainer
               # reruns, but it can hang on stale subscription/session state in
@@ -2293,7 +2303,7 @@ jobs:
           fi
           case "${{ matrix.suite_id }}" in
             live-cli-backend-docker)
-              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.5" >> "$GITHUB_ENV"
+              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4" >> "$GITHUB_ENV"
               echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
               echo 'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
               echo 'OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=["exec","resume","{sessionId}","-c","sandbox_mode=\"danger-full-access\"","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"

@@ -181,7 +181,11 @@ export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 
 export { definePluginEntry } from "./plugin-entry.js";
-export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/config-schema.js";
+export {
+  buildJsonPluginConfigSchema,
+  buildPluginConfigSchema,
+  emptyPluginConfigSchema,
+} from "../plugins/config-schema.js";
 export { KeyedAsyncQueue, enqueueKeyedTask } from "./keyed-async-queue.js";
 export { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
 export { generateSecureToken, generateSecureUuid } from "../infra/secure-random.js";
@@ -192,6 +196,7 @@ export {
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export {
   buildChannelConfigSchema,
+  buildJsonChannelConfigSchema,
   emptyChannelConfigSchema,
 } from "../channels/plugins/config-schema.js";
 export {

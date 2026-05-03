@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 
 type SetupRegistryRuntimeModule = Pick<
   typeof import("./setup-registry.js"),
@@ -30,7 +30,7 @@ export const __testing = {
 };
 
 function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
-  const snapshot = loadPluginMetadataSnapshot({ config: {}, env: process.env });
+  const snapshot = loadManifestMetadataSnapshot({ config: {}, env: process.env });
   return snapshot.plugins.flatMap((plugin) => {
     if (plugin.origin !== "bundled" || !isInstalledPluginEnabled(snapshot.index, plugin.id)) {
       return [];

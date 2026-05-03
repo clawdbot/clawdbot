@@ -85,6 +85,43 @@ describe("music-generation runtime", () => {
     ]);
   });
 
+  it("does not list providers when explicit config disables auto provider fallback", async () => {
+    const provider: MusicGenerationProvider = {
+      id: "music-plugin",
+      capabilities: {},
+      async generateMusic() {
+        return {
+          tracks: [
+            {
+              buffer: Buffer.from("mp3-bytes"),
+              mimeType: "audio/mpeg",
+              fileName: "sample.mp3",
+            },
+          ],
+          model: "track-v1",
+        };
+      },
+    };
+    providers = [provider];
+
+    const params: GenerateMusicParams = {
+      cfg: {
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "music-plugin/track-v1" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "play a synth line",
+      autoProviderFallback: false,
+    };
+
+    const result = await runGenerateMusic(params);
+
+    expect(result.provider).toBe("music-plugin");
+    expect(listedConfigs).toEqual([]);
+  });
+
   it("auto-detects and falls through to another configured music-generation provider by default", async () => {
     providers = [
       {

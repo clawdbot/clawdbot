@@ -6,7 +6,11 @@ import {
   type OpenClawConfig,
 } from "../../config/config.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
-import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
+import {
+  requestHeartbeat,
+  resetHeartbeatWakeStateForTests,
+  setHeartbeatWakeHandler,
+} from "../../infra/heartbeat-wake.js";
 import * as execModule from "../../process/exec.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { VERSION } from "../../version.js";
@@ -161,10 +165,16 @@ describe("plugin runtime command execution", () => {
       expected: onSessionTranscriptUpdate,
     },
     {
-      name: "exposes runtime.system.requestHeartbeatNow",
+      name: "exposes runtime.system.requestHeartbeat",
       readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
-        runtime.system.requestHeartbeatNow,
-      expected: requestHeartbeatNow,
+        runtime.system.requestHeartbeat,
+      expected: requestHeartbeat,
+    },
+    {
+      name: "exposes deprecated runtime.system.requestHeartbeatNow",
+      readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
+        typeof runtime.system.requestHeartbeatNow,
+      expected: "function",
     },
     {
       name: "exposes runtime.version from the shared VERSION constant",
@@ -173,6 +183,30 @@ describe("plugin runtime command execution", () => {
     },
   ] as const)("$name", ({ readValue, expected }) => {
     expectRuntimeValue(readValue, expected);
+  });
+
+  it("maps deprecated runtime.system.requestHeartbeatNow to an immediate compatibility wake", async () => {
+    vi.useFakeTimers();
+    resetHeartbeatWakeStateForTests();
+    const handler = vi.fn(async () => ({ status: "skipped" as const, reason: "disabled" }));
+    setHeartbeatWakeHandler(handler);
+    try {
+      createPluginRuntime().system.requestHeartbeatNow({
+        reason: "legacy-plugin",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "other",
+          intent: "immediate",
+          reason: "legacy-plugin",
+        }),
+      );
+    } finally {
+      resetHeartbeatWakeStateForTests();
+      vi.useRealTimers();
+    }
   });
 
   it("resolves thinking policy with configured model compat from runtime config", () => {
@@ -274,6 +308,8 @@ describe("plugin runtime command execution", () => {
           "resolveAgentDir",
         ]);
         expectFunctionKeys(runtime.agent.session as Record<string, unknown>, [
+          "updateSessionStore",
+          "updateSessionStoreEntry",
           "resolveSessionFilePath",
         ]);
       },

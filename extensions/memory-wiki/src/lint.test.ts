@@ -8,6 +8,48 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 const { createVault } = createMemoryWikiTestHarness();
 
 describe("lintMemoryWikiVault", () => {
+  it("accepts native markdown links that include the relative .md target", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-native-links-",
+      config: {
+        vault: { renderMode: "native" },
+      },
+    });
+    await Promise.all(
+      ["entities", "sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.alpha",
+          title: "Alpha Source",
+        },
+        body: "# Alpha Source\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha",
+          title: "Alpha",
+          sourceIds: ["source.alpha"],
+        },
+        body: "# Alpha\n\n[Alpha Source](sources/alpha.md)\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(result.issues.filter((issue) => issue.code === "broken-wikilink")).toEqual([]);
+  });
+
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-",

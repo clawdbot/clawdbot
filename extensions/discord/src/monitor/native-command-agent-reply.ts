@@ -15,6 +15,7 @@ import type {
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import type { buildDiscordNativeCommandContext } from "./native-command-context.js";
 import {
+  DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
   deliverDiscordInteractionReply,
   isDiscordUnknownInteraction,
   safeDiscordInteractionCall,
@@ -102,6 +103,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   if (
     params.suppressReplies ||
     didReply ||
+    dispatchResult.queuedFinal ||
     dispatchResult.counts.final !== 0 ||
     dispatchResult.counts.block !== 0 ||
     dispatchResult.counts.tool !== 0
@@ -111,7 +113,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
 
   await safeDiscordInteractionCall("interaction empty fallback", async () => {
     const payload = {
-      content: "✅ Done.",
+      content: DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
       ephemeral: true,
     };
     if (params.preferFollowUp) {

@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -29,13 +30,12 @@ import {
   shouldSuppressReasoningPayload,
 } from "./reply-payloads.js";
 
-let deliverRuntimePromise: Promise<
-  typeof import("../../infra/outbound/deliver-runtime.js")
-> | null = null;
+const deliverRuntimeLoader = createLazyImportLoader(
+  () => import("../../infra/outbound/deliver-runtime.js"),
+);
 
 function loadDeliverRuntime() {
-  deliverRuntimePromise ??= import("../../infra/outbound/deliver-runtime.js");
-  return deliverRuntimePromise;
+  return deliverRuntimeLoader.load();
 }
 
 export type RouteReplyParams = {

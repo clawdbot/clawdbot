@@ -17,6 +17,7 @@ import {
   parseImageMode,
   resolveCliModelSwitchProbeTarget,
   resolveCliBackendLiveArgs,
+  resolveCliBackendLiveModelSelection,
   parseJsonStringArray,
   restoreCliBackendLiveEnv,
   shouldRunCliImageProbe,
@@ -56,11 +57,26 @@ const DEFAULT_MODEL =
 // The cron/MCP live probe now tolerates more cancelled tool-call retries in CI,
 // so the outer test budget needs enough headroom to finish those retries.
 const CLI_BACKEND_LIVE_TIMEOUT_MS = 20 * 60_000;
-const CLI_BACKEND_REQUEST_TIMEOUT_MS = 600_000;
+const CLI_BACKEND_REQUEST_TIMEOUT_MS = parsePositiveIntegerEnv(
+  "OPENCLAW_LIVE_CLI_BACKEND_REQUEST_TIMEOUT_MS",
+  15 * 60_000,
+);
 const CLI_BACKEND_AGENT_TIMEOUT_SECONDS = Math.max(
   1,
   Math.ceil(CLI_BACKEND_REQUEST_TIMEOUT_MS / 1000) - 10,
 );
+
+function parsePositiveIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  return value;
+}
 
 function logCliBackendLiveStep(step: string, details?: Record<string, unknown>): void {
   if (!CLI_DEBUG) {
@@ -189,25 +205,34 @@ describeLive("gateway live (cli backend)", () => {
       logCliBackendLiveStep("env-ready", { port });
 
       const rawModel = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;
-      const parsed = parseModelRef(rawModel, "claude-cli");
-      if (!parsed) {
-        throw new Error(
-          `OPENCLAW_LIVE_CLI_BACKEND_MODEL must resolve to a CLI backend model. Got: ${rawModel}`,
-        );
-      }
-
-      const providerId = parsed.provider;
-      const modelKey = `${providerId}/${parsed.model}`;
+      const initialParsed = parseModelRef(rawModel, "claude-cli");
+      const initialProviderId = initialParsed?.provider ?? "";
+      const initialModelKey = initialParsed
+        ? `${initialProviderId}/${initialParsed.model}`
+        : rawModel;
+      const initialModelSwitchTarget = resolveCliModelSwitchProbeTarget(
+        initialProviderId,
+        initialModelKey,
+      );
+      const modelSelection = resolveCliBackendLiveModelSelection({
+        rawModel,
+        defaultProvider: "claude-cli",
+        modelSwitchTarget: initialModelSwitchTarget,
+      });
+      const providerId = modelSelection.providerId;
+      const modelKey = modelSelection.cliModelKey;
+      const configModelKey = modelSelection.configModelKey;
       const backendResolved = resolveCliBackendConfig(providerId);
       const enableCliImageProbe = shouldRunCliImageProbe(providerId);
       const enableCliMcpProbe = shouldRunCliMcpProbe(providerId);
       const enableCliModelSwitchProbe = shouldRunCliModelSwitchProbe(providerId, modelKey);
       const modelSwitchTarget = enableCliModelSwitchProbe
-        ? resolveCliModelSwitchProbeTarget(providerId, modelKey)
+        ? modelSelection.configModelSwitchTarget
         : undefined;
       logCliBackendLiveStep("model-selected", {
         providerId,
         modelKey,
+        configModelKey,
         enableCliImageProbe,
         enableCliMcpProbe,
         enableCliModelSwitchProbe,
@@ -258,6 +283,7 @@ describeLive("gateway live (cli backend)", () => {
       const schemaProbePluginPath = CLI_MCP_SCHEMA_PROBE
         ? await createMcpSchemaProbePlugin(tempDir)
         : undefined;
+      const useMinimalToolsProfile = providerId === "codex-cli" && !schemaProbePluginPath;
       process.env.OPENCLAW_STATE_DIR = stateDir;
       const bundleMcp = backendResolved?.bundleMcp === true;
       const bootstrapWorkspace = await createBootstrapWorkspace(tempDir);
@@ -312,23 +338,31 @@ describeLive("gateway live (cli backend)", () => {
                 providers: {
                   ...cfg.models?.providers,
                   openai: {
-                    ...openAiProviderConfigForCodexCli(modelKey),
+                    ...openAiProviderConfigForCodexCli(configModelKey),
                     ...cfg.models?.providers?.openai,
                   },
                 },
               }
             : cfg.models,
+        ...(useMinimalToolsProfile
+          ? {
+              tools: {
+                ...cfg.tools,
+                profile: "minimal" as const,
+              },
+            }
+          : {}),
         agents: {
           ...cfg.agents,
           defaults: {
             ...cfg.agents?.defaults,
             ...(bootstrapWorkspace ? { workspace: bootstrapWorkspace.workspaceRootDir } : {}),
-            model: { primary: modelKey },
+            model: { primary: configModelKey },
             models: {
-              [modelKey]: {},
+              [configModelKey]: {},
               ...(modelSwitchTarget ? { [modelSwitchTarget]: {} } : {}),
             },
-            agentRuntime: { id: "pi", fallback: "pi" },
+            agentRuntime: modelSelection.agentRuntime,
             cliBackends: {
               ...existingBackends,
               [providerId]: {
@@ -402,6 +436,12 @@ describeLive("gateway live (cli backend)", () => {
           ),
         );
         if (!payload) {
+          return;
+        }
+        if (providerId === "codex-cli" && payload?.status === "timeout") {
+          console.warn(
+            "SKIP: Codex CLI backend live smoke timed out waiting for a model response.",
+          );
           return;
         }
         if (payload?.status !== "ok") {

@@ -7,6 +7,7 @@ import {
   type APIChannel,
   type APIInteraction,
   type APIInteractionDataResolvedChannel,
+  type APIMessage,
   type APIMessageComponentInteraction,
   type APIModalSubmitInteraction,
   type APIUser,
@@ -41,6 +42,15 @@ export { ModalFields } from "./modal-fields.js";
 
 type InteractionClient = StructureClient & {
   options: { clientId: string };
+  componentHandler: {
+    waitForMessageComponent(
+      message: Message,
+      timeoutMs: number,
+    ): Promise<
+      | { success: true; customId: string; message: Message; values?: string[] }
+      | { success: false; message: Message; reason: "timed out" }
+    >;
+  };
   fetchChannel(id: string): Promise<DiscordChannel>;
 };
 
@@ -216,6 +226,16 @@ export class BaseInteraction {
     );
   }
 
+  async replyAndWaitForComponent(payload: MessagePayload, timeoutMs = 300_000) {
+    const result = await this.reply(payload);
+    const rawMessage = isRawMessage(result) ? result : await this.fetchReply();
+    if (!isRawMessage(rawMessage)) {
+      throw new Error("Discord interaction reply did not return a message");
+    }
+    const message = new Message(this.client, rawMessage as APIMessage);
+    return await this.client.componentHandler.waitForMessageComponent(message, timeoutMs);
+  }
+
   async followUp(payload: MessagePayload): Promise<unknown> {
     const body = serializePayload(payload);
     return await createWebhookMessage(
@@ -271,6 +291,18 @@ export class BaseComponentInteraction extends BaseInteraction {
   }
   async showModal(modal: Modal): Promise<unknown> {
     return await this.callback(InteractionResponseType.Modal, modal.serialize());
+  }
+
+  async editAndWaitForComponent(
+    payload: MessagePayload,
+    message: Message | null = this.message,
+    timeoutMs = 300_000,
+  ) {
+    if (!message) {
+      return null;
+    }
+    const editedMessage = await message.edit(payload);
+    return await this.client.componentHandler.waitForMessageComponent(editedMessage, timeoutMs);
   }
 }
 
@@ -334,4 +366,13 @@ export function parseComponentInteractionData(
   customId: string,
 ): ComponentData {
   return component.customIdParser(customId).data;
+}
+
+function isRawMessage(value: unknown): value is { id: string; channel_id: string } {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    typeof (value as { id?: unknown }).id === "string" &&
+    typeof (value as { channel_id?: unknown }).channel_id === "string"
+  );
 }

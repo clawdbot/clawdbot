@@ -6,6 +6,7 @@ import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
 } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
+import type { SessionWriteLockAcquireTimeoutConfig } from "../session-write-lock.js";
 
 export type HarnessContextEngine = ContextEngine;
 
@@ -21,6 +22,7 @@ export async function bootstrapHarnessContextEngine(params: {
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
+  config?: SessionWriteLockAcquireTimeoutConfig;
   warn: (message: string) => void;
 }): Promise<void> {
   if (
@@ -45,6 +47,7 @@ export async function bootstrapHarnessContextEngine(params: {
       reason: "bootstrap",
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
+      config: params.config,
     });
   } catch (bootstrapErr) {
     params.warn(`context engine bootstrap failed: ${String(bootstrapErr)}`);
@@ -97,6 +100,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
   runtimeContext?: ContextEngineRuntimeContext;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
   sessionManager?: unknown;
+  config?: SessionWriteLockAcquireTimeoutConfig;
   warn: (message: string) => void;
 }) {
   if (!params.contextEngine) {
@@ -165,6 +169,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
       reason: "turn",
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
+      config: params.config,
     });
   }
 
@@ -201,6 +206,7 @@ export async function runHarnessContextEngineMaintenance(params: {
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
   executionMode?: "foreground" | "background";
+  config?: SessionWriteLockAcquireTimeoutConfig;
 }) {
   return await runContextEngineMaintenance({
     contextEngine: params.contextEngine,
@@ -213,6 +219,7 @@ export async function runHarnessContextEngineMaintenance(params: {
     >[0]["sessionManager"],
     runtimeContext: params.runtimeContext,
     executionMode: params.executionMode,
+    config: params.config,
   });
 }
 

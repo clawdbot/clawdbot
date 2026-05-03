@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.js";
-import { loadPluginManifestRegistry } from "../manifest-registry.js";
-import { isPackageIncludedInCoreBundle } from "../manifest.js";
+import { loadPluginManifestRegistry, type PluginManifestRecord } from "../manifest-registry.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
+import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
 import {
   pluginRegistrationContractRegistry,
   providerContractLoadError,
@@ -16,40 +16,19 @@ describe("plugin contract registry", () => {
 
   function expectRegistryPluginIds(params: {
     actualPluginIds: readonly string[];
-    predicate: (plugin: {
-      origin: string;
-      providers: unknown[];
-      contracts?: {
-        speechProviders?: unknown[];
-        realtimeTranscriptionProviders?: unknown[];
-        realtimeVoiceProviders?: unknown[];
-        migrationProviders?: unknown[];
-      };
-    }) => boolean;
+    predicate: (plugin: PluginManifestRecord) => boolean;
   }) {
     expect(uniqueSortedStrings(params.actualPluginIds)).toEqual(
       resolveBundledManifestPluginIds(params.predicate),
     );
   }
 
-  function resolveBundledManifestPluginIds(
-    predicate: (plugin: {
-      origin: string;
-      providers: unknown[];
-      contracts?: {
-        speechProviders?: unknown[];
-        realtimeTranscriptionProviders?: unknown[];
-        realtimeVoiceProviders?: unknown[];
-        migrationProviders?: unknown[];
-      };
-    }) => boolean,
-  ) {
+  function resolveBundledManifestPluginIds(predicate: (plugin: PluginManifestRecord) => boolean) {
+    const snapshotPluginIds = new Set(
+      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => entry.pluginId),
+    );
     return loadPluginManifestRegistry({})
-      .plugins.filter(
-        (plugin) =>
-          (plugin.origin !== "bundled" || isPackageIncludedInCoreBundle(plugin.packageManifest)) &&
-          predicate(plugin),
-      )
+      .plugins.filter((plugin) => snapshotPluginIds.has(plugin.id) && predicate(plugin))
       .map((plugin) => plugin.id)
       .toSorted((left, right) => left.localeCompare(right));
   }
@@ -198,10 +177,13 @@ describe("plugin contract registry", () => {
   });
 
   it("covers every bundled web search plugin from the shared resolver", () => {
+    const snapshotPluginIds = new Set(
+      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => entry.pluginId),
+    );
     const bundledWebSearchPluginIds = resolveManifestContractPluginIds({
       contract: "webSearchProviders",
       origin: "bundled",
-    });
+    }).filter((pluginId) => snapshotPluginIds.has(pluginId));
 
     expect(
       uniqueSortedStrings(

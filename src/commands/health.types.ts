@@ -39,6 +39,7 @@ export type HealthSummary = {
   ok: true;
   ts: number;
   durationMs: number;
+  eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
   plugins?: PluginHealthSummary;
   channels: Record<string, ChannelHealthSummary>;
   channelOrder: string[];

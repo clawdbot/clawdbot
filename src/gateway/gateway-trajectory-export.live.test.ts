@@ -58,7 +58,7 @@ async function writeLiveGatewayConfig(params: {
       list: [{ id: "dev", default: true }],
       defaults: {
         workspace: params.workspace,
-        agentRuntime: { id: "codex", fallback: "none" },
+        agentRuntime: { id: "codex" },
         skipBootstrap: true,
         model: { primary: params.modelKey },
         models: { [params.modelKey]: {} },
@@ -194,7 +194,6 @@ describeLive("gateway live trajectory export", () => {
 
       clearRuntimeConfigSnapshot();
       process.env.OPENCLAW_AGENT_RUNTIME = "codex";
-      process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "none";
       delete process.env.OPENAI_BASE_URL;
       delete process.env.OPENAI_API_KEY;
       process.env.OPENCLAW_CONFIG_PATH = configPath;

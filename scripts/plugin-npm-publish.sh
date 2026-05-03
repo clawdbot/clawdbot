@@ -75,6 +75,15 @@ log "Resolved mirror dist-tags: ${mirror_dist_tags_csv:-<none>}"
 log "Mirror dist-tag auth source: ${mirror_auth_source}"
 log "Mirror dist-tag auth requirement: ${mirror_auth_requirement}"
 
+build_package_runtime() {
+  if [[ "${OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD:-1}" == "0" || "${OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD:-1}" == "false" ]]; then
+    log "Package-local runtime build: skipped"
+    return
+  fi
+  log "Package-local runtime build: ${package_dir}"
+  node scripts/lib/plugin-npm-runtime-build.mjs "${package_dir}" >&2
+}
+
 mirror_auth_token=""
 case "${mirror_auth_source}" in
   node-auth-token)
@@ -121,6 +130,8 @@ fi
 if [[ "${mode}" == "--dry-run" ]]; then
   exit 0
 fi
+
+build_package_runtime
 
 if [[ "${mode}" == "--pack-dry-run" ]]; then
   node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- \

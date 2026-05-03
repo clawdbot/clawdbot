@@ -111,6 +111,12 @@ Plugins can register additional tools. Some examples:
 - [OpenProse](/prose) — markdown-first workflow orchestration
 - [Tokenjuice](/tools/tokenjuice) — compact noisy `exec` and `bash` tool results
 
+Plugin tools are still authored with `api.registerTool(...)` and declared in
+the plugin manifest's `contracts.tools` list. OpenClaw captures the validated
+tool descriptor during discovery and caches it by plugin source and contract, so
+later tool planning can skip plugin runtime loading. Tool execution still loads
+the owning plugin and calls the live registered implementation.
+
 ## Tool configuration
 
 ### Allow and deny lists

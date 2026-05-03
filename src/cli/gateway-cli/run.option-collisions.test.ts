@@ -27,6 +27,10 @@ const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
   snapshot: { exists: false } as Record<string, unknown>,
 }));
+const readBestEffortConfig = vi.fn(async () => configState.cfg);
+const readConfigFileSnapshotWithPluginMetadata = vi.fn(async () => ({
+  snapshot: configState.snapshot,
+}));
 const recoverConfigFromLastKnownGood = vi.fn<(params?: unknown) => Promise<boolean>>(
   async (_params?: unknown) => false,
 );
@@ -52,8 +56,9 @@ const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeC
 
 vi.mock("../../config/config.js", () => ({
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
-  readBestEffortConfig: async () => configState.cfg,
+  readBestEffortConfig: () => readBestEffortConfig(),
   readConfigFileSnapshot: async () => configState.snapshot,
+  readConfigFileSnapshotWithPluginMetadata: () => readConfigFileSnapshotWithPluginMetadata(),
   recoverConfigFromLastKnownGood: (params: unknown) => recoverConfigFromLastKnownGood(params),
   recoverConfigFromJsonRootSuffix: (snapshot: unknown) => recoverConfigFromJsonRootSuffix(snapshot),
 }));
@@ -186,6 +191,8 @@ describe("gateway run option collisions", () => {
     resetRuntimeCapture();
     configState.cfg = {};
     configState.snapshot = { exists: false };
+    readBestEffortConfig.mockClear();
+    readConfigFileSnapshotWithPluginMetadata.mockClear();
     controlUiState.root = "/tmp/openclaw-control-ui";
     gatewayLogMessages.length = 0;
     recoverConfigFromLastKnownGood.mockReset();
@@ -306,10 +313,15 @@ describe("gateway run option collisions", () => {
   it("starts gateway when token mode has no configured token (startup bootstrap path)", async () => {
     await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
 
+    expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledTimes(1);
+    expect(readBestEffortConfig).not.toHaveBeenCalled();
     expect(startGatewayServer).toHaveBeenCalledWith(
       18789,
       expect.objectContaining({
         bind: "loopback",
+        startupConfigSnapshotRead: {
+          snapshot: configState.snapshot,
+        },
       }),
     );
   });
@@ -339,7 +351,7 @@ describe("gateway run option collisions", () => {
     expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
   });
 
-  it("blocks startup when the observed snapshot loses gateway.mode even if loadConfig still says local", async () => {
+  it("blocks startup when the observed snapshot loses gateway.mode", async () => {
     configState.cfg = {
       gateway: {
         mode: "local",
@@ -365,6 +377,7 @@ describe("gateway run option collisions", () => {
       `Config write audit: ${path.join("/tmp", "logs", "config-audit.jsonl")}`,
     );
     expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(readBestEffortConfig).not.toHaveBeenCalled();
   });
 
   it("restores last-known-good config before startup when the effective config is invalid", async () => {

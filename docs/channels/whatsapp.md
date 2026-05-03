@@ -14,8 +14,8 @@ Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session
 - `openclaw channels login --channel whatsapp` also offers the install flow when
   the plugin is not present yet.
 - Dev channel + git checkout: defaults to the local plugin path.
-- Stable/Beta: uses the npm package `@openclaw/whatsapp` when a current package
-  is published.
+- Stable/Beta: uses the npm package `@openclaw/whatsapp` on the current official
+  release tag.
 
 Manual install stays available:
 
@@ -23,9 +23,8 @@ Manual install stays available:
 openclaw plugins install @openclaw/whatsapp
 ```
 
-If npm reports the OpenClaw-owned package as deprecated or missing, use a
-current packaged OpenClaw build or a local checkout until the npm package train
-catches up.
+Use the bare package to follow the current official release tag. Pin an exact
+version only when you need a reproducible install.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -154,10 +153,12 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 - The reconnect watchdog uses WhatsApp Web transport activity, not only inbound app-message volume, so a quiet linked-device session is not restarted solely because nobody has sent a message recently. A longer application-silence cap still forces a reconnect if transport frames keep arriving but no application messages are handled for the watchdog window; after a transient reconnect for a recently active session, that application-silence check uses the normal message timeout for the first recovery window.
 - Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` controls WhatsApp Web application pings, `connectTimeoutMs` controls the opening handshake timeout, and `defaultQueryTimeoutMs` controls Baileys query timeouts.
 - Outbound sends require an active WhatsApp listener for the target account.
+- Group sends attach native mention metadata for `@+<digits>` and `@<digits>` tokens in text and media captions when the token matches current WhatsApp participant metadata, including LID-backed groups.
 - Status and broadcast chats are ignored (`@status`, `@broadcast`).
 - The reconnect watchdog follows WhatsApp Web transport activity, not only inbound app-message volume: quiet linked-device sessions stay up while transport frames continue, but a transport stall forces reconnect well before the later remote disconnect path.
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs to the agent main session).
 - Group sessions are isolated (`agent:<agentId>:whatsapp:group:<jid>`).
+- WhatsApp Channels/Newsletters can be explicit outbound targets with their native `@newsletter` JID. Outbound newsletter sends use channel session metadata (`agent:<agentId>:whatsapp:channel:<jid>`) rather than DM session semantics.
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` / lowercase variants). Prefer host-level proxy config over channel-specific WhatsApp proxy settings.
 - When `messages.removeAckAfterReply` is enabled, OpenClaw clears the WhatsApp ack reaction after a visible reply is delivered.
 
@@ -213,6 +214,8 @@ content and identifiers.
     - `disabled`
 
     `allowFrom` accepts E.164-style numbers (normalized internally).
+
+    `allowFrom` is a DM sender access-control list. It does not gate explicit outbound sends to WhatsApp group JIDs or `@newsletter` channel JIDs.
 
     Multi-account override: `channels.whatsapp.accounts.<id>.dmPolicy` (and `allowFrom`) take precedence over channel-level defaults for that account.
 

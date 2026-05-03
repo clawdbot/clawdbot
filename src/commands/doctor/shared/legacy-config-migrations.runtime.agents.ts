@@ -56,10 +56,21 @@ const LEGACY_SANDBOX_SCOPE_RULES: LegacyConfigRule[] = [
 
 const LEGACY_AGENT_RUNTIME_POLICY_RULES: LegacyConfigRule[] = [
   {
+    path: ["agents", "defaults", "agentRuntime", "fallback"],
+    message:
+      'agents.defaults.agentRuntime.fallback is no longer supported; explicit runtimes fail closed and auto mode owns PI fallback. Run "openclaw doctor --fix".',
+  },
+  {
     path: ["agents", "defaults", "embeddedHarness"],
     message:
       'agents.defaults.embeddedHarness is legacy; use agents.defaults.agentRuntime instead. Run "openclaw doctor --fix".',
     match: (value) => getRecord(value) !== null,
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].agentRuntime.fallback is no longer supported; explicit runtimes fail closed and auto mode owns PI fallback. Run "openclaw doctor --fix".',
+    match: (value) => hasAgentListRuntimeFallback(value),
   },
   {
     path: ["agents", "list"],
@@ -155,6 +166,18 @@ function hasLegacyAgentListEmbeddedHarness(value: unknown): boolean {
   return value.some((agent) => getRecord(getRecord(agent)?.embeddedHarness) !== null);
 }
 
+function hasAgentRuntimeFallback(value: unknown): boolean {
+  const runtime = getRecord(value);
+  return Boolean(runtime && Object.prototype.hasOwnProperty.call(runtime, "fallback"));
+}
+
+function hasAgentListRuntimeFallback(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) => hasAgentRuntimeFallback(getRecord(agent)?.agentRuntime));
+}
+
 function migrateLegacySandboxPerSession(
   sandbox: Record<string, unknown>,
   pathLabel: string,
@@ -191,15 +214,30 @@ function migrateLegacyAgentRuntimePolicy(
   if (next.id === undefined && legacy.runtime !== undefined) {
     next.id = legacy.runtime;
   }
-  if (next.fallback === undefined && legacy.fallback !== undefined) {
-    next.fallback = legacy.fallback;
-  }
 
   if (Object.keys(next).length > 0) {
     container.agentRuntime = next;
   }
   delete container.embeddedHarness;
   changes.push(`Moved ${pathLabel}.embeddedHarness → ${pathLabel}.agentRuntime.`);
+}
+
+function removeAgentRuntimeFallback(
+  container: Record<string, unknown>,
+  pathLabel: string,
+  changes: string[],
+): void {
+  const runtime = getRecord(container.agentRuntime);
+  if (!runtime || !Object.prototype.hasOwnProperty.call(runtime, "fallback")) {
+    return;
+  }
+  delete runtime.fallback;
+  if (Object.keys(runtime).length > 0) {
+    container.agentRuntime = runtime;
+  } else {
+    delete container.agentRuntime;
+  }
+  changes.push(`Removed ${pathLabel}.agentRuntime.fallback.`);
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
@@ -227,6 +265,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
       const defaults = getRecord(agents?.defaults);
       if (defaults) {
         migrateLegacyAgentRuntimePolicy(defaults, "agents.defaults", changes);
+        removeAgentRuntimeFallback(defaults, "agents.defaults", changes);
       }
 
       if (!Array.isArray(agents?.list)) {
@@ -238,6 +277,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
           continue;
         }
         migrateLegacyAgentRuntimePolicy(agentRecord, `agents.list.${index}`, changes);
+        removeAgentRuntimeFallback(agentRecord, `agents.list.${index}`, changes);
       }
     },
   }),

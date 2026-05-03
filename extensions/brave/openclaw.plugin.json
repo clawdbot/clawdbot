@@ -6,6 +6,15 @@
   "providerAuthEnvVars": {
     "brave": ["BRAVE_API_KEY"]
   },
+  "setup": {
+    "providers": [
+      {
+        "id": "brave",
+        "authMethods": ["api-key"],
+        "envVars": ["BRAVE_API_KEY"]
+      }
+    ]
+  },
   "uiHints": {
     "webSearch.apiKey": {
       "label": "Brave Search API Key",

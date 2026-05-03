@@ -138,6 +138,8 @@ type CapabilityProvider = {
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
 
+type CapabilityProviderSource = CapabilityProvider[] | (() => CapabilityProvider[]);
+
 type GenerationCapabilityProviderKey =
   | "imageGenerationProviders"
   | "videoGenerationProviders"
@@ -271,12 +273,18 @@ export function resolveCapabilityModelConfigForTool(params: {
   agentDir?: string;
   authStore?: AuthProfileStore;
   modelConfig?: AgentModelConfig;
-  providers: CapabilityProvider[];
+  providers: CapabilityProviderSource;
 }): ToolModelConfig | null {
   const explicit = coerceToolModelConfig(params.modelConfig);
   if (hasToolModelConfig(explicit)) {
     return explicit;
   }
+  let resolvedProviders: CapabilityProvider[] | undefined;
+  const getProviders = (): CapabilityProvider[] => {
+    resolvedProviders ??=
+      typeof params.providers === "function" ? params.providers() : params.providers;
+    return resolvedProviders;
+  };
   return buildToolModelConfigFromCandidates({
     explicit,
     agentDir: params.agentDir,
@@ -285,11 +293,11 @@ export function resolveCapabilityModelConfigForTool(params: {
       cfg: params.cfg,
       agentDir: params.agentDir,
       authStore: params.authStore,
-      providers: params.providers,
+      providers: getProviders(),
     }),
     isProviderConfigured: (providerId) =>
       isCapabilityProviderConfigured({
-        providers: params.providers,
+        providers: getProviders(),
         providerId,
         cfg: params.cfg,
         agentDir: params.agentDir,

@@ -2240,7 +2240,7 @@ describe("createTelegramBot", () => {
       undefined,
     );
   });
-  it("sets command target session key for dm topic commands", async () => {
+  it("keeps unconfigured dm topic commands on the flat dm session", async () => {
     onSpy.mockClear();
     sendMessageSpy.mockClear();
     commandSpy.mockClear();
@@ -2279,7 +2279,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
-    expect(payload.CommandTargetSessionKey).toBe("agent:main:main:thread:12345:99");
+    expect(payload.CommandTargetSessionKey).toBe("agent:main:main");
   });
 
   it("allows native DM commands for paired users", async () => {

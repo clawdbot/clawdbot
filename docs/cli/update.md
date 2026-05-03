@@ -144,9 +144,14 @@ it manually.
     `openclaw doctor` runs as the final safe-update check.
   </Step>
   <Step title="Sync plugins">
-    Syncs plugins to the active channel. Dev uses bundled plugins; stable and beta use npm. Updates npm-installed plugins.
+    Syncs plugins to the active channel. Dev uses bundled plugins; stable and beta use npm. Updates tracked plugin installs.
   </Step>
 </Steps>
+
+On the beta update channel, tracked npm and ClawHub plugin installs that follow
+the default/latest line try a plugin `@beta` release first. If the plugin has no
+beta release, OpenClaw falls back to the recorded default/latest spec. Exact
+versions and explicit tags are not rewritten.
 
 <Warning>
 If an exact pinned npm plugin update resolves to an artifact whose integrity differs from the stored install record, `openclaw update` aborts that plugin artifact update instead of installing it. Reinstall or update the plugin explicitly only after verifying that you trust the new artifact.

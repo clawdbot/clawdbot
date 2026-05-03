@@ -177,7 +177,11 @@ export function resolveTelegramAccount(params: {
 }
 
 export function listEnabledTelegramAccounts(cfg: OpenClawConfig): ResolvedTelegramAccount[] {
+  const baseEnabled = cfg.channels?.telegram?.enabled !== false;
+  if (!baseEnabled) {
+    return [];
+  }
   return listTelegramAccountIds(cfg)
-    .map((accountId) => resolveTelegramAccount({ cfg, accountId }))
-    .filter((account) => account.enabled);
+    .filter((accountId) => mergeTelegramAccountConfig(cfg, accountId).enabled !== false)
+    .map((accountId) => resolveTelegramAccount({ cfg, accountId }));
 }

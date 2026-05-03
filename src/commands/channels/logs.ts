@@ -3,10 +3,7 @@ import { normalizeChannelId as normalizeBundledChannelId } from "../../channels/
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { resolveLogFile } from "../../logging/log-tail.js";
 import { parseLogLine } from "../../logging/parse-log-line.js";
-import {
-  listPluginContributionIds,
-  loadPluginRegistrySnapshot,
-} from "../../plugins/plugin-registry.js";
+import { listManifestChannelContributionIds } from "../../plugins/manifest-contribution-ids.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
@@ -23,14 +20,10 @@ const DEFAULT_LIMIT = 200;
 const MAX_BYTES = 1_000_000;
 
 function listManifestChannelIds(): Set<string> {
-  const index = loadPluginRegistrySnapshot({
-    env: process.env,
-  });
   return new Set(
-    listPluginContributionIds({
-      index,
-      contribution: "channels",
+    listManifestChannelContributionIds({
       includeDisabled: true,
+      env: process.env,
     }),
   );
 }

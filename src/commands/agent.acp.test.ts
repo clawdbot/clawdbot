@@ -378,6 +378,16 @@ describe("agentCommand ACP runtime routing", () => {
     });
   });
 
+  it("keeps no-reply ACP turns silent", async () => {
+    await withAcpSessionEnv(async () => {
+      const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents(["NO_REPLY"]);
+
+      expect(assistantEvents.map((event) => event.text).filter(Boolean)).toEqual([]);
+      expect(logLines.some((line) => line.includes("NO_REPLY"))).toBe(false);
+      expect(logLines).toEqual([]);
+    });
+  });
+
   it("fails closed for ACP-shaped session keys missing ACP metadata", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");

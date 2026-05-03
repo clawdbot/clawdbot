@@ -27,11 +27,13 @@ import {
   CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
+  CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE,
   CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   isImmutableReleaseRef,
+  isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   looksLikeReleaseVersionRef,
   normalizeRequestedRef,
   normalizeWindowsCommandShimPath,
@@ -55,6 +57,7 @@ import {
   shouldStopManagedGatewayBeforeManualFallback,
   shouldRunMainChannelDevUpdate,
   shouldRetryCrossOsAgentTurnError,
+  shouldSkipOptionalCrossOsAgentTurnError,
   shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
@@ -123,6 +126,47 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ).toBe(true);
   });
 
+  it("skips optional live agent turns only for model availability failures", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-skip-"));
+    try {
+      const logPath = join(dir, "agent.log");
+      writeFileSync(
+        logPath,
+        JSON.stringify({
+          status: "timeout",
+          result: {
+            payloads: [
+              {
+                text: "Request timed out before a response was generated.",
+              },
+            ],
+          },
+        }),
+      );
+
+      expect(
+        shouldSkipOptionalCrossOsAgentTurnError(
+          new Error("Agent output did not contain the expected OK marker."),
+          logPath,
+        ),
+      ).toBe(true);
+      expect(
+        shouldSkipOptionalCrossOsAgentTurnError(
+          new Error("document-extract: failed to install bundled runtime deps"),
+          logPath,
+        ),
+      ).toBe(false);
+      expect(
+        shouldSkipOptionalCrossOsAgentTurnError(
+          new Error("Agent output did not contain the expected OK marker."),
+          join(dir, "missing.log"),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("allows cross-OS provider smoke models to use faster CI overrides", () => {
     expect(
       resolveProviderConfig("openai", {
@@ -134,10 +178,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         OPENCLAW_CROSS_OS_MODEL: "openai/gpt-5.4-nano",
       })?.model,
     ).toBe("openai/gpt-5.4-nano");
-    expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.5");
+    expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.4");
   });
 
-  it("keeps release cross-OS OpenAI smoke on GPT-5.5", () => {
+  it("keeps release cross-OS OpenAI smoke on GPT-5.4", () => {
     const workflow = readFileSync(
       ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
       "utf8",
@@ -145,9 +189,9 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const releaseChecks = readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8");
 
     expect(workflow).toContain(
-      "OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.5' }}",
+      "OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.4' }}",
     );
-    expect(releaseChecks).toContain("openai_model: openai/gpt-5.5");
+    expect(releaseChecks).toContain("openai_model: openai/gpt-5.4");
   });
 
   it("keeps release smoke plugin allowlists focused on agent-turn essentials", () => {
@@ -160,11 +204,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(allowlist).not.toContain("web-readability");
   });
 
-  it("keeps cross-OS live smoke agent turns on GPT-5.5-safe timeouts and minimal thinking", () => {
+  it("keeps cross-OS live smoke agent turns on GPT-5-safe timeouts and minimal context", () => {
     const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
     const providerOverride = "models.providers.${params.providerConfig.extensionId}";
 
+    expect(CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE).toBe("minimal");
     expect(source).toContain('"--thinking",\n    "minimal"');
+    expect(source.match(/"tools\.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE/g)).toHaveLength(2);
     expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(600);
     expect(source).toContain("buildReleaseProviderConfigOverride");
     expect(source).toContain("models: []");
@@ -188,6 +234,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(looksLikeReleaseVersionRef("2026.4.5")).toBe(true);
     expect(looksLikeReleaseVersionRef("refs/tags/v2026.4.5-beta.1")).toBe(true);
     expect(looksLikeReleaseVersionRef("v2026.4.5-beta.1")).toBe(true);
+    expect(looksLikeReleaseVersionRef("refs/tags/v2026.4.5-alpha.1")).toBe(true);
+    expect(looksLikeReleaseVersionRef("v2026.4.5-alpha.1")).toBe(true);
     expect(looksLikeReleaseVersionRef("v2026.4.7-1")).toBe(true);
     expect(looksLikeReleaseVersionRef("main")).toBe(false);
     expect(looksLikeReleaseVersionRef("codex/cross-os-release-checks")).toBe(false);
@@ -627,6 +675,59 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         { candidateVersion: "2026.4.27" },
       ),
     ).toThrow(/Packaged upgrade failed/u);
+  });
+
+  it("recognizes the shipped Windows updater native-module backup cleanup failure", () => {
+    expect(
+      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "error",
+            reason: "global install swap",
+            after: { version: "2026.5.2" },
+            steps: [
+              {
+                name: "global install swap",
+                exitCode: 1,
+                stderrTail:
+                  "EPERM: operation not permitted, unlink 'C:\\Users\\runner\\prefix\\node_modules\\.openclaw-5748-1777776287462\\node_modules\\@mariozechner\\clipboard-win32-x64-msvc\\clipboard.win32-x64-msvc.node'",
+              },
+            ],
+          }),
+          stderr: "",
+        },
+        "win32",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not recover unrelated packaged update failures", () => {
+    expect(
+      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "error",
+            reason: "global install swap",
+            steps: [{ name: "global install swap", exitCode: 1, stderrTail: "ENOENT: missing" }],
+          }),
+          stderr: "",
+        },
+        "win32",
+      ),
+    ).toBe(false);
+    expect(
+      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
+        {
+          exitCode: 1,
+          stdout:
+            "EPERM: operation not permitted, unlink '/tmp/prefix/node_modules/.openclaw-1-2/native.node'",
+          stderr: "",
+        },
+        "linux",
+      ),
+    ).toBe(false);
   });
 
   it("only treats pinned baseline specs as exact installer version assertions", () => {

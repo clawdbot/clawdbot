@@ -171,6 +171,61 @@ describe("createMusicGenerateTool", () => {
     expect(listProviders).not.toHaveBeenCalled();
   });
 
+  it("does not load runtime providers while executing an explicitly configured tool", async () => {
+    const listProviders = vi
+      .spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders")
+      .mockImplementation(() => {
+        throw new Error("runtime provider list should not run for explicit music model config");
+      });
+    vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
+      provider: "google",
+      model: "lyria-3-clip-preview",
+      attempts: [],
+      ignoredOverrides: [],
+      tracks: [
+        {
+          buffer: Buffer.from("music-bytes"),
+          mimeType: "audio/mpeg",
+          fileName: "night-drive.mp3",
+        },
+      ],
+      metadata: {},
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+      path: "/tmp/generated-night-drive.mp3",
+      id: "generated-night-drive.mp3",
+      size: 11,
+      contentType: "audio/mpeg",
+    });
+
+    const tool = createMusicGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "google/lyria-3-clip-preview" },
+          },
+        },
+      }),
+    });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected music_generate tool");
+    }
+
+    await expect(
+      tool.execute("call-1", {
+        prompt: "night-drive synthwave",
+        instrumental: true,
+      }),
+    ).resolves.toBeTruthy();
+    expect(listProviders).not.toHaveBeenCalled();
+    expect(musicGenerationRuntime.generateMusic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        autoProviderFallback: false,
+      }),
+    );
+  });
+
   it("generates tracks, saves them, and emits MEDIA paths without a session-backed detach", async () => {
     taskExecutorMocks.createRunningTaskRun.mockReturnValue({
       taskId: "task-123",
@@ -295,6 +350,7 @@ describe("createMusicGenerateTool", () => {
 
     expect(generateSpy).toHaveBeenCalledWith(
       expect.objectContaining({
+        autoProviderFallback: false,
         timeoutMs: 10_000,
       }),
     );
@@ -398,6 +454,7 @@ describe("createMusicGenerateTool", () => {
     await scheduledWork?.();
     expect(musicGenerationRuntime.generateMusic).toHaveBeenCalledWith(
       expect.objectContaining({
+        autoProviderFallback: false,
         timeoutMs: 10_000,
       }),
     );

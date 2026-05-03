@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
 const { createRequire } = require("node:module");
 
@@ -8,8 +9,81 @@ const profile = process.argv[2];
 const portFile = process.argv[3];
 const requireFromApp = createRequire(path.join(process.cwd(), "package.json"));
 const JSZip = requireFromApp("jszip");
-const packageName = "openclaw-kitchen-sink";
+const tar = requireFromApp("tar");
+const packageName = "@openclaw/kitchen-sink";
 const pluginId = "openclaw-kitchen-sink-fixture";
+
+const buildArtifactSummary = ({
+  clawpackSha256,
+  clawpackSize,
+  npmIntegrity,
+  npmShasum,
+  npmTarballName,
+}) => ({
+  kind: "npm-pack",
+  format: "tgz",
+  sha256: clawpackSha256,
+  size: clawpackSize,
+  npmIntegrity,
+  npmShasum,
+  npmTarballName,
+});
+
+const buildClawPackSummary = ({
+  clawpackSha256,
+  clawpackSize,
+  npmIntegrity,
+  npmShasum,
+  npmTarballName,
+}) => ({
+  available: true,
+  format: "tgz",
+  sha256: clawpackSha256,
+  size: clawpackSize,
+  npmIntegrity,
+  npmShasum,
+  npmTarballName,
+});
+
+async function buildNpmPackArtifact(fixture) {
+  const packRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-fixture-"));
+  try {
+    const packageDir = path.join(packRoot, "package");
+    await fs.promises.mkdir(packageDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(packageDir, "package.json"),
+      `${JSON.stringify(fixture.packageJson, null, 2)}\n`,
+    );
+    await fs.promises.writeFile(path.join(packageDir, "index.js"), fixture.indexJs);
+    await fs.promises.writeFile(
+      path.join(packageDir, "openclaw.plugin.json"),
+      `${JSON.stringify(fixture.manifest, null, 2)}\n`,
+    );
+    const npmTarballName = `${packageName.replace(/^@/, "").replace("/", "-")}-${fixture.version}.tgz`;
+    const archivePath = path.join(packRoot, npmTarballName);
+    await tar.c(
+      {
+        cwd: packRoot,
+        file: archivePath,
+        gzip: true,
+        portable: true,
+        noMtime: true,
+      },
+      ["package"],
+    );
+    const archive = await fs.promises.readFile(archivePath);
+    return {
+      archive,
+      clawpackSha256: crypto.createHash("sha256").update(archive).digest("hex"),
+      clawpackSize: archive.length,
+      npmIntegrity: `sha512-${crypto.createHash("sha512").update(archive).digest("base64")}`,
+      npmShasum: crypto.createHash("sha1").update(archive).digest("hex"),
+      npmTarballName,
+    };
+  } finally {
+    await fs.promises.rm(packRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
 
 const profiles = {
   "kitchen-sink-plugin": {
@@ -87,7 +161,9 @@ export default definePluginEntry({
         properties: {},
       },
     },
-    packageDetail(sha256hash) {
+    packageDetail(artifact) {
+      const clawpack = buildClawPackSummary(artifact);
+      const packageArtifact = buildArtifactSummary(artifact);
       const packageDetail = {
         package: {
           name: packageName,
@@ -121,6 +197,8 @@ export default definePluginEntry({
             hasProvenance: false,
             scanStatus: "passed",
           },
+          artifact: packageArtifact,
+          clawpack,
         },
       };
       return {
@@ -136,10 +214,12 @@ export default definePluginEntry({
             createdAt: 0,
             changelog: "Fixture package for kitchen-sink plugin prerelease CI.",
             distTags: ["latest"],
-            sha256hash,
+            sha256hash: artifact.sha256hash,
             compatibility: packageDetail.package.compatibility,
             capabilities: packageDetail.package.capabilities,
             verification: packageDetail.package.verification,
+            artifact: packageArtifact,
+            clawpack,
           },
         },
         betaStatus: 404,
@@ -191,11 +271,13 @@ export default definePluginEntry({
         properties: {},
       },
     },
-    packageDetail(sha256hash) {
+    packageDetail(artifact) {
       const compatibility = {
         pluginApiRange: ">=2026.4.26",
         minGatewayVersion: "2026.4.26",
       };
+      const clawpack = buildClawPackSummary(artifact);
+      const packageArtifact = buildArtifactSummary(artifact);
       return {
         packageDetail: {
           package: {
@@ -209,6 +291,8 @@ export default definePluginEntry({
             createdAt: 0,
             updatedAt: 0,
             compatibility,
+            artifact: packageArtifact,
+            clawpack,
           },
         },
         versionDetail: {
@@ -216,8 +300,10 @@ export default definePluginEntry({
             version: this.version,
             createdAt: 0,
             changelog: "Kitchen-sink fixture package for Docker plugin E2E.",
-            sha256hash,
+            sha256hash: artifact.sha256hash,
             compatibility,
+            artifact: packageArtifact,
+            clawpack,
           },
         },
       };
@@ -237,17 +323,37 @@ async function main() {
     date: new Date(0),
   });
   zip.file("package/index.js", fixture.indexJs, { date: new Date(0) });
-  zip.file("package/openclaw.plugin.json", `${JSON.stringify(fixture.manifest, null, 2)}\n`, {
-    date: new Date(0),
-  });
+  const manifestJson = `${JSON.stringify(fixture.manifest, null, 2)}\n`;
+  zip.file("package/openclaw.plugin.json", manifestJson, { date: new Date(0) });
 
   const archive = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
   const sha256hash = crypto.createHash("sha256").update(archive).digest("hex");
-  const { packageDetail, versionDetail, betaStatus } = fixture.packageDetail(sha256hash);
+  const clawpack = await buildNpmPackArtifact(fixture);
+  const { packageDetail, versionDetail, betaStatus } = fixture.packageDetail({
+    sha256hash,
+    ...clawpack,
+  });
 
   const json = (response, value, status = 200) => {
     response.writeHead(status, { "content-type": "application/json" });
     response.end(`${JSON.stringify(value)}\n`);
+  };
+  const artifactResolverDetail = {
+    package: versionDetail.package ?? {
+      name: packageName,
+      displayName: packageDetail.package?.displayName ?? "OpenClaw Kitchen Sink",
+      family: packageDetail.package?.family ?? "code-plugin",
+    },
+    version: versionDetail.version,
+    artifact: {
+      source: "clawhub",
+      artifactKind: "npm-pack",
+      packageName,
+      version: fixture.version,
+      artifactSha256: clawpack.clawpackSha256,
+      npmIntegrity: clawpack.npmIntegrity,
+      npmShasum: clawpack.npmShasum,
+    },
   };
 
   const server = http.createServer((request, response) => {
@@ -269,6 +375,13 @@ async function main() {
       return;
     }
     if (
+      url.pathname ===
+      `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}/artifact`
+    ) {
+      json(response, artifactResolverDetail);
+      return;
+    }
+    if (
       betaStatus !== undefined &&
       url.pathname === `/api/v1/packages/${encodeURIComponent(packageName)}/versions/beta`
     ) {
@@ -281,6 +394,21 @@ async function main() {
         "content-length": String(archive.length),
       });
       response.end(archive);
+      return;
+    }
+    if (
+      url.pathname ===
+      `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}/artifact/download`
+    ) {
+      response.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-length": String(clawpack.archive.length),
+        "X-ClawHub-Artifact-Type": "npm-pack-tarball",
+        "X-ClawHub-Artifact-Sha256": clawpack.clawpackSha256,
+        "X-ClawHub-Npm-Integrity": clawpack.npmIntegrity,
+        "X-ClawHub-Npm-Shasum": clawpack.npmShasum,
+      });
+      response.end(clawpack.archive);
       return;
     }
     response.writeHead(404, { "content-type": "text/plain" });

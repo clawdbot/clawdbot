@@ -55,6 +55,7 @@ let downloadImageFeishu: typeof import("./media.js").downloadImageFeishu;
 let downloadMessageResourceFeishu: typeof import("./media.js").downloadMessageResourceFeishu;
 let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
+let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
 
 function expectPathIsolatedToTmpRoot(pathValue: string, key: string): void {
   expect(pathValue).not.toContain(key);
@@ -92,6 +93,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       downloadMessageResourceFeishu,
       sanitizeFileNameForUpload,
       sendMediaFeishu,
+      shouldSuppressFeishuTextForVoiceMedia,
     } = await import("./media.js"));
   });
 
@@ -153,6 +155,25 @@ describe("sendMediaFeishu msg_type routing", () => {
       await fs.writeFile(args.at(-1) ?? "", Buffer.from("opus-output"));
       return "";
     });
+  });
+
+  it("suppresses reply text only for voice-intent or native voice media", () => {
+    expect(
+      shouldSuppressFeishuTextForVoiceMedia({
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppressFeishuTextForVoiceMedia({
+        mediaUrl: "https://example.com/reply.ogg?download=1",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppressFeishuTextForVoiceMedia({
+        mediaUrl: "https://example.com/song.mp3",
+      }),
+    ).toBe(false);
   });
 
   it("uses msg_type=media for mp4 video", async () => {

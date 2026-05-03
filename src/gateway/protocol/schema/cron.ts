@@ -365,6 +365,7 @@ export const CronRunLogEntrySchema = Type.Object(
     deliveryError: Type.Optional(Type.String()),
     sessionId: Type.Optional(NonEmptyString),
     sessionKey: Type.Optional(NonEmptyString),
+    runId: Type.Optional(NonEmptyString),
     runAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

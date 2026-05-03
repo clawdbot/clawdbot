@@ -116,6 +116,7 @@ export async function generateVideo(
     parseModelRef: parseVideoGenerationModelRef,
     agentDir: params.agentDir,
     listProviders,
+    autoProviderFallback: params.autoProviderFallback,
   });
   if (candidates.length === 0) {
     throw new Error(buildNoVideoGenerationModelConfiguredMessage(params.cfg, deps));

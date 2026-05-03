@@ -29,18 +29,33 @@ describe("cleanupLegacyPluginDependencyState", () => {
       "demo",
       "node_modules",
     );
+    const legacyExtensionStamp = path.join(
+      packageRoot,
+      "dist",
+      "extensions",
+      "demo",
+      ".openclaw-runtime-deps-stamp.json",
+    );
     const legacyManifest = path.join(
       packageRoot,
       "extensions",
       "demo",
       ".openclaw-runtime-deps.json",
     );
+    const thirdPartyNodeModules = path.join(
+      stateDir,
+      "extensions",
+      "lossless-claw",
+      "node_modules",
+    );
 
     await fs.mkdir(legacyRuntimeRoot, { recursive: true });
     await fs.mkdir(legacyLocalRoot, { recursive: true });
     await fs.mkdir(legacyExtensionNodeModules, { recursive: true });
+    await fs.writeFile(legacyExtensionStamp, "{}");
     await fs.mkdir(path.dirname(legacyManifest), { recursive: true });
     await fs.writeFile(legacyManifest, "{}");
+    await fs.mkdir(thirdPartyNodeModules, { recursive: true });
     await fs.mkdir(explicitStageDir, { recursive: true });
     await fs.mkdir(path.join(stateDirectory, "plugin-runtime-deps"), { recursive: true });
 
@@ -55,11 +70,13 @@ describe("cleanupLegacyPluginDependencyState", () => {
         legacyRuntimeRoot,
         legacyLocalRoot,
         legacyExtensionNodeModules,
+        legacyExtensionStamp,
         legacyManifest,
         explicitStageDir,
         path.join(stateDirectory, "plugin-runtime-deps"),
       ]),
     );
+    expect(targets).not.toContain(thirdPartyNodeModules);
 
     const result = await cleanupLegacyPluginDependencyState({ env, packageRoot });
 
@@ -68,7 +85,9 @@ describe("cleanupLegacyPluginDependencyState", () => {
     await expect(fs.stat(legacyRuntimeRoot)).rejects.toThrow();
     await expect(fs.stat(legacyLocalRoot)).rejects.toThrow();
     await expect(fs.stat(legacyExtensionNodeModules)).rejects.toThrow();
+    await expect(fs.stat(legacyExtensionStamp)).rejects.toThrow();
     await expect(fs.stat(legacyManifest)).rejects.toThrow();
+    await expect(fs.stat(thirdPartyNodeModules)).resolves.toBeDefined();
     await expect(fs.stat(explicitStageDir)).rejects.toThrow();
     await expect(fs.stat(path.join(stateDirectory, "plugin-runtime-deps"))).rejects.toThrow();
   });

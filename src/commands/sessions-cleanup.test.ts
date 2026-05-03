@@ -14,6 +14,11 @@ const mocks = vi.hoisted(() => ({
   capEntryCount: vi.fn(),
   updateSessionStore: vi.fn(),
   enforceSessionDiskBudget: vi.fn(),
+  resolveSessionCleanupAction: vi.fn(),
+  runSessionsCleanup: vi.fn(),
+  serializeSessionCleanupResult: vi.fn(),
+  callGateway: vi.fn(),
+  isGatewayTransportError: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -35,6 +40,14 @@ vi.mock("../config/sessions.js", () => ({
   capEntryCount: mocks.capEntryCount,
   updateSessionStore: mocks.updateSessionStore,
   enforceSessionDiskBudget: mocks.enforceSessionDiskBudget,
+  resolveSessionCleanupAction: mocks.resolveSessionCleanupAction,
+  runSessionsCleanup: mocks.runSessionsCleanup,
+  serializeSessionCleanupResult: mocks.serializeSessionCleanupResult,
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
+  isGatewayTransportError: mocks.isGatewayTransportError,
 }));
 
 import { sessionsCleanupCommand } from "./sessions-cleanup.js";
@@ -97,6 +110,49 @@ describe("sessionsCleanupCommand", () => {
     );
     mocks.capEntryCount.mockImplementation(() => 0);
     mocks.updateSessionStore.mockResolvedValue(0);
+    mocks.callGateway.mockResolvedValue(null);
+    mocks.isGatewayTransportError.mockReturnValue(true);
+    mocks.resolveSessionCleanupAction.mockImplementation(
+      (params: {
+        key: string;
+        missingKeys: Set<string>;
+        staleKeys: Set<string>;
+        cappedKeys: Set<string>;
+        budgetEvictedKeys: Set<string>;
+      }) => {
+        if (params.missingKeys.has(params.key)) {
+          return "prune-missing";
+        }
+        if (params.staleKeys.has(params.key)) {
+          return "prune-stale";
+        }
+        if (params.cappedKeys.has(params.key)) {
+          return "cap-overflow";
+        }
+        if (params.budgetEvictedKeys.has(params.key)) {
+          return "evict-budget";
+        }
+        return "keep";
+      },
+    );
+    mocks.serializeSessionCleanupResult.mockImplementation(
+      (params: { mode: string; dryRun: boolean; summaries: Record<string, unknown>[] }) => {
+        if (params.summaries.length === 1) {
+          return params.summaries[0] ?? {};
+        }
+        return {
+          allAgents: true,
+          mode: params.mode,
+          dryRun: params.dryRun,
+          stores: params.summaries,
+        };
+      },
+    );
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "warn",
+      previewResults: [],
+      appliedSummaries: [],
+    });
     mocks.enforceSessionDiskBudget.mockResolvedValue({
       totalBytesBefore: 1000,
       totalBytesAfter: 700,
@@ -110,34 +166,21 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("emits a single JSON object for non-dry runs and applies maintenance", async () => {
-    mocks.loadSessionStore
-      .mockReturnValueOnce({
-        stale: { sessionId: "stale", updatedAt: 1 },
-        fresh: { sessionId: "fresh", updatedAt: 2 },
-      })
-      .mockReturnValueOnce({
-        fresh: { sessionId: "fresh", updatedAt: 2 },
-      });
-    mocks.updateSessionStore.mockImplementation(
-      async (
-        _storePath: string,
-        mutator: (store: Record<string, SessionEntry>) => Promise<void> | void,
-        opts?: {
-          onMaintenanceApplied?: (report: {
-            mode: "warn" | "enforce";
-            beforeCount: number;
-            afterCount: number;
-            pruned: number;
-            capped: number;
-            diskBudget: Record<string, unknown> | null;
-          }) => Promise<void> | void;
-        },
-      ) => {
-        await mutator({});
-        await opts?.onMaintenanceApplied?.({
+    mocks.callGateway.mockRejectedValue(
+      Object.assign(new Error("closed"), { name: "GatewayTransportError" }),
+    );
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "enforce",
+      previewResults: [],
+      appliedSummaries: [
+        {
+          agentId: "main",
+          storePath: "/resolved/sessions.json",
           mode: "enforce",
+          dryRun: false,
           beforeCount: 3,
           afterCount: 1,
+          missing: 0,
           pruned: 0,
           capped: 2,
           diskBudget: {
@@ -150,10 +193,12 @@ describe("sessionsCleanupCommand", () => {
             highWaterBytes: 800,
             overBudget: true,
           },
-        });
-        return 0;
-      },
-    );
+          wouldMutate: true,
+          applied: true,
+          appliedCount: 1,
+        },
+      ],
+    });
 
     const { runtime, logs } = makeRuntime();
     await sessionsCleanupCommand(
@@ -179,21 +224,90 @@ describe("sessionsCleanupCommand", () => {
         removedEntries: 0,
       }),
     );
-    expect(mocks.updateSessionStore).toHaveBeenCalledWith(
-      "/resolved/sessions.json",
-      expect.any(Function),
+    expect(mocks.runSessionsCleanup).toHaveBeenCalledWith(
       expect.objectContaining({
-        activeSessionKey: "agent:main:main",
-        maintenanceOverride: { mode: "enforce" },
-        onMaintenanceApplied: expect.any(Function),
+        cfg: { session: { store: "/cfg/sessions.json" } },
+        opts: expect.objectContaining({
+          enforce: true,
+          activeKey: "agent:main:main",
+        }),
+        targets: [{ agentId: "main", storePath: "/resolved/sessions.json" }],
       }),
     );
   });
 
+  it("delegates non-store enforcing cleanup through the Gateway writer when reachable", async () => {
+    mocks.callGateway.mockResolvedValue({
+      agentId: "main",
+      storePath: "/resolved/sessions.json",
+      mode: "enforce",
+      dryRun: false,
+      beforeCount: 3,
+      afterCount: 1,
+      missing: 0,
+      pruned: 2,
+      capped: 0,
+      diskBudget: null,
+      wouldMutate: true,
+      applied: true,
+      appliedCount: 1,
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        json: true,
+        enforce: true,
+      },
+      runtime,
+    );
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.cleanup",
+        params: expect.objectContaining({ enforce: true }),
+        requiredMethods: ["sessions.cleanup"],
+      }),
+    );
+    expect(mocks.updateSessionStore).not.toHaveBeenCalled();
+    expect(JSON.parse(logs[0] ?? "{}")).toEqual(expect.objectContaining({ appliedCount: 1 }));
+  });
+
   it("returns dry-run JSON without mutating the store", async () => {
-    mocks.loadSessionStore.mockReturnValue({
-      stale: { sessionId: "stale", updatedAt: 1 },
-      fresh: { sessionId: "fresh", updatedAt: 2 },
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "warn",
+      previewResults: [
+        {
+          summary: {
+            agentId: "main",
+            storePath: "/resolved/sessions.json",
+            mode: "warn",
+            dryRun: true,
+            beforeCount: 2,
+            afterCount: 1,
+            missing: 0,
+            pruned: 1,
+            capped: 0,
+            diskBudget: {
+              totalBytesBefore: 1000,
+              totalBytesAfter: 700,
+              removedFiles: 1,
+              removedEntries: 1,
+              freedBytes: 300,
+              maxBytes: 900,
+              highWaterBytes: 700,
+              overBudget: true,
+            },
+            wouldMutate: true,
+          },
+          beforeStore: {},
+          missingKeys: new Set<string>(),
+          staleKeys: new Set<string>(),
+          cappedKeys: new Set<string>(),
+          budgetEvictedKeys: new Set<string>(),
+        },
+      ],
+      appliedSummaries: [],
     });
 
     const { runtime, logs } = makeRuntime();
@@ -209,6 +323,7 @@ describe("sessionsCleanupCommand", () => {
     const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
     expect(payload.dryRun).toBe(true);
     expect(payload.applied).toBeUndefined();
+    expect(mocks.runSessionsCleanup).toHaveBeenCalled();
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
     expect(payload.diskBudget).toEqual(
       expect.objectContaining({
@@ -220,8 +335,31 @@ describe("sessionsCleanupCommand", () => {
 
   it("counts missing transcript entries when --fix-missing is enabled in dry-run", async () => {
     mocks.enforceSessionDiskBudget.mockResolvedValue(null);
-    mocks.loadSessionStore.mockReturnValue({
-      missing: { sessionId: "missing-transcript", updatedAt: 1 },
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "warn",
+      previewResults: [
+        {
+          summary: {
+            agentId: "main",
+            storePath: "/resolved/sessions.json",
+            mode: "warn",
+            dryRun: true,
+            beforeCount: 1,
+            afterCount: 0,
+            missing: 1,
+            pruned: 0,
+            capped: 0,
+            diskBudget: null,
+            wouldMutate: true,
+          },
+          beforeStore: {},
+          missingKeys: new Set(["missing"]),
+          staleKeys: new Set<string>(),
+          cappedKeys: new Set<string>(),
+          budgetEvictedKeys: new Set<string>(),
+        },
+      ],
+      appliedSummaries: [],
     });
 
     const { runtime, logs } = makeRuntime();
@@ -243,9 +381,34 @@ describe("sessionsCleanupCommand", () => {
 
   it("renders a dry-run action table with keep/prune actions", async () => {
     mocks.enforceSessionDiskBudget.mockResolvedValue(null);
-    mocks.loadSessionStore.mockReturnValue({
-      stale: { sessionId: "stale", updatedAt: 1, model: "pi:opus" },
-      fresh: { sessionId: "fresh", updatedAt: 2, model: "pi:opus" },
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "warn",
+      previewResults: [
+        {
+          summary: {
+            agentId: "main",
+            storePath: "/resolved/sessions.json",
+            mode: "warn",
+            dryRun: true,
+            beforeCount: 2,
+            afterCount: 1,
+            missing: 0,
+            pruned: 1,
+            capped: 0,
+            diskBudget: null,
+            wouldMutate: true,
+          },
+          beforeStore: {
+            stale: { sessionId: "stale", updatedAt: 1, model: "pi:opus" },
+            fresh: { sessionId: "fresh", updatedAt: 2, model: "pi:opus" },
+          },
+          missingKeys: new Set<string>(),
+          staleKeys: new Set(["stale"]),
+          cappedKeys: new Set<string>(),
+          budgetEvictedKeys: new Set<string>(),
+        },
+      ],
+      appliedSummaries: [],
     });
 
     const { runtime, logs } = makeRuntime();
@@ -268,9 +431,52 @@ describe("sessionsCleanupCommand", () => {
       { agentId: "work", storePath: "/resolved/work-sessions.json" },
     ]);
     mocks.enforceSessionDiskBudget.mockResolvedValue(null);
-    mocks.loadSessionStore
-      .mockReturnValueOnce({ stale: { sessionId: "stale-main", updatedAt: 1 } })
-      .mockReturnValueOnce({ stale: { sessionId: "stale-work", updatedAt: 1 } });
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "warn",
+      previewResults: [
+        {
+          summary: {
+            agentId: "main",
+            storePath: "/resolved/main-sessions.json",
+            mode: "warn",
+            dryRun: true,
+            beforeCount: 1,
+            afterCount: 0,
+            missing: 0,
+            pruned: 1,
+            capped: 0,
+            diskBudget: null,
+            wouldMutate: true,
+          },
+          beforeStore: {},
+          missingKeys: new Set<string>(),
+          staleKeys: new Set(["stale"]),
+          cappedKeys: new Set<string>(),
+          budgetEvictedKeys: new Set<string>(),
+        },
+        {
+          summary: {
+            agentId: "work",
+            storePath: "/resolved/work-sessions.json",
+            mode: "warn",
+            dryRun: true,
+            beforeCount: 1,
+            afterCount: 0,
+            missing: 0,
+            pruned: 1,
+            capped: 0,
+            diskBudget: null,
+            wouldMutate: true,
+          },
+          beforeStore: {},
+          missingKeys: new Set<string>(),
+          staleKeys: new Set(["stale"]),
+          cappedKeys: new Set<string>(),
+          budgetEvictedKeys: new Set<string>(),
+        },
+      ],
+      appliedSummaries: [],
+    });
 
     const { runtime, logs } = makeRuntime();
     await sessionsCleanupCommand(
