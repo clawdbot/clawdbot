@@ -57,6 +57,11 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
         ```
       </Tab>
     </Tabs>
+
+    <Warning>
+    `plugins.allow` is an exclusive allowlist, not an additive enable flag. On an existing gateway, add `diagnostics-prometheus` to the current list instead of replacing it with the one-item example above. Replacing the list can prevent other plugins from loading.
+    </Warning>
+
   </Step>
   <Step title="Restart the Gateway">
     The HTTP route is registered at plugin startup, so reload after enabling.
