@@ -7,7 +7,7 @@ import type { PluginLoadOptions } from "./loader.js";
 import type { PluginRegistry } from "./registry-types.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
-const PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION = 3;
+const PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION = 4;
 const PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT = 256;
 
 /** Cached display descriptor for one plugin-created tool. */
@@ -92,6 +92,7 @@ function buildDescriptorContextCacheKey(params: {
   ctx: OpenClawPluginToolContext;
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
   configCacheKeyMemo?: PluginToolDescriptorConfigCacheKeyMemo;
+  factoryDelegatedAuth?: boolean;
 }): string {
   const { ctx } = params;
   return JSON.stringify({
@@ -114,6 +115,7 @@ function buildDescriptorContextCacheKey(params: {
     requesterSenderId: ctx.requesterSenderId ?? null,
     senderIsOwner: ctx.senderIsOwner ?? null,
     sandboxed: ctx.sandboxed ?? null,
+    factoryDelegatedAuth: params.factoryDelegatedAuth === true,
   });
 }
 
@@ -125,6 +127,7 @@ export function buildPluginToolDescriptorCacheKey(params: {
   ctx: OpenClawPluginToolContext;
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
   configCacheKeyMemo?: PluginToolDescriptorConfigCacheKeyMemo;
+  factoryDelegatedAuth?: boolean;
 }): string {
   return JSON.stringify({
     version: PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION,
@@ -137,6 +140,7 @@ export function buildPluginToolDescriptorCacheKey(params: {
       ctx: params.ctx,
       currentRuntimeConfig: params.currentRuntimeConfig,
       configCacheKeyMemo: params.configCacheKeyMemo,
+      factoryDelegatedAuth: params.factoryDelegatedAuth,
     }),
   });
 }

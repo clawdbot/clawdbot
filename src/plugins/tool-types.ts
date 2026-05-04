@@ -1,10 +1,43 @@
 // Defines plugin tool metadata and filesystem policy types.
 import type { ToolFsPolicy } from "../agents/tool-fs-policy.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { DelegatedAccessTokenProvider } from "./delegated-auth-types.js";
+
+export type { DelegatedAccessTokenProvider } from "./delegated-auth-types.js";
+
+export type DelegatedAccessTokenRequest = {
+  provider: DelegatedAccessTokenProvider;
+  /** Provider-specific OAuth connection name. Defaults to the channel's configured connection. */
+  connectionName?: string;
+  /** Expected token audience. Used as a local guard before returning the token to a tool. */
+  audience?: string;
+  /** Required delegated scopes. Used as a local guard before returning the token to a tool. */
+  scopes?: string[];
+};
+
+export type DelegatedAccessTokenResult =
+  | {
+      ok: true;
+      token: string;
+      expiresAt?: string;
+      tenantId?: string;
+      userId?: string;
+    }
+  | {
+      ok: false;
+      reason: "not_configured" | "missing_consent" | "expired" | "unavailable";
+    };
+
+export type OpenClawPluginAuthContext = {
+  getDelegatedAccessToken(
+    request: DelegatedAccessTokenRequest,
+  ): Promise<DelegatedAccessTokenResult>;
+};
 
 export type OpenClawPluginActiveModelContext = {
   provider?: string;
@@ -37,6 +70,10 @@ export type OpenClawPluginToolContext = {
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;
   };
+  /** Active conversation type supplied by the channel runtime. */
+  chatType?: ChatType;
+  /** Execution-scoped delegated auth capability for this plugin's tools. */
+  auth?: OpenClawPluginAuthContext;
   messageChannel?: string;
   agentAccountId?: string;
   /** Trusted provider auth availability from the active auth profile store. */

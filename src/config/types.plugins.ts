@@ -1,6 +1,23 @@
 // Defines plugin entry and install configuration types.
+import type { ChatType } from "../channels/chat-type.js";
+import type { DelegatedAccessTokenProvider } from "../plugins/delegated-auth-types.js";
+
 export type PluginEntryConfig = {
   enabled?: boolean;
+  auth?: {
+    delegatedAccess?: {
+      /** Explicitly allow this plugin's tools to request delegated user access tokens at runtime. */
+      enabled?: boolean;
+      /** Optional delegated auth providers this plugin may request. */
+      providers?: DelegatedAccessTokenProvider[];
+      /** Optional token audiences this plugin may request. */
+      audiences?: string[];
+      /** Optional delegated scopes this plugin may request. */
+      scopes?: string[];
+      /** Optional chat types where this plugin may receive delegated tokens. */
+      chatTypes?: ChatType[];
+    };
+  };
   hooks?: {
     /** Controls prompt mutation via before_prompt_build and prompt fields from legacy before_agent_start. */
     allowPromptInjection?: boolean;

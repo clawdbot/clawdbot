@@ -69,6 +69,53 @@ describe("normalizePluginsConfig", () => {
 
   it.each([
     {
+      name: "normalizes plugin delegated auth policy settings",
+      entry: {
+        auth: {
+          delegatedAccess: {
+            enabled: true,
+            providers: ["msteams"],
+            audiences: [" api://downstream "],
+            scopes: [" downstream.access "],
+            chatTypes: ["DIRECT", "group", "invalid", ""],
+          },
+        },
+      },
+      expectedAuth: {
+        delegatedAccess: {
+          enabled: true,
+          providers: ["msteams"],
+          audiences: ["api://downstream"],
+          scopes: ["downstream.access"],
+          chatTypes: ["direct", "group"],
+        },
+      },
+    },
+    {
+      name: "preserves delegated auth provider ids as extension-owned strings",
+      entry: {
+        auth: {
+          delegatedAccess: {
+            enabled: "yes",
+            providers: ["msteams", "unknown"],
+            audiences: [42],
+            scopes: [null],
+            chatTypes: ["invalid"],
+          },
+        },
+      },
+      expectedAuth: {
+        delegatedAccess: {
+          providers: ["msteams", "unknown"],
+        },
+      },
+    },
+  ] as const)("$name", ({ entry, expectedAuth }) => {
+    expect(normalizeVoiceCallEntry(entry)?.auth).toEqual(expectedAuth);
+  });
+
+  it.each([
+    {
       name: "normalizes plugin hook policy flags",
       entry: {
         hooks: {

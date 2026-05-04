@@ -142,6 +142,29 @@ describe("plugin tool descriptor cache keys", () => {
     expect(firstKey).not.toBe(secondKey);
   });
 
+  it("separates descriptors created with and without delegated auth", () => {
+    const base = {
+      pluginId: "demo",
+      source: "/tmp/demo.js",
+      contractToolNames: ["demo"],
+      ctx: {
+        workspaceDir: "/tmp/workspace",
+        agentId: "main",
+      },
+    };
+
+    const withoutAuth = buildPluginToolDescriptorCacheKey({
+      ...base,
+      factoryDelegatedAuth: false,
+    });
+    const withAuth = buildPluginToolDescriptorCacheKey({
+      ...base,
+      factoryDelegatedAuth: true,
+    });
+
+    expect(withAuth).not.toBe(withoutAuth);
+  });
+
   it("varies descriptor keys by trusted owner state", () => {
     const base = {
       pluginId: "demo",

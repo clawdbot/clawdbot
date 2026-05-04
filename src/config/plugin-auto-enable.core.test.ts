@@ -977,6 +977,58 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("discord plugin config present, added to plugin allowlist.");
   });
 
+  it("preserves delegated-auth plugin entries in restrictive plugins.allow", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["glueclaw"],
+          entries: {
+            "downstream-tools": {
+              auth: {
+                delegatedAccess: {
+                  enabled: true,
+                  providers: ["msteams"],
+                  audiences: ["api://downstream-tools"],
+                  scopes: ["downstream.access"],
+                },
+              },
+            },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([{ id: "downstream-tools", channels: [] }]),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["glueclaw", "downstream-tools"]);
+    expect(result.changes).toContain(
+      "downstream-tools plugin config present, added to plugin allowlist.",
+    );
+  });
+
+  it("does not preserve disabled or empty delegated-auth plugin entries in restrictive plugins.allow", () => {
+    for (const auth of [{}, { delegatedAccess: {} }, { delegatedAccess: { enabled: false } }]) {
+      const result = materializePluginAutoEnableCandidates({
+        config: {
+          plugins: {
+            allow: ["glueclaw"],
+            entries: {
+              "downstream-tools": { auth },
+            },
+          },
+        },
+        candidates: [],
+        env,
+        manifestRegistry: makeRegistry([{ id: "downstream-tools", channels: [] }]),
+      });
+
+      expect(result.config.plugins?.allow).toEqual(["glueclaw"]);
+      expect(result.changes).not.toContain(
+        "downstream-tools plugin config present, added to plugin allowlist.",
+      );
+    }
+  });
+
   it("does not preserve stale configured plugin entries in restrictive plugins.allow", () => {
     const result = materializePluginAutoEnableCandidates({
       config: {

@@ -268,6 +268,21 @@ const SkillEntrySchema = z
 const PluginEntrySchema = z
   .object({
     enabled: z.boolean().optional(),
+    auth: z
+      .object({
+        delegatedAccess: z
+          .object({
+            enabled: z.boolean().optional(),
+            providers: z.array(z.string()).optional(),
+            audiences: z.array(z.string()).optional(),
+            scopes: z.array(z.string()).optional(),
+            chatTypes: z.array(z.enum(["direct", "group", "channel"])).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     hooks: z
       .object({
         allowPromptInjection: z.boolean().optional(),

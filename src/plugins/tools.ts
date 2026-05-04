@@ -15,7 +15,11 @@ import {
   isHostRestrictedConversationReadTool,
   registrationIncludesHostRestrictedConversationReadTool,
 } from "./compat/conversation-read-tools.js";
-import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
+import {
+  applyTestPluginDefaults,
+  normalizePluginsConfig,
+  type NormalizedPluginsConfig,
+} from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
   isManifestPluginAvailableForControlPlane,
@@ -32,6 +36,7 @@ import {
 } from "./runtime/load-context.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "./runtime/standalone-runtime-registry-loader.js";
 import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
+import { resolveDelegatedAuthForPlugin } from "./tool-delegated-auth-policy.js";
 import {
   buildPluginToolDescriptorCacheKey,
   capturePluginToolDescriptor,
@@ -42,7 +47,11 @@ import {
   type PluginToolDescriptorConfigCacheKeyMemo,
   writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
-import type { OpenClawPluginToolContext } from "./types.js";
+import {
+  bindPluginToolExecutionAuth,
+  createExecutionScopedPluginAuthContext,
+} from "./tool-execution-auth.js";
+import type { OpenClawPluginAuthContext, OpenClawPluginToolContext } from "./types.js";
 
 /** MCP bridge metadata attached to plugin tools surfaced through agent tool lists. */
 export type PluginToolMcpMeta = {
@@ -324,6 +333,31 @@ function isPluginToolOptional(params: {
   );
 }
 
+function areManifestToolNamesAllOptional(params: {
+  manifestPlugin: PluginManifestRecord | undefined;
+  toolNames: readonly string[];
+}): boolean {
+  return Boolean(
+    params.manifestPlugin &&
+    params.toolNames.length > 0 &&
+    params.toolNames.every((toolName) => isManifestToolOptional(params.manifestPlugin!, toolName)),
+  );
+}
+
+function isPluginToolFactoryEffectivelyOptional(params: {
+  entryOptional: boolean;
+  manifestPlugin: PluginManifestRecord | undefined;
+  toolNames: readonly string[];
+}): boolean {
+  return (
+    params.entryOptional ||
+    areManifestToolNamesAllOptional({
+      manifestPlugin: params.manifestPlugin,
+      toolNames: params.toolNames,
+    })
+  );
+}
+
 function isManifestToolReplaySafe(params: {
   manifestPlugin: PluginManifestRecord | undefined;
   toolName: string;
@@ -382,6 +416,18 @@ function isOptionalToolEntryPotentiallyAllowed(params: {
     return true;
   }
   return params.names.some((name) => params.allowlist.has(normalizeToolName(name)));
+}
+
+function isPluginToolFactoryDelegatedAuthAllowed(params: {
+  optional: boolean;
+  pluginId: string;
+  names: readonly string[];
+  allowlist: Set<string>;
+}): boolean {
+  if (!params.optional) {
+    return true;
+  }
+  return isOptionalToolEntryPotentiallyAllowed(params);
 }
 
 function readPluginToolName(tool: unknown): string {
@@ -532,6 +578,54 @@ function describeMalformedPluginTool(tool: unknown): string | undefined {
     return `${name} missing parameters object`;
   }
   return undefined;
+}
+
+function withPluginDelegatedAuthContext(params: {
+  context: OpenClawPluginToolContext;
+  auth: OpenClawPluginAuthContext | undefined;
+}): OpenClawPluginToolContext {
+  if (params.auth) {
+    return {
+      ...params.context,
+      auth: params.auth,
+    };
+  }
+  const { auth: _auth, ...contextWithoutAuth } = params.context;
+  return contextWithoutAuth;
+}
+
+function resolvePluginToolFactoryDelegatedAuth(params: {
+  context: OpenClawPluginToolContext;
+  pluginId: string;
+  optional: boolean;
+  names: readonly string[];
+  allowlist: Set<string>;
+  plugins: NormalizedPluginsConfig;
+}): {
+  executionAuth: OpenClawPluginAuthContext | undefined;
+  factoryAuth: OpenClawPluginAuthContext | undefined;
+} {
+  const executionAuth = resolveDelegatedAuthForPlugin({
+    auth: params.context.auth,
+    chatType: params.context.chatType,
+    pluginId: params.pluginId,
+    plugins: params.plugins,
+  });
+  if (
+    !executionAuth ||
+    !isPluginToolFactoryDelegatedAuthAllowed({
+      optional: params.optional,
+      pluginId: params.pluginId,
+      names: params.names,
+      allowlist: params.allowlist,
+    })
+  ) {
+    return { executionAuth: undefined, factoryAuth: undefined };
+  }
+  return {
+    executionAuth,
+    factoryAuth: createExecutionScopedPluginAuthContext(params.pluginId),
+  };
 }
 
 function pluginToolNamesMatchAllowlist(params: {
@@ -704,6 +798,7 @@ function buildPluginDescriptorCacheKey(params: {
   ctx: OpenClawPluginToolContext;
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
   configCacheKeyMemo?: PluginToolDescriptorConfigCacheKeyMemo;
+  factoryDelegatedAuth: boolean;
 }): string {
   return buildPluginToolDescriptorCacheKey({
     pluginId: params.plugin.id,
@@ -713,6 +808,7 @@ function buildPluginDescriptorCacheKey(params: {
     ctx: params.ctx,
     currentRuntimeConfig: params.currentRuntimeConfig,
     configCacheKeyMemo: params.configCacheKeyMemo,
+    factoryDelegatedAuth: params.factoryDelegatedAuth,
   });
 }
 
@@ -732,10 +828,24 @@ function createCachedDescriptorPluginTool(params: {
   ctx: OpenClawPluginToolContext;
   loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
   runtimeOptions: PluginLoadOptions["runtimeOptions"];
+  allowlist: Set<string>;
+  plugins: NormalizedPluginsConfig;
 }): AnyAgentTool {
   const { descriptor } = params.descriptor;
   const pluginId = descriptor.owner.kind === "plugin" ? descriptor.owner.pluginId : "";
   const toolName = descriptor.name;
+  const delegatedAuth = resolvePluginToolFactoryDelegatedAuth({
+    context: params.ctx,
+    pluginId,
+    optional: params.descriptor.optional,
+    names: [toolName],
+    allowlist: params.allowlist,
+    plugins: params.plugins,
+  });
+  const factoryContext = withPluginDelegatedAuthContext({
+    context: params.ctx,
+    auth: delegatedAuth.factoryAuth,
+  });
   const tool: AnyAgentTool = {
     name: descriptor.name,
     label: descriptor.title ?? descriptor.name,
@@ -792,7 +902,7 @@ function createCachedDescriptorPluginTool(params: {
         ) {
           return undefined;
         }
-        const resolved = resolvePluginToolFactory(candidate, params.ctx);
+        const resolved = resolvePluginToolFactory(candidate, factoryContext);
         const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
         for (const toolRaw of listRaw) {
           const malformedReason = describeMalformedPluginTool(toolRaw);
@@ -820,10 +930,17 @@ function createCachedDescriptorPluginTool(params: {
       throw new Error(`plugin tool runtime missing (${pluginId}): ${toolName}`);
     },
   };
+  const executableTool = delegatedAuth.factoryAuth
+    ? bindPluginToolExecutionAuth({
+        tool,
+        pluginId,
+        auth: delegatedAuth.executionAuth,
+      })
+    : tool;
   if (params.descriptor.displaySummary) {
-    tool.displaySummary = params.descriptor.displaySummary;
+    executableTool.displaySummary = params.descriptor.displaySummary;
   }
-  setPluginToolMeta(tool, {
+  setPluginToolMeta(executableTool, {
     pluginId,
     optional: params.descriptor.optional,
     replaySafe: isManifestToolReplaySafe({
@@ -835,7 +952,7 @@ function createCachedDescriptorPluginTool(params: {
       toolName,
     }),
   });
-  return tool;
+  return executableTool;
 }
 
 function resolveCachedPluginTools(params: {
@@ -855,6 +972,7 @@ function resolveCachedPluginTools(params: {
   runtimeOptions: PluginLoadOptions["runtimeOptions"];
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
   configCacheKeyMemo: PluginToolDescriptorConfigCacheKeyMemo;
+  plugins: NormalizedPluginsConfig;
 }): { tools: AnyAgentTool[]; handledPluginIds: Set<string> } {
   const tools: AnyAgentTool[] = [];
   const handledPluginIds = new Set<string>();
@@ -902,12 +1020,26 @@ function resolveCachedPluginTools(params: {
     if (params.existingNormalized.has(normalizeToolName(plugin.id))) {
       continue;
     }
+    const factoryOptional = isPluginToolFactoryEffectivelyOptional({
+      entryOptional: false,
+      manifestPlugin: plugin,
+      toolNames: availableToolNames,
+    });
+    const delegatedAuth = resolvePluginToolFactoryDelegatedAuth({
+      context: params.ctx,
+      pluginId: plugin.id,
+      optional: factoryOptional,
+      names: availableToolNames,
+      allowlist: params.allowlist,
+      plugins: params.plugins,
+    });
     const cached = readCachedPluginToolDescriptors(
       buildPluginDescriptorCacheKey({
         plugin,
         ctx: params.ctx,
         currentRuntimeConfig: params.currentRuntimeConfig,
         configCacheKeyMemo: params.configCacheKeyMemo,
+        factoryDelegatedAuth: Boolean(delegatedAuth.factoryAuth),
       }),
     );
     if (
@@ -976,6 +1108,8 @@ function resolveCachedPluginTools(params: {
           ctx: params.ctx,
           loadContext: params.loadContext,
           runtimeOptions: params.runtimeOptions,
+          allowlist: params.allowlist,
+          plugins: params.plugins,
         }),
       );
     }
@@ -1082,6 +1216,7 @@ function resolvePluginToolLoadState(params: {
       onlyPluginIds: string[];
       runtimeOptions: PluginLoadOptions["runtimeOptions"];
       snapshot: PluginMetadataManifestView;
+      plugins: NormalizedPluginsConfig;
     }
   | undefined {
   const env = params.env ?? process.env;
@@ -1120,7 +1255,15 @@ function resolvePluginToolLoadState(params: {
     onlyPluginIds,
     runtimeOptions,
   });
-  return { context, env, loadOptions, onlyPluginIds, runtimeOptions, snapshot };
+  return {
+    context,
+    env,
+    loadOptions,
+    onlyPluginIds,
+    runtimeOptions,
+    snapshot,
+    plugins: normalized,
+  };
 }
 
 export function ensureStandalonePluginToolRegistryLoaded(params: {
@@ -1166,7 +1309,7 @@ export function resolvePluginTools(params: {
   if (!loadState) {
     return [];
   }
-  const { context, env, onlyPluginIds, runtimeOptions, snapshot } = loadState;
+  const { context, env, onlyPluginIds, runtimeOptions, snapshot, plugins } = loadState;
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
@@ -1203,6 +1346,7 @@ export function resolvePluginTools(params: {
     runtimeOptions,
     currentRuntimeConfig: currentRuntimeConfigForDescriptorCache,
     configCacheKeyMemo,
+    plugins,
   });
   tools.push(...cached.tools);
   const runtimePluginIds = onlyPluginIds.filter(
@@ -1275,6 +1419,7 @@ export function resolvePluginTools(params: {
   const factoryTimingStartedAt = Date.now();
   const factoryTimings: PluginToolFactoryTiming[] = [];
   const capturedDescriptorsByPluginId = new Map<string, CachedPluginToolDescriptor[]>();
+  const capturedDescriptorFactoryAuthByPluginId = new Map<string, boolean>();
   const manifestPluginsById = new Map(snapshot.plugins.map((plugin) => [plugin.id, plugin]));
 
   for (const entry of registry.tools) {
@@ -1350,9 +1495,25 @@ export function resolvePluginTools(params: {
     ) {
       continue;
     }
+    const factoryOptional = isPluginToolFactoryEffectivelyOptional({
+      entryOptional: entry.optional,
+      manifestPlugin,
+      toolNames: allowlistNames,
+    });
+    const delegatedAuth = resolvePluginToolFactoryDelegatedAuth({
+      context: params.context,
+      pluginId: entry.pluginId,
+      optional: factoryOptional,
+      names: allowlistNames,
+      allowlist,
+      plugins,
+    });
     const factoryResult = resolvePluginToolFactoryEntry({
       entry,
-      ctx: params.context,
+      ctx: withPluginDelegatedAuthContext({
+        context: params.context,
+        auth: delegatedAuth.factoryAuth,
+      }),
       declaredNames,
       factoryTimingStartedAt,
       logError: (message) => context.logger.error(message),
@@ -1486,7 +1647,14 @@ export function resolvePluginTools(params: {
         manifestPlugin,
         toolName: tool.name,
       });
-      pluginToolMeta.set(tool, {
+      const executableTool = delegatedAuth.factoryAuth
+        ? bindPluginToolExecutionAuth({
+            tool,
+            pluginId: entry.pluginId,
+            auth: delegatedAuth.executionAuth,
+          })
+        : tool;
+      pluginToolMeta.set(executableTool, {
         pluginId: entry.pluginId,
         optional,
         replaySafe: isManifestToolReplaySafe({
@@ -1508,8 +1676,13 @@ export function resolvePluginTools(params: {
           }),
         );
         capturedDescriptorsByPluginId.set(entry.pluginId, capturedDescriptors);
+        capturedDescriptorFactoryAuthByPluginId.set(
+          entry.pluginId,
+          (capturedDescriptorFactoryAuthByPluginId.get(entry.pluginId) ?? false) ||
+            Boolean(delegatedAuth.factoryAuth),
+        );
       }
-      tools.push(tool);
+      tools.push(executableTool);
     }
   }
 
@@ -1543,6 +1716,7 @@ export function resolvePluginTools(params: {
           ctx: params.context,
           currentRuntimeConfig: currentRuntimeConfigForDescriptorCache,
           configCacheKeyMemo,
+          factoryDelegatedAuth: capturedDescriptorFactoryAuthByPluginId.get(pluginId) === true,
         }),
         descriptors,
       });

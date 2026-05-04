@@ -953,8 +953,11 @@ function hasMaterialPluginEntryConfig(entry: unknown): boolean {
   if (!isRecord(entry)) {
     return false;
   }
+  const auth = entry.auth;
+  const delegatedAccess = isRecord(auth) ? auth.delegatedAccess : undefined;
   return (
     entry.enabled === true ||
+    (isRecord(delegatedAccess) && delegatedAccess.enabled === true) ||
     isRecord(entry.config) ||
     isRecord(entry.hooks) ||
     isRecord(entry.subagent) ||

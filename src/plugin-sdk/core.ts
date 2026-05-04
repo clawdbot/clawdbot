@@ -138,7 +138,11 @@ export type {
 } from "@openclaw/model-catalog-core/model-catalog-types";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type {
+  DelegatedAccessTokenProvider,
+  DelegatedAccessTokenRequest,
+  DelegatedAccessTokenResult,
   OpenClawPluginActiveModelContext,
+  OpenClawPluginAuthContext,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "../plugins/types.js";
