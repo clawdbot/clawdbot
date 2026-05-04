@@ -1,0 +1,40 @@
+{
+  "id": "msteams-graph-profile",
+  "name": "Microsoft Teams Downstream Profile Example",
+  "description": "Example delegated-auth tool that calls a downstream profile API with the signed-in Teams user's token.",
+  "activation": {
+    "onStartup": false
+  },
+  "contracts": {
+    "tools": ["msteams_whoami"]
+  },
+  "toolMetadata": {
+    "msteams_whoami": {
+      "optional": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "downstreamBaseUrl": {
+        "type": "string",
+        "description": "Base URL for the downstream API that validates the Teams SSO token and performs OBO to Graph."
+      },
+      "audience": {
+        "type": "string",
+        "description": "Expected JWT audience for the downstream API. For Entra app-id URI tokens, api://<downstream-app-id> is accepted as equivalent to the bare downstream app id."
+      },
+      "scope": {
+        "type": "string",
+        "default": "downstream.access",
+        "description": "Expected delegated scope claim in the downstream API token."
+      },
+      "profilePath": {
+        "type": "string",
+        "default": "/api/me",
+        "description": "Relative downstream API path that returns the signed-in user's profile."
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "msteams-graph-profile",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "downstream": "pnpm --dir ./downstream --ignore-workspace start"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

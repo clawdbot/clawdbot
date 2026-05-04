@@ -280,6 +280,14 @@ const config = {
       project: ["index.ts!", "src/**/*.{js,mjs,ts}!", "protocol/**/*.ts!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
+    "examples/plugins/*": {
+      entry: ["index.ts!"],
+      project: ["index.ts!"],
+    },
+    "examples/plugins/*/downstream": {
+      entry: ["server.ts!"],
+      project: ["*.ts!"],
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       // Bundled plugins often load their public surface via string specifiers in
       // `index.ts` contracts, so Knip needs these convention-based entry files.

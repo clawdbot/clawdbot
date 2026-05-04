@@ -1,0 +1,8 @@
+{
+  "extends": "../../../extensions/tsconfig.package-boundary.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": ["./index.ts", "../../../src/types/**/*.d.ts"]
+}
