@@ -387,24 +387,26 @@ describe("Google Chat monitor inbound context", () => {
       );
 
       expect(res.statusCode).toBe(200);
-      expect(buildContext).toHaveBeenCalledWith(
-        expect.objectContaining({
-          messageId: "spaces/AAA/messages/123",
-          messageIdFull: "spaces/AAA/messages/123",
-          reply: expect.objectContaining({
-            messageThreadId: "spaces/AAA/threads/xyz",
-            replyToId: "spaces/AAA/threads/xyz",
-            replyToIdFull: "spaces/AAA/threads/xyz",
+      await vi.waitFor(() => {
+        expect(buildContext).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId: "spaces/AAA/messages/123",
+            messageIdFull: "spaces/AAA/messages/123",
+            reply: expect.objectContaining({
+              messageThreadId: "spaces/AAA/threads/xyz",
+              replyToId: "spaces/AAA/threads/xyz",
+              replyToIdFull: "spaces/AAA/threads/xyz",
+            }),
           }),
-        }),
-      );
-      expect(run).toHaveBeenCalledWith(
-        expect.objectContaining({
-          adapter: expect.objectContaining({
-            resolveTurn: expect.any(Function),
+        );
+        expect(run).toHaveBeenCalledWith(
+          expect.objectContaining({
+            adapter: expect.objectContaining({
+              resolveTurn: expect.any(Function),
+            }),
           }),
-        }),
-      );
+        );
+      });
     } finally {
       unregister();
     }
@@ -497,17 +499,19 @@ describe("Google Chat monitor inbound context", () => {
       );
 
       expect(res.statusCode).toBe(200);
-      expect(buildContext).toHaveBeenCalledWith(
-        expect.objectContaining({
-          messageId: "spaces/DM/messages/789",
-          messageIdFull: "spaces/DM/messages/789",
-          reply: expect.objectContaining({
-            messageThreadId: undefined,
-            replyToId: undefined,
-            replyToIdFull: undefined,
+      await vi.waitFor(() => {
+        expect(buildContext).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId: "spaces/DM/messages/789",
+            messageIdFull: "spaces/DM/messages/789",
+            reply: expect.objectContaining({
+              messageThreadId: undefined,
+              replyToId: undefined,
+              replyToIdFull: undefined,
+            }),
           }),
-        }),
-      );
+        );
+      });
     } finally {
       unregister();
     }
@@ -641,10 +645,12 @@ describe("Google Chat delivery thread routing", () => {
       );
 
       expect(res.statusCode).toBe(200);
-      expect(updateGoogleChatMessageMock).toHaveBeenCalledWith({
-        account: expect.objectContaining({ accountId: "default" }),
-        messageName: "spaces/AAA/messages/typing",
-        text: "threaded reply",
+      await vi.waitFor(() => {
+        expect(updateGoogleChatMessageMock).toHaveBeenCalledWith({
+          account: expect.objectContaining({ accountId: "default" }),
+          messageName: "spaces/AAA/messages/typing",
+          text: "threaded reply",
+        });
       });
       expect(sendGoogleChatMessageMock).toHaveBeenNthCalledWith(
         1,
