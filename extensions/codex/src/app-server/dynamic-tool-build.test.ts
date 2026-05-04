@@ -250,6 +250,13 @@ describe("Codex app-server dynamic tool build", () => {
     params.chatId = "native-chat-123";
     params.chatType = "direct";
     params.messageActionTurnCapability = "turn-capability-1";
+    const pluginAuth = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: false as const,
+        reason: "unavailable" as const,
+      })),
+    };
+    params.pluginAuth = pluginAuth;
     let receivedOptions: unknown;
     setOpenClawCodingToolsFactoryForTests((options) => {
       receivedOptions = options;
@@ -261,6 +268,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(receivedOptions).toMatchObject({
       clientCaps: ["tool-events", "inline-widgets"],
       chatType: "direct",
+      pluginAuth,
       nativeChannelId: "native-chat-123",
       messageActionTurnCapability: "turn-capability-1",
     });

@@ -243,6 +243,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     // declared caps in this sibling harness too, not only the embedded runner.
     clientCaps: params.clientCaps,
     chatType: params.chatType,
+    pluginAuth: params.pluginAuth,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
