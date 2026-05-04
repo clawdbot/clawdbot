@@ -213,6 +213,79 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls[0]?.[1]).toBe("hello");
   });
 
+  it("renders shared interactive reply buttons as Telegram inline buttons", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 2, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: "Plugin bind approval required",
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  { label: "Allow once", value: "pluginbind:req:o", style: "success" },
+                  { label: "Always allow", value: "pluginbind:req:a", style: "primary" },
+                  { label: "Deny", value: "pluginbind:req:d", style: "danger" },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      "Plugin bind approval required",
+      expect.objectContaining({
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: "Allow once", callback_data: "pluginbind:req:o", style: "success" },
+              { text: "Always allow", callback_data: "pluginbind:req:a", style: "primary" },
+              { text: "Deny", callback_data: "pluginbind:req:d", style: "danger" },
+            ],
+          ],
+        },
+      }),
+    );
+  });
+
+  it("uses interactive button labels as fallback text for button-only replies", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 3, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          interactive: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "cmd:retry" }] }],
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Retry"),
+      expect.objectContaining({
+        reply_markup: {
+          inline_keyboard: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+        },
+      }),
+    );
+  });
+
   it("reports message_sent success=false when hooks blank out a text-only reply", async () => {
     messageHookRunner.hasHooks.mockImplementation(
       (name: string) => name === "message_sending" || name === "message_sent",

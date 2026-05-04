@@ -126,6 +126,7 @@
             "enum": ["auto", "raw", "card"]
           },
           "streaming": { "type": "boolean" },
+          "blockStreaming": { "type": "boolean" },
           "replyInThread": {
             "type": "string",
             "enum": ["disabled", "enabled"]
@@ -162,6 +163,7 @@
         "enum": ["auto", "raw", "card"]
       },
       "streaming": { "type": "boolean" },
+      "blockStreaming": { "type": "boolean" },
       "replyInThread": {
         "type": "string",
         "enum": ["disabled", "enabled"]

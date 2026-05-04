@@ -1,5 +1,9 @@
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
+
+type GatewayMethodChannelPlugin = {
+  gatewayMethods?: readonly string[];
+};
 
 const BASE_METHODS = [
   "health",
@@ -158,7 +162,9 @@ const BASE_METHODS = [
 ];
 
 export function listGatewayMethods(): string[] {
-  const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
+  const channelMethods = (listLoadedChannelPlugins() as GatewayMethodChannelPlugin[]).flatMap(
+    (plugin) => plugin.gatewayMethods ?? [],
+  );
   return Array.from(new Set([...BASE_METHODS, ...channelMethods]));
 }
 

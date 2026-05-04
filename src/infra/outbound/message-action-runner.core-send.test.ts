@@ -123,4 +123,36 @@ describe("runMessageAction core send routing", () => {
       }),
     );
   });
+
+  it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {
+    setActivePluginRegistry(createTestRegistry([]));
+
+    const result = await runMessageAction({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:test",
+          },
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "telegram",
+        target: "-1001234567890:topic:42",
+        message: "topic hello",
+      },
+      dryRun: true,
+    });
+
+    if (result.kind !== "send") {
+      throw new Error(`Expected send result, got ${result.kind}`);
+    }
+    expect(result.to).toBe("telegram:-1001234567890:topic:42");
+    expect(result.payload).toEqual(
+      expect.objectContaining({
+        to: "telegram:-1001234567890:topic:42",
+        dryRun: true,
+      }),
+    );
+  });
 });

@@ -24,6 +24,10 @@ type GatewayPluginBootstrapLog = {
   debug: (msg: string) => void;
 };
 
+type GatewayStartupTrace = {
+  detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
+};
+
 type GatewayPluginBootstrapParams = {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -37,6 +41,7 @@ type GatewayPluginBootstrapParams = {
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
   logDiagnostics?: boolean;
+  startupTrace?: GatewayStartupTrace;
   beforePrimeRegistry?: (pluginRegistry: PluginRegistry) => void;
 };
 
@@ -102,6 +107,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     pluginLookUpTable: params.pluginLookUpTable,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
+    startupTrace: params.startupTrace,
   });
   params.beforePrimeRegistry?.(loaded.pluginRegistry);
   primeConfiguredBindingRegistry({ cfg: resolvedConfig });

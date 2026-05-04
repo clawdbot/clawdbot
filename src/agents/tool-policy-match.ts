@@ -16,9 +16,6 @@ function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
     if (matchesAnyGlobPattern(normalized, deny)) {
       return false;
     }
-    if (normalized === "apply_patch" && matchesAnyGlobPattern("write", deny)) {
-      return false;
-    }
     if (allow.length === 0) {
       return true;
     }

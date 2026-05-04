@@ -135,7 +135,7 @@ describe("discordPlugin outbound", () => {
     const hints = discordPlugin.agentPrompt?.messageToolHints?.({} as never) ?? [];
 
     expect(hints).toContain(
-      "- Discord mentions: use canonical outbound syntax: users `<@USER_ID>`, channels `<#CHANNEL_ID>`, and roles `<@&ROLE_ID>`. Do not use the legacy `<@!USER_ID>` nickname form.",
+      "- Discord mentions: use canonical outbound syntax: users `<@USER_ID>`, channels `<#CHANNEL_ID>`, and roles `<@&ROLE_ID>`. Plain `@name` text only pings when a configured `mentionAliases` entry rewrites it; do not use the legacy `<@!USER_ID>` nickname form.",
     );
   });
 
@@ -379,7 +379,7 @@ describe("discordPlugin outbound", () => {
     expect(runtimeProbeDiscord).not.toHaveBeenCalled();
   });
 
-  it("uses direct Discord startup helpers before monitoring", async () => {
+  it("uses direct Discord startup helpers for async startup enrichment", async () => {
     const runtimeProbeDiscord = vi.fn(async () => {
       throw new Error("runtime Discord probe should not be used");
     });
@@ -407,9 +407,11 @@ describe("discordPlugin outbound", () => {
     const cfg = createCfg();
     await startDiscordAccount(cfg);
 
-    expect(probeDiscordMock).toHaveBeenCalledWith("discord-token", 2500, {
-      includeApplication: true,
-    });
+    await vi.waitFor(() =>
+      expect(probeDiscordMock).toHaveBeenCalledWith("discord-token", 2500, {
+        includeApplication: true,
+      }),
+    );
     expect(monitorDiscordProviderMock).toHaveBeenCalledWith(
       expect.objectContaining({
         token: "discord-token",
@@ -419,6 +421,130 @@ describe("discordPlugin outbound", () => {
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
     expect(runtimeProbeDiscord).not.toHaveBeenCalled();
     expect(runtimeMonitorDiscordProvider).not.toHaveBeenCalled();
+  });
+
+  it("does not block Discord monitor startup on the startup probe", async () => {
+    let resolveProbe!: (value: {
+      ok: true;
+      bot: { username: string };
+      application: { intents: { messageContent: "limited" } };
+      elapsedMs: number;
+    }) => void;
+    probeDiscordMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveProbe = resolve;
+      }),
+    );
+    monitorDiscordProviderMock.mockResolvedValue(undefined);
+
+    const cfg = createCfg();
+    const statusPatches: Array<Record<string, unknown>> = [];
+    const ctx = createStartAccountContext({
+      account: resolveAccount(cfg),
+      cfg,
+      statusPatchSink: (next) => statusPatches.push({ ...next }),
+    });
+
+    await discordPlugin.gateway!.startAccount!(ctx);
+
+    expect(monitorDiscordProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: "discord-token",
+        accountId: "default",
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(probeDiscordMock).toHaveBeenCalledWith("discord-token", 2500, {
+        includeApplication: true,
+      }),
+    );
+    expect(statusPatches.some((patch) => "bot" in patch || "application" in patch)).toBe(false);
+
+    resolveProbe({
+      ok: true,
+      bot: { username: "AsyncBob" },
+      application: { intents: { messageContent: "limited" } },
+      elapsedMs: 1,
+    });
+
+    await vi.waitFor(() =>
+      expect(
+        statusPatches.some(
+          (patch) =>
+            (patch.bot as { username?: string } | undefined)?.username === "AsyncBob" &&
+            Boolean(patch.application),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("clears stale Discord probe metadata when the async startup probe degrades", async () => {
+    probeDiscordMock.mockResolvedValue({
+      ok: false,
+      status: 401,
+      error: "getMe failed (401)",
+      elapsedMs: 1,
+    });
+    monitorDiscordProviderMock.mockResolvedValue(undefined);
+
+    const cfg = createCfg();
+    const statusPatches: Array<Record<string, unknown>> = [];
+    const ctx = createStartAccountContext({
+      account: resolveAccount(cfg),
+      cfg,
+      statusPatchSink: (next) => statusPatches.push({ ...next }),
+    });
+    ctx.setStatus({
+      accountId: "default",
+      bot: { username: "OldBot" },
+      application: { intents: { messageContent: "enabled" } },
+    });
+
+    await discordPlugin.gateway!.startAccount!(ctx);
+
+    await vi.waitFor(() =>
+      expect(
+        statusPatches.some(
+          (patch) =>
+            "bot" in patch &&
+            "application" in patch &&
+            patch.bot === undefined &&
+            patch.application === undefined,
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("clears stale Discord probe metadata when the async startup probe throws", async () => {
+    probeDiscordMock.mockRejectedValue(new Error("probe timed out"));
+    monitorDiscordProviderMock.mockResolvedValue(undefined);
+
+    const cfg = createCfg();
+    const statusPatches: Array<Record<string, unknown>> = [];
+    const ctx = createStartAccountContext({
+      account: resolveAccount(cfg),
+      cfg,
+      statusPatchSink: (next) => statusPatches.push({ ...next }),
+    });
+    ctx.setStatus({
+      accountId: "default",
+      bot: { username: "OldBot" },
+      application: { intents: { messageContent: "enabled" } },
+    });
+
+    await discordPlugin.gateway!.startAccount!(ctx);
+
+    await vi.waitFor(() =>
+      expect(
+        statusPatches.some(
+          (patch) =>
+            "bot" in patch &&
+            "application" in patch &&
+            patch.bot === undefined &&
+            patch.application === undefined,
+        ),
+      ).toBe(true),
+    );
   });
 
   it("stagger starts later accounts in multi-bot setups", async () => {

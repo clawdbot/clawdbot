@@ -4,7 +4,10 @@ import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
+import {
+  buildExecApprovalRequestMessage,
+  createExecApprovalForwarder,
+} from "./exec-approval-forwarder.js";
 
 const baseRequest = {
   id: "req-1",
@@ -30,8 +33,9 @@ afterEach(() => {
 const emptyRegistry = createTestRegistry([]);
 
 async function flushPendingDelivery(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let index = 0; index < 10; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 function isDiscordExecApprovalClientEnabledForTest(params: {
@@ -568,6 +572,26 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Command: `echo hello`");
     expect(text).toContain("Expires in: 5s");
     expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
+  });
+
+  it("includes command analysis warnings in fallback delivery text", async () => {
+    const text = buildExecApprovalRequestMessage(
+      {
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          commandAnalysis: {
+            commandCount: 1,
+            nestedCommandCount: 0,
+            riskKinds: ["inline-eval"],
+            warningLines: ["Contains inline-eval: python3 -c"],
+          },
+        },
+      },
+      1000,
+    );
+    expect(text).toContain("Command analysis:");
+    expect(text).toContain("- Contains inline-eval: python3 -c");
   });
 
   it("omits allow-always from forwarded fallback text when ask=always", async () => {

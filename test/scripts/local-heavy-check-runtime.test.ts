@@ -231,7 +231,7 @@ describe("local-heavy-check-runtime", () => {
     expect(args).toEqual([
       "--type-aware",
       "--tsconfig",
-      "tsconfig.oxlint.json",
+      "config/tsconfig/oxlint.json",
       "--allow",
       "eslint/no-underscore-dangle",
       "--report-unused-disable-directives-severity",
@@ -246,7 +246,7 @@ describe("local-heavy-check-runtime", () => {
     expect(args).toEqual([
       "--type-aware",
       "--tsconfig",
-      "tsconfig.oxlint.json",
+      "config/tsconfig/oxlint.json",
       "--allow",
       "eslint/no-underscore-dangle",
       "--report-unused-disable-directives-severity",
@@ -262,7 +262,7 @@ describe("local-heavy-check-runtime", () => {
       "--threads=8",
       "--type-aware",
       "--tsconfig",
-      "tsconfig.oxlint.json",
+      "config/tsconfig/oxlint.json",
       "--allow",
       "eslint/no-underscore-dangle",
       "--report-unused-disable-directives-severity",
@@ -282,7 +282,7 @@ describe("local-heavy-check-runtime", () => {
     expect(args).toEqual([
       "--type-aware",
       "--tsconfig",
-      "tsconfig.oxlint.json",
+      "config/tsconfig/oxlint.json",
       "--allow",
       "eslint/no-underscore-dangle",
       "--report-unused-disable-directives-severity",

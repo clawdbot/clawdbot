@@ -492,6 +492,83 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("main");
   });
 
+  it("resolves sessionKey=current to runSessionKey under default tree visibility (#76708)", async () => {
+    resetSessionStore({
+      "agent:main:telegram:default:direct:1234": {
+        sessionId: "s-tg-direct",
+        updatedAt: 5,
+        status: "done",
+      },
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+        status: "running",
+      },
+    });
+
+    // Default visibility is "tree". The tool is constructed with the Telegram
+    // sandbox key as agentSessionKey but the live run session key as runSessionKey.
+    // semantic-current must be treated as self for visibility purposes.
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey: "agent:main:main",
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-current-run-session", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:main");
+  });
+
+  it("synthesizes semantic current from runSessionKey when the live run is not persisted yet", async () => {
+    resetSessionStore({
+      "agent:main:telegram:default:direct:1234": {
+        sessionId: "s-tg-direct",
+        updatedAt: 5,
+        status: "done",
+      },
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey: "agent:main:main",
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-current-unpersisted-run", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:main");
+    expect(details.statusText).toContain("OpenClaw");
+  });
+
+  it("rejects explicit cross-session key under tree visibility even when it equals runSessionKey (#76708)", async () => {
+    resetSessionStore({
+      "agent:main:telegram:default:direct:1234": {
+        sessionId: "s-tg-direct",
+        updatedAt: 5,
+        status: "done",
+      },
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+        status: "running",
+      },
+    });
+
+    // Same setup but with an explicit key — should NOT bypass visibility.
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey: "agent:main:main",
+      config: mockConfig as never,
+    });
+
+    await expect(
+      tool.execute("call-explicit-key", { sessionKey: "agent:main:main" }),
+    ).rejects.toThrow(/visibility is restricted/);
+  });
+
   it("treats the TUI client label as the current requester session", async () => {
     resetSessionStore({
       "agent:main:main": {
@@ -588,6 +665,29 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
     expect(details.statusText).toContain("OpenClaw");
     expect(details.statusText).toContain("🧠 Model:");
+  });
+
+  it("resolves sandboxed sessionKey=current to the requester when no run session override exists", async () => {
+    resetSessionStore({});
+
+    const tool = getSessionStatusTool("agent:main:telegram:group:-5096326138", {
+      sandboxed: true,
+    });
+
+    const result = await tool.execute("call-current-sandboxed-channel", {
+      sessionKey: "current",
+    });
+    const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:telegram:group:-5096326138");
+    expect(details.statusText).toContain("OpenClaw");
+    expect(details.statusText).toContain("🧠 Model:");
+    expect(callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.resolve",
+        params: expect.objectContaining({ key: "current" }),
+      }),
+    );
   });
 
   it("resolves the default session_status lookup for a channel-plugin requester via implicit fallback", async () => {

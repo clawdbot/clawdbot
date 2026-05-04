@@ -55,7 +55,7 @@ type CommandHandlerContext = {
 };
 
 function isBtwCommand(text: string): boolean {
-  return /^\/btw(?::|\s|$)/i.test(text.trim());
+  return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
 }
 
 export function createCommandHandlers(context: CommandHandlerContext) {

@@ -115,6 +115,18 @@ describe("tool display details", () => {
     expect(detail).toBe("install dependencies (in ~/my-project), `cd ~/my-project && npm install`");
   });
 
+  it("omits raw command details in explain mode", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "cd ~/my-project && npm install" },
+        detailMode: "explain",
+      }),
+    );
+
+    expect(detail).toBe("install dependencies (in ~/my-project)");
+  });
+
   it("moves cd path to context suffix with multiple stages and raw command", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({

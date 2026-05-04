@@ -1,11 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
 registerAppMountHooks();
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
 
 function mountApp(pathname: string) {
   return mountTestApp(pathname);

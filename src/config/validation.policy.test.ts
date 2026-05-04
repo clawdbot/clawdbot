@@ -98,7 +98,7 @@ describe("config validation SecretRef policy guards", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("rejects legacy secretref-env markers on supported SecretRef credential paths", () => {
+  it("leaves legacy secretref-env marker migration to doctor", () => {
     const result = validateConfigObjectRaw({
       secrets: {
         defaults: {
@@ -112,21 +112,10 @@ describe("config validation SecretRef policy guards", () => {
       },
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      const issue = result.issues.find((entry) => entry.path === "channels.discord.token");
-      expect(issue).toBeDefined();
-      expect(issue?.message).toContain(
-        '"secretref-env:DISCORD_BOT_TOKEN" is a legacy SecretRef marker',
-      );
-      expect(issue?.message).toContain(
-        '{"source":"env","provider":"gateway-env","id":"DISCORD_BOT_TOKEN"}',
-      );
-      expect(issue?.message).toContain('Run "openclaw doctor --fix"');
-    }
+    expect(result.ok).toBe(true);
   });
 
-  it("rejects invalid legacy secretref-env markers that doctor cannot migrate", () => {
+  it("does not reject invalid legacy secretref-env markers during raw validation", () => {
     const result = validateConfigObjectRaw({
       channels: {
         discord: {
@@ -135,12 +124,7 @@ describe("config validation SecretRef policy guards", () => {
       },
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      const issue = result.issues.find((entry) => entry.path === "channels.discord.token");
-      expect(issue?.message).toContain('"secretref-env:not-valid" is a legacy SecretRef marker');
-      expect(issue?.message).toContain('{"source":"env","provider":"default","id":"ENV_VAR"}');
-    }
+    expect(result.ok).toBe(true);
   });
 
   it("replaces derived unrecognized-key errors with policy guidance for discord thread binding webhookToken", () => {

@@ -260,6 +260,8 @@ export type AppViewState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  sessionsShowArchived: boolean;
+  sessionsFiltersCollapsed: boolean;
   sessionsHideCron: boolean;
   sessionsSearchQuery: string;
   sessionsSortColumn: "key" | "kind" | "updated" | "tokens";
@@ -328,6 +330,7 @@ export type AppViewState = {
   | "cronStatus"
   | "cronError"
   | "cronForm"
+  | "cronFormCollapsed"
   | "cronFieldErrors"
   | "cronEditingJobId"
   | "cronRunsJobId"

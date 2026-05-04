@@ -5,6 +5,8 @@ import {
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
+  resolveChannelPreviewStreamMode,
+  type StreamingMode,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
@@ -34,6 +36,7 @@ export type ResolvedMattermostAccount = {
   requireMention?: boolean;
   textChunkLimit?: number;
   chunkMode?: MattermostAccountConfig["chunkMode"];
+  streamingMode: StreamingMode;
   blockStreaming?: boolean;
   blockStreamingCoalesce?: MattermostAccountConfig["blockStreamingCoalesce"];
 };
@@ -120,6 +123,7 @@ export function resolveMattermostAccount(params: {
     requireMention,
     textChunkLimit: merged.textChunkLimit,
     chunkMode: resolveChannelStreamingChunkMode(merged) ?? merged.chunkMode,
+    streamingMode: resolveChannelPreviewStreamMode(merged, "partial"),
     blockStreaming: resolveChannelStreamingBlockEnabled(merged) ?? merged.blockStreaming,
     blockStreamingCoalesce:
       resolveChannelStreamingBlockCoalesce(merged) ?? merged.blockStreamingCoalesce,

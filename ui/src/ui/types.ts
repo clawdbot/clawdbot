@@ -417,7 +417,7 @@ export type SessionCompactionCheckpointPreview = Pick<
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
-  kind: "direct" | "group" | "global" | "unknown";
+  kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
   surface?: string;
@@ -441,6 +441,7 @@ export type GatewaySessionRow = {
   totalTokens?: number;
   totalTokensFresh?: boolean;
   status?: SessionRunStatus;
+  archived?: boolean;
   hasActiveRun?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;

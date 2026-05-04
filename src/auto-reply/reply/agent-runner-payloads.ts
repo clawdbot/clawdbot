@@ -216,15 +216,38 @@ export async function buildReplyPayloads(params: {
     }),
   }) ?? {
     shouldDedupePayloads: shouldCheckMessagingToolDedupe && messagingToolSentTargets.length === 0,
-    suppressReplies: false,
+    matchingRoute: false,
+    routeSentTexts: [],
+    routeSentMediaUrls: [],
+    useGlobalSentTextEvidenceFallback: false,
+    useGlobalSentMediaUrlEvidenceFallback: false,
   };
   const dedupeMessagingToolPayloads = messagingToolPayloadDedupe.shouldDedupePayloads;
+  const sentMediaUrlFallback = params.messagingToolSentMediaUrls ?? [];
+  const shouldUseGlobalSentMediaUrlEvidence =
+    messagingToolPayloadDedupe.matchingRoute &&
+    messagingToolPayloadDedupe.routeSentMediaUrls.length === 0 &&
+    messagingToolPayloadDedupe.useGlobalSentMediaUrlEvidenceFallback;
+  const shouldUseGlobalSentTextEvidence =
+    messagingToolPayloadDedupe.matchingRoute &&
+    messagingToolPayloadDedupe.routeSentTexts.length === 0 &&
+    messagingToolPayloadDedupe.useGlobalSentTextEvidenceFallback;
+  const sentMediaUrlsForDedupe = messagingToolPayloadDedupe.matchingRoute
+    ? shouldUseGlobalSentMediaUrlEvidence
+      ? sentMediaUrlFallback
+      : messagingToolPayloadDedupe.routeSentMediaUrls
+    : sentMediaUrlFallback;
+  const sentTextsForDedupe = messagingToolPayloadDedupe.matchingRoute
+    ? shouldUseGlobalSentTextEvidence
+      ? messagingToolSentTexts
+      : messagingToolPayloadDedupe.routeSentTexts
+    : messagingToolSentTexts;
   const messagingToolSentMediaUrls = dedupeMessagingToolPayloads
     ? await normalizeSentMediaUrlsForDedupe({
-        sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
+        sentMediaUrls: sentMediaUrlsForDedupe,
         normalizeMediaPaths: params.normalizeMediaPaths,
       })
-    : (params.messagingToolSentMediaUrls ?? []);
+    : sentMediaUrlsForDedupe;
   const mediaFilteredPayloads = dedupeMessagingToolPayloads
     ? (
         dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())
@@ -236,7 +259,7 @@ export async function buildReplyPayloads(params: {
   const dedupedPayloads = dedupeMessagingToolPayloads
     ? (dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())).filterMessagingToolDuplicates({
         payloads: mediaFilteredPayloads,
-        sentTexts: messagingToolSentTexts,
+        sentTexts: sentTextsForDedupe,
       })
     : mediaFilteredPayloads;
   const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
@@ -295,9 +318,7 @@ export async function buildReplyPayloads(params: {
           sentMediaUrls: blockSentMediaUrls,
         })
       : contentSuppressedPayloads;
-  const replyPayloads = messagingToolPayloadDedupe.suppressReplies
-    ? []
-    : filteredPayloads.filter(isRenderablePayload);
+  const replyPayloads = filteredPayloads.filter(isRenderablePayload);
 
   return {
     replyPayloads,

@@ -897,6 +897,43 @@ describe("exec approval handlers", () => {
     await requestPromise;
   });
 
+  it("attaches shared command analysis to gateway exec approval requests", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        host: "gateway",
+        command: "python3 -c 'print(1)'",
+        commandArgv: ["python3", "script.py"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const request = requested?.payload as { id?: string; request?: { commandAnalysis?: unknown } };
+    expect(request.request?.commandAnalysis).toEqual(
+      expect.objectContaining({
+        commandCount: 1,
+        riskKinds: expect.arrayContaining(["inline-eval"]),
+        warningLines: expect.arrayContaining(["Contains inline-eval: python3 -c"]),
+      }),
+    );
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: request.id ?? "",
+      respond: resolveRespond,
+      context,
+    });
+    await requestPromise;
+  });
+
   it("lists pending exec approvals", async () => {
     const { handlers, respond, context } = createExecApprovalFixture();
     const requestPromise = requestExecApproval({

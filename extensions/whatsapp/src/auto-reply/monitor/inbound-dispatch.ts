@@ -15,6 +15,7 @@ import {
   getAgentScopedMediaLocalRoots,
   jidToE164,
   logVerbose,
+  resolveChannelSourceReplyDeliveryMode,
   resolveChunkMode,
   resolveIdentityNamePrefix,
   resolveInboundLastRouteSessionKey,
@@ -313,7 +314,22 @@ export async function dispatchWhatsAppBufferedReply(params: {
     accountId: params.route.accountId,
   });
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
-  const disableBlockStreaming = resolveWhatsAppDisableBlockStreaming(params.cfg);
+  const sourceReplyChatType =
+    typeof params.context.ChatType === "string" ? params.context.ChatType : params.msg.chatType;
+  const sourceReplyDeliveryMode =
+    sourceReplyChatType === "group" || sourceReplyChatType === "channel"
+      ? resolveChannelSourceReplyDeliveryMode({
+          cfg: params.cfg,
+          ctx: {
+            ChatType: sourceReplyChatType,
+            CommandSource: params.context.CommandSource === "native" ? "native" : undefined,
+          },
+        })
+      : undefined;
+  const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
+  const disableBlockStreaming = sourceRepliesAreToolOnly
+    ? true
+    : resolveWhatsAppDisableBlockStreaming(params.cfg);
   let didSendReply = false;
   let didLogHeartbeatStrip = false;
 
@@ -401,6 +417,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
     },
     replyOptions: {
       disableBlockStreaming,
+      ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       onModelSelected: params.onModelSelected,
     },
   });

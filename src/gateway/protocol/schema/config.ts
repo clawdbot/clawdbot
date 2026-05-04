@@ -58,6 +58,7 @@ export const UpdateRunParamsSchema = Type.Object(
     sessionKey: Type.Optional(Type.String()),
     deliveryContext: Type.Optional(ConfigDeliveryContextSchema),
     note: Type.Optional(Type.String()),
+    continuationMessage: Type.Optional(Type.String()),
     restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   },

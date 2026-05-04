@@ -985,6 +985,28 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
   });
 
+  it("keeps xhigh when switching to OpenCode Claude Opus 4.7", async () => {
+    const sessionEntry = createSessionEntry({ thinkingLevel: "xhigh" });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model opencode/claude-opus-4-7"),
+        allowedModelKeys: new Set([...allowedModelKeys, "opencode/claude-opus-4-7"]),
+        allowedModelCatalog: [
+          ...allowedModelCatalog,
+          { provider: "opencode", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+        ],
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Model set to opencode/claude-opus-4-7 for this session.");
+    expect(result?.text ?? "").not.toContain("xhigh not supported");
+    expect(sessionEntry.thinkingLevel).toBe("xhigh");
+  });
+
   it("does not request a live restart when /model mutates an active session", async () => {
     const directives = parseInlineDirectives("/model openai/gpt-4o");
     const sessionEntry = createSessionEntry();

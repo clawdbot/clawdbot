@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   resolveAuthProfileDisplayLabel: vi.fn(),
   resolveUsableCustomProviderApiKey: vi.fn(() => null),
   resolveEnvApiKey: vi.fn<() => { apiKey: string; source: string } | null>(() => null),
-  readCodexCliCredentialsCached: vi.fn<() => unknown>(() => null),
+  readCodexCliCredentialsCached: vi.fn<(options?: unknown) => unknown>(() => null),
 }));
 
 vi.mock("./auth-profiles.js", () => ({
@@ -144,6 +144,10 @@ describe("resolveModelAuthLabel", () => {
     });
 
     expect(label).toBe("oauth (codex-cli)");
+    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith({
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    });
   });
 
   it("can skip external auth profile overlays for status labels", () => {

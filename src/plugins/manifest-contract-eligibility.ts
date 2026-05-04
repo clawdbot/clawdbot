@@ -11,7 +11,10 @@ import type {
 
 export function isManifestPluginAvailableForControlPlane(params: {
   snapshot: Pick<PluginMetadataSnapshot, "index">;
-  plugin: Pick<PluginManifestRecord, "id" | "origin" | "enabledByDefault">;
+  plugin: Pick<
+    PluginManifestRecord,
+    "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms"
+  >;
   config?: OpenClawConfig;
 }): boolean {
   if (params.plugin.origin === "bundled") {

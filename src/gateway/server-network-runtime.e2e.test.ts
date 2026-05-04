@@ -38,6 +38,14 @@ function isEnvHttpProxyDispatcher(dispatcher: unknown): boolean {
   );
 }
 
+async function closeTestDispatcher(dispatcher: unknown): Promise<void> {
+  const close = (dispatcher as { close?: () => Promise<void> | void } | undefined)?.close;
+  if (typeof close !== "function") {
+    return;
+  }
+  await close.call(dispatcher);
+}
+
 describe("gateway network runtime", () => {
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
@@ -64,7 +72,8 @@ describe("gateway network runtime", () => {
     let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
 
     try {
-      setGlobalDispatcher(new Agent());
+      const testDispatcher = new Agent();
+      setGlobalDispatcher(testDispatcher);
       for (const key of NETWORK_GATEWAY_ENV_KEYS) {
         delete process.env[key];
       }
@@ -101,7 +110,11 @@ describe("gateway network runtime", () => {
       expect(isEnvHttpProxyDispatcher(getGlobalDispatcher())).toBe(true);
     } finally {
       await server?.close({ reason: "gateway proxy bootstrap test complete" });
+      const dispatcherToClose = getGlobalDispatcher();
       setGlobalDispatcher(originalDispatcher);
+      if (dispatcherToClose !== originalDispatcher) {
+        await closeTestDispatcher(dispatcherToClose);
+      }
       await fs.rm(tempHome, { recursive: true, force: true });
       envSnapshot.restore();
     }

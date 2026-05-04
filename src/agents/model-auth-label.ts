@@ -74,7 +74,10 @@ export function resolveModelAuthLabel(params: {
     return `api-key (${envKey.source})`;
   }
 
-  if (providerKey === "codex" && readCodexCliCredentialsCached({ ttlMs: 5_000 })) {
+  if (
+    providerKey === "codex" &&
+    readCodexCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
+  ) {
     return "oauth (codex-cli)";
   }
 

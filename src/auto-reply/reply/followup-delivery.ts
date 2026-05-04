@@ -73,17 +73,37 @@ export function resolveFollowupDeliveryPayloads(params: {
       originatingAccountId: params.originatingAccountId,
     }),
   });
+  const sentMediaUrlFallback = params.sentMediaUrls ?? [];
+  const sentTextFallback = params.sentTexts ?? [];
+  const shouldUseGlobalSentMediaUrlEvidence =
+    messagingToolPayloadDedupe.matchingRoute &&
+    messagingToolPayloadDedupe.routeSentMediaUrls.length === 0 &&
+    messagingToolPayloadDedupe.useGlobalSentMediaUrlEvidenceFallback;
+  const shouldUseGlobalSentTextEvidence =
+    messagingToolPayloadDedupe.matchingRoute &&
+    messagingToolPayloadDedupe.routeSentTexts.length === 0 &&
+    messagingToolPayloadDedupe.useGlobalSentTextEvidenceFallback;
+  const sentMediaUrlsForDedupe = messagingToolPayloadDedupe.matchingRoute
+    ? shouldUseGlobalSentMediaUrlEvidence
+      ? sentMediaUrlFallback
+      : messagingToolPayloadDedupe.routeSentMediaUrls
+    : sentMediaUrlFallback;
+  const sentTextsForDedupe = messagingToolPayloadDedupe.matchingRoute
+    ? shouldUseGlobalSentTextEvidence
+      ? sentTextFallback
+      : messagingToolPayloadDedupe.routeSentTexts
+    : sentTextFallback;
   const mediaFilteredPayloads = messagingToolPayloadDedupe.shouldDedupePayloads
     ? filterMessagingToolMediaDuplicates({
         payloads: replyTaggedPayloads,
-        sentMediaUrls: params.sentMediaUrls ?? [],
+        sentMediaUrls: sentMediaUrlsForDedupe,
       })
     : replyTaggedPayloads;
   const dedupedPayloads = messagingToolPayloadDedupe.shouldDedupePayloads
     ? filterMessagingToolDuplicates({
         payloads: mediaFilteredPayloads,
-        sentTexts: params.sentTexts ?? [],
+        sentTexts: sentTextsForDedupe,
       })
     : mediaFilteredPayloads;
-  return messagingToolPayloadDedupe.suppressReplies ? [] : dedupedPayloads;
+  return dedupedPayloads;
 }

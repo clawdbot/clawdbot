@@ -126,13 +126,45 @@ type DiscordFetchOptions = {
   label?: string;
 };
 
-export async function fetchDiscord<T>(
+type DiscordApiRequestOptions = DiscordFetchOptions & {
+  body?: unknown;
+  fetcher?: typeof fetch;
+  headers?: Record<string, string>;
+  method?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
+function normalizeDiscordRequestBody(body: unknown, headers: Headers): BodyInit | null | undefined {
+  if (body === undefined) {
+    return undefined;
+  }
+  if (
+    typeof body === "string" ||
+    body instanceof Blob ||
+    body instanceof FormData ||
+    body instanceof URLSearchParams ||
+    body instanceof ArrayBuffer
+  ) {
+    return body;
+  }
+  headers.set("Content-Type", headers.get("Content-Type") ?? "application/json");
+  return JSON.stringify(body);
+}
+
+function resolveDiscordRequestSignal(options: DiscordApiRequestOptions) {
+  if (options.signal || typeof options.timeoutMs !== "number") {
+    return options.signal;
+  }
+  return AbortSignal.timeout(options.timeoutMs);
+}
+
+export async function requestDiscord<T>(
   path: string,
   token: string,
-  fetcher: typeof fetch = fetch,
-  options?: DiscordFetchOptions,
+  options?: DiscordApiRequestOptions,
 ): Promise<T> {
-  const fetchImpl = resolveFetch(fetcher);
+  const fetchImpl = resolveFetch(options?.fetcher ?? fetch);
   if (!fetchImpl) {
     throw new Error("fetch is not available");
   }
@@ -140,11 +172,17 @@ export async function fetchDiscord<T>(
   const retryConfig = resolveRetryConfig(DISCORD_API_RETRY_DEFAULTS, options?.retry);
   return retryAsync(
     async () => {
+      const headers = new Headers(options?.headers);
+      headers.set("Authorization", `Bot ${token}`);
+      const body = normalizeDiscordRequestBody(options?.body, headers);
       const res = await fetchImpl(`${DISCORD_API_BASE}${path}`, {
-        headers: { Authorization: `Bot ${token}` },
+        method: options?.method ?? (body === undefined ? "GET" : "POST"),
+        headers,
+        body,
+        signal: resolveDiscordRequestSignal(options ?? {}),
       });
+      const text = await res.text().catch(() => "");
       if (!res.ok) {
-        const text = await res.text().catch(() => "");
         const detail = formatDiscordApiErrorText(text, res);
         const suffix = detail ? `: ${detail}` : "";
         const retryAfter =
@@ -157,7 +195,10 @@ export async function fetchDiscord<T>(
           retryAfter,
         );
       }
-      return (await res.json()) as T;
+      if (!text.trim()) {
+        return undefined as T;
+      }
+      return JSON.parse(text) as T;
     },
     {
       ...retryConfig,
@@ -166,4 +207,13 @@ export async function fetchDiscord<T>(
       retryAfterMs: (err) => getDiscordApiRetryAfterMs(err, retryConfig),
     },
   );
+}
+
+export async function fetchDiscord<T>(
+  path: string,
+  token: string,
+  fetcher: typeof fetch = fetch,
+  options?: DiscordFetchOptions,
+): Promise<T> {
+  return await requestDiscord<T>(path, token, { ...options, fetcher, method: "GET" });
 }

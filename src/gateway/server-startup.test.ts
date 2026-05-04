@@ -36,14 +36,14 @@ vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
   resolveEmbeddedAgentRuntime: () => resolveEmbeddedAgentRuntimeMock(),
 }));
 
-let prewarmConfiguredPrimaryModel: typeof import("./server-startup.js").__testing.prewarmConfiguredPrimaryModel;
-let shouldSkipStartupModelPrewarm: typeof import("./server-startup.js").__testing.shouldSkipStartupModelPrewarm;
+let prewarmConfiguredPrimaryModel: typeof import("./server-startup-post-attach.js").__testing.prewarmConfiguredPrimaryModel;
+let shouldSkipStartupModelPrewarm: typeof import("./server-startup-post-attach.js").__testing.shouldSkipStartupModelPrewarm;
 
 describe("gateway startup primary model warmup", () => {
   beforeAll(async () => {
     ({
       __testing: { prewarmConfiguredPrimaryModel, shouldSkipStartupModelPrewarm },
-    } = await import("./server-startup.js"));
+    } = await import("./server-startup-post-attach.js"));
   });
 
   beforeEach(() => {

@@ -38,6 +38,10 @@ export const SessionCompactionCheckpointSchema = Type.Object(
 
 export const SessionsListParamsSchema = Type.Object(
   {
+    /**
+     * Maximum rows to return. Omitted Gateway RPC calls use a bounded default
+     * to keep large session stores from monopolizing the event loop.
+     */
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
     includeGlobal: Type.Optional(Type.Boolean()),

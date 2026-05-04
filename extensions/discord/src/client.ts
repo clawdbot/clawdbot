@@ -51,9 +51,18 @@ export function resolveDiscordClientAccountContext(
   };
 }
 
-function resolveToken(params: { accountId: string; fallbackToken?: string }) {
+function resolveToken(params: {
+  account: ResolvedDiscordAccount;
+  accountId: string;
+  fallbackToken?: string;
+}) {
   const fallback = normalizeDiscordToken(params.fallbackToken, "channels.discord.token");
   if (!fallback) {
+    if (params.account.tokenStatus === "configured_unavailable") {
+      throw new Error(
+        `Discord bot token configured for account "${params.accountId}" is unavailable; resolve SecretRefs against the active runtime snapshot before using this account.`,
+      );
+    }
     throw new Error(
       `Discord bot token missing for account "${params.accountId}" (set discord.accounts.${params.accountId}.token or DISCORD_BOT_TOKEN for default).`,
     );
@@ -92,6 +101,7 @@ function resolveAccountWithoutToken(params: {
     name: normalizeOptionalString(merged.name),
     token: "",
     tokenSource: "none",
+    tokenStatus: "missing",
     config: merged,
   };
 }
@@ -106,6 +116,7 @@ export function createDiscordRestClient(opts: DiscordClientOpts) {
   const token =
     explicitToken ??
     resolveToken({
+      account,
       accountId: account.accountId,
       fallbackToken: account.token,
     });

@@ -533,10 +533,11 @@ describe("plugins cli install", () => {
   });
 
   it("does not persist incomplete config entries for config-gated bundled installs", async () => {
+    const pluginId = "config-required-plugin";
     const cfg = {
       plugins: {
         entries: {
-          "memory-lancedb": {
+          [pluginId]: {
             config: {},
           },
         },
@@ -546,17 +547,31 @@ describe("plugins cli install", () => {
       },
     } as OpenClawConfig;
     loadConfig.mockReturnValue(cfg);
+    findBundledPluginSourceMock.mockReturnValue({
+      pluginId,
+      localPath: `/app/dist/extensions/${pluginId}`,
+      configSchema: {
+        type: "object",
+        required: ["token"],
+        properties: {
+          token: {
+            type: "string",
+          },
+        },
+      },
+      requiresConfig: true,
+    });
 
-    await runPluginsCommand(["plugins", "install", "memory-lancedb"]);
+    await runPluginsCommand(["plugins", "install", pluginId]);
 
     const writtenConfig = writeConfigFile.mock.calls.at(-1)?.[0] as OpenClawConfig;
-    expect(writtenConfig.plugins?.entries?.["memory-lancedb"]).toBeUndefined();
+    expect(writtenConfig.plugins?.entries?.[pluginId]).toBeUndefined();
     expect(writtenConfig.plugins?.load?.paths).toEqual(["/existing/plugin"]);
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
-      "memory-lancedb": expect.objectContaining({
+      [pluginId]: expect.objectContaining({
         source: "path",
-        sourcePath: expect.stringContaining("memory-lancedb"),
-        installPath: expect.stringContaining("memory-lancedb"),
+        sourcePath: expect.stringContaining(pluginId),
+        installPath: expect.stringContaining(pluginId),
       }),
     });
     expect(enablePluginInConfig).not.toHaveBeenCalled();
@@ -565,25 +580,37 @@ describe("plugins cli install", () => {
   });
 
   it("enables config-gated bundled installs when provider-backed config is explicit", async () => {
+    const pluginId = "config-required-plugin";
     const cfg = {
       plugins: {
         entries: {
-          "memory-lancedb": {
+          [pluginId]: {
             config: {
-              embedding: {
-                apiKey: "sk-test",
-                model: "text-embedding-3-small",
-              },
+              token: "sk-test",
             },
           },
         },
       },
     } as OpenClawConfig;
-    const enabledCfg = createEnabledPluginConfig("memory-lancedb");
+    const enabledCfg = createEnabledPluginConfig(pluginId);
     loadConfig.mockReturnValue(cfg);
+    findBundledPluginSourceMock.mockReturnValue({
+      pluginId,
+      localPath: `/app/dist/extensions/${pluginId}`,
+      configSchema: {
+        type: "object",
+        required: ["token"],
+        properties: {
+          token: {
+            type: "string",
+          },
+        },
+      },
+      requiresConfig: true,
+    });
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
 
-    await runPluginsCommand(["plugins", "install", "memory-lancedb"]);
+    await runPluginsCommand(["plugins", "install", pluginId]);
 
     expect(enablePluginInConfig).toHaveBeenCalled();
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);

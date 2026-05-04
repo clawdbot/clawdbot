@@ -5,6 +5,11 @@ vi.mock("../../../commands/message.js", () => ({
   messageCommand: messageCommandMock,
 }));
 
+const getChannelPluginMock = vi.fn();
+vi.mock("../../../channels/plugins/index.js", () => ({
+  getChannelPlugin: getChannelPluginMock,
+}));
+
 vi.mock("../../../globals.js", () => ({
   danger: (s: string) => s,
   setVerbose: vi.fn(),
@@ -70,6 +75,14 @@ async function runSendAction(opts: Record<string, unknown> = {}) {
   await expect(runMessageAction("send", { ...baseSendOptions, ...opts })).rejects.toThrow("exit");
 }
 
+function mockChannelExecutionModes(modes: Record<string, "gateway" | "local"> = {}) {
+  getChannelPluginMock.mockImplementation((id: string) => ({
+    actions: {
+      resolveExecutionMode: () => modes[id] ?? "local",
+    },
+  }));
+}
+
 function expectNoAccountFieldInPassedOptions() {
   const passedOpts = (
     messageCommandMock.mock.calls as unknown as Array<[Record<string, unknown>]>
@@ -84,6 +97,8 @@ function expectNoAccountFieldInPassedOptions() {
 describe("runMessageAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getChannelPluginMock.mockReset();
+    mockChannelExecutionModes({ telegram: "gateway" });
     messageCommandMock.mockClear().mockResolvedValue(undefined);
     hasHooksMock.mockClear().mockReturnValue(false);
     runGatewayStopMock.mockClear().mockResolvedValue(undefined);
@@ -113,12 +128,152 @@ describe("runMessageAction", () => {
   });
 
   it("narrows plugin loading from a channel-prefixed target", async () => {
-    await runSendAction({ channel: undefined, target: "telegram:12345" });
+    await runSendAction({ channel: undefined, target: "discord:channel:12345" });
+
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      onlyChannelIds: ["discord"],
+    });
+  });
+
+  it("skips local plugin preload for any gateway-owned scoped channel action", async () => {
+    mockChannelExecutionModes({ discord: "gateway" });
+
+    await runSendAction({ target: "channel:12345" });
+
+    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(messageCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "send",
+        channel: "discord",
+        target: "channel:12345",
+        message: "hi",
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
+  it("keeps broadcast on the local preload path for same-channel prefixed targets", async () => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("broadcast", {
+        targets: ["telegram:1", "telegram:2"],
+        message: "hi",
+      }),
+    ).rejects.toThrow("exit");
 
     expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
       scope: "configured-channels",
       onlyChannelIds: ["telegram"],
     });
+    expect(messageCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "broadcast",
+        targets: ["telegram:1", "telegram:2"],
+        message: "hi",
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("keeps unknown actions on the local preload path", async () => {
+    mockChannelExecutionModes({ discord: "gateway" });
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("custom-action", {
+        ...baseSendOptions,
+        target: "channel:12345",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      onlyChannelIds: ["discord"],
+    });
+    expect(messageCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "custom-action",
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("preloads when the scoped channel plugin is not cheaply available", async () => {
+    getChannelPluginMock.mockReturnValue(undefined);
+
+    await runSendAction({ target: "channel:12345" });
+
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      onlyChannelIds: ["discord"],
+    });
+  });
+
+  it("keeps target-prefixed Telegram sends from local plugin preload", async () => {
+    await runSendAction({ channel: undefined, target: "telegram:12345" });
+
+    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(messageCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "send",
+        target: "telegram:12345",
+        message: "hi",
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
+  it("keeps explicit Telegram sends on the normal command path without local plugin preload", async () => {
+    await runSendAction({
+      channel: "telegram",
+      account: "default",
+      target: "@ops",
+      media: "./diagram.png",
+      presentation: '{"blocks":[{"type":"buttons","buttons":[{"label":"OK","value":"ok"}]}]}',
+      delivery: '{"pin":true}',
+      forceDocument: true,
+    });
+
+    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(messageCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "send",
+        channel: "telegram",
+        accountId: "default",
+        target: "@ops",
+        message: "hi",
+        media: "./diagram.png",
+        presentation: '{"blocks":[{"type":"buttons","buttons":[{"label":"OK","value":"ok"}]}]}',
+        delivery: '{"pin":true}',
+        forceDocument: true,
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+    expectNoAccountFieldInPassedOptions();
+    expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
+  it("keeps Telegram dry-runs on the local preload path for local validation", async () => {
+    await runSendAction({
+      channel: "telegram",
+      target: "@ops",
+      dryRun: true,
+    });
+
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      onlyChannelIds: ["telegram"],
+    });
+    expect(messageCommandMock).toHaveBeenCalled();
   });
 
   it("loads configured channel plugins for mixed broadcast target prefixes", async () => {
@@ -134,6 +289,20 @@ describe("runMessageAction", () => {
     expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
       scope: "configured-channels",
     });
+  });
+
+  it("exits with failure when plugin registry loading fails before dispatch", async () => {
+    vi.mocked(ensurePluginRegistryLoaded).mockImplementationOnce(() => {
+      throw new Error("plugin load failed");
+    });
+
+    await runSendAction();
+
+    expect(messageCommandMock).not.toHaveBeenCalled();
+    expect(errorMock).toHaveBeenCalledWith("Error: plugin load failed");
+    expect(exitMock).toHaveBeenCalledOnce();
+    expect(exitMock).toHaveBeenCalledWith(1);
+    expect(exitMock).not.toHaveBeenCalledWith(0);
   });
 
   it("runs gateway_stop hooks before exit when registered", async () => {

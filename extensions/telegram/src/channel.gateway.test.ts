@@ -156,6 +156,45 @@ describe("telegramPlugin gateway startup", () => {
     );
   });
 
+  it("passes successful startup probe botInfo into the polling monitor", async () => {
+    installTelegramRuntime();
+    const botInfo = {
+      id: 123456,
+      is_bot: true,
+      first_name: "OpenClaw",
+      username: "openclaw_bot",
+      can_join_groups: true,
+      can_read_all_group_messages: false,
+      can_manage_bots: false,
+      supports_inline_queries: false,
+      can_connect_to_business: false,
+      has_main_web_app: false,
+      has_topics_enabled: false,
+      allows_users_to_create_topics: false,
+    } as const;
+    probeTelegram.mockResolvedValue({
+      ok: true,
+      status: null,
+      error: null,
+      elapsedMs: 12,
+      bot: {
+        id: botInfo.id,
+        username: botInfo.username,
+      },
+      botInfo,
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+
+    const { task } = startTelegramAccount();
+
+    await expect(task).resolves.toBeUndefined();
+    expect(monitorTelegramProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        botInfo,
+      }),
+    );
+  });
+
   it("honors higher per-account timeoutSeconds for startup probe", async () => {
     installTelegramRuntime();
     probeTelegram.mockResolvedValue({

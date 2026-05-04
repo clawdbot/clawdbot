@@ -22,6 +22,8 @@ export type NormalizedPluginsConfig = {
       hooks?: {
         allowPromptInjection?: boolean;
         allowConversationAccess?: boolean;
+        timeoutMs?: number;
+        timeouts?: Record<string, number>;
       };
       subagent?: {
         allowModelOverride?: boolean;
@@ -57,6 +59,33 @@ function normalizeSlotValue(value: unknown): string | null | undefined {
   return trimmed;
 }
 
+function normalizeHookTimeoutMs(value: unknown): number | undefined {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    !Number.isFinite(value) ||
+    value <= 0 ||
+    value > 600_000
+  ) {
+    return undefined;
+  }
+  return value;
+}
+
+function normalizeHookTimeouts(value: unknown): Record<string, number> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, number> = {};
+  for (const [hookName, timeoutMs] of Object.entries(value)) {
+    const normalizedTimeoutMs = normalizeHookTimeoutMs(timeoutMs);
+    if (normalizedTimeoutMs !== undefined) {
+      normalized[hookName] = normalizedTimeoutMs;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function normalizePluginEntries(
   entries: unknown,
   normalizePluginId: NormalizePluginId,
@@ -83,12 +112,16 @@ function normalizePluginEntries(
               .allowPromptInjection,
             allowConversationAccess: (hooksRaw as { allowConversationAccess?: unknown })
               .allowConversationAccess,
+            timeoutMs: normalizeHookTimeoutMs((hooksRaw as { timeoutMs?: unknown }).timeoutMs),
+            timeouts: normalizeHookTimeouts((hooksRaw as { timeouts?: unknown }).timeouts),
           }
         : undefined;
     const normalizedHooks =
       hooks &&
       (typeof hooks.allowPromptInjection === "boolean" ||
-        typeof hooks.allowConversationAccess === "boolean")
+        typeof hooks.allowConversationAccess === "boolean" ||
+        hooks.timeoutMs !== undefined ||
+        hooks.timeouts !== undefined)
         ? {
             ...(typeof hooks.allowPromptInjection === "boolean"
               ? { allowPromptInjection: hooks.allowPromptInjection }
@@ -96,6 +129,8 @@ function normalizePluginEntries(
             ...(typeof hooks.allowConversationAccess === "boolean"
               ? { allowConversationAccess: hooks.allowConversationAccess }
               : {}),
+            ...(hooks.timeoutMs !== undefined ? { timeoutMs: hooks.timeoutMs } : {}),
+            ...(hooks.timeouts !== undefined ? { timeouts: hooks.timeouts } : {}),
           }
         : undefined;
     const subagentRaw = entry.subagent;

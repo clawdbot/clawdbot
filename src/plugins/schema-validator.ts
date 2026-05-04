@@ -86,6 +86,7 @@ export type JsonSchemaValidationError = {
   path: string;
   message: string;
   text: string;
+  additionalProperty?: string;
   allowedValues?: string[];
   allowedValuesHiddenCount?: number;
 };
@@ -152,6 +153,16 @@ function getAjvAllowedValuesSummary(error: ErrorObject): ReturnType<typeof summa
   return summarizeAllowedValues(allowedValues);
 }
 
+function resolveAdditionalProperty(error: ErrorObject): string | undefined {
+  if (error.keyword !== "additionalProperties") {
+    return undefined;
+  }
+  const additionalProperty = (error.params as { additionalProperty?: unknown }).additionalProperty;
+  return typeof additionalProperty === "string" && additionalProperty.trim()
+    ? additionalProperty
+    : undefined;
+}
+
 function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaValidationError[] {
   if (!errors || errors.length === 0) {
     return [{ path: "<root>", message: "invalid config", text: "<root>: invalid config" }];
@@ -160,6 +171,7 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaVa
     const path = resolveAjvErrorPath(error);
     const baseMessage = error.message ?? "invalid";
     const allowedValuesSummary = getAjvAllowedValuesSummary(error);
+    const additionalProperty = resolveAdditionalProperty(error);
     const message = allowedValuesSummary
       ? appendAllowedValuesHint(baseMessage, allowedValuesSummary)
       : baseMessage;
@@ -169,6 +181,7 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaVa
       path,
       message,
       text: `${safePath}: ${safeMessage}`,
+      ...(additionalProperty ? { additionalProperty } : {}),
       ...(allowedValuesSummary
         ? {
             allowedValues: allowedValuesSummary.values,

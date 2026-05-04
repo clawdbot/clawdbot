@@ -8,7 +8,10 @@ import {
   setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import { markDiagnosticEmbeddedRunStarted } from "./diagnostic-run-activity.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
+} from "./diagnostic-run-activity.js";
 import {
   diagnosticSessionStates,
   getDiagnosticSessionStateCountForTest,
@@ -92,6 +95,70 @@ describe("diagnostic session state pruning", () => {
     expect(bySessionId).toBe(keyed);
     expect(bySessionId.sessionKey).toBe("agent:main:demo-channel:channel:c1");
     expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+  });
+
+  it("canonicalizes sessionId-only state when the sessionKey becomes known", () => {
+    const sessionKey = "agent:main:demo-channel:channel:c1";
+    const pending = getDiagnosticSessionState({ sessionId: "s1" });
+    pending.queueDepth = 1;
+
+    const keyed = getDiagnosticSessionState({ sessionId: "s1", sessionKey });
+
+    expect(keyed).toBe(pending);
+    expect(keyed.queueDepth).toBe(1);
+    expect(diagnosticSessionStates.has("s1")).toBe(false);
+    expect(diagnosticSessionStates.get(sessionKey)).toBe(keyed);
+    expect(getDiagnosticSessionState({ sessionKey })).toBe(keyed);
+    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+  });
+
+  it("merges split sessionId and sessionKey state without leaving stale queued work", () => {
+    const sessionKey = "agent:main:demo-channel:channel:c1";
+    const keyed = getDiagnosticSessionState({ sessionKey });
+    keyed.queueDepth = 1;
+    keyed.lastActivity = 1;
+    const bySessionId = getDiagnosticSessionState({ sessionId: "s1" });
+    bySessionId.queueDepth = 1;
+    bySessionId.state = "processing";
+    bySessionId.lastActivity = 2;
+
+    const merged = getDiagnosticSessionState({ sessionId: "s1", sessionKey });
+
+    expect(merged).toBe(keyed);
+    expect(merged.queueDepth).toBe(2);
+    expect(merged.state).toBe("processing");
+    expect(diagnosticSessionStates.has("s1")).toBe(false);
+    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+
+    logSessionStateChange({ sessionId: "s1", sessionKey, state: "idle", reason: "run_completed" });
+    logSessionStateChange({ sessionKey, state: "idle", reason: "message_completed" });
+
+    expect(getDiagnosticSessionState({ sessionKey }).queueDepth).toBe(0);
+    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+  });
+});
+
+describe("diagnostic session activity aliases", () => {
+  beforeEach(() => {
+    resetDiagnosticStateForTest();
+  });
+
+  afterEach(() => {
+    resetDiagnosticStateForTest();
+  });
+
+  it("registers the sessionKey alias when activity first arrives with only a sessionId", () => {
+    const sessionKey = "agent:main:demo-channel:channel:c1";
+
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey });
+
+    expect(getDiagnosticSessionActivitySnapshot({ sessionKey }).activeWorkKind).toBe(
+      "embedded_run",
+    );
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId: "s1" }).activeWorkKind).toBe(
+      "embedded_run",
+    );
   });
 });
 
@@ -253,7 +320,7 @@ describe("stuck session diagnostics threshold", () => {
       expect(events).toHaveLength(1);
       expect(recoverStuckSession).toHaveBeenCalledTimes(1);
 
-      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(31_000);
     } finally {
       unsubscribe();
     }
@@ -265,6 +332,7 @@ describe("stuck session diagnostics threshold", () => {
   it("reports active sessions as stalled instead of stuck when active work stops progressing", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
     });
@@ -293,12 +361,60 @@ describe("stuck session diagnostics threshold", () => {
       reason: "active_work_without_progress",
       activeWorkKind: "embedded_run",
     });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("lastProgress=embedded_run:started"),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("lastProgressAge=60s"));
     expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("aborts and drains embedded runs after an extended no-progress stall", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+
+      vi.advanceTimersByTime(9 * 60_000);
+      expect(recoverStuckSession).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(2 * 60_000);
+    } finally {
+      unsubscribe();
+    }
+
+    const stalledEvents = events.filter((event) => event.type === "session.stalled");
+    expect(stalledEvents.length).toBeGreaterThan(0);
+    expect(stalledEvents.at(-1)).toMatchObject({
+      classification: "stalled_agent_run",
+      reason: "active_work_without_progress",
+      activeWorkKind: "embedded_run",
+    });
+    expect(recoverStuckSession).toHaveBeenCalledWith({
+      sessionId: "s1",
+      sessionKey: "main",
+      ageMs: expect.any(Number),
+      queueDepth: 0,
+      allowActiveAbort: true,
+    });
   });
 
   it("reports long-running sessions separately when active work is making progress", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
     });
@@ -329,6 +445,49 @@ describe("stuck session diagnostics threshold", () => {
       reason: "active_work",
       activeWorkKind: "embedded_run",
     });
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("long-running session:"));
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("throttles repeated long-running active-work warnings", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      vi.advanceTimersByTime(45_000);
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      vi.advanceTimersByTime(16_000);
+
+      expect(events.filter((event) => event.type === "session.long_running")).toHaveLength(1);
+
+      vi.advanceTimersByTime(28_000);
+      emitDiagnosticEvent({
+        type: "run.progress",
+        sessionId: "s1",
+        sessionKey: "main",
+        reason: "stream",
+      });
+      vi.advanceTimersByTime(2_000);
+
+      expect(events.filter((event) => event.type === "session.long_running")).toHaveLength(1);
+    } finally {
+      unsubscribe();
+    }
+
+    const longRunningEvents = events.filter((event) => event.type === "session.long_running");
+    expect(longRunningEvents).toHaveLength(1);
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
@@ -515,6 +674,41 @@ describe("stuck session diagnostics threshold", () => {
         active: 0,
         waiting: 0,
         queued: 1,
+      }),
+    );
+  });
+
+  it("keeps transient event-loop max spikes debug-only when only background work is active", () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      {
+        emitMemorySample: createEmitMemorySampleMock(),
+        sampleLiveness: () => ({
+          reasons: ["event_loop_delay"],
+          intervalMs: 30_000,
+          eventLoopDelayP99Ms: 21,
+          eventLoopDelayMaxMs: 1_500,
+        }),
+      },
+    );
+
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    vi.advanceTimersByTime(30_000);
+
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
+    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
+      expect.objectContaining({
+        type: "diagnostic.liveness.warning",
+        level: "warning",
+        active: 1,
+        waiting: 0,
+        queued: 0,
       }),
     );
   });

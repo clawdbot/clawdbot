@@ -1212,7 +1212,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("requires explicit approval for strict inline-eval carriers", async () => {
-    // The full carrier matrix lives in exec-inline-eval.test.ts; this is the
+    // The full carrier matrix lives in command-analysis tests; this is the
     // handle-level smoke for strictInlineEval denial wiring.
     const cases = [
       {

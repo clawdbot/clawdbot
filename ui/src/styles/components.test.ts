@@ -24,3 +24,27 @@ describe("agent fallback chip styles", () => {
     expect(css).toContain(".agent-chip-input .chip-remove:disabled");
   });
 });
+
+describe("sessions filter styles", () => {
+  it("keeps the expanded sessions filters on one row until the mobile breakpoint", () => {
+    const css = readComponentsCss();
+
+    expect(css).toContain(".sessions-filter-bar {\n  display: flex;\n  flex-wrap: wrap;");
+    expect(css).toContain("@media (max-width: 760px)");
+    expect(css).toContain(".sessions-filter-bar {\n    flex-direction: column;");
+  });
+});
+
+describe("overview access grid styles", () => {
+  it("keeps access fields and native controls within the card", () => {
+    const css = readComponentsCss();
+
+    expect(css).toContain(
+      "grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));",
+    );
+    expect(css).toContain(".ov-access-grid .field {\n  min-width: 0;");
+    expect(css).toContain(".ov-access-grid .field input,\n.ov-access-grid .field select {");
+    expect(css).toContain("box-sizing: border-box;");
+    expect(css).toContain("width: 100%;");
+  });
+});

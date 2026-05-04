@@ -141,6 +141,17 @@ export function resolveMissingPluginCommandMessage(
         "the bundled plugin command surface."
       );
     }
+    if (
+      commandAlias.kind !== "runtime-slash" &&
+      commandAlias.enabledByDefault !== true &&
+      config?.plugins?.entries?.[parentPluginId]?.enabled !== true
+    ) {
+      return (
+        `The \`openclaw ${normalizedPluginId}\` command is provided by the ` +
+        `"${parentPluginId}" plugin, but that bundled plugin is disabled by default. Run ` +
+        `\`openclaw plugins enable ${parentPluginId}\` to enable that CLI surface.`
+      );
+    }
     if (commandAlias.kind === "runtime-slash") {
       const cliHint = commandAlias.cliCommand
         ? `Use \`openclaw ${commandAlias.cliCommand}\` for related CLI operations, or `

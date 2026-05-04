@@ -23,7 +23,7 @@ const SENDER_BLOCK = `Sender (untrusted metadata):
 }
 \`\`\``;
 
-const REPLY_BLOCK = `Replied message (untrusted, for context):
+const REPLY_BLOCK = `Reply target of current user message (untrusted, for context):
 \`\`\`json
 {
   "body": "What time is it?"
@@ -74,7 +74,7 @@ describe("stripInboundMetadata", () => {
       "Conversation info (untrusted metadata):",
       "Sender (untrusted metadata):",
       "Thread starter (untrusted, for context):",
-      "Replied message (untrusted, for context):",
+      "Reply target of current user message (untrusted, for context):",
       "Forwarded message context (untrusted metadata):",
       "Chat history since last reply (untrusted, for context):",
     ];

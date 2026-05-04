@@ -471,6 +471,31 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
+  it("keeps same-provider tool-only ACP final replies private when an origin route exists", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("hidden final");
+    const onReplyStart = vi.fn();
+    const { dispatcher } = createDispatcher();
+
+    const result = await runDispatch({
+      bodyForAgent: "reply via message tool if needed",
+      dispatcher,
+      onReplyStart,
+      suppressUserDelivery: true,
+      suppressReplyLifecycle: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+      shouldRouteToOriginating: true,
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+    });
+
+    expect(result?.queuedFinal).toBe(false);
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+    expect(routeMocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
   it("edits ACP tool lifecycle updates in place when supported", async () => {
     setReadyAcpResolution();
     mockToolLifecycleTurn("call-1");

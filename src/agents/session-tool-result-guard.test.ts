@@ -498,6 +498,32 @@ describe("installSessionToolResultGuard", () => {
     });
   });
 
+  it("suppresses only the next persisted user message when requested", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      suppressNextUserMessagePersistence: true,
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "first",
+        timestamp: Date.now(),
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "second",
+        timestamp: Date.now() + 1,
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm);
+    expect(persisted.map((message) => message.role)).toEqual(["user"]);
+    expect(persisted[0]).toMatchObject({ content: "second" });
+  });
+
   // When an assistant message with toolCalls is aborted, no synthetic toolResult
   // should be created. Creating synthetic results for aborted/incomplete tool calls
   // causes API 400 errors: "unexpected tool_use_id found in tool_result blocks".

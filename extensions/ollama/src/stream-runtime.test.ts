@@ -208,7 +208,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         };
         expect(requestBody.think).toBe(false);
         expect(requestBody.options?.think).toBeUndefined();
-        expect(requestBody.options?.num_ctx).toBeUndefined();
+        expect(requestBody.options?.num_ctx).toBe(131072);
       },
     );
   });
@@ -310,7 +310,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         };
         expect(requestBody.think).toBe("low");
         expect(requestBody.options?.think).toBeUndefined();
-        expect(requestBody.options?.num_ctx).toBeUndefined();
+        expect(requestBody.options?.num_ctx).toBe(131072);
       },
     );
   });
@@ -405,7 +405,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         };
         expect(requestBody.think).toBe("high");
         expect(requestBody.options?.think).toBeUndefined();
-        expect(requestBody.options?.num_ctx).toBeUndefined();
+        expect(requestBody.options?.num_ctx).toBe(131072);
       },
     );
   });
@@ -1602,7 +1602,9 @@ describe("createOllamaStreamFn", () => {
         if (!requestBody.options) {
           throw new Error("Expected Ollama request options");
         }
-        expect(requestBody.options?.num_ctx).toBeUndefined();
+        // Catalog `contextWindow` flows through as `num_ctx` so the request
+        // does not silently truncate to Ollama's small Modelfile default.
+        expect(requestBody.options?.num_ctx).toBe(131072);
         expect(requestBody.options.num_predict).toBe(123);
       },
     );
@@ -1653,6 +1655,89 @@ describe("createOllamaStreamFn", () => {
         expect(requestBody.options.top_p).toBe(0.9);
         expect(requestBody.options.streaming).toBeUndefined();
         expect(requestBody.think).toBe(false);
+      },
+    );
+  });
+
+  it("omits num_ctx when the model has no params.num_ctx and no catalog window", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          // Override the helper default contextWindow back to undefined so the
+          // request body should leave Ollama's Modelfile to decide num_ctx.
+          model: { contextWindow: undefined },
+        });
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          options?: { num_ctx?: number };
+        };
+        expect(requestBody.options?.num_ctx).toBeUndefined();
+      },
+    );
+  });
+
+  it("falls back to catalog contextWindow as num_ctx when params.num_ctx is unset", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: { contextWindow: 32768 },
+        });
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          options?: { num_ctx?: number };
+        };
+        expect(requestBody.options?.num_ctx).toBe(32768);
+      },
+    );
+  });
+
+  it("falls back to catalog maxTokens as num_ctx when contextWindow is absent", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          // The helper default contextWindow is overridden back to undefined so
+          // the right side of `model.contextWindow ?? model.maxTokens` is the
+          // load-bearing branch.
+          model: { contextWindow: undefined, maxTokens: 65536 },
+        });
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          options?: { num_ctx?: number };
+        };
+        expect(requestBody.options?.num_ctx).toBe(65536);
       },
     );
   });

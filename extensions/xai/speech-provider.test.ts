@@ -68,4 +68,39 @@ describe("xai speech provider", () => {
       }),
     );
   });
+
+  it("honors voice, language, and speed overrides for telephony output", async () => {
+    const provider = buildXaiSpeechProvider();
+    const result = await provider.synthesizeTelephony?.({
+      text: "hello",
+      cfg: {},
+      providerConfig: {
+        apiKey: "xai-key",
+        baseUrl: "https://api.x.ai/v1",
+        voiceId: "eve",
+        language: "en",
+        speed: 1,
+      },
+      providerOverrides: {
+        voice: "aura",
+        language: "es",
+        speed: 1.2,
+      },
+      timeoutMs: 5_000,
+    });
+
+    expect(result).toEqual({
+      audioBuffer: Buffer.from("audio-bytes"),
+      outputFormat: "pcm",
+      sampleRate: 24_000,
+    });
+    expect(xaiTTSMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        voiceId: "aura",
+        language: "es",
+        speed: 1.2,
+        responseFormat: "pcm",
+      }),
+    );
+  });
 });

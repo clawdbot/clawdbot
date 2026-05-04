@@ -202,6 +202,30 @@ describe("TeamsHttpStream", () => {
     );
   });
 
+  it("reports failure when replacing informative progress with final text fails", async () => {
+    const sendActivity = vi.fn(async (activity: Record<string, unknown>) => {
+      if (activity.type === "message") {
+        throw new Error("final send rejected");
+      }
+      return { id: "stream-1" };
+    });
+    const stream = new TeamsHttpStream({ sendActivity, throttleMs: 1 });
+
+    await stream.sendInformativeUpdate("Thinking");
+    const carried = await stream.replaceInformativeWithFinal(
+      "Final response long enough to stream before the final message send fails.",
+    );
+
+    expect(carried).toBe(false);
+    expect(stream.isFailed).toBe(true);
+    expect(sendActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "message",
+        text: "Final response long enough to stream before the final message send fails.",
+      }),
+    );
+  });
+
   it("hasContent is true after update", () => {
     const stream = new TeamsHttpStream({
       sendActivity: vi.fn(async () => ({ id: "x" })),

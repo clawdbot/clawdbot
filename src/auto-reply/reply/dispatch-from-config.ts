@@ -754,6 +754,12 @@ export async function dispatchReplyFromConfig(
     suppressHookUserDelivery,
     suppressHookReplyLifecycle,
   } = sourceReplyPolicy;
+  const attachSourceReplyDeliveryMode = (
+    result: DispatchFromConfigResult,
+  ): DispatchFromConfigResult =>
+    sourceReplyDeliveryMode === "message_tool_only"
+      ? { ...result, sourceReplyDeliveryMode }
+      : result;
 
   let pluginFallbackReason:
     | "plugin-bound-fallback-missing-plugin"
@@ -797,7 +803,10 @@ export async function dispatchReplyFromConfig(
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });
           commitInboundDedupeIfClaimed();
-          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+          return attachSourceReplyDeliveryMode({
+            queuedFinal: false,
+            counts: dispatcher.getQueuedCounts(),
+          });
         }
         case "missing_plugin":
         case "no_handler": {
@@ -824,7 +833,10 @@ export async function dispatchReplyFromConfig(
           markIdle("plugin_binding_declined");
           recordProcessed("completed", { reason: "plugin-bound-declined" });
           commitInboundDedupeIfClaimed();
-          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+          return attachSourceReplyDeliveryMode({
+            queuedFinal: false,
+            counts: dispatcher.getQueuedCounts(),
+          });
         }
         case "error": {
           logVerbose(
@@ -837,7 +849,10 @@ export async function dispatchReplyFromConfig(
           markIdle("plugin_binding_error");
           recordProcessed("completed", { reason: "plugin-bound-error" });
           commitInboundDedupeIfClaimed();
-          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+          return attachSourceReplyDeliveryMode({
+            queuedFinal: false,
+            counts: dispatcher.getQueuedCounts(),
+          });
         }
       }
     }
@@ -910,7 +925,7 @@ export async function dispatchReplyFromConfig(
       recordProcessed("completed", { reason: "fast_abort" });
       markIdle("message_completed");
       commitInboundDedupeIfClaimed();
-      return { queuedFinal, counts };
+      return attachSourceReplyDeliveryMode({ queuedFinal, counts });
     }
 
     const isSlackNonDirectSurface =
@@ -989,7 +1004,7 @@ export async function dispatchReplyFromConfig(
         recordProcessed("completed", { reason: "before_dispatch_handled" });
         markIdle("message_completed");
         commitInboundDedupeIfClaimed();
-        return { queuedFinal, counts };
+        return attachSourceReplyDeliveryMode({ queuedFinal, counts });
       }
     }
 
@@ -1023,10 +1038,10 @@ export async function dispatchReplyFromConfig(
       );
       if (replyDispatchResult?.handled) {
         commitInboundDedupeIfClaimed();
-        return {
+        return attachSourceReplyDeliveryMode({
           queuedFinal: replyDispatchResult.queuedFinal,
           counts: replyDispatchResult.counts,
-        };
+        });
       }
     }
 
@@ -1192,6 +1207,8 @@ export async function dispatchReplyFromConfig(
     });
     const suppressDefaultToolProgressMessages =
       params.replyOptions?.suppressDefaultToolProgressMessages === true;
+    const shouldSuppressDefaultToolProgressMessages = () =>
+      suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -1257,7 +1274,7 @@ export async function dispatchReplyFromConfig(
             if (!deliveryPayload) {
               return;
             }
-            if (suppressDefaultToolProgressMessages) {
+            if (shouldSuppressDefaultToolProgressMessages()) {
               const hasMedia = resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
               const execApproval =
                 deliveryPayload.channelData &&
@@ -1286,7 +1303,7 @@ export async function dispatchReplyFromConfig(
           if (!suppressAutomaticSourceDelivery) {
             await onPlanUpdateFromReplyOptions?.(payload);
           }
-          if (payload.phase !== "update" || suppressDefaultToolProgressMessages) {
+          if (payload.phase !== "update" || shouldSuppressDefaultToolProgressMessages()) {
             return;
           }
           await sendPlanUpdate({ explanation: payload.explanation, steps: payload.steps });
@@ -1297,7 +1314,7 @@ export async function dispatchReplyFromConfig(
           if (!suppressAutomaticSourceDelivery) {
             await onApprovalEventFromReplyOptions?.(payload);
           }
-          if (payload.phase !== "requested" || suppressDefaultToolProgressMessages) {
+          if (payload.phase !== "requested" || shouldSuppressDefaultToolProgressMessages()) {
             return;
           }
           const label = summarizeApprovalLabel({
@@ -1316,7 +1333,7 @@ export async function dispatchReplyFromConfig(
           if (!suppressAutomaticSourceDelivery) {
             await onPatchSummaryFromReplyOptions?.(payload);
           }
-          if (payload.phase !== "end" || suppressDefaultToolProgressMessages) {
+          if (payload.phase !== "end" || shouldSuppressDefaultToolProgressMessages()) {
             return;
           }
           const label = summarizePatchLabel({ summary: payload.summary, title: payload.title });
@@ -1441,10 +1458,10 @@ export async function dispatchReplyFromConfig(
           },
         );
         if (tailDispatchResult?.handled) {
-          return {
+          return attachSourceReplyDeliveryMode({
             queuedFinal: tailDispatchResult.queuedFinal,
             counts: tailDispatchResult.counts,
-          };
+          });
         }
       }
     }
@@ -1533,7 +1550,7 @@ export async function dispatchReplyFromConfig(
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
     );
     markIdle("message_completed");
-    return { queuedFinal, counts };
+    return attachSourceReplyDeliveryMode({ queuedFinal, counts });
   } catch (err) {
     if (inboundDedupeClaim.status === "claimed") {
       if (inboundDedupeReplayUnsafe) {

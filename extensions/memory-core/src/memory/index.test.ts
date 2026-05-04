@@ -406,7 +406,27 @@ describe("memory index", () => {
     const status = manager.status();
     expect(status.vector?.enabled).toBe(true);
     expect(typeof status.vector?.available).toBe("boolean");
+    expect(status.vector?.storeAvailable).toBe(available);
+    expect(status.vector?.semanticAvailable).toBe(available);
     expect(status.vector?.available).toBe(available);
+  });
+
+  it("probes sqlite vector store availability without initializing embeddings", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-vector-store-only.sqlite"),
+      vectorEnabled: true,
+    });
+    const manager = await getPersistentManager(cfg);
+
+    const available = await manager.probeVectorStoreAvailability?.();
+    const status = manager.status();
+
+    expect(providerCalls).toEqual([]);
+    expect(typeof status.vector?.storeAvailable).toBe("boolean");
+    expect(status.vector?.storeAvailable).toBe(available);
+    expect(status.vector?.semanticAvailable).toBeUndefined();
+    expect(status.vector?.available).toBeUndefined();
   });
 
   it("caches embedding probe readiness across transient status managers", async () => {

@@ -196,11 +196,17 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
     return changes.length > 0 ? { next, changes } : { next: null, changes: [] };
   }
 
+  let partiallyValidOverride: boolean | undefined;
+
   return {
     migrate,
     migrateLegacyConfig: (raw: unknown) => {
       const { next, changes } = migrate(raw);
-      return { config: next, changes };
+      const partiallyValid = partiallyValidOverride;
+      return { config: next, changes, ...(partiallyValid ? { partiallyValid } : {}) };
+    },
+    setPartiallyValidOverride(value: boolean | undefined) {
+      partiallyValidOverride = value;
     },
   };
 });
@@ -595,7 +601,7 @@ vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
 }));
 
 vi.mock("./doctor/shared/legacy-config-migrate.js", () => ({
-  migrateLegacyConfig: legacyConfigMigrationForTest.migrateLegacyConfig,
+  migrateLegacyConfig: (raw: unknown) => legacyConfigMigrationForTest.migrateLegacyConfig(raw),
 }));
 
 vi.mock("./doctor/shared/bundled-plugin-load-paths.js", () => ({
@@ -2642,5 +2648,24 @@ describe("doctor config flow", () => {
       },
       { skipSessionCleanup: true },
     );
+  });
+
+  it("sets skipPluginValidationOnWrite when legacy migration is only partially valid (#76800)", async () => {
+    legacyConfigMigrationForTest.setPartiallyValidOverride(true);
+    try {
+      const result = await runDoctorConfigWithInput({
+        config: {
+          heartbeat: { model: "openai/gpt-4o", every: 60 },
+          tools: { web: { search: { provider: "brave" } } },
+        },
+        repair: true,
+        preflightMode: "compat",
+        run: ({ options, confirm }) =>
+          loadAndMaybeMigrateDoctorConfig({ options, confirm: async () => confirm() }),
+      });
+      expect(result.skipPluginValidationOnWrite).toBe(true);
+    } finally {
+      legacyConfigMigrationForTest.setPartiallyValidOverride(undefined);
+    }
   });
 });

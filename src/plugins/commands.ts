@@ -339,6 +339,10 @@ export async function executePluginCommand(params: {
     logVerbose(
       `Plugin command /${command.name} executed successfully for ${senderId || "unknown"}`,
     );
+    if (!result || typeof result !== "object") {
+      logVerbose(`Plugin command /${command.name} returned no reply payload`);
+      return {};
+    }
     return result;
   } catch (err) {
     const error = err as Error;

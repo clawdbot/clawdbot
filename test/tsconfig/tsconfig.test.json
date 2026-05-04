@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": [
+    "../../src/**/*.d.ts",
+    "../../src/**/*.test.ts",
+    "../../src/**/*.test.tsx",
+    "../../ui/**/*.d.ts",
+    "../../ui/**/*.test.ts",
+    "../../ui/**/*.test.tsx",
+    "../../extensions/**/*.d.ts",
+    "../../extensions/**/*.test.ts",
+    "../../extensions/**/*.test.tsx",
+    "../../packages/**/*.d.ts",
+    "../../packages/**/*.test.ts",
+    "../../packages/**/*.test.tsx"
+  ],
+  "exclude": ["../../node_modules", "../../dist", "../../**/dist/**"]
+}

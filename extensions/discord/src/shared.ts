@@ -156,6 +156,7 @@ export function createDiscordPluginBase(params: {
           configured: Boolean(account.token?.trim()),
           extra: {
             tokenSource: account.tokenSource,
+            tokenStatus: account.tokenStatus,
           },
         }),
     },

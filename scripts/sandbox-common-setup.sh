@@ -27,7 +27,7 @@ echo "Building ${TARGET_IMAGE} with: ${PACKAGES}"
 
 docker_build_exec \
   -t "${TARGET_IMAGE}" \
-  -f "$ROOT_DIR/Dockerfile.sandbox-common" \
+  -f "$ROOT_DIR/scripts/docker/sandbox/Dockerfile.common" \
   --build-arg BASE_IMAGE="${BASE_IMAGE}" \
   --build-arg PACKAGES="${PACKAGES}" \
   --build-arg INSTALL_PNPM="${INSTALL_PNPM}" \

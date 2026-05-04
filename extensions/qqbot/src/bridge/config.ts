@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
+import { coerceSecretRef, normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { getPlatformAdapter } from "../engine/adapter/index.js";
 import {
   DEFAULT_ACCOUNT_ID as ENGINE_DEFAULT_ACCOUNT_ID,
@@ -15,6 +17,68 @@ export const DEFAULT_ACCOUNT_ID = ENGINE_DEFAULT_ACCOUNT_ID;
 interface QQBotChannelConfig extends QQBotAccountConfig {
   accounts?: Record<string, QQBotAccountConfig>;
   defaultAccount?: string;
+}
+
+function assertNotLegacySecretRefMarker(value: unknown, path: string): void {
+  const normalized = normalizeSecretInputString(value);
+  if (!normalized || !/^secretref(?:-env)?:/i.test(normalized)) {
+    return;
+  }
+  throw new Error(
+    `${path}: legacy SecretRef marker strings are not valid QQ Bot clientSecret values; use a structured SecretRef object instead.`,
+  );
+}
+
+function resolveEnvSecretRefValue(params: {
+  cfg: OpenClawConfig;
+  value: unknown;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  const ref = coerceSecretRef(params.value, params.cfg.secrets?.defaults);
+  if (!ref || ref.source !== "env") {
+    return undefined;
+  }
+
+  const providerConfig = params.cfg.secrets?.providers?.[ref.provider];
+  if (providerConfig) {
+    if (providerConfig.source !== "env") {
+      throw new Error(
+        `Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "env".`,
+      );
+    }
+    if (providerConfig.allowlist && !providerConfig.allowlist.includes(ref.id)) {
+      throw new Error(
+        `Environment variable "${ref.id}" is not allowlisted in secrets.providers.${ref.provider}.allowlist.`,
+      );
+    }
+  } else if (ref.provider !== resolveDefaultSecretProviderAlias(params.cfg, "env")) {
+    throw new Error(
+      `Secret provider "${ref.provider}" is not configured (ref: env:${ref.provider}:${ref.id}).`,
+    );
+  }
+
+  return normalizeSecretInputString((params.env ?? process.env)[ref.id]);
+}
+
+function resolveQQBotClientSecretInput(params: {
+  cfg: OpenClawConfig;
+  value: unknown;
+  path: string;
+}): string | undefined {
+  assertNotLegacySecretRefMarker(params.value, params.path);
+
+  const envSecret = resolveEnvSecretRefValue({
+    cfg: params.cfg,
+    value: params.value,
+  });
+  if (envSecret) {
+    return envSecret;
+  }
+
+  return getPlatformAdapter().resolveSecretInputString({
+    value: params.value,
+    path: params.path,
+  });
 }
 
 /** List all configured QQBot account IDs. */
@@ -62,7 +126,8 @@ export function resolveQQBotAccount(
   if (adapter.hasConfiguredSecret(accountConfig.clientSecret)) {
     clientSecret = opts?.allowUnresolvedSecretRef
       ? (adapter.normalizeSecretInputString(accountConfig.clientSecret) ?? "")
-      : (adapter.resolveSecretInputString({
+      : (resolveQQBotClientSecretInput({
+          cfg,
           value: accountConfig.clientSecret,
           path: clientSecretPath,
         }) ?? "");

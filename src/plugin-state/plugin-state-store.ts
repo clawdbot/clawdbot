@@ -7,6 +7,7 @@ import {
   pluginStateEntries,
   pluginStateLookup,
   pluginStateRegister,
+  pluginStateRegisterIfAbsent,
 } from "./plugin-state-store.sqlite.js";
 import type {
   OpenKeyedStoreOptions,
@@ -217,20 +218,44 @@ function createKeyedStoreForPluginId<T>(
   const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
   assertConsistentOptions(pluginId, namespace, { maxEntries, defaultTtlMs });
 
+  const prepareRegisterParams = (
+    key: string,
+    value: T,
+    opts?: { ttlMs?: number },
+  ): { key: string; valueJson: string; ttlMs?: number } => {
+    const normalizedKey = validateKey(key, "register");
+    assertJsonSerializable(value);
+    const json = JSON.stringify(value);
+    assertValueSize(json);
+    const ttlMs = validateOptionalTtlMs(opts?.ttlMs, "register") ?? defaultTtlMs;
+    return {
+      key: normalizedKey,
+      valueJson: json,
+      ...(ttlMs != null ? { ttlMs } : {}),
+    };
+  };
+
   return {
     async register(key, value, opts) {
-      const normalizedKey = validateKey(key, "register");
-      assertJsonSerializable(value);
-      const json = JSON.stringify(value);
-      assertValueSize(json);
-      const ttlMs = validateOptionalTtlMs(opts?.ttlMs, "register") ?? defaultTtlMs;
+      const params = prepareRegisterParams(key, value, opts);
       pluginStateRegister({
         pluginId,
         namespace,
-        key: normalizedKey,
-        valueJson: json,
+        key: params.key,
+        valueJson: params.valueJson,
         maxEntries,
-        ...(ttlMs != null ? { ttlMs } : {}),
+        ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+      });
+    },
+    async registerIfAbsent(key, value, opts) {
+      const params = prepareRegisterParams(key, value, opts);
+      return pluginStateRegisterIfAbsent({
+        pluginId,
+        namespace,
+        key: params.key,
+        valueJson: params.valueJson,
+        maxEntries,
+        ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
       });
     },
     async lookup(key) {

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
 import {
   resolveControlUiDistIndexHealth,
@@ -1443,6 +1444,27 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           stepIndex: 0,
           totalSteps: 1,
         }),
+      postVerifyStep: async (verifiedPackageRoot) => {
+        const doctorEntry = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
+        if (!doctorEntry) {
+          return null;
+        }
+        const doctorNodePath = await resolveStableNodePath(process.execPath);
+        return await runStep({
+          runCommand,
+          name: "openclaw doctor",
+          argv: [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"],
+          cwd: verifiedPackageRoot,
+          timeoutMs,
+          env: {
+            OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+          },
+          progress,
+          stepIndex: 0,
+          totalSteps: 1,
+        });
+      },
     });
     return {
       status: packageUpdate.failedStep ? "error" : "ok",

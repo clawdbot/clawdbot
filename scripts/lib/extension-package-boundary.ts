@@ -46,6 +46,8 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   ],
   "openclaw/plugin-sdk/ssrf-runtime": ["../dist/plugin-sdk/src/plugin-sdk/ssrf-runtime.d.ts"],
   "@openclaw/qa-channel/api.js": ["../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
+  "@openclaw/discord/api.js": ["../dist/plugin-sdk/extensions/discord/api.d.ts"],
+  "@openclaw/slack/api.js": ["../dist/plugin-sdk/extensions/slack/api.d.ts"],
   "@openclaw/*.js": ["../packages/plugin-sdk/dist/extensions/*.d.ts", "../extensions/*"],
   "@openclaw/*": ["../packages/plugin-sdk/dist/extensions/*", "../extensions/*"],
   "@openclaw/plugin-sdk/*": ["../dist/plugin-sdk/src/plugin-sdk/*.d.ts"],
@@ -68,6 +70,8 @@ export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
     (({
       "openclaw/plugin-sdk/channel-secret-basic-runtime": _omitBasic,
       "openclaw/plugin-sdk/channel-secret-tts-runtime": _omitTts,
+      "@openclaw/discord/api.js": _omitDiscord,
+      "@openclaw/slack/api.js": _omitSlack,
       ...rest
     }) => rest)(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS),
     "../",

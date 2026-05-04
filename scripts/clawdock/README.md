@@ -145,7 +145,7 @@ The Docker setup uses three config files on the host. The container never stores
 | -------------------------- | -------------------------------------------------------------------------- |
 | `Dockerfile`               | Builds the `openclaw:local` image (Node 22, pnpm, non-root `node` user)    |
 | `docker-compose.yml`       | Defines `openclaw-gateway` and `openclaw-cli` services, bind-mounts, ports |
-| `docker-setup.sh`          | First-time setup — builds image, creates `.env` from `.env.example`        |
+| `scripts/docker/setup.sh`  | First-time setup — builds image, creates `.env` from `.env.example`        |
 | `.env.example`             | Template for `<project>/.env` with all supported vars and docs             |
 | `docker-compose.extra.yml` | Optional overrides — auto-loaded by ClawDock helpers if present            |
 
@@ -161,14 +161,14 @@ The Docker setup uses three config files on the host. The container never stores
 
 ### Initial Setup
 
-`./docker-setup.sh` (in the project root) handles first-time Docker configuration:
+`./scripts/docker/setup.sh` handles first-time Docker configuration:
 
 - Builds the `openclaw:local` image from `Dockerfile`
 - Creates `<project>/.env` from `.env.example` with a generated gateway token
 - Sets up `~/.openclaw` directories if they don't exist
 
 ```bash
-./docker-setup.sh
+./scripts/docker/setup.sh
 ```
 
 After setup, add your API keys:

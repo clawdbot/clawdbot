@@ -19,6 +19,29 @@ export function encodePowerShell(script: string): string {
   );
 }
 
+export const windowsScopedEnvFunction = String.raw`function Invoke-WithScopedEnv {
+  param(
+    [Parameter(Mandatory = $true)][hashtable] $Values,
+    [Parameter(Mandatory = $true)][scriptblock] $Script
+  )
+  $previous = @{}
+  foreach ($key in $Values.Keys) {
+    $previous[$key] = [Environment]::GetEnvironmentVariable([string]$key, 'Process')
+    Set-Item -Path ('Env:' + $key) -Value ([string]$Values[$key])
+  }
+  try {
+    & $Script
+  } finally {
+    foreach ($key in $Values.Keys) {
+      if ($null -eq $previous[$key]) {
+        Remove-Item -Path ('Env:' + $key) -ErrorAction SilentlyContinue
+      } else {
+        Set-Item -Path ('Env:' + $key) -Value $previous[$key]
+      }
+    }
+  }
+}`;
+
 export function windowsModelProviderTimeoutScript(modelId: string): string {
   const providerId = providerIdFromModelId(modelId);
   const configJson = providerTimeoutConfigJson(modelId, "windows");

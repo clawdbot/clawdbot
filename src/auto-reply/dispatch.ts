@@ -113,6 +113,7 @@ function finalizeDispatchResult(
     final: Math.max(0, result.counts.final - cancelledCounts.final),
   };
   return {
+    ...result,
     queuedFinal: result.queuedFinal && counts.final > 0,
     counts,
   };

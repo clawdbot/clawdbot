@@ -32,14 +32,16 @@ describe("QA provider image generation config", () => {
       "qa-channel",
     ]);
   });
-  it("uses the selected mock provider for AIMock image generation", () => {
+  it("routes AIMock image generation through the OpenAI image provider", () => {
     const patch = buildQaImageGenerationConfigPatch({
       providerMode: "aimock",
       providerBaseUrl: "http://127.0.0.1:45080/v1",
       requiredPluginIds: [],
     });
 
-    expect(patch.agents.defaults.imageGenerationModel.primary).toBe("aimock/gpt-image-1");
+    expect(patch.plugins.allow).toEqual(["acpx", "memory-core", "openai"]);
+    expect(patch.plugins.entries).toEqual({ openai: { enabled: true } });
+    expect(patch.agents.defaults.imageGenerationModel.primary).toBe("openai/gpt-image-1");
     expect(patch.models?.providers.aimock?.baseUrl).toBe("http://127.0.0.1:45080/v1");
     expect(patch.models?.providers["mock-openai"]).toBeUndefined();
   });

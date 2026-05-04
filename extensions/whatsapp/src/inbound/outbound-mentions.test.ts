@@ -114,6 +114,19 @@ describe("resolveWhatsAppOutboundMentions", () => {
     });
   });
 
+  it("does not mention numeric prefixes inside longer tokens", () => {
+    expect(
+      resolveWhatsAppOutboundMentions({
+        chatJid: "120363000000000000@g.us",
+        text: "literal @15551234567abc and x@15551234567",
+        participants: [{ id: "15551234567@s.whatsapp.net" }],
+      }),
+    ).toEqual({
+      text: "literal @15551234567abc and x@15551234567",
+      mentionedJids: [],
+    });
+  });
+
   it("does not add mention metadata for direct chats or unmatched group participants", () => {
     expect(
       resolveWhatsAppOutboundMentions({

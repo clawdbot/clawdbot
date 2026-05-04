@@ -1,7 +1,9 @@
-import * as net from "node:net";
 import { Agent, EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
-import { isWSL2Sync } from "../wsl.js";
 import { hasEnvHttpProxyAgentConfigured, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
+import {
+  createUndiciAutoSelectFamilyConnectOptions,
+  resolveUndiciAutoSelectFamily,
+} from "./undici-family-policy.js";
 
 export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -11,8 +13,6 @@ export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
  * non-public `.options` field.
  */
 export let _globalUndiciStreamTimeoutMs: number | undefined;
-
-const AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
 
 let lastAppliedTimeoutKey: string | null = null;
 let lastAppliedProxyBootstrap = false;
@@ -34,36 +34,6 @@ function resolveDispatcherKind(dispatcher: unknown): DispatcherKind {
     return "agent";
   }
   return "unsupported";
-}
-
-function resolveAutoSelectFamily(): boolean | undefined {
-  if (typeof net.getDefaultAutoSelectFamily !== "function") {
-    return undefined;
-  }
-  try {
-    const systemDefault = net.getDefaultAutoSelectFamily();
-    // WSL2 has unstable IPv6 connectivity; disable autoSelectFamily to
-    // force IPv4 connections and avoid "fetch failed" errors when reaching
-    // Windows-host services (e.g. Ollama) from inside WSL2.
-    if (systemDefault && isWSL2Sync()) {
-      return false;
-    }
-    return systemDefault;
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveConnectOptions(
-  autoSelectFamily: boolean | undefined,
-): { autoSelectFamily: boolean; autoSelectFamilyAttemptTimeout: number } | undefined {
-  if (autoSelectFamily === undefined) {
-    return undefined;
-  }
-  return {
-    autoSelectFamily,
-    autoSelectFamilyAttemptTimeout: AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS,
-  };
 }
 
 function resolveDispatcherKey(params: {
@@ -127,13 +97,13 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
     return;
   }
 
-  const autoSelectFamily = resolveAutoSelectFamily();
+  const autoSelectFamily = resolveUndiciAutoSelectFamily();
   const nextKey = resolveDispatcherKey({ kind, timeoutMs, autoSelectFamily });
   if (lastAppliedTimeoutKey === nextKey) {
     return;
   }
 
-  const connect = resolveConnectOptions(autoSelectFamily);
+  const connect = createUndiciAutoSelectFamilyConnectOptions(autoSelectFamily);
   try {
     if (kind === "env-proxy") {
       const proxyOptions = {

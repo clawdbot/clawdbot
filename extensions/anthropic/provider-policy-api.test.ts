@@ -1,6 +1,10 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
-import { applyConfigDefaults, normalizeConfig } from "./provider-policy-api.js";
+import {
+  applyConfigDefaults,
+  normalizeConfig,
+  resolveThinkingProfile,
+} from "./provider-policy-api.js";
 
 function createModel(id: string, name: string): ModelDefinitionConfig {
   return {
@@ -86,5 +90,42 @@ describe("anthropic provider policy public artifact", () => {
       mode: "cache-ttl",
       ttl: "1h",
     });
+  });
+
+  it("exposes Claude Opus 4.7 thinking levels without loading the full provider plugin", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "anthropic",
+        modelId: "claude-opus-4-7",
+      }),
+    ).toMatchObject({
+      levels: expect.arrayContaining([{ id: "xhigh" }, { id: "adaptive" }, { id: "max" }]),
+      defaultLevel: "off",
+    });
+  });
+
+  it("keeps adaptive-only Claude profiles aligned with the runtime provider", () => {
+    const profile = resolveThinkingProfile({
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+    });
+
+    expect(profile).toMatchObject({
+      levels: expect.arrayContaining([{ id: "adaptive" }]),
+      defaultLevel: "adaptive",
+    });
+    if (!profile) {
+      throw new Error("Expected Anthropic policy profile");
+    }
+    expect(profile.levels.some((level) => level.id === "xhigh" || level.id === "max")).toBe(false);
+  });
+
+  it("does not expose Anthropic thinking profiles for unrelated providers", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "openai",
+        modelId: "claude-opus-4-7",
+      }),
+    ).toBeNull();
   });
 });

@@ -372,6 +372,7 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
 type SessionListRowContext = {
   subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
   storeChildSessionsByKey: Map<string, string[]>;
+  thinkingLevelsByModelRef: Map<string, ReturnType<typeof listThinkingLevelOptions>>;
 };
 
 function resolveRuntimeChildSessionKeys(
@@ -488,7 +489,31 @@ function buildSessionListRowContext(params: {
   return {
     subagentRuns,
     storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
+    thinkingLevelsByModelRef: new Map(),
   };
+}
+
+function createSessionRowModelCacheKey(provider: string | undefined, model: string | undefined) {
+  return `${normalizeLowercaseStringOrEmpty(provider)}\0${normalizeOptionalString(model) ?? ""}`;
+}
+
+function resolveSessionRowThinkingLevels(params: {
+  provider: string;
+  model: string;
+  modelCatalog?: ModelCatalogEntry[];
+  rowContext?: SessionListRowContext;
+}): ReturnType<typeof listThinkingLevelOptions> {
+  if (!params.rowContext) {
+    return listThinkingLevelOptions(params.provider, params.model, params.modelCatalog);
+  }
+  const key = createSessionRowModelCacheKey(params.provider, params.model);
+  const cached = params.rowContext.thinkingLevelsByModelRef.get(key);
+  if (cached) {
+    return cached;
+  }
+  const levels = listThinkingLevelOptions(params.provider, params.model, params.modelCatalog);
+  params.rowContext.thinkingLevelsByModelRef.set(key, levels);
+  return levels;
 }
 
 function mergeChildSessionKeys(
@@ -1530,6 +1555,7 @@ export function buildGatewaySessionRow(params: {
     resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined;
   const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
+    !skipTranscriptUsage &&
     resolveEstimatedSessionCostUsd({
       cfg,
       provider: resolvedModel.provider,
@@ -1635,9 +1661,12 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  const thinkingLevels = lightweight
-    ? []
-    : listThinkingLevelOptions(thinkingProvider, thinkingModel, params.modelCatalog);
+  const thinkingLevels = resolveSessionRowThinkingLevels({
+    provider: thinkingProvider,
+    model: thinkingModel,
+    modelCatalog: params.modelCatalog,
+    rowContext,
+  });
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 
@@ -1766,8 +1795,14 @@ export function loadGatewaySessionRow(
  */
 const SESSIONS_LIST_YIELD_BATCH_SIZE = 10;
 const SESSIONS_LIST_TOP_N_LIMIT = 200;
+const SESSIONS_LIST_DEFAULT_LIMIT = 100;
 
 type SessionEntryPair = [string, SessionEntry];
+type SessionEntrySelection = {
+  entries: SessionEntryPair[];
+  totalCount: number;
+  limitApplied?: number;
+};
 
 function compareSessionEntryPairsByUpdatedAt(a: SessionEntryPair, b: SessionEntryPair): number {
   return (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0);
@@ -1775,9 +1810,10 @@ function compareSessionEntryPairsByUpdatedAt(a: SessionEntryPair, b: SessionEntr
 
 function resolveSessionsListLimit(
   opts: import("./protocol/index.js").SessionsListParams,
+  defaultLimit?: number,
 ): number | undefined {
   if (typeof opts.limit !== "number" || !Number.isFinite(opts.limit)) {
-    return undefined;
+    return defaultLimit;
   }
   return Math.max(1, Math.floor(opts.limit));
 }
@@ -1814,12 +1850,12 @@ function sortAndLimitSessionEntries(
   return limit === undefined ? sorted : sorted.slice(0, limit);
 }
 
-export function filterAndSortSessionEntries(params: {
+function filterSessionEntries(params: {
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
   rowContext?: SessionListRowContext;
-}): [string, SessionEntry][] {
+}): SessionEntryPair[] {
   const { store, opts, now } = params;
   const rowContext = params.rowContext;
   const includeGlobal = opts.includeGlobal === true;
@@ -1912,7 +1948,33 @@ export function filterAndSortSessionEntries(params: {
     entries = entries.filter(([, entry]) => (entry?.updatedAt ?? 0) >= cutoff);
   }
 
-  return sortAndLimitSessionEntries(entries, resolveSessionsListLimit(opts));
+  return entries;
+}
+
+function selectSessionEntries(params: {
+  store: Record<string, SessionEntry>;
+  opts: import("./protocol/index.js").SessionsListParams;
+  now: number;
+  rowContext?: SessionListRowContext;
+  defaultLimit?: number;
+}): SessionEntrySelection {
+  const filtered = filterSessionEntries(params);
+  const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
+  const entries = sortAndLimitSessionEntries(filtered, limit);
+  return {
+    entries,
+    totalCount: filtered.length,
+    limitApplied: limit,
+  };
+}
+
+export function filterAndSortSessionEntries(params: {
+  store: Record<string, SessionEntry>;
+  opts: import("./protocol/index.js").SessionsListParams;
+  now: number;
+  rowContext?: SessionListRowContext;
+}): [string, SessionEntry][] {
+  return selectSessionEntries(params).entries;
 }
 
 export function listSessionsFromStore(params: {
@@ -1935,12 +1997,14 @@ export function listSessionsFromStore(params: {
   const includeLastMessage = opts.includeLastMessage === true;
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
-  const entries = filterAndSortSessionEntries({
+  const selection = selectSessionEntries({
     store,
     opts,
     now,
     rowContext: hasSpawnedByFilter ? getRowContext() : undefined,
+    defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
   });
+  const { entries, totalCount, limitApplied } = selection;
 
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
@@ -1964,6 +2028,9 @@ export function listSessionsFromStore(params: {
     ts: now,
     path: storePath,
     count: sessions.length,
+    totalCount,
+    limitApplied,
+    hasMore: sessions.length < totalCount,
     defaults: getSessionDefaults(cfg, params.modelCatalog),
     sessions,
   };
@@ -1999,12 +2066,14 @@ export async function listSessionsFromStoreAsync(params: {
   const includeLastMessage = opts.includeLastMessage === true;
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
-  const entries = filterAndSortSessionEntries({
+  const selection = selectSessionEntries({
     store,
     opts,
     now,
     rowContext: hasSpawnedByFilter ? getRowContext() : undefined,
+    defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
   });
+  const { entries, totalCount, limitApplied } = selection;
 
   const sessions: GatewaySessionRow[] = [];
   for (let i = 0; i < entries.length; i++) {
@@ -2060,6 +2129,9 @@ export async function listSessionsFromStoreAsync(params: {
     ts: now,
     path: storePath,
     count: sessions.length,
+    totalCount,
+    limitApplied,
+    hasMore: sessions.length < totalCount,
     defaults: getSessionDefaults(cfg, params.modelCatalog),
     sessions,
   };

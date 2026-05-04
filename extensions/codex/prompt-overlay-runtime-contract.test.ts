@@ -18,6 +18,9 @@ describe("Codex prompt overlay runtime contract", () => {
     expect(contribution?.sectionOverrides?.interaction_style).toContain(
       "This is a live chat, not a memo.",
     );
+    expect(contribution?.sectionOverrides?.interaction_style).not.toContain(
+      "The purpose of heartbeats is to make you feel magical and proactive.",
+    );
   });
 
   it("respects shared GPT-5 prompt overlay config for Codex runs", () => {

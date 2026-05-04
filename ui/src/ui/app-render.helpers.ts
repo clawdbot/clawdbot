@@ -18,7 +18,7 @@ import { createSessionAndRefresh, loadSessions } from "./controllers/sessions.ts
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "./session-key.ts";
-import { normalizeOptionalString } from "./string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
@@ -50,6 +50,20 @@ export function resolveAssistantAttachmentAuthToken(
   state: Pick<AppViewState, "hello" | "settings" | "password">,
 ) {
   return resolveControlUiAuthToken(state);
+}
+
+export function resolveDashboardHeaderContext(
+  state: Pick<AppViewState, "agentsList" | "sessionKey">,
+): { agentLabel: string } {
+  const agentId = resolveAgentIdFromSessionKey(state.sessionKey);
+  const agent = state.agentsList?.agents.find(
+    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === agentId,
+  );
+  const agentLabel =
+    normalizeOptionalString(agent?.identity?.name) ??
+    normalizeOptionalString(agent?.name) ??
+    agentId;
+  return { agentLabel };
 }
 
 function resolveSidebarChatSessionKey(state: AppViewState): string {
@@ -605,6 +619,22 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   void refreshSessionOptions(state);
 }
 
+export function dismissChatError(state: AppViewState) {
+  state.lastError = null;
+  state.lastErrorCode = null;
+  if (state.realtimeTalkStatus === "error") {
+    const talkHost = state as unknown as {
+      realtimeTalkSession?: { stop(): void } | null;
+    };
+    talkHost.realtimeTalkSession?.stop();
+    talkHost.realtimeTalkSession = null;
+    state.realtimeTalkActive = false;
+    state.realtimeTalkStatus = "idle";
+    state.realtimeTalkDetail = null;
+    state.realtimeTalkTranscript = null;
+  }
+}
+
 export async function createChatSession(state: AppViewState) {
   if (!state.client || !state.connected) {
     return;
@@ -636,6 +666,7 @@ export async function createChatSession(state: AppViewState) {
       limit: 0,
       includeGlobal: true,
       includeUnknown: true,
+      showArchived: state.sessionsShowArchived,
     },
   );
   if (
@@ -666,6 +697,7 @@ async function refreshSessionOptions(state: AppViewState) {
     limit: 0,
     includeGlobal: true,
     includeUnknown: true,
+    showArchived: state.sessionsShowArchived,
   });
 }
 

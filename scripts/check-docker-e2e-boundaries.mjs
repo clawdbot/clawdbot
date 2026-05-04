@@ -12,9 +12,9 @@ const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const errors = [];
 const packageJson = JSON.parse(readText("package.json"));
 const packageScripts = new Set(Object.keys(packageJson.scripts ?? {}));
-// This lane proves the published Codex npm plugin against live OpenAI auth, so
-// it intentionally needs both live credentials and the package-backed image.
-const livePackageBackedLanes = new Set(["live-codex-npm-plugin"]);
+// These lanes prove package-installed surfaces against live auth, so they
+// intentionally need both live credentials and a package-backed image.
+const livePackageBackedLanes = new Set(["live-codex-npm-plugin", "openwebui"]);
 
 function readText(relativePath) {
   return fs.readFileSync(path.join(ROOT_DIR, relativePath), "utf8");

@@ -50,23 +50,30 @@ function installStandaloneRegistry(
 
 export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
   loadOptions: PluginLoadOptions;
+  forceLoad?: boolean;
+  installRegistry?: boolean;
   requiredPluginIds?: readonly string[];
   surface?: ActiveRuntimePluginRegistrySurface;
 }): PluginRegistry | undefined {
   const requiredPluginIds = params.requiredPluginIds ?? params.loadOptions.onlyPluginIds;
   const surface = params.surface ?? "active";
-  const existing = getLoadedRuntimePluginRegistry({
-    env: params.loadOptions.env,
-    loadOptions: params.loadOptions,
-    workspaceDir: params.loadOptions.workspaceDir,
-    requiredPluginIds,
-    surface,
-  });
-  if (existing) {
-    return existing;
+  if (!params.forceLoad) {
+    const existing = getLoadedRuntimePluginRegistry({
+      env: params.loadOptions.env,
+      loadOptions: params.loadOptions,
+      workspaceDir: params.loadOptions.workspaceDir,
+      requiredPluginIds,
+      surface,
+    });
+    if (existing) {
+      return existing;
+    }
   }
 
-  const registry = loadOpenClawPlugins(params.loadOptions);
+  const effectiveLoadOptions = params.forceLoad
+    ? { ...params.loadOptions, cache: false }
+    : params.loadOptions;
+  const registry = loadOpenClawPlugins(effectiveLoadOptions);
   if (params.loadOptions.activate !== false) {
     switch (surface) {
       case "active":
@@ -78,6 +85,10 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
         pinActivePluginHttpRouteRegistry(registry);
         break;
     }
+    return registry;
+  }
+
+  if (params.installRegistry === false) {
     return registry;
   }
 

@@ -6,6 +6,9 @@ const registryJitiMocks = vi.hoisted(() => ({
   loadPluginManifestRegistry: vi.fn(),
   loadPluginRegistrySnapshot: vi.fn(),
 }));
+const pluginModuleLoaderJitiFactoryOverrideKey = Symbol.for(
+  "openclaw.pluginModuleLoaderJitiFactoryOverride",
+);
 
 vi.mock("jiti", () => ({
   createJiti: (...args: Parameters<typeof registryJitiMocks.createJiti>) =>
@@ -43,6 +46,11 @@ vi.mock("../plugin-registry.js", async (importOriginal) => {
   };
 });
 export function resetRegistryJitiMocks(): void {
+  (
+    globalThis as typeof globalThis & {
+      [pluginModuleLoaderJitiFactoryOverrideKey]?: typeof registryJitiMocks.createJiti;
+    }
+  )[pluginModuleLoaderJitiFactoryOverrideKey] = registryJitiMocks.createJiti;
   registryJitiMocks.createJiti.mockReset();
   registryJitiMocks.discoverOpenClawPlugins.mockReset();
   registryJitiMocks.loadPluginManifestRegistry.mockReset();

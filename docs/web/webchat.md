@@ -28,6 +28,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 - Compaction entries render as an explicit compacted-history divider. The divider explains that earlier turns are preserved in a checkpoint and links to the Sessions checkpoint controls, where operators can branch or restore the pre-compaction view when their permissions allow it.
 - Control UI remembers the backing Gateway `sessionId` returned by `chat.history` and includes it on follow-up `chat.send` calls, so reconnects and page refreshes continue the same stored conversation unless the user starts or resets a session.
 - Control UI coalesces duplicate in-flight submits for the same session, message, and attachments before generating a new `chat.send` run id; the Gateway still dedupes repeated requests that reuse the same idempotency key.
+- Workspace startup files and pending `BOOTSTRAP.md` instructions are supplied through the agent system prompt's Project Context, not copied into the WebChat user message. Bootstrap truncation only adds a concise system-prompt recovery notice; detailed counts and config knobs stay on diagnostic surfaces.
 - `chat.history` is also display-normalized: runtime-only OpenClaw context,
   inbound envelope wrappers, inline delivery directive tags
   such as `[[reply_to_*]]` and `[[audio_as_voice]]`, plain-text tool-call XML
@@ -43,6 +44,17 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 - Gateway persists aborted partial assistant text into transcript history when buffered output exists, and marks those entries with abort metadata.
 - History is always fetched from the gateway (no local file watching).
 - If the gateway is unreachable, WebChat is read-only.
+
+### Transcript and delivery model
+
+WebChat has two separate data paths:
+
+- The session JSONL file is the durable model/runtime transcript. For normal agent runs, Pi persists model-visible `user`, `assistant`, and `toolResult` messages through its session manager. WebChat does not write arbitrary delivery, status, or helper text into that transcript.
+- Gateway `ReplyPayload` events are the live delivery projection. They can be normalized for WebChat/channel display, block streaming, directive tags, media embedding, TTS/audio flags, and UI fallback behavior. They are not themselves the canonical session log.
+- WebChat injects assistant transcript entries only when the Gateway owns a displayed message outside a normal Pi assistant turn: `chat.inject`, non-agent command replies, aborted partial output, and WebChat-managed media transcript supplements.
+- `chat.history` reads the stored session transcript and applies WebChat display projection. If live assistant text appears during a run but disappears after history reload, first check whether the raw JSONL contains the assistant text, then whether `chat.history` projection stripped it, then whether the Control UI optimistic-tail merge replaced local delivery state with the persisted snapshot.
+
+Normal agent-run final answers should be durable because Pi writes the assistant `message_end`. Any fallback that mirrors a delivered final payload into the transcript must first avoid duplicating an assistant turn that Pi already wrote.
 
 ## Control UI agents tools panel
 

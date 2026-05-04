@@ -76,6 +76,9 @@ function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
         origin: record.origin,
         enabled: record.enabled,
         enabledByDefault: record.enabledByDefault,
+        enabledByDefaultOnPlatforms: record.enabledByDefaultOnPlatforms
+          ? [...record.enabledByDefaultOnPlatforms]
+          : undefined,
         syntheticAuthRefs: record.syntheticAuthRefs,
         startup: record.startup,
         compat: record.compat,

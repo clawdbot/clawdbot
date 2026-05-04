@@ -68,6 +68,7 @@ const accountFixture: ResolvedMattermostAccount = {
   baseUrl: "https://chat.example.com",
   botTokenSource: "config",
   baseUrlSource: "config",
+  streamingMode: "partial",
   config: {},
 };
 

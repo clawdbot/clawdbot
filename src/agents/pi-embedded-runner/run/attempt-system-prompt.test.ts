@@ -1,0 +1,90 @@
+import { describe, expect, it } from "vitest";
+import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
+
+const baseProviderTransform = {
+  provider: "openai",
+  workspaceDir: "/tmp/openclaw",
+  context: {
+    provider: "openai",
+    modelId: "gpt-5.5",
+    promptMode: "full" as const,
+  },
+};
+
+describe("buildAttemptSystemPrompt", () => {
+  it("preserves bootstrap Project Context when a system prompt override is configured", () => {
+    const result = buildAttemptSystemPrompt({
+      isRawModelRun: false,
+      systemPromptOverrideText: "Custom override prompt.",
+      embeddedSystemPrompt: {
+        workspaceDir: "/tmp/openclaw",
+        reasoningTagHint: false,
+        runtimeInfo: {
+          host: "test-host",
+          os: "Darwin",
+          arch: "arm64",
+          node: "v22.0.0",
+          model: "openai/gpt-5.5",
+        },
+        tools: [],
+        modelAliasLines: [],
+        userTimezone: "UTC",
+        bootstrapMode: "full",
+        bootstrapTruncationNotice: "Bootstrap context was truncated.",
+        contextFiles: [
+          {
+            path: "/tmp/openclaw/BOOTSTRAP.md",
+            content: "Reply with BOOTSTRAP_OK.",
+          },
+          {
+            path: "/tmp/openclaw/USER.md",
+            content: "User profile should stay in normal prompt context only.",
+          },
+        ],
+      },
+      providerTransform: baseProviderTransform,
+    });
+
+    expect(result.systemPrompt).toContain("Custom override prompt.");
+    expect(result.systemPrompt).toContain("## Bootstrap Pending");
+    expect(result.systemPrompt).toContain("BOOTSTRAP.md is included below in Project Context");
+    expect(result.systemPrompt).toContain("## Bootstrap Context Notice");
+    expect(result.systemPrompt).toContain("Bootstrap context was truncated.");
+    expect(result.systemPrompt).toContain("# Project Context");
+    expect(result.systemPrompt).toContain("## /tmp/openclaw/BOOTSTRAP.md");
+    expect(result.systemPrompt).toContain("Reply with BOOTSTRAP_OK.");
+    expect(result.systemPrompt).not.toContain("USER.md");
+  });
+
+  it("omits system prompts for raw model probes", () => {
+    const result = buildAttemptSystemPrompt({
+      isRawModelRun: true,
+      embeddedSystemPrompt: {
+        workspaceDir: "/tmp/openclaw",
+        reasoningTagHint: false,
+        runtimeInfo: {
+          host: "test-host",
+          os: "Darwin",
+          arch: "arm64",
+          node: "v22.0.0",
+          model: "openai/gpt-5.5",
+        },
+        tools: [],
+        modelAliasLines: [],
+        userTimezone: "UTC",
+        bootstrapMode: "full",
+        contextFiles: [
+          {
+            path: "/tmp/openclaw/BOOTSTRAP.md",
+            content: "Reply with BOOTSTRAP_OK.",
+          },
+        ],
+      },
+      providerTransform: baseProviderTransform,
+    });
+
+    expect(result.baseSystemPrompt).toContain("BOOTSTRAP.md is included below in Project Context");
+    expect(result.systemPrompt).toBe("");
+    expect(result.systemPromptOverride()).toBe("");
+  });
+});

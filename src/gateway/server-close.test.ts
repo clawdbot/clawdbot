@@ -246,6 +246,22 @@ describe("createGatewayCloseHandler", () => {
     expect(stopChannel).toHaveBeenCalledTimes(2);
   });
 
+  it("uses caller-provided channel ids instead of the local channel registry", async () => {
+    mocks.listChannelPlugins.mockReturnValue([]);
+    const stopChannel = vi.fn(async (_id: string) => undefined);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["telegram", "discord"],
+        stopChannel,
+      }),
+    );
+
+    await close({ reason: "test shutdown" });
+
+    expect(mocks.listChannelPlugins).not.toHaveBeenCalled();
+    expect(stopChannel.mock.calls.map(([id]) => id)).toEqual(["telegram", "discord"]);
+  });
+
   it("unsubscribes lifecycle listeners and disposes bundle runtimes during shutdown", async () => {
     const lifecycleUnsub = vi.fn();
     const transcriptUnsub = vi.fn();

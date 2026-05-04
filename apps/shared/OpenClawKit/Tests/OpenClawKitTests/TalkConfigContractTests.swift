@@ -58,7 +58,7 @@ private enum TalkConfigContractFixtureLoader {
     private static func findFixtureURL(startingAt fileURL: URL) throws -> URL {
         var directory = fileURL.deletingLastPathComponent()
         while directory.path != "/" {
-            let candidate = directory.appendingPathComponent("test-fixtures/talk-config-contract.json")
+            let candidate = directory.appendingPathComponent("test/fixtures/talk-config-contract.json")
             if FileManager.default.fileExists(atPath: candidate.path) {
                 return candidate
             }

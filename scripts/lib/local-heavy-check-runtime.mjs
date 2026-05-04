@@ -84,7 +84,7 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
   const nextArgs = [...args];
 
   insertBeforeSeparator(nextArgs, "--type-aware");
-  insertBeforeSeparator(nextArgs, "--tsconfig", "tsconfig.oxlint.json");
+  insertBeforeSeparator(nextArgs, "--tsconfig", "config/tsconfig/oxlint.json");
   insertBeforeSeparator(nextArgs, "--allow", "eslint/no-underscore-dangle");
   if (
     !hasFlag(nextArgs, "--report-unused-disable-directives") &&

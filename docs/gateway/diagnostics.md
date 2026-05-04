@@ -118,9 +118,11 @@ The same diagnostic heartbeat records liveness samples when the Gateway keeps
 running but the Node.js event loop or CPU looks saturated. These
 `diagnostic.liveness.warning` events include event-loop delay, event-loop
 utilization, CPU-core ratio, and active/waiting/queued session counts. Idle
-samples stay in telemetry at `info` level; they are only logged as Gateway
-warnings when diagnostic work is active, waiting, or queued. They do not
-restart the Gateway by themselves.
+samples stay in telemetry at `info` level. Liveness samples become Gateway
+warnings only when work is waiting or queued, or when active work overlaps with
+sustained event-loop delay. Transient max-delay spikes during otherwise healthy
+background work stay in debug logs. They do not restart the Gateway by
+themselves.
 
 Inspect the live recorder:
 

@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  __setRealtimeVoiceAgentConsultDepsForTest,
   consultRealtimeVoiceAgent,
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
@@ -7,7 +8,17 @@ import {
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "./agent-consult-tool.js";
 
 function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
-  const sessionStore: Record<string, { sessionId?: string; updatedAt?: number }> = {};
+  const sessionStore: Record<
+    string,
+    {
+      sessionId?: string;
+      updatedAt?: number;
+      sessionFile?: string;
+      spawnedBy?: string;
+      forkedFromParent?: boolean;
+      totalTokens?: number;
+    }
+  > = {};
   const runEmbeddedPiAgent = vi.fn(async () => ({
     payloads,
     meta: {},
@@ -31,7 +42,10 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
         loadSessionStore: vi.fn(() => sessionStore),
         saveSessionStore: vi.fn(async () => {}),
         updateSessionStore,
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+        resolveSessionFilePath: vi.fn(
+          (_sessionId: string, entry?: { sessionFile?: string }) =>
+            entry?.sessionFile ?? "/tmp/session.json",
+        ),
       },
       runEmbeddedPiAgent,
     },
@@ -41,6 +55,10 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
 }
 
 describe("realtime voice agent consult runtime", () => {
+  afterEach(() => {
+    __setRealtimeVoiceAgentConsultDepsForTest(null);
+  });
+
   it("exposes the shared consult tool based on policy", () => {
     expect(resolveRealtimeVoiceAgentConsultTools("safe-read-only")).toEqual([
       expect.objectContaining({ name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME }),
@@ -149,6 +167,69 @@ describe("realtime voice agent consult runtime", () => {
     expect(result).toEqual({ text: "Let me verify that first." });
     expect(warn).toHaveBeenCalledWith(
       "[realtime-voice] agent consult produced no answer: agent returned no speakable text",
+    );
+  });
+
+  it("forks requester context when fork mode has a parent session", async () => {
+    const { runtime, runEmbeddedPiAgent, sessionStore } = createAgentRuntime();
+    sessionStore["agent:main:main"] = {
+      sessionId: "parent-session",
+      sessionFile: "/tmp/parent.jsonl",
+      totalTokens: 100,
+      updatedAt: 1,
+    };
+    const resolveParentForkDecision = vi.fn(async () => ({
+      status: "fork" as const,
+      maxTokens: 100_000,
+      parentTokens: 100,
+    }));
+    const forkSessionFromParent = vi.fn(async () => ({
+      sessionId: "forked-session",
+      sessionFile: "/tmp/forked.jsonl",
+    }));
+    __setRealtimeVoiceAgentConsultDepsForTest({
+      resolveParentForkDecision,
+      forkSessionFromParent,
+    });
+
+    await consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn: vi.fn() },
+      agentId: "main",
+      sessionKey: "agent:main:subagent:google-meet:meet-1",
+      spawnedBy: "agent:main:main",
+      contextMode: "fork",
+      messageProvider: "google-meet",
+      lane: "google-meet",
+      runIdPrefix: "google-meet:meet-1",
+      args: { question: "What should I say?" },
+      transcript: [],
+      surface: "a private Google Meet",
+      userLabel: "Participant",
+    });
+
+    expect(resolveParentForkDecision).toHaveBeenCalledWith({
+      parentEntry: sessionStore["agent:main:main"],
+      storePath: "/tmp/sessions.json",
+    });
+    expect(forkSessionFromParent).toHaveBeenCalledWith({
+      parentEntry: sessionStore["agent:main:main"],
+      agentId: "main",
+      sessionsDir: "/tmp",
+    });
+    expect(sessionStore["agent:main:subagent:google-meet:meet-1"]).toMatchObject({
+      sessionId: "forked-session",
+      sessionFile: "/tmp/forked.jsonl",
+      spawnedBy: "agent:main:main",
+      forkedFromParent: true,
+    });
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "forked-session",
+        sessionFile: "/tmp/forked.jsonl",
+        spawnedBy: "agent:main:main",
+      }),
     );
   });
 });

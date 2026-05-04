@@ -61,6 +61,8 @@ export type MemoryProviderStatus = {
   fallback?: { from: string; reason?: string };
   vector?: {
     enabled: boolean;
+    storeAvailable?: boolean;
+    semanticAvailable?: boolean;
     available?: boolean;
     extensionPath?: string;
     loadError?: string;
@@ -102,6 +104,7 @@ export interface MemorySearchManager {
   }): Promise<void>;
   getCachedEmbeddingAvailability?(): MemoryEmbeddingProbeResult | null;
   probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
+  probeVectorStoreAvailability?(): Promise<boolean>;
   probeVectorAvailability(): Promise<boolean>;
   close?(): Promise<void>;
 }

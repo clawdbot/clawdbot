@@ -5,6 +5,7 @@ import {
   isPrivateIpAddress,
   isSameSsrFPolicy,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
 } from "./ssrf.js";
 
 const privateIpCases = [
@@ -122,6 +123,26 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedHostname", () => {
     expect(ssrfPolicyFromHttpBaseUrlAllowedHostname("")).toBeUndefined();
     expect(ssrfPolicyFromHttpBaseUrlAllowedHostname("not-a-url")).toBeUndefined();
     expect(ssrfPolicyFromHttpBaseUrlAllowedHostname("ftp://api.example.com")).toBeUndefined();
+  });
+});
+
+describe("ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist", () => {
+  it("builds a host-scoped fake-IP policy from HTTP base URLs", () => {
+    expect(
+      ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(" https://api.example.com/v1 "),
+    ).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["api.example.com"],
+    });
+  });
+
+  it("ignores empty, invalid, and non-HTTP URLs", () => {
+    expect(ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist("")).toBeUndefined();
+    expect(ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist("not-a-url")).toBeUndefined();
+    expect(
+      ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist("ftp://api.example.com"),
+    ).toBeUndefined();
   });
 });
 

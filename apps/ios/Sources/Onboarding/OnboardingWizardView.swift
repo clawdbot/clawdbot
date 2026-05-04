@@ -203,14 +203,7 @@ struct OnboardingWizardView: View {
                             return
                         }
                         if let message = self.detectQRCode(from: data) {
-                            if let link = GatewayConnectDeepLink.fromSetupCode(message) {
-                                self.handleScannedLink(link)
-                                return
-                            }
-                            if let url = URL(string: message),
-                               let route = DeepLinkParser.parse(url),
-                               case let .gateway(link) = route
-                            {
+                            if let link = GatewayConnectDeepLink.fromSetupInput(message) {
                                 self.handleScannedLink(link)
                                 return
                             }

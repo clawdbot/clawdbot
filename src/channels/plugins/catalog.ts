@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { MANIFEST_KEY } from "../../compat/legacy-names.js";
+import { isPrereleaseSemverVersion, parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registry.js";
 import {
@@ -240,12 +241,26 @@ function toChannelMeta(params: {
 function resolveInstallInfo(params: {
   install?: PluginPackageInstall;
   packageName?: string;
+  packageVersion?: string;
   packageDir?: string;
   workspaceDir?: string;
 }): ChannelPluginCatalogEntry["install"] | null {
   const clawhubSpec = normalizeOptionalString(params.install?.clawhubSpec);
-  const npmSpec =
+  let npmSpec =
     normalizeOptionalString(params.install?.npmSpec) ?? normalizeOptionalString(params.packageName);
+  const packageVersion = normalizeOptionalString(params.packageVersion);
+  const parsedNpmSpec = npmSpec ? parseRegistryNpmSpec(npmSpec) : null;
+  const expectedPackageName = normalizeOptionalString(params.packageName);
+  const parsedPackageName = expectedPackageName ? parseRegistryNpmSpec(expectedPackageName) : null;
+  if (
+    npmSpec &&
+    packageVersion &&
+    isPrereleaseSemverVersion(packageVersion) &&
+    parsedNpmSpec?.selectorKind === "none" &&
+    (!parsedPackageName || parsedNpmSpec.name === parsedPackageName.name)
+  ) {
+    npmSpec = `${parsedNpmSpec.name}@${packageVersion}`;
+  }
   if (!clawhubSpec && !npmSpec) {
     return null;
   }
@@ -296,6 +311,7 @@ function resolveInstallInfo(params: {
 function buildCatalogEntryFromManifest(params: {
   pluginId?: string;
   packageName?: string;
+  packageVersion?: string;
   packageDir?: string;
   origin?: PluginOrigin;
   trustedSourceLinkedOfficialInstall?: boolean;
@@ -317,6 +333,7 @@ function buildCatalogEntryFromManifest(params: {
   const install = resolveInstallInfo({
     install: params.install,
     packageName: params.packageName,
+    packageVersion: params.packageVersion,
     packageDir: params.packageDir,
     workspaceDir: params.workspaceDir,
   });
@@ -349,6 +366,7 @@ function buildExternalCatalogEntry(
   return buildCatalogEntryFromManifest({
     pluginId: manifest?.plugin?.id,
     packageName: entry.name,
+    packageVersion: entry.version,
     trustedSourceLinkedOfficialInstall: options?.trustedSourceLinkedOfficialInstall,
     channel: manifest?.channel,
     install: manifest?.install,

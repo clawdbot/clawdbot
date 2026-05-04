@@ -16,6 +16,12 @@ until a message is processed. Use `openclaw channels status --probe`,
 `openclaw status --deep`, or `openclaw health --verbose` when you need live
 channel connectivity.
 
+Gateway `sessions.list` responses are bounded by default so large long-lived
+stores cannot monopolize the Gateway event loop. Pass an explicit positive
+`limit` from RPC clients when a different result window is needed; responses
+include `totalCount`, `limitApplied`, and `hasMore` when callers need to show
+that more rows exist.
+
 ```bash
 openclaw sessions
 openclaw sessions --agent work

@@ -7,6 +7,7 @@ export type PluginStateEntry<T> = {
 
 export type PluginStateKeyedStore<T> = {
   register(key: string, value: T, opts?: { ttlMs?: number }): Promise<void>;
+  registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): Promise<boolean>;
   lookup(key: string): Promise<T | undefined>;
   consume(key: string): Promise<T | undefined>;
   delete(key: string): Promise<boolean>;

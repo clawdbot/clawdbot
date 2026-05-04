@@ -1,7 +1,26 @@
 import fs from "node:fs/promises";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  ensureAuthProfileStore,
+  resolveOpenClawAgentDir,
+  resolveProviderIdForAuth,
+  type AuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { CodexAppServerApprovalPolicy, CodexAppServerSandboxMode } from "./config.js";
 import type { CodexServiceTier } from "./protocol.js";
+
+const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai-codex";
+const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
+
+type ProviderAuthAliasLookupParams = Parameters<typeof resolveProviderIdForAuth>[1];
+type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
+
+export type CodexAppServerAuthProfileLookup = {
+  authProfileId?: string;
+  authProfileStore?: AuthProfileStore;
+  agentDir?: string;
+  config?: ProviderAuthAliasConfig;
+};
 
 export type CodexAppServerThreadBinding = {
   schemaVersion: 1;
@@ -25,6 +44,7 @@ export function resolveCodexAppServerBindingPath(sessionFile: string): string {
 
 export async function readCodexAppServerBinding(
   sessionFile: string,
+  lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<CodexAppServerThreadBinding | undefined> {
   const path = resolveCodexAppServerBindingPath(sessionFile);
   let raw: string;
@@ -42,14 +62,20 @@ export async function readCodexAppServerBinding(
     if (parsed.schemaVersion !== 1 || typeof parsed.threadId !== "string") {
       return undefined;
     }
+    const authProfileId =
+      typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined;
     return {
       schemaVersion: 1,
       threadId: parsed.threadId,
       sessionFile,
       cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
-      authProfileId: typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined,
+      authProfileId,
       model: typeof parsed.model === "string" ? parsed.model : undefined,
-      modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
+      modelProvider: normalizeCodexAppServerBindingModelProvider({
+        ...lookup,
+        authProfileId,
+        modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
+      }),
       approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
       sandbox: readSandboxMode(parsed.sandbox),
       serviceTier: readServiceTier(parsed.serviceTier),
@@ -74,6 +100,7 @@ export async function writeCodexAppServerBinding(
   > & {
     createdAt?: string;
   },
+  lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<void> {
   const now = new Date().toISOString();
   const payload: CodexAppServerThreadBinding = {
@@ -83,7 +110,11 @@ export async function writeCodexAppServerBinding(
     cwd: binding.cwd,
     authProfileId: binding.authProfileId,
     model: binding.model,
-    modelProvider: binding.modelProvider,
+    modelProvider: normalizeCodexAppServerBindingModelProvider({
+      ...lookup,
+      authProfileId: binding.authProfileId,
+      modelProvider: binding.modelProvider,
+    }),
     approvalPolicy: binding.approvalPolicy,
     sandbox: binding.sandbox,
     serviceTier: binding.serviceTier,
@@ -109,6 +140,80 @@ export async function clearCodexAppServerBinding(sessionFile: string): Promise<v
 
 function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
+export function isCodexAppServerNativeAuthProfile(
+  lookup: CodexAppServerAuthProfileLookup,
+): boolean {
+  const authProfileId = lookup.authProfileId?.trim();
+  if (!authProfileId) {
+    return false;
+  }
+  try {
+    const credential = resolveCodexAppServerAuthProfileCredential({
+      ...lookup,
+      authProfileId,
+    });
+    return isCodexAppServerNativeAuthProvider({
+      provider: credential?.provider,
+      config: lookup.config,
+    });
+  } catch (error) {
+    embeddedAgentLog.debug("failed to resolve codex app-server auth profile provider", {
+      authProfileId,
+      error,
+    });
+    return false;
+  }
+}
+
+export function normalizeCodexAppServerBindingModelProvider(params: {
+  authProfileId?: string;
+  modelProvider?: string;
+  authProfileStore?: AuthProfileStore;
+  agentDir?: string;
+  config?: ProviderAuthAliasConfig;
+}): string | undefined {
+  const modelProvider = params.modelProvider?.trim();
+  if (!modelProvider) {
+    return undefined;
+  }
+  if (
+    isCodexAppServerNativeAuthProfile(params) &&
+    modelProvider.toLowerCase() === PUBLIC_OPENAI_MODEL_PROVIDER
+  ) {
+    return undefined;
+  }
+  return modelProvider;
+}
+
+function resolveCodexAppServerAuthProfileCredential(
+  lookup: CodexAppServerAuthProfileLookup,
+): AuthProfileStore["profiles"][string] | undefined {
+  const authProfileId = lookup.authProfileId?.trim();
+  if (!authProfileId) {
+    return undefined;
+  }
+  const store = lookup.authProfileStore ?? loadCodexAppServerAuthProfileStore(lookup.agentDir);
+  return store.profiles[authProfileId];
+}
+
+function loadCodexAppServerAuthProfileStore(agentDir: string | undefined): AuthProfileStore {
+  return ensureAuthProfileStore(agentDir?.trim() || resolveOpenClawAgentDir(), {
+    allowKeychainPrompt: false,
+  });
+}
+
+function isCodexAppServerNativeAuthProvider(params: {
+  provider?: string;
+  config?: ProviderAuthAliasConfig;
+}): boolean {
+  const provider = params.provider?.trim();
+  return Boolean(
+    provider &&
+    resolveProviderIdForAuth(provider, { config: params.config }) ===
+      CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER,
+  );
 }
 
 function readApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {

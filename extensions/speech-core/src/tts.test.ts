@@ -625,6 +625,12 @@ describe("speech-core native voice-note routing", () => {
           tts: {
             enabled: true,
             provider: "mock",
+            providers: {
+              mock: {
+                modelId: "telephony-model",
+                voiceId: "default-voice",
+              },
+            },
           },
         },
       },
@@ -638,6 +644,8 @@ describe("speech-core native voice-note routing", () => {
     });
 
     expect(result.success).toBe(true);
+    expect(result.providerModel).toBe("telephony-model");
+    expect(result.providerVoice).toBe("directed-voice");
     expect(synthesizeTelephony).toHaveBeenCalledWith(
       expect.objectContaining({
         providerOverrides: {

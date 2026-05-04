@@ -9,6 +9,7 @@ import {
   resolveToolVerbAndDetailForArgs,
 } from "./tool-display-common.js";
 import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
+import type { ToolDetailMode } from "./tool-display-exec.js";
 
 type ToolDisplay = {
   name: string;
@@ -45,6 +46,7 @@ export function resolveToolDisplay(params: {
   name?: string;
   args?: unknown;
   meta?: string;
+  detailMode?: ToolDetailMode;
 }): ToolDisplay {
   const name = normalizeToolName(params.name);
   const key = normalizeLowercaseStringOrEmpty(name);
@@ -59,6 +61,7 @@ export function resolveToolDisplay(params: {
     spec,
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "summary",
+    toolDetailMode: params.detailMode,
     detailMaxEntries: MAX_DETAIL_ENTRIES,
     detailFormatKey: (raw) => formatDetailKey(raw, DETAIL_LABEL_OVERRIDES),
   });

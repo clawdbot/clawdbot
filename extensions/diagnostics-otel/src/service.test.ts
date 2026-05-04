@@ -296,6 +296,7 @@ describe("diagnostics-otel service", () => {
       type: "webhook.processed",
       channel: "telegram",
       updateType: "telegram-post",
+      chatId: "chat-should-not-export",
       durationMs: 120,
     });
     emitDiagnosticEvent({
@@ -307,7 +308,10 @@ describe("diagnostics-otel service", () => {
     emitDiagnosticEvent({
       type: "message.processed",
       channel: "telegram",
+      chatId: "chat-should-not-export",
+      messageId: "message-should-not-export",
       outcome: "completed",
+      reason: "progress draft / message tool 123",
       durationMs: 55,
     });
     emitDiagnosticEvent({
@@ -348,6 +352,33 @@ describe("diagnostics-otel service", () => {
     expect(spanNames).toContain("openclaw.webhook.processed");
     expect(spanNames).toContain("openclaw.message.processed");
     expect(spanNames).toContain("openclaw.session.stuck");
+    const webhookSpanCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.webhook.processed",
+    );
+    expect(webhookSpanCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "openclaw.chatId": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
+    const messageSpanCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.message.processed",
+    );
+    expect(messageSpanCall?.[1]).toEqual({
+      attributes: expect.objectContaining({
+        "openclaw.channel": "telegram",
+        "openclaw.outcome": "completed",
+        "openclaw.reason": "unknown",
+      }),
+      startTime: expect.any(Number),
+    });
+    expect(messageSpanCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "openclaw.chatId": expect.anything(),
+        "openclaw.messageId": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
 
     emitDiagnosticEvent({
       type: "log.record",
@@ -2387,6 +2418,7 @@ describe("diagnostics-otel service", () => {
     for (const call of deliverySpanCalls) {
       expect(call[1]).toEqual({
         attributes: expect.not.objectContaining({
+          "openclaw.chatId": expect.anything(),
           "openclaw.sessionKey": expect.anything(),
           "openclaw.messageId": expect.anything(),
           "openclaw.conversationId": expect.anything(),
@@ -2402,6 +2434,46 @@ describe("diagnostics-otel service", () => {
     expect(errorSpan?.setStatus).toHaveBeenCalledWith({
       code: 2,
       message: "TypeError",
+    });
+    await service.stop?.(ctx);
+  });
+
+  test("bounds unsafe message delivery attributes before export", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "message.delivery.completed",
+      channel: "discord/custom",
+      deliveryKind: "progress draft" as never,
+      durationMs: 20,
+      resultCount: 1,
+      sessionKey: "session-secret",
+    });
+    await flushDiagnosticEvents();
+
+    expect(
+      telemetryState.histograms.get("openclaw.message.delivery.duration_ms")?.record,
+    ).toHaveBeenCalledWith(
+      20,
+      expect.objectContaining({
+        "openclaw.channel": "unknown",
+        "openclaw.delivery.kind": "other",
+        "openclaw.outcome": "completed",
+      }),
+    );
+    const deliverySpanCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.message.delivery",
+    );
+    expect(deliverySpanCall?.[1]).toMatchObject({
+      attributes: {
+        "openclaw.channel": "unknown",
+        "openclaw.delivery.kind": "other",
+        "openclaw.outcome": "completed",
+        "openclaw.delivery.result_count": 1,
+      },
+      startTime: expect.any(Number),
     });
     await service.stop?.(ctx);
   });

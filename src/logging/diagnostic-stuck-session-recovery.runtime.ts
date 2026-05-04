@@ -8,6 +8,10 @@ import {
 } from "../agents/pi-embedded-runner/runs.js";
 import { getCommandLaneSnapshot, resetCommandLane } from "../process/command-queue.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
+import {
+  formatStoppedCronSessionDiagnosticFields,
+  resolveCronSessionDiagnosticContext,
+} from "./diagnostic-session-context.js";
 
 const STUCK_SESSION_ABORT_SETTLE_MS = 15_000;
 const recoveriesInFlight = new Set<string>();
@@ -126,10 +130,16 @@ export async function recoverStuckDiagnosticSession(
       sessionLane && (!activeSessionId || !aborted || !drained) ? resetCommandLane(sessionLane) : 0;
 
     if (aborted || released > 0) {
+      const action = aborted ? "abort_embedded_run" : "release_lane";
+      const stoppedFields = formatStoppedCronSessionDiagnosticFields(
+        resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),
+      );
       diag.warn(
         `stuck session recovery: sessionId=${params.sessionId ?? activeSessionId ?? "unknown"} sessionKey=${
           params.sessionKey ?? "unknown"
-        } age=${Math.round(params.ageMs / 1000)}s aborted=${aborted} drained=${drained} released=${released}`,
+        } age=${Math.round(params.ageMs / 1000)}s action=${action} aborted=${aborted} drained=${drained} released=${released}${
+          stoppedFields ? ` ${stoppedFields}` : ""
+        }`,
       );
     } else {
       diag.warn(

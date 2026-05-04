@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
+import {
+  DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+  type RestartSentinelPayload,
+} from "../../infra/restart-sentinel.js";
 import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner.js";
 
 // Capture the sentinel payload written during update.run
@@ -102,6 +105,7 @@ vi.mock("./restart-request.js", () => ({
   parseRestartRequestParams: (params: Record<string, unknown>) => ({
     sessionKey: params.sessionKey,
     note: params.note,
+    continuationMessage: params.continuationMessage,
     restartDelayMs: undefined,
   }),
 }));
@@ -167,7 +171,10 @@ describe("update.run sentinel deliveryContext", () => {
       to: "webchat:user-123",
       accountId: "default",
     });
-    expect(capturedPayload!.continuation).toBeUndefined();
+    expect(capturedPayload!.continuation).toEqual({
+      kind: "agentTurn",
+      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+    });
   });
 
   it("omits deliveryContext when no sessionKey is provided", async () => {
@@ -193,7 +200,25 @@ describe("update.run sentinel deliveryContext", () => {
       accountId: "workspace-1",
     });
     expect(capturedPayload!.threadId).toBe("1234567890.123456");
-    expect(capturedPayload!.continuation).toBeUndefined();
+    expect(capturedPayload!.continuation).toEqual({
+      kind: "agentTurn",
+      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+    });
+  });
+
+  it("uses an explicit continuationMessage in successful update sentinels", async () => {
+    capturedPayload = undefined;
+
+    await invokeUpdateRun({
+      sessionKey: "agent:main:webchat:dm:user-123",
+      continuationMessage: "Check the running version and finish the update report.",
+    });
+
+    expect(capturedPayload).toBeDefined();
+    expect(capturedPayload!.continuation).toEqual({
+      kind: "agentTurn",
+      message: "Check the running version and finish the update report.",
+    });
   });
 });
 
@@ -234,10 +259,16 @@ describe("update.run restart scheduling", () => {
 
     let payload: { ok: boolean; restart: unknown } | undefined;
 
-    await invokeUpdateRun({}, (_ok: boolean, response: unknown) => {
-      const typed = response as { ok: boolean; restart: unknown };
-      payload = typed;
-    });
+    await invokeUpdateRun(
+      {
+        sessionKey: "agent:main:webchat:dm:user-123",
+        continuationMessage: "This should not run after a failed update.",
+      },
+      (_ok: boolean, response: unknown) => {
+        const typed = response as { ok: boolean; restart: unknown };
+        payload = typed;
+      },
+    );
 
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     expect(payload?.ok).toBe(false);

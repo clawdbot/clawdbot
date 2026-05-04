@@ -411,7 +411,10 @@ describe("gateway server agent", () => {
       ],
       idempotencyKey: "idem-agent-attachments",
     });
-    expect(res.ok).toBe(true);
+    expect(
+      res,
+      `agent RPC failed before forwarding image attachment: ${JSON.stringify(res)}`,
+    ).toMatchObject({ ok: true });
 
     const call = await waitForAgentCommandCall("idem-agent-attachments");
     expect(call.sessionKey).toBe("agent:main:main");
@@ -419,12 +422,22 @@ describe("gateway server agent", () => {
     expect(typeof call.message).toBe("string");
     expect(call.message).toContain("what is in the image?");
 
-    const images = call.images as Array<Record<string, unknown>>;
-    expect(Array.isArray(images)).toBe(true);
-    expect(images.length).toBe(1);
-    expect(images[0]?.type).toBe("image");
-    expect(images[0]?.mimeType).toBe("image/png");
-    expect(images[0]?.data).toBe(BASE_IMAGE_PNG);
+    expect(
+      {
+        rpcResult: res,
+        commandImages: call.images,
+      },
+      "agent command should include one forwarded image attachment",
+    ).toEqual({
+      rpcResult: expect.objectContaining({ ok: true }),
+      commandImages: [
+        expect.objectContaining({
+          type: "image",
+          mimeType: "image/png",
+          data: BASE_IMAGE_PNG,
+        }),
+      ],
+    });
   });
 
   test("agent errors when delivery requested and no last channel exists", async () => {

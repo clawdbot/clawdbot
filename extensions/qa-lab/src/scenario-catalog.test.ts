@@ -53,7 +53,6 @@ describe("qa scenario catalog", () => {
     const codexLeakConfig = readQaScenarioExecutionConfig("codex-harness-no-meta-leak") as
       | {
           harnessRuntime?: string;
-          harnessFallback?: string;
           expectedReply?: string;
           forbiddenReplySubstrings?: string[];
         }
@@ -73,7 +72,6 @@ describe("qa scenario catalog", () => {
     );
     expect(codexLeak.title).toBe("Codex harness no meta leak");
     expect(codexLeakConfig?.harnessRuntime).toBe("codex");
-    expect(codexLeakConfig?.harnessFallback).toBe("none");
     expect(JSON.stringify(codexLeak.execution.flow)).toContain("agentRuntime");
     expect(JSON.stringify(codexLeak.execution.flow)).not.toContain("embeddedHarness");
     expect(codexLeakConfig?.expectedReply).toBe("QA_LEAK_OK");

@@ -1,6 +1,5 @@
 import path from "node:path";
 import { vi } from "vitest";
-import { createGatewayConfigModuleMock } from "./test-helpers.config-runtime.js";
 import {
   getTestPluginRegistry,
   resetTestPluginRegistry,
@@ -201,6 +200,7 @@ vi.mock("../config/sessions.js", async () => {
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  const { createGatewayConfigModuleMock } = await import("./test-helpers.config-runtime.js");
   return createGatewayConfigModuleMock(actual);
 });
 
@@ -208,6 +208,7 @@ vi.mock("../config/io.js", async () => {
   const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
   const configActual =
     await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  const { createGatewayConfigModuleMock } = await import("./test-helpers.config-runtime.js");
   const configMock = createGatewayConfigModuleMock(configActual);
   const createConfigIO = vi.fn(() => ({
     ...actual.createConfigIO(),

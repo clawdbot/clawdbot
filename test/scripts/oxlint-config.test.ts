@@ -80,16 +80,16 @@ function readJson(path: string): unknown {
 
 describe("oxlint config", () => {
   it("includes bundled extensions in type-aware lint coverage", () => {
-    const tsconfig = readJson("tsconfig.oxlint.json") as OxlintTsconfig;
+    const tsconfig = readJson("config/tsconfig/oxlint.json") as OxlintTsconfig;
 
-    expect(tsconfig.include).toContain("extensions/**/*");
-    expect(tsconfig.exclude ?? []).not.toContain("extensions");
+    expect(tsconfig.include).toContain("../../extensions/**/*");
+    expect(tsconfig.exclude ?? []).not.toContain("../../extensions");
   });
 
   it("includes scripts in root type-aware lint coverage", () => {
-    const tsconfig = readJson("tsconfig.oxlint.json") as OxlintTsconfig;
+    const tsconfig = readJson("config/tsconfig/oxlint.json") as OxlintTsconfig;
 
-    expect(tsconfig.include).toContain("scripts/**/*");
+    expect(tsconfig.include).toContain("../../scripts/**/*");
   });
 
   it("has a discoverable scripts tsconfig for type-aware linting", () => {
@@ -121,6 +121,8 @@ describe("oxlint config", () => {
     expect(ignorePatterns).toContain("**/build/**");
     expect(ignorePatterns).toContain("**/coverage/**");
     expect(ignorePatterns).toContain("**/.cache/**");
+    expect(ignorePatterns).toContain("**/.openclaw-runtime-deps-copy-*/**");
+    expect(ignorePatterns).toContain("extensions/diffs/assets/viewer-runtime.js");
   });
 
   it("enables strict empty object type lint with named single-extends interfaces allowed", () => {

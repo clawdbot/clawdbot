@@ -8,6 +8,7 @@ import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { loadManifestContractSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestContractListKey, PluginManifestRecord } from "./manifest-registry.js";
 
@@ -85,7 +86,7 @@ export function resolveEnabledBundledManifestContractPlugins(params: {
       origin: plugin.origin,
       config: normalizedPlugins,
       rootConfig: activation.config,
-      enabledByDefault: plugin.enabledByDefault,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
       activationSource,
     }).enabled;
   });

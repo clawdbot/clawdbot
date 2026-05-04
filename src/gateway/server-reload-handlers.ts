@@ -1,7 +1,6 @@
 import { resetModelCatalogCache } from "../agents/model-catalog.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/run-state.js";
-import { abortEmbeddedPiRun } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
@@ -27,7 +26,6 @@ import {
   type ActiveTaskRestartBlocker,
 } from "../tasks/task-registry.maintenance.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
-import { enqueueConfigRecoveryNotice } from "./config-recovery-notice.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
@@ -70,23 +68,6 @@ export type GatewayPluginReloadResult = {
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
-
-function abortActiveAgentRunsAfterConfigRecovery(params: {
-  reason: string;
-  logReload: GatewayReloadLog;
-}) {
-  const aborted = abortEmbeddedPiRun(undefined, { mode: "all" });
-  if (!aborted) {
-    return;
-  }
-  params.logReload.warn(
-    `config recovery aborted active agent run(s) after reload-${params.reason}`,
-  );
-}
-
-export const __testing = {
-  abortActiveAgentRunsAfterConfigRecovery,
-};
 
 async function disposeMcpRuntimesWithTimeout(params: {
   dispose: () => Promise<void>;
@@ -132,6 +113,7 @@ type GatewayReloadHandlerParams = {
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;
   createHealthMonitor: (config: OpenClawConfig) => ChannelHealthMonitor | null;
+  onCronRestart?: () => void;
 };
 
 type ManagedGatewayConfigReloaderParams = Omit<
@@ -144,7 +126,6 @@ type ManagedGatewayConfigReloaderParams = Omit<
   initialInternalWriteHash: string | null;
   watchPath: string;
   readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
-  recoverSnapshot: typeof import("../config/config.js").recoverConfigFromLastKnownGood;
   promoteSnapshot: typeof import("../config/config.js").promoteConfigSnapshotToLastKnownGood;
   subscribeToWrites: typeof import("../config/config.js").registerConfigWriteListener;
   logReload: GatewayReloadLog & {
@@ -330,6 +311,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     if (plan.restartCron) {
+      params.onCronRestart?.();
       state.cronState.cron.stop();
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
@@ -509,6 +491,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     logChannels: params.logChannels,
     logCron: params.logCron,
     logReload: params.logReload,
+    ...(params.onCronRestart ? { onCronRestart: params.onCronRestart } : {}),
     createHealthMonitor: (config) =>
       startGatewayChannelHealthMonitor({
         cfg: config,
@@ -521,19 +504,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     initialCompareConfig: params.initialCompareConfig,
     initialInternalWriteHash: params.initialInternalWriteHash,
     readSnapshot: params.readSnapshot,
-    recoverSnapshot: async (snapshot, reason) =>
-      await params.recoverSnapshot({ snapshot, reason: `reload-${reason}` }),
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
-    onRecovered: ({ reason, snapshot, recoveredSnapshot }) => {
-      abortActiveAgentRunsAfterConfigRecovery({ reason, logReload: params.logReload });
-      enqueueConfigRecoveryNotice({
-        cfg: recoveredSnapshot.config,
-        phase: "reload",
-        reason: `reload-${reason}`,
-        configPath: snapshot.path,
-        issues: [...snapshot.issues, ...snapshot.legacyIssues],
-      });
-    },
     subscribeToWrites: params.subscribeToWrites,
     onHotReload: async (plan, nextConfig) => {
       const previousSharedGatewaySessionGeneration =

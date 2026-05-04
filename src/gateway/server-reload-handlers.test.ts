@@ -1,13 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  __testing as embeddedRunTesting,
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-  type EmbeddedPiQueueHandle,
-} from "../agents/pi-embedded-runner/runs.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
-import { __testing, createGatewayReloadHandlers } from "./server-reload-handlers.js";
+import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 
 const hoisted = vi.hoisted(() => ({
   activeTaskCount: { value: 0 },
@@ -88,49 +82,6 @@ function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() 
 afterEach(() => {
   hoisted.activeTaskCount.value = 0;
   hoisted.activeTaskBlockers.length = 0;
-});
-
-describe("gateway reload recovery handlers", () => {
-  afterEach(() => {
-    embeddedRunTesting.resetActiveEmbeddedRuns();
-  });
-
-  it("aborts active agent runs after last-known-good config recovery", () => {
-    const sessionId = "config-recovery-session";
-    const sessionKey = "agent:main:telegram:direct:123";
-    let handle!: EmbeddedPiQueueHandle;
-    handle = {
-      abort: vi.fn(() => {
-        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-      }),
-      isCompacting: () => false,
-      isStreaming: () => false,
-      queueMessage: async () => {},
-    };
-    const logReload = { info: vi.fn(), warn: vi.fn() };
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
-
-    __testing.abortActiveAgentRunsAfterConfigRecovery({
-      reason: "invalid-config",
-      logReload,
-    });
-
-    expect(handle.abort).toHaveBeenCalledOnce();
-    expect(logReload.warn).toHaveBeenCalledWith(
-      "config recovery aborted active agent run(s) after reload-invalid-config",
-    );
-  });
-
-  it("does not warn when config recovery has no active agent runs to abort", () => {
-    const logReload = { info: vi.fn(), warn: vi.fn() };
-
-    __testing.abortActiveAgentRunsAfterConfigRecovery({
-      reason: "invalid-config",
-      logReload,
-    });
-
-    expect(logReload.warn).not.toHaveBeenCalled();
-  });
 });
 
 describe("gateway restart deferral preflight", () => {

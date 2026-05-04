@@ -647,6 +647,55 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       tokenCount: 0,
     });
   });
+
+  it("forwards internal compaction hook messages to the caller", async () => {
+    const onHookMessages = vi.fn();
+    triggerInternalHook.mockImplementation(async (event: unknown) => {
+      const hookEvent = event as { action?: string; messages?: string[] };
+      hookEvent.messages?.push(`${hookEvent.action} notice`);
+    });
+    const beforeMetrics = compactTesting.buildBeforeCompactionHookMetrics({
+      originalMessages: sessionMessages.slice(1) as AgentMessage[],
+      currentMessages: sessionMessages.slice(1) as AgentMessage[],
+      estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
+    });
+
+    const hookState = await compactTesting.runBeforeCompactionHooks({
+      hookRunner,
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionAgentId: "main",
+      workspaceDir: "/tmp",
+      metrics: beforeMetrics,
+      onHookMessages,
+    });
+    await compactTesting.runAfterCompactionHooks({
+      hookRunner,
+      sessionId: "session-1",
+      sessionAgentId: "main",
+      hookSessionKey: hookState.hookSessionKey,
+      missingSessionKey: hookState.missingSessionKey,
+      workspaceDir: "/tmp",
+      messageCountAfter: 1,
+      tokensAfter: 10,
+      compactedCount: 1,
+      sessionFile: "/tmp/session.jsonl",
+      onHookMessages,
+    });
+
+    expect(onHookMessages).toHaveBeenNthCalledWith(1, {
+      phase: "before",
+      messages: ["compact:before notice"],
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+    });
+    expect(onHookMessages).toHaveBeenNthCalledWith(2, {
+      phase: "after",
+      messages: ["compact:after notice"],
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+    });
+  });
   it("emits a transcript update after successful compaction", async () => {
     const listener = vi.fn();
     const cleanup = onSessionTranscriptUpdate(listener);

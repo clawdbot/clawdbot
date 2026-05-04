@@ -7,7 +7,7 @@ import { handleSubagentsSendAction } from "./commands-subagents/action-send.js";
 
 const buildContext = () =>
   buildSubagentsDispatchContext({
-    handledPrefix: "/steer",
+    handledPrefix: "/subagents",
     restTokens: ["1", "check", "timer.ts", "instead"],
   });
 

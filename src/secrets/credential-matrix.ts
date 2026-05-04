@@ -1,4 +1,4 @@
-import { listSecretTargetRegistryEntries } from "./target-registry.js";
+import { getSourceSecretTargetRegistry } from "./target-registry-data.js";
 import { getUnsupportedSecretRefSurfacePatterns } from "./unsupported-surface-policy.js";
 
 type CredentialMatrixEntry = {
@@ -22,7 +22,7 @@ export type SecretRefCredentialMatrixDocument = {
 };
 
 export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocument {
-  const entries: CredentialMatrixEntry[] = listSecretTargetRegistryEntries()
+  const entries: CredentialMatrixEntry[] = getSourceSecretTargetRegistry()
     .map((entry) => {
       const isCanonicalFirecrawlWebFetchEntry =
         entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey";

@@ -178,6 +178,12 @@ export async function runBeforeCompactionHooks(params: {
   workspaceDir: string;
   messageProvider?: string;
   metrics: ReturnType<typeof buildBeforeCompactionHookMetrics>;
+  onHookMessages?: (payload: {
+    phase: "before";
+    messages: string[];
+    sessionId: string;
+    sessionKey: string;
+  }) => void | Promise<void>;
 }) {
   const missingSessionKey = !params.sessionKey || !params.sessionKey.trim();
   const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
@@ -191,6 +197,14 @@ export async function runBeforeCompactionHooks(params: {
       tokenCountOriginal: params.metrics.tokenCountOriginal,
     });
     await triggerInternalHook(hookEvent);
+    if (hookEvent.messages.length > 0) {
+      await params.onHookMessages?.({
+        phase: "before",
+        messages: hookEvent.messages.slice(),
+        sessionId: params.sessionId,
+        sessionKey: hookSessionKey,
+      });
+    }
   } catch (err) {
     log.warn("session:compact:before hook failed", {
       errorMessage: formatErrorMessage(err),
@@ -261,6 +275,12 @@ export async function runAfterCompactionHooks(params: {
   summaryLength?: number;
   tokensBefore?: number;
   firstKeptEntryId?: string;
+  onHookMessages?: (payload: {
+    phase: "after";
+    messages: string[];
+    sessionId: string;
+    sessionKey: string;
+  }) => void | Promise<void>;
 }) {
   try {
     const hookEvent = createInternalHookEvent("session", "compact:after", params.hookSessionKey, {
@@ -275,6 +295,14 @@ export async function runAfterCompactionHooks(params: {
       firstKeptEntryId: params.firstKeptEntryId,
     });
     await triggerInternalHook(hookEvent);
+    if (hookEvent.messages.length > 0) {
+      await params.onHookMessages?.({
+        phase: "after",
+        messages: hookEvent.messages.slice(),
+        sessionId: params.sessionId,
+        sessionKey: params.hookSessionKey,
+      });
+    }
   } catch (err) {
     log.warn("session:compact:after hook failed", {
       errorMessage: formatErrorMessage(err),

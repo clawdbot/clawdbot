@@ -10,6 +10,7 @@ import {
   type RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { GoogleMeetConfig, GoogleMeetToolPolicy } from "./config.js";
 
 export const GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME = REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME;
@@ -44,11 +45,14 @@ export async function consultOpenClawAgentForGoogleMeet(params: {
   runtime: PluginRuntime;
   logger: RuntimeLogger;
   meetingSessionId: string;
+  requesterSessionKey?: string;
   args: unknown;
   transcript: Array<{ role: "user" | "assistant"; text: string }>;
 }): Promise<{ text: string }> {
   const agentId = normalizeAgentId(params.config.realtime.agentId);
-  const sessionKey = `agent:${agentId}:google-meet:${params.meetingSessionId}`;
+  const requesterSessionKey =
+    normalizeOptionalString(params.requesterSessionKey) ?? `agent:${agentId}:main`;
+  const sessionKey = `agent:${agentId}:subagent:google-meet:${params.meetingSessionId}`;
   return await consultRealtimeVoiceAgent({
     cfg: params.fullConfig,
     agentRuntime: params.runtime.agent,
@@ -58,6 +62,8 @@ export async function consultOpenClawAgentForGoogleMeet(params: {
     messageProvider: "google-meet",
     lane: "google-meet",
     runIdPrefix: `google-meet:${params.meetingSessionId}`,
+    spawnedBy: requesterSessionKey,
+    contextMode: "fork",
     args: params.args,
     transcript: params.transcript,
     surface: "a private Google Meet",

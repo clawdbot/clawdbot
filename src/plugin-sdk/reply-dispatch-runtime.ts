@@ -15,12 +15,12 @@ export type { ReplyPayload } from "./reply-payload.js";
 export const dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher =
   async (params) => {
     const { dispatchReplyWithBufferedBlockDispatcher: dispatch } =
-      await import("../auto-reply/reply/provider-dispatcher.js");
+      await import("../auto-reply/reply/provider-dispatcher.runtime.js");
     return await dispatch(params);
   };
 
 export const dispatchReplyWithDispatcher: DispatchReplyWithDispatcher = async (params) => {
   const { dispatchReplyWithDispatcher: dispatch } =
-    await import("../auto-reply/reply/provider-dispatcher.js");
+    await import("../auto-reply/reply/provider-dispatcher.runtime.js");
   return await dispatch(params);
 };

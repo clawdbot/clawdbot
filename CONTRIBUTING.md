@@ -93,9 +93,9 @@ Welcome to the lobster tank! 🦞
 
 ## PR Limits
 
-We cap at **10 open PRs per author**. If you exceed this, the `r: too-many-prs` label is added and your PR is auto-closed. This is a hard limit.
+We cap at **20 open PRs per author**. If you exceed this, the `r: too-many-prs` label is added and your PR is auto-closed. This is a hard limit.
 
-For coordinated change sets that genuinely need more than 10 PRs, join the **#clawtributors** channel in Discord and talk to maintainers first.
+For coordinated change sets that genuinely need more than 20 PRs, join the **#clawtributors** channel in Discord and talk to maintainers first.
 
 ## Before You PR
 

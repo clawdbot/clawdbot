@@ -8,8 +8,8 @@ const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 
 const DIGEST_PINNED_DOCKERFILES = [
   "Dockerfile",
-  "Dockerfile.sandbox",
-  "Dockerfile.sandbox-browser",
+  "scripts/docker/sandbox/Dockerfile",
+  "scripts/docker/sandbox/Dockerfile.browser",
   "scripts/docker/cleanup-smoke/Dockerfile",
   "scripts/docker/install-sh-e2e/Dockerfile",
   "scripts/docker/install-sh-nonroot/Dockerfile",

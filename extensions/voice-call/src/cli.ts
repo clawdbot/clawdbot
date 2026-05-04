@@ -60,6 +60,7 @@ export const __testing = {
   setCallGatewayFromCliForTests(next?: typeof callGatewayFromCli): void {
     voiceCallCliDeps.callGatewayFromCli = next ?? callGatewayFromCli;
   },
+  isGatewayUnavailableForLocalFallback,
 };
 
 function writeStdoutLine(...values: unknown[]): void {
@@ -81,6 +82,7 @@ function isGatewayUnavailableForLocalFallback(err: unknown): boolean {
     message.includes("ECONNRESET") ||
     message.includes("EHOSTUNREACH") ||
     message.includes("ENOTFOUND") ||
+    message.includes("gateway closed (1006") ||
     message.includes("gateway not connected")
   );
 }

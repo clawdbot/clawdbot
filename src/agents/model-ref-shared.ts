@@ -1,4 +1,5 @@
 import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./provider-id.js";
 
@@ -26,7 +27,10 @@ export function modelKey(provider: string, model: string): string {
 export function normalizeStaticProviderModelId(
   provider: string,
   model: string,
-  options: { allowManifestNormalization?: boolean } = {},
+  options: {
+    allowManifestNormalization?: boolean;
+    manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+  } = {},
 ): string {
   if (options.allowManifestNormalization === false) {
     return model;
@@ -34,6 +38,7 @@ export function normalizeStaticProviderModelId(
   return (
     normalizeProviderModelIdWithManifest({
       provider,
+      plugins: options.manifestPlugins,
       context: {
         provider,
         modelId: model,

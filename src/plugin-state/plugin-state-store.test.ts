@@ -58,6 +58,145 @@ describe("plugin state keyed store", () => {
     });
   });
 
+  it("registerIfAbsent inserts the first value and preserves live duplicates", async () => {
+    await withOpenClawTestState({ label: "plugin-state-register-if-absent-live" }, async () => {
+      vi.useFakeTimers();
+      const store = createPluginStateKeyedStore<{ version: number }>("discord", {
+        namespace: "claims",
+        maxEntries: 10,
+      });
+
+      vi.setSystemTime(1000);
+      await expect(store.registerIfAbsent("claim", { version: 1 }, { ttlMs: 1000 })).resolves.toBe(
+        true,
+      );
+      vi.setSystemTime(1200);
+      await expect(store.registerIfAbsent("claim", { version: 2 }, { ttlMs: 5000 })).resolves.toBe(
+        false,
+      );
+
+      await expect(store.lookup("claim")).resolves.toEqual({ version: 1 });
+      await expect(store.entries()).resolves.toMatchObject([
+        { key: "claim", value: { version: 1 }, createdAt: 1000, expiresAt: 2000 },
+      ]);
+    });
+  });
+
+  it("registerIfAbsent replaces expired keys", async () => {
+    await withOpenClawTestState({ label: "plugin-state-register-if-absent-expired" }, async () => {
+      vi.useFakeTimers();
+      const store = createPluginStateKeyedStore<{ version: number }>("discord", {
+        namespace: "claims-expired",
+        maxEntries: 10,
+      });
+
+      vi.setSystemTime(1000);
+      await expect(store.registerIfAbsent("claim", { version: 1 }, { ttlMs: 100 })).resolves.toBe(
+        true,
+      );
+      vi.setSystemTime(1200);
+      await expect(store.registerIfAbsent("claim", { version: 2 })).resolves.toBe(true);
+
+      await expect(store.lookup("claim")).resolves.toEqual({ version: 2 });
+      await expect(store.entries()).resolves.toMatchObject([
+        { key: "claim", value: { version: 2 }, createdAt: 1200 },
+      ]);
+    });
+  });
+
+  it("registerIfAbsent keeps plugin and namespace claims isolated", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-state-register-if-absent-isolation" },
+      async () => {
+        const discordA = createPluginStateKeyedStore<{ owner: string }>("discord", {
+          namespace: "claims-a",
+          maxEntries: 10,
+        });
+        const discordB = createPluginStateKeyedStore<{ owner: string }>("discord", {
+          namespace: "claims-b",
+          maxEntries: 10,
+        });
+        const telegramA = createPluginStateKeyedStore<{ owner: string }>("telegram", {
+          namespace: "claims-a",
+          maxEntries: 10,
+        });
+
+        await expect(discordA.registerIfAbsent("same", { owner: "discord-a" })).resolves.toBe(true);
+        await expect(discordB.registerIfAbsent("same", { owner: "discord-b" })).resolves.toBe(true);
+        await expect(telegramA.registerIfAbsent("same", { owner: "telegram-a" })).resolves.toBe(
+          true,
+        );
+        await expect(discordA.registerIfAbsent("same", { owner: "overwrite" })).resolves.toBe(
+          false,
+        );
+
+        await expect(discordA.lookup("same")).resolves.toEqual({ owner: "discord-a" });
+        await expect(discordB.lookup("same")).resolves.toEqual({ owner: "discord-b" });
+        await expect(telegramA.lookup("same")).resolves.toEqual({ owner: "telegram-a" });
+      },
+    );
+  });
+
+  it("registerIfAbsent only lets one parallel claimant win", async () => {
+    await withOpenClawTestState({ label: "plugin-state-register-if-absent-race" }, async () => {
+      const store = createPluginStateKeyedStore<{ claimant: number }>("discord", {
+        namespace: "claims-race",
+        maxEntries: 10,
+      });
+
+      const attempts = await Promise.all(
+        Array.from({ length: 25 }, async (_, claimant) =>
+          store.registerIfAbsent("claim", { claimant }),
+        ),
+      );
+
+      expect(attempts.filter(Boolean)).toHaveLength(1);
+      const stored = await store.lookup("claim");
+      expect(stored).toBeDefined();
+      expect(attempts[stored?.claimant ?? -1]).toBe(true);
+    });
+  });
+
+  it("registerIfAbsent preserves eviction and plugin row cap behavior", async () => {
+    await withOpenClawTestState({ label: "plugin-state-register-if-absent-limits" }, async () => {
+      vi.useFakeTimers();
+      const evicting = createPluginStateKeyedStore<number>("discord", {
+        namespace: "claims-evict",
+        maxEntries: 2,
+      });
+      vi.setSystemTime(1000);
+      await evicting.registerIfAbsent("a", 1);
+      vi.setSystemTime(2000);
+      await evicting.registerIfAbsent("b", 2);
+      vi.setSystemTime(3000);
+      await evicting.registerIfAbsent("c", 3);
+      await expect(evicting.entries()).resolves.toMatchObject([{ key: "b" }, { key: "c" }]);
+
+      seedPluginStateEntriesForTests([
+        ...Array.from({ length: 999 }, (_, entryIndex) => ({
+          pluginId: "limited-plugin",
+          namespace: "limit",
+          key: `k-${entryIndex}`,
+          value: { entryIndex },
+        })),
+        {
+          pluginId: "limited-plugin",
+          namespace: "sibling",
+          key: "k-0",
+          value: { sibling: true },
+        },
+      ]);
+      const limited = createPluginStateKeyedStore("limited-plugin", {
+        namespace: "limit",
+        maxEntries: 1_001,
+      });
+      await expect(limited.registerIfAbsent("overflow", { overflow: true })).rejects.toMatchObject({
+        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      });
+      await expect(limited.lookup("overflow")).resolves.toBeUndefined();
+    });
+  });
+
   it("returns undefined for missing lookups and consumes by deleting atomically", async () => {
     await withOpenClawTestState({ label: "plugin-state-consume" }, async () => {
       const store = createPluginStateKeyedStore<{ ok: boolean }>("discord", {
@@ -122,6 +261,40 @@ describe("plugin state keyed store", () => {
       await store.register("c", 3);
 
       await expect(store.entries()).resolves.toMatchObject([{ key: "b" }, { key: "c" }]);
+    });
+  });
+
+  it("keeps the just-registered key when namespace eviction timestamps tie", async () => {
+    await withOpenClawTestState({ label: "plugin-state-eviction-tie-register" }, async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1000);
+      const store = createPluginStateKeyedStore<number>("discord", {
+        namespace: "evict-tie-register",
+        maxEntries: 1,
+      });
+
+      await store.register("z", 1);
+      await store.register("a", 2);
+
+      await expect(store.entries()).resolves.toMatchObject([{ key: "a", value: 2 }]);
+      await expect(store.lookup("z")).resolves.toBeUndefined();
+    });
+  });
+
+  it("keeps a same-millisecond registerIfAbsent claim during namespace eviction", async () => {
+    await withOpenClawTestState({ label: "plugin-state-eviction-tie-claim" }, async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1000);
+      const store = createPluginStateKeyedStore<number>("discord", {
+        namespace: "evict-tie-claim",
+        maxEntries: 1,
+      });
+
+      await expect(store.registerIfAbsent("z", 1)).resolves.toBe(true);
+      await expect(store.registerIfAbsent("a", 2)).resolves.toBe(true);
+
+      await expect(store.entries()).resolves.toMatchObject([{ key: "a", value: 2 }]);
+      await expect(store.lookup("z")).resolves.toBeUndefined();
     });
   });
 

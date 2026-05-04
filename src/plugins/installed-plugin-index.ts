@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { normalizeInstallRecordMap } from "./installed-plugin-index-install-records.js";
 import {
   resolveCompatRegistryVersion,
@@ -131,7 +132,7 @@ export function isInstalledPluginEnabled(
     origin: record.origin,
     config: normalizedConfig,
     rootConfig: config,
-    enabledByDefault: record.enabledByDefault,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
   });
   return state.enabled && (record.enabled || state.explicitlyEnabled);
 }

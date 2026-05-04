@@ -4,7 +4,7 @@ import path from "node:path";
 import { resolveGatewayPort } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { isGatewayArgv } from "./gateway-process-argv.js";
+import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
 import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import {
@@ -166,7 +166,7 @@ export function getSelfAndAncestorPidsSync(): Set<number> {
 }
 
 /**
- * Parse openclaw gateway PIDs from lsof -Fpc stdout, excluding the current
+ * Parse raw PIDs from lsof -Fpc stdout, excluding the current
  * process and its ancestors (see `getSelfAndAncestorPidsSync` for the full
  * rationale). On Linux the ancestor lookup reads up to
  * `MAX_ANCESTOR_WALK_DEPTH` entries from `/proc/<pid>/status`; each read is
@@ -174,19 +174,18 @@ export function getSelfAndAncestorPidsSync(): Set<number> {
  * in try/catch and degrades silently. On macOS/Windows the lookup is
  * in-memory via `process.ppid` only.
  */
-function parsePidsFromLsofOutput(stdout: string): number[] {
-  const pids: number[] = [];
+function parseLsofEntries(stdout: string): Array<{ pid: number; cmd?: string }> {
+  const entries: Array<{ pid: number; cmd?: string }> = [];
   let currentPid: number | undefined;
   let currentCmd: string | undefined;
+  const flush = () => {
+    if (currentPid != null) {
+      entries.push({ pid: currentPid, ...(currentCmd ? { cmd: currentCmd } : {}) });
+    }
+  };
   for (const line of stdout.split(/\r?\n/).filter(Boolean)) {
     if (line.startsWith("p")) {
-      if (
-        currentPid != null &&
-        currentCmd &&
-        normalizeLowercaseStringOrEmpty(currentCmd).includes("openclaw")
-      ) {
-        pids.push(currentPid);
-      }
+      flush();
       const parsed = Number.parseInt(line.slice(1), 10);
       currentPid = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
       currentCmd = undefined;
@@ -194,19 +193,67 @@ function parsePidsFromLsofOutput(stdout: string): number[] {
       currentCmd = line.slice(1);
     }
   }
-  if (
-    currentPid != null &&
-    currentCmd &&
-    normalizeLowercaseStringOrEmpty(currentCmd).includes("openclaw")
-  ) {
-    pids.push(currentPid);
+  flush();
+  return entries;
+}
+
+function parsePsCommandLine(raw: string): string[] {
+  const args: string[] = [];
+  for (const match of raw.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)) {
+    const value = match[1] ?? match[2] ?? match[3];
+    if (value) {
+      args.push(value);
+    }
   }
+  return args;
+}
+
+function readUnixProcessArgsSync(pid: number, spawnTimeoutMs: number): string[] | null {
+  if (process.platform === "linux") {
+    try {
+      const args = parseProcCmdline(readFileSync(`/proc/${pid}/cmdline`, "utf8"));
+      if (args.length > 0) {
+        return args;
+      }
+    } catch {
+      // Fall back to ps below; /proc may be unavailable or restricted.
+    }
+  }
+  const res = spawnSync("ps", ["-ww", "-p", String(pid), "-o", "command="], {
+    encoding: "utf8",
+    timeout: spawnTimeoutMs,
+  });
+  if (res.error || res.status !== 0 || !res.stdout.trim()) {
+    return null;
+  }
+  return parsePsCommandLine(res.stdout.trim());
+}
+
+function verifyGatewayPidByArgvSync(pid: number, spawnTimeoutMs: number): boolean {
+  const args = readUnixProcessArgsSync(pid, spawnTimeoutMs);
+  return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
+}
+
+function parsePidsFromLsofOutput(stdout: string, spawnTimeoutMs: number): number[] {
   // Deduplicate: dual-stack listeners (IPv4 + IPv6) cause lsof to emit the
   // same PID twice. Return each PID at most once to avoid double-killing.
   // Exclude self and ancestors — terminating any ancestor cascade-kills the
   // caller via the supervisor, recreating the #68451 restart loop.
   const excluded = getSelfAndAncestorPidsSync();
-  return [...new Set(pids)].filter((pid) => !excluded.has(pid));
+  const pids: number[] = [];
+  for (const entry of parseLsofEntries(stdout)) {
+    if (excluded.has(entry.pid)) {
+      continue;
+    }
+    if (entry.cmd && normalizeLowercaseStringOrEmpty(entry.cmd).includes("openclaw")) {
+      pids.push(entry.pid);
+      continue;
+    }
+    if (verifyGatewayPidByArgvSync(entry.pid, spawnTimeoutMs)) {
+      pids.push(entry.pid);
+    }
+  }
+  return [...new Set(pids)];
 }
 
 /**
@@ -298,7 +345,7 @@ export function findGatewayPidsOnPortSync(
     );
     return [];
   }
-  return parsePidsFromLsofOutput(res.stdout);
+  return parsePidsFromLsofOutput(res.stdout, spawnTimeoutMs);
 }
 
 /**
@@ -345,7 +392,7 @@ function pollPortOnce(port: number): PollResult {
       // user namespaces), lsof can exit 1 AND still emit some output for the
       // processes it could read. Parse stdout when non-empty to avoid false-free.
       if (res.stdout) {
-        const pids = parsePidsFromLsofOutput(res.stdout);
+        const pids = parsePidsFromLsofOutput(res.stdout, POLL_SPAWN_TIMEOUT_MS);
         return pids.length === 0 ? { free: true } : { free: false };
       }
       return { free: true };
@@ -358,7 +405,7 @@ function pollPortOnce(port: number): PollResult {
     }
     // status === 0: lsof found listeners. Parse pids from the stdout we
     // already hold — no second lsof spawn, no new failure surface.
-    const pids = parsePidsFromLsofOutput(res.stdout);
+    const pids = parsePidsFromLsofOutput(res.stdout, POLL_SPAWN_TIMEOUT_MS);
     return pids.length === 0 ? { free: true } : { free: false };
   } catch {
     return { free: null, permanent: false };

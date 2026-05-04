@@ -1,8 +1,7 @@
-import { writeFileSync, rmSync } from "node:fs";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
+import { repoRoot } from "./host-command.ts";
 
 export async function exists(filePath: string): Promise<boolean> {
   try {
@@ -23,7 +22,31 @@ export async function writeJson(filePath: string, value: unknown): Promise<void>
 }
 
 export async function makeTempDir(prefix: string): Promise<string> {
-  return mkdtempSync(path.join(tmpdir(), prefix));
+  const root =
+    process.env.OPENCLAW_PARALLELS_ARTIFACT_ROOT || path.join(repoRoot, ".artifacts", "parallels");
+  mkdirSync(root, { recursive: true });
+  return mkdtempSync(path.join(root, prefix));
+}
+
+export async function writeSummaryMarkdown(input: {
+  summaryPath: string;
+  title: string;
+  lines: string[];
+}): Promise<string> {
+  const markdownPath = path.join(path.dirname(input.summaryPath), "summary.md");
+  await writeFile(
+    markdownPath,
+    [
+      `# ${input.title}`,
+      "",
+      ...input.lines,
+      "",
+      `JSON: ${path.basename(input.summaryPath)}`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return markdownPath;
 }
 
 export async function cleanupPath(filePath: string): Promise<void> {

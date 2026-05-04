@@ -44,6 +44,7 @@ const OPENAI_REALTIME_TRANSCRIPTION_URL = "wss://api.openai.com/v1/realtime?inte
 const OPENAI_REALTIME_TRANSCRIPTION_CONNECT_TIMEOUT_MS = 10_000;
 const OPENAI_REALTIME_TRANSCRIPTION_MAX_RECONNECT_ATTEMPTS = 5;
 const OPENAI_REALTIME_TRANSCRIPTION_RECONNECT_DELAY_MS = 1000;
+const OPENAI_REALTIME_TRANSCRIPTION_DEFAULT_MODEL = "gpt-4o-transcribe";
 
 function normalizeProviderConfig(
   config: RealtimeTranscriptionProviderConfig,
@@ -72,8 +73,16 @@ function createOpenAIRealtimeTranscriptionSession(
 ): RealtimeTranscriptionSession {
   let pendingTranscript = "";
 
-  const handleEvent = (event: RealtimeEvent) => {
+  const handleEvent = (
+    event: RealtimeEvent,
+    transport: RealtimeTranscriptionWebSocketTransport,
+  ) => {
     switch (event.type) {
+      case "session.updated":
+      case "transcription_session.updated":
+        transport.markReady();
+        return;
+
       case "conversation.item.input_audio_transcription.delta":
         if (event.delta) {
           pendingTranscript += event.delta;
@@ -95,7 +104,12 @@ function createOpenAIRealtimeTranscriptionSession(
 
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
-        config.onError?.(new Error(detail));
+        const error = new Error(detail);
+        if (!transport.isReady()) {
+          transport.failConnect(error);
+        } else {
+          config.onError?.(error);
+        }
         return;
       }
 
@@ -121,11 +135,11 @@ function createOpenAIRealtimeTranscriptionSession(
       Authorization: `Bearer ${config.apiKey}`,
       "OpenAI-Beta": "realtime=v1",
     },
-    readyOnOpen: true,
     connectTimeoutMs: OPENAI_REALTIME_TRANSCRIPTION_CONNECT_TIMEOUT_MS,
     maxReconnectAttempts: OPENAI_REALTIME_TRANSCRIPTION_MAX_RECONNECT_ATTEMPTS,
     reconnectDelayMs: OPENAI_REALTIME_TRANSCRIPTION_RECONNECT_DELAY_MS,
     connectTimeoutMessage: "OpenAI realtime transcription connection timeout",
+    connectClosedBeforeReadyMessage: "OpenAI realtime transcription connection closed before ready",
     reconnectLimitMessage: "OpenAI realtime transcription reconnect limit reached",
     sendAudio: (audio, transport) => {
       transport.sendJson({
@@ -161,6 +175,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(): RealtimeTranscriptio
     id: "openai",
     label: "OpenAI Realtime Transcription",
     aliases: ["openai-realtime"],
+    defaultModel: OPENAI_REALTIME_TRANSCRIPTION_DEFAULT_MODEL,
     autoSelectOrder: 10,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
@@ -175,7 +190,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(): RealtimeTranscriptio
         ...req,
         apiKey,
         language: config.language,
-        model: config.model ?? "gpt-4o-transcribe",
+        model: config.model ?? OPENAI_REALTIME_TRANSCRIPTION_DEFAULT_MODEL,
         prompt: config.prompt,
         silenceDurationMs: config.silenceDurationMs ?? 800,
         vadThreshold: config.vadThreshold ?? 0.5,

@@ -65,7 +65,8 @@ describe("plugin runtime state proxy", () => {
         namespace: "runtime",
         maxEntries: 10,
       });
-      await store.register("k", { plugin: "discord" });
+      await expect(store.registerIfAbsent("k", { plugin: "discord" })).resolves.toBe(true);
+      await expect(store.registerIfAbsent("k", { plugin: "duplicate" })).resolves.toBe(false);
 
       const telegram = createPluginRecord("telegram", "bundled");
       registry.registry.plugins.push(telegram);

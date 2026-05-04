@@ -68,4 +68,21 @@ describe("safe npm install helpers", () => {
       npm_config_yes: "true",
     });
   });
+
+  it("allows package-lock-enabled installs to write lockfiles", () => {
+    expect(
+      createSafeNpmInstallEnv(
+        {
+          PATH: "/usr/bin:/bin",
+          npm_config_save: "false",
+        },
+        {
+          packageLock: true,
+        },
+      ),
+    ).toMatchObject({
+      npm_config_package_lock: "true",
+      npm_config_save: "true",
+    });
+  });
 });

@@ -23,6 +23,7 @@ import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
+import { maskApiKey } from "../utils/mask-api-key.js";
 import type { WizardPrompter } from "./prompts.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import type {
@@ -209,14 +210,28 @@ export async function configureGatewayForSetup(
         randomToken();
       gatewayTokenInput = gatewayToken;
     } else {
-      const tokenInput = await prompter.text({
-        message: "Gateway token (blank to generate)",
-        placeholder: "Needed for multi-machine or non-loopback access",
-        initialValue:
-          quickstartTokenString ??
-          normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN) ??
-          "",
-      });
+      const existingToken =
+        quickstartTokenString ?? normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN);
+      let tokenInput: string | undefined;
+      if (existingToken) {
+        const keep = await prompter.confirm({
+          message: `Use existing gateway token (${maskApiKey(existingToken)})?`,
+          initialValue: true,
+        });
+        tokenInput = keep
+          ? existingToken
+          : await prompter.text({
+              message: "Gateway token (blank to generate)",
+              placeholder: "Needed for multi-machine or non-loopback access",
+              sensitive: true,
+            });
+      } else {
+        tokenInput = await prompter.text({
+          message: "Gateway token (blank to generate)",
+          placeholder: "Needed for multi-machine or non-loopback access",
+          sensitive: true,
+        });
+      }
       gatewayToken = normalizeGatewayTokenInput(tokenInput) || randomToken();
       gatewayTokenInput = gatewayToken;
     }
@@ -252,6 +267,7 @@ export async function configureGatewayForSetup(
           await prompter.text({
             message: "Gateway password",
             validate: validateGatewayPasswordInput,
+            sensitive: true,
           }),
         );
       }

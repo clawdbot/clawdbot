@@ -1,8 +1,12 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 
-type OwnerPlugin = Pick<PluginManifestRecord, "id" | "origin" | "enabledByDefault">;
+type OwnerPlugin = Pick<
+  PluginManifestRecord,
+  "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms"
+>;
 
 type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfig>;
 
@@ -73,6 +77,6 @@ export function isActivatedManifestOwner(params: {
     origin: params.plugin.origin,
     config: params.normalizedConfig,
     rootConfig: params.rootConfig,
-    enabledByDefault: params.plugin.enabledByDefault,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin),
   }).activated;
 }

@@ -6,7 +6,11 @@ import {
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
-import { resolvePluginRegistryLoadCacheKey, type PluginLoadOptions } from "./loader.js";
+import {
+  resolvePluginRegistryLoadCacheKey,
+  resolveRuntimePluginRegistry,
+  type PluginLoadOptions,
+} from "./loader.js";
 import {
   hasManifestContractValue,
   isManifestPluginAvailableForControlPlane,
@@ -414,13 +418,23 @@ function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
   loadOptions: PluginLoadOptions;
   requested?: Set<string>;
 }): PluginRegistry[K] {
-  const registry = getLoadedRuntimePluginRegistry({
+  const loadedRegistry = getLoadedRuntimePluginRegistry({
     env: params.loadOptions.env,
     loadOptions: params.loadOptions,
     workspaceDir: params.loadOptions.workspaceDir,
     requiredPluginIds: params.loadOptions.onlyPluginIds,
   });
-  const entries = registry?.[params.key] ?? [];
+  const loadedEntries = loadedRegistry?.[params.key] ?? [];
+  const coldRegistry = loadedRegistry
+    ? undefined
+    : resolveRuntimePluginRegistry(params.loadOptions);
+  const coldEntries = coldRegistry?.[params.key] ?? [];
+  const entries =
+    loadedEntries.length > 0 && coldEntries.length > 0
+      ? mergeCapabilityProviderEntries(loadedEntries, coldEntries)
+      : loadedEntries.length > 0
+        ? loadedEntries
+        : coldEntries;
   const missingRequested =
     params.key === "speechProviders" && params.requested && params.requested.size > 0
       ? new Set(params.requested)

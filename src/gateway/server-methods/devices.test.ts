@@ -612,6 +612,49 @@ describe("deviceHandlers", () => {
     );
   });
 
+  it("allows admins to approve another device", async () => {
+    approveDevicePairingMock.mockResolvedValue({
+      status: "approved",
+      requestId: "req-2",
+      device: {
+        deviceId: "device-2",
+        publicKey: "pk-2",
+        approvedAtMs: 200,
+        createdAtMs: 150,
+      },
+    });
+    const opts = createOptions(
+      "device.pair.approve",
+      { requestId: "req-2" },
+      {
+        client: createClient(["operator.admin"], "device-1", {
+          isDeviceTokenAuth: true,
+        }),
+      },
+    );
+
+    await deviceHandlers["device.pair.approve"](opts);
+
+    expect(getPendingDevicePairingMock).not.toHaveBeenCalled();
+    expect(approveDevicePairingMock).toHaveBeenCalledWith("req-2", {
+      callerScopes: ["operator.admin"],
+    });
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        requestId: "req-2",
+        device: {
+          deviceId: "device-2",
+          publicKey: "pk-2",
+          approvedAtMs: 200,
+          createdAtMs: 150,
+          tokens: undefined,
+        },
+      },
+      undefined,
+    );
+  });
+
   it("allows approving the caller device from a non-admin device session", async () => {
     getPendingDevicePairingMock.mockResolvedValue({
       requestId: "req-1",

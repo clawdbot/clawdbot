@@ -58,6 +58,7 @@ type ProviderMonitorTestMocks = {
     (params?: { cfg?: unknown; accountId?: string | null; token?: string | null }) => unknown
   >;
   resolveDiscordAllowlistConfigMock: Mock<() => Promise<unknown>>;
+  isNativeCommandsExplicitlyDisabledMock: Mock<(params?: unknown) => boolean>;
   resolveNativeCommandsEnabledMock: Mock<(params?: unknown) => boolean>;
   resolveNativeSkillsEnabledMock: Mock<(params?: unknown) => boolean>;
   isVerboseMock: Mock<() => boolean>;
@@ -150,6 +151,7 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
       guildEntries: undefined,
       allowFrom: undefined,
     })),
+    isNativeCommandsExplicitlyDisabledMock: vi.fn((_params) => false),
     resolveNativeCommandsEnabledMock: vi.fn((_params) => true),
     resolveNativeSkillsEnabledMock: vi.fn((_params) => false),
     isVerboseMock,
@@ -183,6 +185,7 @@ const {
   monitorLifecycleMock,
   resolveDiscordAccountMock,
   resolveDiscordAllowlistConfigMock,
+  isNativeCommandsExplicitlyDisabledMock,
   resolveNativeCommandsEnabledMock,
   resolveNativeSkillsEnabledMock,
   isVerboseMock,
@@ -259,6 +262,7 @@ export function resetDiscordProviderMonitorMocks(params?: {
     guildEntries: undefined,
     allowFrom: undefined,
   });
+  isNativeCommandsExplicitlyDisabledMock.mockClear().mockReturnValue(false);
   resolveNativeCommandsEnabledMock.mockClear().mockReturnValue(true);
   resolveNativeSkillsEnabledMock.mockClear().mockReturnValue(false);
   isVerboseMock.mockClear().mockReturnValue(false);
@@ -387,7 +391,7 @@ vi.mock("openclaw/plugin-sdk/native-command-config-runtime", async () => {
   >("openclaw/plugin-sdk/native-command-config-runtime");
   return {
     ...actual,
-    isNativeCommandsExplicitlyDisabled: () => false,
+    isNativeCommandsExplicitlyDisabled: isNativeCommandsExplicitlyDisabledMock,
     resolveNativeCommandsEnabled: resolveNativeCommandsEnabledMock,
     resolveNativeSkillsEnabled: resolveNativeSkillsEnabledMock,
   };

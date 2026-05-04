@@ -8,8 +8,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import { writePackageDistInventory } from "../infra/package-dist-inventory.js";
+import { isBetaTag } from "../infra/update-channels.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { VERSION } from "../version.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 import { isOwningNpmCommand } from "./update-cli.test-helpers.js";
 
@@ -1127,7 +1129,7 @@ describe("update-cli", () => {
         expect(last).toBeDefined();
         const parsed = last as Record<string, unknown>;
         const channel = parsed.channel as { value?: unknown };
-        expect(channel.value).toBe("stable");
+        expect(channel.value).toBe(isBetaTag(VERSION) ? "beta" : "stable");
       },
     },
   ] as const)("updateStatusCommand rendering: $name", runUpdateCliScenario);

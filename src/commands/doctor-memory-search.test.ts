@@ -276,6 +276,63 @@ describe("noteMemorySearchHealth", () => {
     );
   });
 
+  it("does not warn when CLI backend resolution is missing but gateway memory probe is ready", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: true },
+    });
+
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+    expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("warns when CLI backend resolution is missing and gateway memory probe was skipped", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+    expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(String(note.mock.calls[0]?.[0] ?? "")).toContain(
+      "No active memory plugin is registered",
+    );
+  });
+
+  it("warns when CLI backend resolution is missing and gateway memory probe is not ready", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: false, error: "memory search unavailable" },
+    });
+
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+    expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(String(note.mock.calls[0]?.[0] ?? "")).toContain(
+      "No active memory plugin is registered",
+    );
+  });
+
   it("does not warn when QMD backend is active", async () => {
     const qmdCfg = { memory: { backend: "qmd", qmd: { command: "qmd" } } } as OpenClawConfig;
     resolveMemorySearchConfig.mockReturnValue({

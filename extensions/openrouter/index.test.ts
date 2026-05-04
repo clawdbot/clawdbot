@@ -9,6 +9,7 @@ import {
   buildOpenrouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
 } from "./provider-catalog.js";
+import { resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("openrouter provider hooks", () => {
   it("registers OpenRouter speech alongside model and media providers", async () => {
@@ -68,6 +69,53 @@ describe("openrouter provider hooks", () => {
         modelId: "openai/gpt-5.4",
       } as never),
     ).toBe("native");
+  });
+
+  it("advertises xhigh thinking for OpenRouter-routed DeepSeek V4 models", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const expectedV4Levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openrouter",
+          modelId: "deepseek/deepseek-v4-pro",
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).toEqual(expectedV4Levels);
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openrouter",
+        modelId: "openrouter/deepseek/deepseek-v4-flash",
+      } as never)?.defaultLevel,
+    ).toBe("high");
+    expect(
+      provider.supportsXHighThinking?.({
+        provider: "openrouter",
+        modelId: "openrouter/deepseek/deepseek-v4-pro",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openrouter",
+        modelId: "openai/gpt-5.4",
+      } as never),
+    ).toBe(undefined);
+  });
+
+  it("exposes DeepSeek V4 thinking levels through the lightweight policy artifact", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "openrouter",
+        modelId: "openrouter/deepseek/deepseek-v4-pro",
+      })?.levels.map((level) => level.id),
+    ).toContain("xhigh");
+    expect(
+      resolveThinkingProfile({
+        provider: "openrouter",
+        modelId: "openai/gpt-5.4",
+      }),
+    ).toBe(undefined);
   });
 
   it("canonicalizes stale OpenRouter /v1 config and runtime metadata", async () => {

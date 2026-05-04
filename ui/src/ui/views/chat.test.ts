@@ -389,6 +389,7 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
       onSend: () => undefined,
       onCompact: () => undefined,
       onToggleRealtimeTalk: () => undefined,
+      onDismissError: () => undefined,
       onAbort: () => undefined,
       onQueueRemove: () => undefined,
       onQueueSteer: () => undefined,
@@ -493,6 +494,24 @@ describe("chat voice controls", () => {
 
     expect(container.querySelector('[aria-label="Start Talk"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
+  });
+
+  it("lets users dismiss Talk start errors", () => {
+    const onDismissError = vi.fn();
+    const container = renderChatView({
+      error: 'Realtime voice provider "openai" is not configured',
+      realtimeTalkStatus: "error",
+      realtimeTalkDetail: 'Realtime voice provider "openai" is not configured',
+      onDismissError,
+    });
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      'Realtime voice provider "openai" is not configured',
+    );
+
+    container.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
+
+    expect(onDismissError).toHaveBeenCalledTimes(1);
   });
 });
 

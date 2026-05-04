@@ -847,6 +847,13 @@ describe("messaging tool media URL tracking", () => {
     await handleToolExecutionEnd(ctx, endEvt);
 
     expect(ctx.state.messagingToolSentMediaUrls).toContain("file:///img.jpg");
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        to: "channel:123",
+        text: "hi",
+        mediaUrls: ["file:///img.jpg"],
+      }),
+    ]);
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m2")).toBe(false);
   });
 
@@ -882,6 +889,13 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.messagingToolSentMediaUrls).toEqual([
       "file:///img-a.jpg",
       "file:///img-b.jpg",
+    ]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        to: "channel:123",
+        text: "hi",
+        mediaUrls: ["file:///img-a.jpg", "file:///img-b.jpg"],
+      }),
     ]);
   });
 

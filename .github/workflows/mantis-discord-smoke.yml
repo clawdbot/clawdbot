@@ -1,0 +1,169 @@
+name: Mantis Discord Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Ref, tag, or SHA to run
+        required: true
+        default: main
+        type: string
+      post_message:
+        description: Post a smoke message and reaction to the configured Discord channel
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: mantis-discord-smoke-${{ inputs.ref }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.33.0"
+  OPENCLAW_BUILD_PRIVATE_QA: "1"
+  OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+
+jobs:
+  authorize_actor:
+    name: Authorize workflow actor
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    steps:
+      - name: Require maintainer-level repository access
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            const permission = data.permission;
+            core.info(`Actor ${context.actor} permission: ${permission}`);
+            if (!allowed.has(permission)) {
+              core.setFailed(
+                `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
+              );
+            }
+
+  validate_selected_ref:
+    name: Validate selected ref
+    needs: authorize_actor
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      selected_revision: ${{ steps.validate.outputs.selected_revision }}
+      trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Validate selected ref
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_REF: ${{ inputs.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          selected_revision="$(git rev-parse HEAD)"
+          trusted_reason=""
+
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+          if git merge-base --is-ancestor "$selected_revision" refs/remotes/origin/main; then
+            trusted_reason="main-ancestor"
+          elif git tag --points-at "$selected_revision" | grep -Eq '^v'; then
+            trusted_reason="release-tag"
+          elif [[ "$INPUT_REF" =~ ^release/[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
+            git fetch --no-tags origin "+refs/heads/${INPUT_REF}:refs/remotes/origin/${INPUT_REF}"
+            release_branch_sha="$(git rev-parse "refs/remotes/origin/${INPUT_REF}")"
+            if [[ "$selected_revision" == "$release_branch_sha" ]]; then
+              trusted_reason="release-branch-head"
+            fi
+          else
+            pr_head_count="$(
+              gh api \
+                -H "Accept: application/vnd.github+json" \
+                "repos/${GITHUB_REPOSITORY}/commits/${selected_revision}/pulls" \
+                --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${selected_revision}"'")] | length'
+            )"
+            if [[ "$pr_head_count" != "0" ]]; then
+              trusted_reason="open-pr-head"
+            fi
+          fi
+
+          if [[ -z "$trusted_reason" ]]; then
+            echo "Ref '${INPUT_REF}' resolved to $selected_revision, which is not trusted for this secret-bearing Mantis run." >&2
+            echo "Allowed refs must be on main, point to a release tag, match a release branch head, or match an open PR head in ${GITHUB_REPOSITORY}." >&2
+            exit 1
+          fi
+
+          echo "selected_revision=$selected_revision" >> "$GITHUB_OUTPUT"
+          echo "trusted_reason=$trusted_reason" >> "$GITHUB_OUTPUT"
+          {
+            echo "Validated ref: \`${INPUT_REF}\`"
+            echo "Resolved SHA: \`$selected_revision\`"
+            echo "Trust reason: \`$trusted_reason\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  run_discord_smoke:
+    name: Run Mantis Discord smoke
+    needs: validate_selected_ref
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 20
+    environment: qa-live-shared
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Build private QA runtime
+        run: pnpm build
+
+      - name: Run Mantis Discord smoke
+        shell: bash
+        env:
+          OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN: ${{ secrets.OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN }}
+          OPENCLAW_QA_DISCORD_GUILD_ID: ${{ secrets.OPENCLAW_QA_DISCORD_GUILD_ID }}
+          OPENCLAW_QA_DISCORD_CHANNEL_ID: ${{ secrets.OPENCLAW_QA_DISCORD_CHANNEL_ID }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "${{ inputs.post_message }}" != "true" ]]; then
+            args+=(--skip-post)
+          fi
+          pnpm openclaw qa mantis discord-smoke \
+            --repo-root . \
+            --output-dir .artifacts/qa-e2e/mantis/discord-smoke \
+            "${args[@]}"
+
+      - name: Upload Mantis artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mantis-discord-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/mantis/
+          retention-days: 14
+          if-no-files-found: warn

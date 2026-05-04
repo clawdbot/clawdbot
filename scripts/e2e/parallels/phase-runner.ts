@@ -5,6 +5,13 @@ import { say, warn } from "./host-command.ts";
 export class PhaseRunner {
   private logText = "";
   private deadlineMs = 0;
+  private timings: Array<{
+    durationMs: number;
+    logPath: string;
+    name: string;
+    status: "pass" | "fail";
+    timeoutSeconds: number;
+  }> = [];
 
   constructor(private runDir: string) {}
 
@@ -13,6 +20,8 @@ export class PhaseRunner {
     say(name);
     this.logText = "";
     this.deadlineMs = Date.now() + timeoutSeconds * 1000;
+    const startedAt = Date.now();
+    let status: "pass" | "fail" = "fail";
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(
@@ -23,6 +32,7 @@ export class PhaseRunner {
     try {
       await Promise.race([Promise.resolve(fn()), timeout]);
       await writeFile(logPath, this.logText, "utf8");
+      status = "pass";
     } catch (error) {
       await writeFile(logPath, this.logText, "utf8").catch(() => undefined);
       warn(`${name} failed`);
@@ -31,6 +41,14 @@ export class PhaseRunner {
       process.stderr.write("\n");
       throw error;
     } finally {
+      this.timings.push({
+        durationMs: Date.now() - startedAt,
+        logPath,
+        name,
+        status,
+        timeoutSeconds,
+      });
+      await this.writeTimings().catch(() => undefined);
       if (timer) {
         clearTimeout(timer);
       }
@@ -70,5 +88,14 @@ export class PhaseRunner {
     if (!text.endsWith("\n")) {
       this.logText += "\n";
     }
+  }
+
+  private async writeTimings(): Promise<void> {
+    const slowest = this.timings.toSorted((a, b) => b.durationMs - a.durationMs)[0] ?? null;
+    await writeFile(
+      path.join(this.runDir, "phase-timings.json"),
+      `${JSON.stringify({ phases: this.timings, slowest }, null, 2)}\n`,
+      "utf8",
+    );
   }
 }

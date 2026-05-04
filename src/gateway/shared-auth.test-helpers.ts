@@ -2,10 +2,42 @@ import { expect } from "vitest";
 import { WebSocket } from "ws";
 import { connectOk, rpcReq, trackConnectChallengeNonce } from "./test-helpers.js";
 
-export async function openAuthenticatedGatewayWs(port: number, token: string): Promise<WebSocket> {
+export async function openAuthenticatedGatewayWs(
+  port: number,
+  token: string,
+  timeoutMs = 10_000,
+): Promise<WebSocket> {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off("open", onOpen);
+      ws.off("error", onError);
+      ws.off("close", onClose);
+    };
+    const onOpen = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: unknown) => {
+      cleanup();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    const onClose = (code: number, reason: Buffer) => {
+      cleanup();
+      reject(new Error(`gateway websocket closed before open (${code}: ${reason.toString()})`));
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      ws.close();
+      reject(new Error(`gateway websocket did not open within ${timeoutMs}ms`));
+    }, timeoutMs);
+    timer.unref?.();
+    ws.once("open", onOpen);
+    ws.once("error", onError);
+    ws.once("close", onClose);
+  });
   await connectOk(ws, { token });
   return ws;
 }
@@ -17,8 +49,11 @@ export async function waitForGatewayWsClose(
   return await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       ws.off("close", onClose);
-      reject(new Error(`gateway websocket did not close within ${timeoutMs}ms`));
+      reject(
+        new Error(`gateway websocket did not close within ${timeoutMs}ms (state=${ws.readyState})`),
+      );
     }, timeoutMs);
+    timer.unref?.();
     const onClose = (code: number, reason: Buffer) => {
       clearTimeout(timer);
       resolve({ code, reason: reason.toString() });

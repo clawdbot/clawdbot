@@ -331,6 +331,7 @@ describe("telegram live qa runtime", () => {
       "telegram-tools-compact-command",
       "telegram-whoami-command",
       "telegram-context-command",
+      "telegram-current-session-status-tool",
       "telegram-mentioned-message-reply",
       "telegram-mention-gating",
     ]);
@@ -340,9 +341,15 @@ describe("telegram live qa runtime", () => {
       "telegram-tools-compact-command",
       "telegram-whoami-command",
       "telegram-context-command",
+      "telegram-current-session-status-tool",
       "telegram-mentioned-message-reply",
       "telegram-mention-gating",
     ]);
+    expect(
+      scenarios
+        .find((scenario) => scenario.id === "telegram-current-session-status-tool")
+        ?.buildRun("sut_bot").expectedTextIncludes,
+    ).toEqual(["QA-TELEGRAM-CURRENT-SESSION-OK", ":telegram:group:"]);
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-mentioned-message-reply")

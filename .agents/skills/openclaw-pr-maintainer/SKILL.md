@@ -28,6 +28,7 @@ gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --
 
 - If an issue or PR matches an auto-close reason, apply the label and let `.github/workflows/auto-response.yml` handle the comment/close/lock flow.
 - Do not manually close plus manually comment for these reasons.
+- If an issue/PR is already fixed on current `main` or solved by a new release, comment with proof plus the canonical commit/PR/release, then close it.
 - `r:*` labels can be used on both issues and PRs.
 - Current reasons:
   - `r: skill`

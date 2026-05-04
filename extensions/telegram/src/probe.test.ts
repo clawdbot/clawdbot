@@ -33,7 +33,20 @@ describe("probeTelegram retry logic", () => {
       ok: true,
       json: vi.fn().mockResolvedValue({
         ok: true,
-        result: { id: 123, username: "test_bot" },
+        result: {
+          id: 123,
+          is_bot: true,
+          first_name: "Test",
+          username: "test_bot",
+          can_join_groups: true,
+          can_read_all_group_messages: false,
+          can_manage_bots: false,
+          supports_inline_queries: false,
+          can_connect_to_business: false,
+          has_main_web_app: false,
+          has_topics_enabled: false,
+          allows_users_to_create_topics: false,
+        },
       }),
     });
   }
@@ -181,6 +194,14 @@ describe("probeTelegram retry logic", () => {
 
     expect(result.ok).toBe(true);
     expect(result.webhook).toBeUndefined();
+    expect(result.botInfo).toEqual(
+      expect.objectContaining({
+        id: 123,
+        is_bot: true,
+        first_name: "Test",
+        username: "test_bot",
+      }),
+    );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.telegram.org/bottest-token/getMe");
   });

@@ -344,6 +344,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "normal_ci",
       "plugin_prerelease",
       "release_checks",
+      "prepare_release_package",
       "npm_telegram",
       "summary",
     ]) {

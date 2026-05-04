@@ -177,14 +177,40 @@ function pathContainsNodeModulesSegment(relativePath: string): boolean {
     .includes("node_modules");
 }
 
-function isTrustedOpenClawPeerSymlink(relativePath: string): boolean {
-  const segments = relativePath.split(/[\\/]+/);
+function isPackageRootOpenClawPeerSymlink(segments: string[]): boolean {
   return (
     (segments.length === 2 && segments[0] === "node_modules" && segments[1] === "openclaw") ||
     (segments.length === 3 &&
       segments[0] === "node_modules" &&
       segments[1] === ".bin" &&
       segments[2] === "openclaw")
+  );
+}
+
+function isManagedNpmRootPackagePeerSymlink(segments: string[]): boolean {
+  if (segments[0] !== "node_modules") {
+    return false;
+  }
+  const packageEndIndex = segments[1]?.startsWith("@") ? 3 : 2;
+  const packageNameSegments = segments.slice(1, packageEndIndex);
+  if (
+    packageNameSegments.length === 0 ||
+    packageNameSegments.some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    return false;
+  }
+  return isPackageRootOpenClawPeerSymlink(segments.slice(packageEndIndex));
+}
+
+function isTrustedOpenClawPeerSymlink(params: {
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
+  relativePath: string;
+}): boolean {
+  const segments = params.relativePath.split(/[\\/]+/);
+  return (
+    isPackageRootOpenClawPeerSymlink(segments) ||
+    (params.allowManagedNpmRootPackagePeerSymlinks === true &&
+      isManagedNpmRootPackagePeerSymlink(segments))
   );
 }
 
@@ -211,6 +237,7 @@ function isTrustedHostOpenClawPath(params: {
 }
 
 async function inspectNodeModulesSymlinkTarget(params: {
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
   rootRealPath: string;
   symlinkPath: string;
   symlinkRelativePath: string;
@@ -235,7 +262,10 @@ async function inspectNodeModulesSymlinkTarget(params: {
     // package. Trust only the exact peer-link shapes and only when the resolved
     // target stays inside the host package root.
     if (
-      isTrustedOpenClawPeerSymlink(params.symlinkRelativePath) &&
+      isTrustedOpenClawPeerSymlink({
+        allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
+        relativePath: params.symlinkRelativePath,
+      }) &&
       isTrustedHostOpenClawPath({
         resolvedTargetPath,
         trustedHostOpenClawRootRealPath: params.trustedHostOpenClawRootRealPath,
@@ -329,10 +359,12 @@ function resolvePackageManifestTraversalLimits(): PackageManifestTraversalLimits
   };
 }
 
-async function collectPackageManifestPaths(
-  rootDir: string,
-): Promise<PackageManifestTraversalResult> {
+async function collectPackageManifestPaths(params: {
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
+  rootDir: string;
+}): Promise<PackageManifestTraversalResult> {
   const limits = resolvePackageManifestTraversalLimits();
+  const rootDir = params.rootDir;
   const rootRealPath = await fs.realpath(rootDir).catch(() => rootDir);
   const trustedHostOpenClawRootRealPath = await resolveTrustedHostOpenClawRootRealPath();
   const queue: Array<{ depth: number; dir: string }> = [{ depth: 0, dir: rootDir }];
@@ -401,6 +433,7 @@ async function collectPackageManifestPaths(
         }
         if (pathContainsNodeModulesSegment(relativeNextPath)) {
           const symlinkTargetInspection = await inspectNodeModulesSymlinkTarget({
+            allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
             rootRealPath,
             symlinkPath: nextPath,
             symlinkRelativePath: relativeNextPath,
@@ -452,11 +485,15 @@ async function collectPackageManifestPaths(
 }
 
 async function scanManifestDependencyDenylist(params: {
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
   logger: InstallScanLogger;
   packageDir: string;
   targetLabel: string;
 }): Promise<InstallSecurityScanResult | undefined> {
-  const traversalResult = await collectPackageManifestPaths(params.packageDir);
+  const traversalResult = await collectPackageManifestPaths({
+    allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
+    rootDir: params.packageDir,
+  });
   const packageManifestPaths = traversalResult.packageManifestPaths;
   for (const manifestPath of packageManifestPaths) {
     let manifest: PackageManifest;
@@ -857,6 +894,7 @@ export async function scanPackageInstallSourceRuntime(
 }
 
 export async function scanInstalledPackageDependencyTreeRuntime(params: {
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
   logger: InstallScanLogger;
   packageDir: string;
   pluginId: string;
@@ -864,6 +902,7 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
   return await scanManifestDependencyDenylist({
     logger: params.logger,
     packageDir: params.packageDir,
+    allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
     targetLabel: `Plugin "${params.pluginId}" installation`,
   });
 }

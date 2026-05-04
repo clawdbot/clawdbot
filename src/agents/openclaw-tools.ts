@@ -22,7 +22,7 @@ import {
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
-import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -83,12 +83,20 @@ function hasExplicitImageModelConfig(config: OpenClawConfig | undefined): boolea
   return hasToolModelConfig(coerceImageModelConfig(config));
 }
 
-function isToolAllowedByFactoryAllowlist(toolName: string, allowlist?: string[]): boolean {
-  if (!allowlist || allowlist.length === 0) {
-    return true;
-  }
-  const expanded = new Set(expandToolGroups(allowlist));
-  return expanded.has("*") || expanded.has(normalizeToolName(toolName));
+function isToolAllowedByFactoryPolicy(params: {
+  toolName: string;
+  allowlist?: string[];
+  denylist?: string[];
+}): boolean {
+  return isToolAllowedByPolicyName(params.toolName, {
+    allow: params.allowlist,
+    deny: params.denylist,
+  });
+}
+
+function mergeFactoryPolicyList(...lists: Array<string[] | undefined>): string[] | undefined {
+  const merged = lists.flatMap((list) => (Array.isArray(list) ? list : []));
+  return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
 }
 
 function resolveImageToolFactoryAvailable(params: {
@@ -159,21 +167,31 @@ function resolveOptionalMediaToolFactoryPlan(params: {
   workspaceDir?: string;
   authStore?: AuthProfileStore;
   toolAllowlist?: string[];
+  toolDenylist?: string[];
 }): OptionalMediaToolFactoryPlan {
   const defaults = params.config?.agents?.defaults;
-  const allowImageGenerate = isToolAllowedByFactoryAllowlist(
-    "image_generate",
-    params.toolAllowlist,
-  );
-  const allowVideoGenerate = isToolAllowedByFactoryAllowlist(
-    "video_generate",
-    params.toolAllowlist,
-  );
-  const allowMusicGenerate = isToolAllowedByFactoryAllowlist(
-    "music_generate",
-    params.toolAllowlist,
-  );
-  const allowPdf = isToolAllowedByFactoryAllowlist("pdf", params.toolAllowlist);
+  const toolAllowlist = mergeFactoryPolicyList(params.config?.tools?.allow, params.toolAllowlist);
+  const toolDenylist = mergeFactoryPolicyList(params.config?.tools?.deny, params.toolDenylist);
+  const allowImageGenerate = isToolAllowedByFactoryPolicy({
+    toolName: "image_generate",
+    allowlist: toolAllowlist,
+    denylist: toolDenylist,
+  });
+  const allowVideoGenerate = isToolAllowedByFactoryPolicy({
+    toolName: "video_generate",
+    allowlist: toolAllowlist,
+    denylist: toolDenylist,
+  });
+  const allowMusicGenerate = isToolAllowedByFactoryPolicy({
+    toolName: "music_generate",
+    allowlist: toolAllowlist,
+    denylist: toolDenylist,
+  });
+  const allowPdf = isToolAllowedByFactoryPolicy({
+    toolName: "pdf",
+    allowlist: toolAllowlist,
+    denylist: toolDenylist,
+  });
   const explicitImageGeneration = hasExplicitToolModelConfig(defaults?.imageGenerationModel);
   const explicitVideoGeneration = hasExplicitToolModelConfig(defaults?.videoGenerationModel);
   const explicitMusicGeneration = hasExplicitToolModelConfig(defaults?.musicGenerationModel);
@@ -242,6 +260,12 @@ export function createOpenClawTools(
     sandboxBrowserBridgeUrl?: string;
     allowHostBrowserControl?: boolean;
     agentSessionKey?: string;
+    /**
+     * The actual live run session key. When the tool is constructed with a sandbox/policy
+     * session key, this allows `session_status({sessionKey:"current"})` to resolve to
+     * the live run session instead of the stale sandbox key.
+     */
+    runSessionKey?: string;
     agentChannel?: GatewayMessageChannel;
     agentAccountId?: string;
     /** Delivery target for topic/thread routing. */
@@ -256,6 +280,7 @@ export function createOpenClawTools(
     sandboxed?: boolean;
     config?: OpenClawConfig;
     pluginToolAllowlist?: string[];
+    pluginToolDenylist?: string[];
     /** Current channel ID for auto-threading. */
     currentChannelId?: string;
     /** Current thread timestamp for auto-threading. */
@@ -348,6 +373,7 @@ export function createOpenClawTools(
     workspaceDir,
     authStore: options?.authProfileStore,
     toolAllowlist: options?.pluginToolAllowlist,
+    toolDenylist: options?.pluginToolDenylist,
   });
   const imageToolAgentDir = options?.agentDir;
   const imageTool = resolveImageToolFactoryAvailable({
@@ -414,6 +440,7 @@ export function createOpenClawTools(
           workspaceDir,
           sandbox,
           fsPolicy: options?.fsPolicy,
+          deferAutoModelResolution: true,
         })
       : null;
   options?.recordToolPrepStage?.("openclaw-tools:pdf-tool");
@@ -428,6 +455,7 @@ export function createOpenClawTools(
     config: options?.config,
     sandboxed: options?.sandboxed,
     runtimeWebFetch: runtimeWebTools?.fetch,
+    lateBindRuntimeConfig: true,
   });
   options?.recordToolPrepStage?.("openclaw-tools:web-fetch-tool");
   const messageTool = options?.disableMessageTool
@@ -567,6 +595,7 @@ export function createOpenClawTools(
     }),
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
+      runSessionKey: options?.runSessionKey,
       config: resolvedConfig,
       sandboxed: options?.sandboxed,
     }),

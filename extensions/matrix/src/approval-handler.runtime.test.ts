@@ -266,6 +266,52 @@ describe("matrixApprovalNativeRuntime", () => {
     );
   });
 
+  it("binds Matrix approval reactions before publishing option reactions", async () => {
+    const sendSingleTextMessage = vi.fn().mockResolvedValue({
+      messageId: "$approval",
+      primaryMessageId: "$approval",
+      messageIds: ["$approval"],
+      roomId: "!room:example.org",
+    });
+    const reactMessage = vi.fn().mockImplementation(async () => {
+      expect(
+        resolveMatrixApprovalReactionTarget({
+          roomId: "!room:example.org",
+          eventId: "$approval",
+          reactionKey: "✅",
+        }),
+      ).toEqual({
+        approvalId: "req-1",
+        decision: "allow-once",
+      });
+    });
+    const view = buildExecApprovalView();
+    const pendingPayload = await buildPendingPayload(view);
+
+    await matrixApprovalNativeRuntime.transport.deliverPending({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        client: {} as never,
+        deps: {
+          sendSingleTextMessage,
+          reactMessage,
+        },
+      },
+      request: {} as never,
+      approvalKind: "exec",
+      plannedTarget: buildMatrixApprovalRoomTarget("!room:example.org"),
+      preparedTarget: {
+        to: "room:!room:example.org",
+        roomId: "!room:example.org",
+      },
+      view,
+      pendingPayload,
+    });
+
+    expect(reactMessage).toHaveBeenCalled();
+  });
+
   it("falls back to chunked Matrix delivery when approval content exceeds one event", async () => {
     const sendSingleTextMessage = vi
       .fn()

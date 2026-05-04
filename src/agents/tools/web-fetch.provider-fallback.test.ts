@@ -6,9 +6,19 @@ import { createWebFetchTool } from "./web-fetch.js";
 const { resolveWebFetchDefinitionMock } = vi.hoisted(() => ({
   resolveWebFetchDefinitionMock: vi.fn(),
 }));
+const runtimeState = vi.hoisted(() => ({
+  activeSecretsRuntimeSnapshot: null as null | { config: unknown },
+  activeRuntimeWebToolsMetadata: null as null | Record<string, unknown>,
+}));
 
 vi.mock("../../web-fetch/runtime.js", () => ({
   resolveWebFetchDefinition: resolveWebFetchDefinitionMock,
+}));
+vi.mock("../../secrets/runtime.js", () => ({
+  getActiveSecretsRuntimeSnapshot: () => runtimeState.activeSecretsRuntimeSnapshot,
+}));
+vi.mock("../../secrets/runtime-web-tools-state.js", () => ({
+  getActiveRuntimeWebToolsMetadata: () => runtimeState.activeRuntimeWebToolsMetadata,
 }));
 
 describe("web_fetch provider fallback normalization", () => {
@@ -16,11 +26,15 @@ describe("web_fetch provider fallback normalization", () => {
 
   beforeEach(() => {
     resolveWebFetchDefinitionMock.mockReset();
+    runtimeState.activeSecretsRuntimeSnapshot = null;
+    runtimeState.activeRuntimeWebToolsMetadata = null;
   });
 
   afterEach(() => {
     global.fetch = priorFetch;
     vi.restoreAllMocks();
+    runtimeState.activeSecretsRuntimeSnapshot = null;
+    runtimeState.activeRuntimeWebToolsMetadata = null;
   });
 
   it("re-wraps and truncates provider fallback payloads before caching or returning", async () => {
@@ -123,5 +137,88 @@ describe("web_fetch provider fallback normalization", () => {
 
     expect(details.url).toBe("https://example.com/fallback");
     expect(details.finalUrl).toBe("https://example.com/fallback");
+  });
+
+  it("late-binds provider fallback config and runtime metadata from the active runtime snapshot", async () => {
+    global.fetch = withFetchPreconnect(
+      vi.fn(async () => {
+        throw new Error("network failed");
+      }),
+    );
+    const runtimeConfig = {
+      tools: {
+        web: {
+          fetch: {
+            provider: "firecrawl",
+            maxChars: 640,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    runtimeState.activeSecretsRuntimeSnapshot = { config: runtimeConfig };
+    runtimeState.activeRuntimeWebToolsMetadata = {
+      fetch: {
+        providerConfigured: "firecrawl",
+        providerSource: "configured",
+        selectedProvider: "firecrawl",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+      diagnostics: [],
+    };
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "firecrawl" },
+      definition: {
+        description: "firecrawl",
+        parameters: {},
+        execute: async () => ({
+          text: "runtime fallback body ".repeat(200),
+        }),
+      },
+    });
+
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              provider: "stale",
+              maxChars: 200,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sandboxed: false,
+      runtimeWebFetch: {
+        providerConfigured: "stale",
+        providerSource: "configured",
+        selectedProvider: "stale",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+      lateBindRuntimeConfig: true,
+    });
+
+    const result = await tool?.execute?.("call-provider-fallback", {
+      url: "https://example.com/fallback",
+    });
+    const details = result?.details as {
+      wrappedLength?: number;
+      externalContent?: Record<string, unknown>;
+    };
+
+    expect(details.wrappedLength).toBeGreaterThan(200);
+    expect(details.wrappedLength).toBeLessThanOrEqual(640);
+    expect(details.externalContent).toMatchObject({
+      provider: "firecrawl",
+    });
+    expect(resolveWebFetchDefinitionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: runtimeConfig,
+        runtimeWebFetch: expect.objectContaining({
+          selectedProvider: "firecrawl",
+        }),
+      }),
+    );
   });
 });

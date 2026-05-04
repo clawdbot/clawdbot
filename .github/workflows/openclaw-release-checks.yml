@@ -54,7 +54,7 @@ on:
           - qa-parity
           - qa-live
       live_suite_filter:
-        description: Optional exact live suite id for focused live/E2E reruns; blank runs all selected live suites
+        description: Optional exact live/E2E suite id, or comma-separated QA live lanes such as qa-live-matrix,qa-live-telegram; blank runs all selected live suites
         required: false
         default: ""
         type: string
@@ -88,6 +88,9 @@ jobs:
       release_profile: ${{ steps.inputs.outputs.release_profile }}
       rerun_group: ${{ steps.inputs.outputs.rerun_group }}
       live_suite_filter: ${{ steps.inputs.outputs.live_suite_filter }}
+      qa_live_matrix_enabled: ${{ steps.inputs.outputs.qa_live_matrix_enabled }}
+      qa_live_telegram_enabled: ${{ steps.inputs.outputs.qa_live_telegram_enabled }}
+      qa_live_slack_enabled: ${{ steps.inputs.outputs.qa_live_slack_enabled }}
       package_acceptance_package_spec: ${{ steps.inputs.outputs.package_acceptance_package_spec }}
     steps:
       - name: Require main or release workflow ref for release checks
@@ -208,6 +211,57 @@ jobs:
           RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT: ${{ inputs.package_acceptance_package_spec }}
         run: |
           set -euo pipefail
+          qa_live_matrix_enabled=true
+          qa_live_telegram_enabled=true
+          qa_live_slack_enabled=true
+
+          filter="$(printf '%s' "$RELEASE_LIVE_SUITE_FILTER_INPUT" | tr '[:upper:]' '[:lower:]')"
+          if [[ -n "${filter// }" ]]; then
+            qa_filter_seen=false
+            matrix_selected=false
+            telegram_selected=false
+            slack_selected=false
+
+            IFS=', ' read -r -a filter_tokens <<< "$filter"
+            for token in "${filter_tokens[@]}"; do
+              token="${token//$'\t'/}"
+              token="${token//$'\r'/}"
+              token="${token//$'\n'/}"
+              [[ -z "$token" ]] && continue
+              case "$token" in
+                qa-live|qa-live-all|qa-all)
+                  qa_filter_seen=true
+                  matrix_selected=true
+                  telegram_selected=true
+                  slack_selected=true
+                  ;;
+                qa-live-non-slack|qa-non-slack|non-slack|no-slack|without-slack)
+                  qa_filter_seen=true
+                  matrix_selected=true
+                  telegram_selected=true
+                  ;;
+                qa-live-matrix|qa-matrix|matrix)
+                  qa_filter_seen=true
+                  matrix_selected=true
+                  ;;
+                qa-live-telegram|qa-telegram|telegram)
+                  qa_filter_seen=true
+                  telegram_selected=true
+                  ;;
+                qa-live-slack|qa-slack|slack)
+                  qa_filter_seen=true
+                  slack_selected=true
+                  ;;
+              esac
+            done
+
+            if [[ "$qa_filter_seen" == "true" ]]; then
+              qa_live_matrix_enabled="$matrix_selected"
+              qa_live_telegram_enabled="$telegram_selected"
+              qa_live_slack_enabled="$slack_selected"
+            fi
+          fi
+
           {
             printf 'ref=%s\n' "$RELEASE_REF_INPUT"
             printf 'provider=%s\n' "$RELEASE_PROVIDER_INPUT"
@@ -215,6 +269,9 @@ jobs:
             printf 'release_profile=%s\n' "$RELEASE_PROFILE_INPUT"
             printf 'rerun_group=%s\n' "$RELEASE_RERUN_GROUP_INPUT"
             printf 'live_suite_filter=%s\n' "$RELEASE_LIVE_SUITE_FILTER_INPUT"
+            printf 'qa_live_matrix_enabled=%s\n' "$qa_live_matrix_enabled"
+            printf 'qa_live_telegram_enabled=%s\n' "$qa_live_telegram_enabled"
+            printf 'qa_live_slack_enabled=%s\n' "$qa_live_slack_enabled"
             printf 'package_acceptance_package_spec=%s\n' "$RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT"
           } >> "$GITHUB_OUTPUT"
 
@@ -243,12 +300,13 @@ jobs:
             if [[ -n "${RELEASE_LIVE_SUITE_FILTER// }" ]]; then
               echo "- Live suite filter: \`${RELEASE_LIVE_SUITE_FILTER}\`"
             fi
+            echo "- QA live lanes: Matrix \`${{ steps.inputs.outputs.qa_live_matrix_enabled }}\`, Telegram \`${{ steps.inputs.outputs.qa_live_telegram_enabled }}\`, Slack \`${{ steps.inputs.outputs.qa_live_slack_enabled }}\`"
             if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
               echo "- Package Acceptance package spec: \`${PACKAGE_ACCEPTANCE_PACKAGE_SPEC}\`"
             else
               echo "- Package Acceptance package spec: prepared release artifact"
             fi
-            echo "- This run will execute cross-OS release validation, install smoke, QA Lab parity, Matrix, and Telegram lanes, and the non-Parallels Docker/live/openwebui coverage from the CI migration plan."
+            echo "- This run will execute cross-OS release validation, install smoke, QA Lab parity, Matrix, Telegram, and Slack lanes, and the non-Parallels Docker/live/openwebui coverage from the CI migration plan."
           } >> "$GITHUB_STEP_SUMMARY"
 
   prepare_release_package:
@@ -462,7 +520,7 @@ jobs:
       published_upgrade_survivor_baselines: all-since-2026.4.23
       published_upgrade_survivor_scenarios: reported-issues
       telegram_mode: mock-openai
-      telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-context-command,telegram-mention-gating
+      telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-context-command,telegram-current-session-status-tool,telegram-mention-gating
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -655,7 +713,7 @@ jobs:
   qa_live_matrix_release_checks:
     name: Run QA Lab live Matrix lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group)
+    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_matrix_enabled == 'true'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
@@ -732,7 +790,7 @@ jobs:
   qa_live_telegram_release_checks:
     name: Run QA Lab live Telegram lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group)
+    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
@@ -822,6 +880,99 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  qa_live_slack_release_checks:
+    name: Run QA Lab live Slack lane
+    needs: [resolve_target]
+    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_slack_enabled == 'true'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: read
+    environment: qa-live-shared
+    env:
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Validate required QA credential env
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_var() {
+            local key="$1"
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required ${key}." >&2
+              exit 1
+            fi
+          }
+
+          require_var OPENCLAW_QA_CONVEX_SITE_URL
+          require_var OPENCLAW_QA_CONVEX_SECRET_CI
+
+      - name: Build private QA runtime
+        run: pnpm build
+
+      - name: Run Slack live lane
+        id: run_lane
+        shell: bash
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_SLACK_CAPTURE_CONTENT: "1"
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/slack-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          for attempt in 1 2; do
+            attempt_output_dir="${output_dir}/attempt-${attempt}"
+            if pnpm openclaw qa slack \
+              --repo-root . \
+              --output-dir "${attempt_output_dir}" \
+              --provider-mode mock-openai \
+              --model mock-openai/gpt-5.5 \
+              --alt-model mock-openai/gpt-5.5-alt \
+              --fast \
+              --credential-source convex \
+              --credential-role ci; then
+              exit 0
+            fi
+            if [[ "${attempt}" == "2" ]]; then
+              exit 1
+            fi
+            echo "Slack live lane failed on attempt ${attempt}; retrying once..." >&2
+            sleep 10
+          done
+
+      - name: Upload Slack QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-qa-live-slack-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: warn
+
   summary:
     name: Verify release checks
     needs:
@@ -835,6 +986,7 @@ jobs:
       - qa_lab_parity_report_release_checks
       - qa_live_matrix_release_checks
       - qa_live_telegram_release_checks
+      - qa_live_slack_release_checks
     if: always()
     runs-on: ubuntu-24.04
     permissions: {}
@@ -855,7 +1007,8 @@ jobs:
             "qa_lab_parity_lane_release_checks=${{ needs.qa_lab_parity_lane_release_checks.result }}" \
             "qa_lab_parity_report_release_checks=${{ needs.qa_lab_parity_report_release_checks.result }}" \
             "qa_live_matrix_release_checks=${{ needs.qa_live_matrix_release_checks.result }}" \
-            "qa_live_telegram_release_checks=${{ needs.qa_live_telegram_release_checks.result }}"
+            "qa_live_telegram_release_checks=${{ needs.qa_live_telegram_release_checks.result }}" \
+            "qa_live_slack_release_checks=${{ needs.qa_live_slack_release_checks.result }}"
           do
             name="${item%%=*}"
             result="${item#*=}"

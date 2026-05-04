@@ -17,6 +17,8 @@ import {
   resolveMattermostThreadSessionContext,
   shouldFinalizeMattermostPreviewAfterDispatch,
   shouldClearMattermostDraftPreview,
+  shouldSuppressMattermostDefaultToolProgressMessages,
+  shouldUpdateMattermostDraftToolProgress,
   type MattermostMentionGateInput,
   type MattermostRequireMentionResolverInput,
 } from "./monitor.js";
@@ -263,6 +265,84 @@ describe("canFinalizeMattermostPreviewInPlace", () => {
         replyToId: "dm-post-123",
       }),
     ).toBe(true);
+  });
+});
+
+describe("shouldUpdateMattermostDraftToolProgress", () => {
+  type MattermostConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["mattermost"]>;
+
+  function resolveToolProgressEnabled(mattermostConfig: MattermostConfig) {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: mattermostConfig,
+        },
+      },
+      accountId: "default",
+      allowUnresolvedSecretRef: true,
+    });
+    return shouldUpdateMattermostDraftToolProgress(account);
+  }
+
+  it("shows tool status draft lines by default", () => {
+    expect(resolveToolProgressEnabled({ enabled: true })).toBe(true);
+  });
+
+  it("honors disabled progress-mode tool status lines", () => {
+    expect(
+      resolveToolProgressEnabled({
+        streaming: {
+          mode: "progress",
+          progress: {
+            toolProgress: false,
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps tool status draft lines disabled when draft streaming is off", () => {
+    expect(
+      resolveToolProgressEnabled({
+        streaming: {
+          mode: "off",
+          progress: {
+            toolProgress: true,
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldSuppressMattermostDefaultToolProgressMessages", () => {
+  type MattermostConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["mattermost"]>;
+
+  function resolveSuppressDefaultProgress(mattermostConfig: MattermostConfig) {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: mattermostConfig,
+        },
+      },
+      accountId: "default",
+      allowUnresolvedSecretRef: true,
+    });
+    return shouldSuppressMattermostDefaultToolProgressMessages(account);
+  }
+
+  it("suppresses standalone progress messages while draft previews are active", () => {
+    expect(resolveSuppressDefaultProgress({ enabled: true })).toBe(true);
+  });
+
+  it("keeps standalone progress messages available when draft streaming is off", () => {
+    expect(
+      resolveSuppressDefaultProgress({
+        streaming: {
+          mode: "off",
+        },
+      }),
+    ).toBe(false);
   });
 });
 

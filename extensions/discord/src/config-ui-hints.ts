@@ -31,11 +31,11 @@ export const discordChannelConfigUiHints = {
   },
   streaming: {
     label: "Discord Streaming Mode",
-    help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
+    help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are auto-mapped.',
   },
   "streaming.mode": {
     label: "Discord Streaming Mode",
-    help: 'Canonical Discord preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord.',
+    help: 'Canonical Discord preview mode: "off" | "partial" | "block" | "progress".',
   },
   "streaming.chunkMode": {
     label: "Discord Chunk Mode",
@@ -63,7 +63,31 @@ export const discordChannelConfigUiHints = {
   },
   "streaming.preview.toolProgress": {
     label: "Discord Draft Tool Progress",
-    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
+    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
+  },
+  "streaming.preview.commandText": {
+    label: "Discord Draft Command Text",
+    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
+  },
+  "streaming.progress.label": {
+    label: "Discord Progress Label",
+    help: 'Initial progress draft title. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.',
+  },
+  "streaming.progress.labels": {
+    label: "Discord Progress Label Pool",
+    help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use OpenClaw built-in progress labels.',
+  },
+  "streaming.progress.maxLines": {
+    label: "Discord Progress Max Lines",
+    help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
+  },
+  "streaming.progress.toolProgress": {
+    label: "Discord Progress Tool Lines",
+    help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
+  },
+  "streaming.progress.commandText": {
+    label: "Discord Progress Command Text",
+    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
   },
   "retry.attempts": {
     label: "Discord Retry Attempts",

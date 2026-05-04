@@ -78,8 +78,9 @@ When approving a device request:
   `operator.admin`.
 
 For paired-device token sessions, management is self-scoped unless the caller
-also has `operator.admin`: non-admin callers can rotate, revoke, or remove only
-their own device entry.
+also has `operator.admin`: non-admin callers see only their own pairing entries,
+can approve or reject only their own pending request, and can rotate, revoke, or
+remove only their own device entry.
 
 ## Node pairing approvals
 

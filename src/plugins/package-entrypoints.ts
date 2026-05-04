@@ -1,6 +1,6 @@
 import path from "node:path";
 
-function isTypeScriptPackageEntry(entryPath: string): boolean {
+export function isTypeScriptPackageEntry(entryPath: string): boolean {
   return [".ts", ".mts", ".cts"].includes(path.extname(entryPath).toLowerCase());
 }
 

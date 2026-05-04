@@ -30,7 +30,6 @@ execution:
     requiredProvider: openai
     requiredModel: gpt-5.5
     harnessRuntime: pi
-    harnessFallback: pi
     artifactFile: star-garden-defenders-pi.html
     gameTitle: Star Garden Defenders
     minBytes: 5000
@@ -81,8 +80,6 @@ steps:
                         agentRuntime:
                           id:
                             expr: config.harnessRuntime
-                          fallback:
-                            expr: config.harnessFallback
             - call: waitForGatewayHealthy
               args:
                 - ref: env

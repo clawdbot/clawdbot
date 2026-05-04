@@ -87,6 +87,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
   });
   ({ cfg, candidate, pendingChanges, fixHints } = legacyStep.state);
+  const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
   const pluginLegacyIssues = await (async () => {
     if (snapshot.parsed === snapshot.sourceConfig) {
       return [];
@@ -280,5 +281,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
+    ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
   };
 }

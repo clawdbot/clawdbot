@@ -369,6 +369,8 @@ const TARGET_KEYS = [
   "plugins.entries.*.hooks",
   "plugins.entries.*.hooks.allowPromptInjection",
   "plugins.entries.*.hooks.allowConversationAccess",
+  "plugins.entries.*.hooks.timeoutMs",
+  "plugins.entries.*.hooks.timeouts",
   "plugins.entries.*.subagent",
   "plugins.entries.*.subagent.allowModelOverride",
   "plugins.entries.*.subagent.allowedModels",
@@ -800,6 +802,14 @@ describe("config help copy quality", () => {
     expect(pluginConversationPolicy.includes("llm_input")).toBe(true);
     expect(pluginConversationPolicy.includes("llm_output")).toBe(true);
     expect(pluginConversationPolicy.includes("before_agent_finalize")).toBe(true);
+
+    const pluginHookTimeout = FIELD_HELP["plugins.entries.*.hooks.timeoutMs"];
+    expect(pluginHookTimeout.includes("typed hooks")).toBe(true);
+    expect(pluginHookTimeout.includes("hooks.timeouts")).toBe(true);
+
+    const pluginHookTimeouts = FIELD_HELP["plugins.entries.*.hooks.timeouts"];
+    expect(pluginHookTimeouts.includes("before_prompt_build")).toBe(true);
+    expect(pluginHookTimeouts.includes("agent_end")).toBe(true);
     expect(pluginConversationPolicy.includes("agent_end")).toBe(true);
   });
 

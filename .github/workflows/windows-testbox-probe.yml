@@ -1,0 +1,189 @@
+name: Windows Testbox Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "Git ref or SHA to check out"
+        required: false
+        default: "main"
+        type: string
+      runner_label:
+        description: "Windows runner label"
+        required: false
+        default: "blacksmith-16vcpu-windows-2025"
+        type: choice
+        options:
+          - blacksmith-16vcpu-windows-2025
+          - blacksmith-32vcpu-windows-2025
+          - windows-2025
+      keepalive_minutes:
+        description: "Minutes to keep the Windows runner alive for SSH inspection"
+        required: false
+        default: "20"
+        type: string
+      require_wsl2:
+        description: "Fail the run when WSL2 is unavailable"
+        required: false
+        default: false
+        type: boolean
+      import_ubuntu_wsl2:
+        description: "Import a throwaway Ubuntu WSL2 distro when none is installed"
+        required: false
+        default: false
+        type: boolean
+      enable_wsl2_features:
+        description: "Try enabling Windows WSL2/VM optional features before probing"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  probe:
+    name: Windows probe
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.target_ref || github.ref }}
+          persist-credentials: false
+          submodules: false
+
+      - name: Probe native Windows
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "runner=$env:RUNNER_NAME"
+          Write-Host "machine=$env:COMPUTERNAME"
+          Write-Host "workspace=$env:GITHUB_WORKSPACE"
+          Write-Host "target_ref=${{ inputs.target_ref || github.ref }}"
+          Write-Host ("os=" + [System.Environment]::OSVersion.VersionString)
+          Write-Host ("arch=" + [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)
+          Write-Host ("powershell=" + $PSVersionTable.PSVersion.ToString())
+          cmd.exe /c ver
+          git --version
+
+      - name: Probe WSL2
+        id: wsl2
+        env:
+          ENABLE_WSL2_FEATURES: ${{ inputs.enable_wsl2_features }}
+          IMPORT_UBUNTU_WSL2: ${{ inputs.import_ubuntu_wsl2 }}
+          UBUNTU_WSL_ROOTFS_URL: https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz
+        run: |
+          $ErrorActionPreference = "Continue"
+          $ok = $false
+
+          function Invoke-WslText {
+            param([string[]] $Arguments)
+            $output = & wsl.exe @Arguments 2>&1
+            $code = $LASTEXITCODE
+            $text = (($output | ForEach-Object { "$_" }) -join "`n") -replace "`0", ""
+            [pscustomobject]@{ Code = $code; Text = $text }
+          }
+
+          function Get-WslDistros {
+            $result = Invoke-WslText -Arguments @("--list", "--quiet")
+            $result.Text -split "\r?\n" |
+              ForEach-Object { $_.Trim() } |
+              Where-Object {
+                $_ -and
+                $_ -notmatch "Windows Subsystem for Linux has no installed distributions" -and
+                $_ -notmatch "^Use 'wsl\.exe" -and
+                $_ -notmatch "^and 'wsl\.exe"
+              }
+          }
+
+          $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
+          if (-not $wsl) {
+            Write-Warning "wsl.exe is not available on this runner."
+          } else {
+            Write-Host "wsl.exe=$($wsl.Source)"
+            if ($env:ENABLE_WSL2_FEATURES -eq "true") {
+              Write-Host "enable_wsl2_features=true"
+              foreach ($feature in @("Microsoft-Windows-Subsystem-Linux", "VirtualMachinePlatform", "HypervisorPlatform", "Microsoft-Hyper-V-All")) {
+                dism.exe /online /enable-feature /featurename:$feature /all /norestart
+                Write-Host "enable_feature_${feature}_exit=$LASTEXITCODE"
+              }
+            }
+
+            $status = Invoke-WslText -Arguments @("--status")
+            Write-Host $status.Text
+            Write-Host "wsl_status_exit=$($status.Code)"
+
+            $list = Invoke-WslText -Arguments @("--list", "--verbose")
+            Write-Host $list.Text
+            Write-Host "wsl_list_exit=$($list.Code)"
+
+            $distros = @(Get-WslDistros)
+            if ($distros.Count -eq 0 -and $env:IMPORT_UBUNTU_WSL2 -eq "true") {
+              Write-Host "import_ubuntu_wsl2=true"
+              $wslRoot = "C:\wsl\UbuntuProbe"
+              $rootfs = "C:\wsl\ubuntu-noble-wsl.rootfs.tar.gz"
+              New-Item -ItemType Directory -Force -Path @((Split-Path -Parent $rootfs), $wslRoot) | Out-Null
+              Invoke-WebRequest -Uri $env:UBUNTU_WSL_ROOTFS_URL -OutFile $rootfs -UseBasicParsing
+              wsl.exe --import UbuntuProbe $wslRoot $rootfs --version 2
+              Write-Host "wsl_import_exit=$LASTEXITCODE"
+              $list = Invoke-WslText -Arguments @("--list", "--verbose")
+              Write-Host $list.Text
+              Write-Host "wsl_list_after_import_exit=$($list.Code)"
+              $distros = @(Get-WslDistros)
+            }
+
+            if ($distros.Count -gt 0) {
+              $distro = $distros[0]
+              Write-Host "wsl_probe_distro=$distro"
+              wsl.exe -d $distro --exec bash -lc 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi'
+            } else {
+              wsl.exe --exec bash -lc 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi'
+            }
+            if ($LASTEXITCODE -eq 0) {
+              $ok = $true
+            }
+            Write-Host "wsl_exec_exit=$LASTEXITCODE"
+          }
+
+          if ($ok) {
+            "wsl2_ok=true" >> $env:GITHUB_OUTPUT
+            "OPENCLAW_WSL2_PROBE_OK=true" >> $env:GITHUB_ENV
+            Write-Host "wsl2_ok=true"
+          } else {
+            "wsl2_ok=false" >> $env:GITHUB_OUTPUT
+            "OPENCLAW_WSL2_PROBE_OK=false" >> $env:GITHUB_ENV
+            Write-Warning "wsl2_ok=false"
+          }
+
+          exit 0
+
+      - name: Keep runner alive for SSH inspection
+        env:
+          KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $minutes = 20
+          if ($env:KEEPALIVE_MINUTES -match '^\d+$') {
+            $minutes = [int]$env:KEEPALIVE_MINUTES
+          }
+          $minutes = [Math]::Max(0, [Math]::Min($minutes, 60))
+          Write-Host "keepalive_minutes=$minutes"
+          for ($i = 1; $i -le $minutes; $i++) {
+            Write-Host "keepalive minute $i/$minutes"
+            Start-Sleep -Seconds 60
+          }
+
+      - name: Enforce WSL2 requirement
+        if: ${{ inputs.require_wsl2 }}
+        run: |
+          if ($env:OPENCLAW_WSL2_PROBE_OK -ne "true") {
+            Write-Error "WSL2 probe failed or WSL2 is unavailable on this Windows runner."
+            exit 1
+          }

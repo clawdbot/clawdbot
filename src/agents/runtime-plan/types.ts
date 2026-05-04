@@ -14,6 +14,13 @@ export type AgentRuntimeThinkLevel =
   | "max";
 
 export type AgentRuntimePromptMode = "full" | "minimal" | "none";
+export type AgentRuntimePromptTrigger =
+  | "cron"
+  | "heartbeat"
+  | "manual"
+  | "memory"
+  | "overflow"
+  | "user";
 
 export type AgentRuntimeFailoverReason =
   | "auth"
@@ -174,6 +181,7 @@ export type AgentRuntimeSystemPromptContributionContext = {
   runtimeChannel?: string;
   runtimeCapabilities?: string[];
   agentId?: string;
+  trigger?: AgentRuntimePromptTrigger;
 };
 
 export type AgentRuntimeFollowupFallbackRouteResult = {

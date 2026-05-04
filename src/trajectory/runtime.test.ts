@@ -88,7 +88,7 @@ describe("trajectory runtime", () => {
     expect(JSON.stringify(parsed.data)).not.toContain("sk-other-secret-token");
   });
 
-  it("truncates events that exceed the runtime event byte limit", () => {
+  it("bounds large runtime event fields before serialization", () => {
     const writes: string[] = [];
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
@@ -108,13 +108,51 @@ describe("trajectory runtime", () => {
 
     expect(writes).toHaveLength(1);
     const parsed = JSON.parse(writes[0]);
-    expect(parsed.data).toMatchObject({
+    expect(parsed.data.prompt).toMatchObject({
       truncated: true,
-      reason: "trajectory-event-size-limit",
+      reason: "trajectory-field-size-limit",
     });
     expect(Buffer.byteLength(writes[0], "utf8")).toBeLessThanOrEqual(
       TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1,
     );
+  });
+
+  it("stops runtime capture at the file budget and records a truncation event", async () => {
+    const writes: string[] = [];
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      maxRuntimeFileBytes: 900,
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    recorder?.recordEvent("context.compiled", {
+      prompt: "x".repeat(180),
+    });
+    recorder?.recordEvent("prompt.submitted", {
+      prompt: "y".repeat(180),
+    });
+    recorder?.recordEvent("model.completed", {
+      get prompt() {
+        throw new Error("stopped recorder should not read dropped payloads");
+      },
+    });
+    await recorder?.flush();
+
+    const parsed = writes.map((line) => JSON.parse(line));
+    expect(parsed.map((event) => event.type)).toContain("trace.truncated");
+    const truncated = parsed.find((event) => event.type === "trace.truncated");
+    expect(truncated?.data).toMatchObject({
+      reason: "trajectory-runtime-file-size-limit",
+      limitBytes: 900,
+    });
+    expect(truncated?.data.droppedEvents).toBeGreaterThan(0);
   });
 
   it("writes a session-adjacent pointer when using an override directory", () => {

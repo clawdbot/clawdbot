@@ -386,11 +386,25 @@ export const ModelsConfigSchema = z
   .strict()
   .optional();
 
+const VisibleRepliesValueSchema = z.enum(["automatic", "message_tool"]);
+
+export const VisibleRepliesSchema = z
+  .union([VisibleRepliesValueSchema, z.boolean()])
+  .overwrite((value) => {
+    if (value === true) {
+      return "automatic";
+    }
+    if (value === false) {
+      return "message_tool";
+    }
+    return value;
+  });
+
 export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
     historyLimit: z.number().int().positive().optional(),
-    visibleReplies: z.enum(["automatic", "message_tool"]).optional(),
+    visibleReplies: VisibleRepliesSchema.optional(),
   })
   .strict()
   .optional();

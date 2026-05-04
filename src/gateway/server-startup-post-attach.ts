@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
@@ -8,6 +11,7 @@ import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
+import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import {
@@ -26,10 +30,12 @@ const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
 const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
+const RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
 
 type Awaitable<T> = T | Promise<T>;
 
 type GatewayStartupTrace = {
+  detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
   mark: (name: string) => void;
   measure: <T>(name: string, run: () => Awaitable<T>) => Promise<T>;
 };
@@ -101,6 +107,96 @@ function scheduleGatewayMemoryBackend(params: {
   }
   const timer = setTimeout(start, params.policy.delayMs);
   timer.unref?.();
+}
+
+function schedulePostAttachUpdateSentinelRefresh(params: {
+  startupTrace?: GatewayStartupTrace;
+  log: { warn: (msg: string) => void };
+  refreshLatestUpdateRestartSentinel: () => Awaitable<
+    ReturnType<typeof refreshLatestUpdateRestartSentinel>
+  >;
+}): void {
+  const handle = setImmediate(() => {
+    void measureStartup(params.startupTrace, "post-attach.update-sentinel", async () => {
+      try {
+        await params.refreshLatestUpdateRestartSentinel();
+      } catch (err) {
+        params.log.warn(`restart sentinel refresh failed: ${String(err)}`);
+      }
+    }).catch((err) => {
+      params.log.warn(`restart sentinel refresh failed: ${String(err)}`);
+    });
+  });
+  handle.unref?.();
+}
+
+function schedulePostReadySidecarTask(params: {
+  startupTrace?: GatewayStartupTrace;
+  name: string;
+  log: { warn: (msg: string) => void };
+  run: () => Awaitable<void>;
+}): void {
+  const handle = setImmediate(() => {
+    void measureStartup(params.startupTrace, params.name, params.run).catch((err) => {
+      params.log.warn(`${params.name} failed after gateway ready: ${String(err)}`);
+    });
+  });
+  handle.unref?.();
+}
+
+function resolveRestartSentinelPathFast(env: NodeJS.ProcessEnv = process.env): string {
+  const normalizePathEnv = (value: string | undefined) => {
+    const trimmed = value?.trim();
+    return trimmed && trimmed !== "undefined" && trimmed !== "null" ? trimmed : undefined;
+  };
+  const resolveRawOsHome = () => normalizePathEnv(env.HOME) ?? normalizePathEnv(env.USERPROFILE);
+  const expandHomePrefix = (input: string, home: string) => input.replace(/^~(?=$|[\\/])/, home);
+  const resolveHome = () => {
+    const explicitHome = normalizePathEnv(env.OPENCLAW_HOME);
+    if (explicitHome) {
+      const osHome = resolveRawOsHome() ?? os.homedir();
+      return path.resolve(expandHomePrefix(explicitHome, osHome));
+    }
+    return path.resolve(resolveRawOsHome() ?? os.homedir());
+  };
+  const resolveUserPath = (input: string) => {
+    const trimmed = input.trim();
+    if (trimmed.startsWith("~")) {
+      return path.resolve(expandHomePrefix(trimmed, resolveHome()));
+    }
+    return path.resolve(trimmed);
+  };
+  const override = normalizePathEnv(env.OPENCLAW_STATE_DIR);
+  if (override) {
+    return path.join(resolveUserPath(override), RESTART_SENTINEL_FILENAME);
+  }
+  const home = resolveHome();
+  const newStateDir = path.join(home, ".openclaw");
+  if (env.OPENCLAW_TEST_FAST === "1" || fs.existsSync(newStateDir)) {
+    return path.join(newStateDir, RESTART_SENTINEL_FILENAME);
+  }
+  const legacyStateDir = path.join(home, ".clawdbot");
+  if (fs.existsSync(legacyStateDir)) {
+    return path.join(legacyStateDir, RESTART_SENTINEL_FILENAME);
+  }
+  return path.join(newStateDir, RESTART_SENTINEL_FILENAME);
+}
+
+function hasRestartSentinelFileFast(env: NodeJS.ProcessEnv = process.env): boolean {
+  try {
+    return fs.existsSync(resolveRestartSentinelPathFast(env));
+  } catch {
+    return false;
+  }
+}
+
+async function refreshLatestUpdateRestartSentinelIfPresent(): Promise<Awaited<
+  ReturnType<typeof refreshLatestUpdateRestartSentinel>
+> | null> {
+  if (!hasRestartSentinelFileFast()) {
+    return null;
+  }
+  return await (await import("./server-restart-sentinel.js")).refreshLatestUpdateRestartSentinel();
 }
 
 function hasGatewayStartHooks(pluginRegistry: ReturnType<typeof loadOpenClawPlugins>): boolean {
@@ -287,37 +383,6 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
 }) {
-  await measureStartup(params.startupTrace, "sidecars.session-locks", async () => {
-    try {
-      const [{ resolveStateDir }, { resolveAgentSessionDirs }, { cleanStaleLockFiles }] =
-        await Promise.all([
-          import("../config/paths.js"),
-          import("../agents/session-dirs.js"),
-          import("../agents/session-write-lock.js"),
-        ]);
-      const stateDir = resolveStateDir(process.env);
-      const sessionDirs = await resolveAgentSessionDirs(stateDir);
-      for (const sessionsDir of sessionDirs) {
-        const result = await cleanStaleLockFiles({
-          sessionsDir,
-          staleMs: SESSION_LOCK_STALE_MS,
-          removeStale: true,
-          log: { warn: (message) => params.log.warn(message) },
-        });
-        if (result.cleaned.length > 0) {
-          const { markRestartAbortedMainSessionsFromLocks } =
-            await import("../agents/main-session-restart-recovery.js");
-          await markRestartAbortedMainSessionsFromLocks({
-            sessionsDir,
-            cleanedLocks: result.cleaned,
-          });
-        }
-      }
-    } catch (err) {
-      params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
-    }
-  });
-
   await measureStartup(params.startupTrace, "sidecars.gmail-watch", async () => {
     if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
       const { startGmailWatcherWithLogs } = await import("../hooks/gmail-watcher-lifecycle.js");
@@ -482,34 +547,84 @@ export async function startGatewaySidecars(params: {
     scheduleGatewayMemoryBackend({ cfg: params.cfg, log: params.log, policy });
   });
 
-  await measureStartup(params.startupTrace, "sidecars.restart-sentinel", async () => {
-    if (!shouldCheckRestartSentinel()) {
-      return;
-    }
-    const { hasRestartSentinel } = await import("../infra/restart-sentinel.js");
-    if (!(await hasRestartSentinel())) {
-      return;
-    }
-    setTimeout(() => {
-      void import("./server-restart-sentinel.js")
-        .then(({ scheduleRestartSentinelWake }) =>
-          scheduleRestartSentinelWake({ deps: params.deps }),
-        )
-        .catch((err) => {
-          params.log.warn(`restart sentinel wake failed to schedule: ${String(err)}`);
-        });
-    }, 750);
+  schedulePostReadySidecarTask({
+    startupTrace: params.startupTrace,
+    name: "sidecars.session-locks",
+    log: params.log,
+    run: async () => {
+      try {
+        const [{ resolveStateDir }, { resolveAgentSessionDirs }, { cleanStaleLockFiles }] =
+          await Promise.all([
+            import("../config/paths.js"),
+            import("../agents/session-dirs.js"),
+            import("../agents/session-write-lock.js"),
+          ]);
+        const stateDir = resolveStateDir(process.env);
+        const sessionDirs = await resolveAgentSessionDirs(stateDir);
+        for (const sessionsDir of sessionDirs) {
+          const result = await cleanStaleLockFiles({
+            sessionsDir,
+            staleMs: SESSION_LOCK_STALE_MS,
+            removeStale: true,
+            log: { warn: (message) => params.log.warn(message) },
+          });
+          if (result.cleaned.length > 0) {
+            const { markRestartAbortedMainSessionsFromLocks } =
+              await import("../agents/main-session-restart-recovery.js");
+            await markRestartAbortedMainSessionsFromLocks({
+              sessionsDir,
+              cleanedLocks: result.cleaned,
+            });
+          }
+        }
+      } catch (err) {
+        params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
+      }
+    },
   });
 
-  await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
-    const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
-    scheduleSubagentOrphanRecovery();
+  schedulePostReadySidecarTask({
+    startupTrace: params.startupTrace,
+    name: "sidecars.restart-sentinel",
+    log: params.log,
+    run: async () => {
+      if (!shouldCheckRestartSentinel()) {
+        return;
+      }
+      if (!hasRestartSentinelFileFast()) {
+        return;
+      }
+      setTimeout(() => {
+        void import("./server-restart-sentinel.js")
+          .then(({ scheduleRestartSentinelWake }) =>
+            scheduleRestartSentinelWake({ deps: params.deps }),
+          )
+          .catch((err) => {
+            params.log.warn(`restart sentinel wake failed to schedule: ${String(err)}`);
+          });
+      }, 750);
+    },
   });
 
-  await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
-    const { scheduleRestartAbortedMainSessionRecovery } =
-      await import("../agents/main-session-restart-recovery.js");
-    scheduleRestartAbortedMainSessionRecovery();
+  schedulePostReadySidecarTask({
+    startupTrace: params.startupTrace,
+    name: "sidecars.subagent-recovery",
+    log: params.log,
+    run: async () => {
+      const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
+      scheduleSubagentOrphanRecovery();
+    },
+  });
+
+  schedulePostReadySidecarTask({
+    startupTrace: params.startupTrace,
+    name: "sidecars.main-session-recovery",
+    log: params.log,
+    run: async () => {
+      const { scheduleRestartAbortedMainSessionRecovery } =
+        await import("../agents/main-session-restart-recovery.js");
+      scheduleRestartAbortedMainSessionRecovery();
+    },
   });
 
   return { pluginServices };
@@ -535,8 +650,7 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
     (await import("../plugins/hook-runner-global.js")).getGlobalHookRunner(),
   logGatewayStartup: async (params) =>
     (await import("./server-startup-log.js")).logGatewayStartup(params),
-  refreshLatestUpdateRestartSentinel: async () =>
-    (await import("./server-restart-sentinel.js")).refreshLatestUpdateRestartSentinel(),
+  refreshLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelIfPresent,
   scheduleGatewayUpdateCheck: async (...args) =>
     (await import("../infra/update-startup.js")).scheduleGatewayUpdateCheck(...args),
   startGatewaySidecars,
@@ -597,14 +711,6 @@ export async function startGatewayPostAttachRuntime(
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
-  await measureStartup(params.startupTrace, "post-attach.update-sentinel", async () => {
-    try {
-      await runtimeDeps.refreshLatestUpdateRestartSentinel();
-    } catch (err) {
-      params.log.warn(`restart sentinel refresh failed: ${String(err)}`);
-    }
-  });
-
   let pluginRegistry = params.pluginRegistry;
   if (!params.minimalTestGateway && params.loadStartupPlugins) {
     params.onStartupPluginsLoading?.();
@@ -663,6 +769,7 @@ export async function startGatewayPostAttachRuntime(
     ? Promise.resolve({ pluginServices: null, pluginRegistry })
     : new Promise<void>((resolve) => setImmediate(resolve)).then(async () => {
         params.log.info("starting channels and sidecars...");
+        const loaderStatsBefore = getPluginModuleLoaderStats();
         const result = await measureStartup(params.startupTrace, "sidecars.total", () =>
           runtimeDeps.startGatewaySidecars({
             cfg: params.gatewayPluginConfigAtStart,
@@ -676,6 +783,20 @@ export async function startGatewayPostAttachRuntime(
             startupTrace: params.startupTrace,
           }),
         );
+        const loaderStatsAfter = getPluginModuleLoaderStats();
+        params.startupTrace?.detail("sidecars.plugin-loader", [
+          ["callsCount", loaderStatsAfter.calls - loaderStatsBefore.calls],
+          ["nativeHitsCount", loaderStatsAfter.nativeHits - loaderStatsBefore.nativeHits],
+          ["nativeMissesCount", loaderStatsAfter.nativeMisses - loaderStatsBefore.nativeMisses],
+          [
+            "sourceTransformForcedCount",
+            loaderStatsAfter.sourceTransformForced - loaderStatsBefore.sourceTransformForced,
+          ],
+          [
+            "sourceTransformFallbacksCount",
+            loaderStatsAfter.sourceTransformFallbacks - loaderStatsBefore.sourceTransformFallbacks,
+          ],
+        ]);
         for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
           params.unavailableGatewayMethods.delete(method);
         }
@@ -691,6 +812,11 @@ export async function startGatewayPostAttachRuntime(
       if (params.minimalTestGateway) {
         return;
       }
+      schedulePostAttachUpdateSentinelRefresh({
+        startupTrace: params.startupTrace,
+        log: params.log,
+        refreshLatestUpdateRestartSentinel: runtimeDeps.refreshLatestUpdateRestartSentinel,
+      });
       if (!hasGatewayStartHooks(sidecarsResult.pluginRegistry)) {
         return;
       }
@@ -740,8 +866,10 @@ export async function startGatewayPostAttachRuntime(
 }
 
 export const __testing = {
+  hasRestartSentinelFileFast,
   prewarmConfiguredPrimaryModel,
   prewarmConfiguredPrimaryModelWithTimeout,
+  refreshLatestUpdateRestartSentinelIfPresent,
   resolveGatewayMemoryStartupPolicy,
   schedulePrimaryModelPrewarm,
   shouldSkipStartupModelPrewarm,

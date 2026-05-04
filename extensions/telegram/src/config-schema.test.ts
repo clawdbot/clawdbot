@@ -66,6 +66,24 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+  it("accepts mediaGroupFlushMs overrides per account", () => {
+    const res = TelegramConfigSchema.safeParse({
+      mediaGroupFlushMs: 750,
+      accounts: { ops: { mediaGroupFlushMs: 1500 } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.mediaGroupFlushMs).toBe(750);
+      expect(res.data.accounts?.ops?.mediaGroupFlushMs).toBe(1500);
+    }
+  });
+
+  it("rejects mediaGroupFlushMs outside the supported flush bounds", () => {
+    expectTelegramConfigIssue({ mediaGroupFlushMs: 9 }, "mediaGroupFlushMs");
+    expectTelegramConfigIssue({ mediaGroupFlushMs: 60_001 }, "mediaGroupFlushMs");
+  });
+
   it("accepts DM thread reply policy overrides", () => {
     const res = TelegramConfigSchema.safeParse({
       dm: { threadReplies: "off" },

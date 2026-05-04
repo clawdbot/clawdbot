@@ -36,7 +36,7 @@ describe("run-oxlint", () => {
 
   it("filters tracked targets missing from sparse checkouts", () => {
     const result = filterSparseMissingOxlintTargets(
-      ["--tsconfig", "tsconfig.oxlint.core.json", "src", "ui", "packages", "--threads=1"],
+      ["--tsconfig", "config/tsconfig/oxlint.core.json", "src", "ui", "packages", "--threads=1"],
       {
         fileExists: (target: string) => target.endsWith("/src"),
         isSparseCheckoutEnabled: () => true,
@@ -45,7 +45,7 @@ describe("run-oxlint", () => {
     );
 
     expect(result).toEqual({
-      args: ["--tsconfig", "tsconfig.oxlint.core.json", "src", "--threads=1"],
+      args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "src", "--threads=1"],
       hadExplicitTargets: true,
       remainingExplicitTargets: 1,
       skippedTargets: ["ui", "packages"],

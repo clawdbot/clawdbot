@@ -34,6 +34,10 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 30_000 })).toBe(30_000);
   });
 
+  it("honors explicit cron run timeouts as the idle watchdog ceiling", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", runTimeoutMs: 600_000 })).toBe(600_000);
+  });
+
   it("disables the idle watchdog when an explicit run timeout disables timeouts", () => {
     expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 2_147_000_000 })).toBe(0);
   });
@@ -84,6 +88,121 @@ describe("resolveLlmIdleTimeoutMs", () => {
   it("caps agents.defaults.timeoutSeconds for cron before disabling the default idle timeout", () => {
     const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
     expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it.each([
+    "http://localhost:11434",
+    "http://127.0.0.1:11434",
+    "http://127.0.0.2:11434",
+    "http://127.255.255.254:11434",
+    "http://0.0.0.0:11434",
+    "http://[::1]:11434",
+    "http://my-rig.local:11434",
+    "http://10.0.0.5:11434",
+    "http://172.16.5.10:11434",
+    "http://172.31.99.1:11434",
+    "http://192.168.1.20:11434",
+    "http://100.64.0.5:11434",
+    "http://100.127.255.254:11434",
+    // RFC 4193 IPv6 unique local (Tailscale IPv6 mesh fd7a:115c:a1e0::/48
+    // falls inside fc00::/7).
+    "http://[fc00::1]:11434",
+    "http://[fd00::1]:11434",
+    "http://[fd7a:115c:a1e0::dead:beef]:11434",
+    "http://[fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:11434",
+    // RFC 4291 IPv6 link-local.
+    "http://[fe80::1]:11434",
+    "http://[fe9a::1]:11434",
+    "http://[feab:cd::1]:11434",
+    "http://[febf::1]:11434",
+  ])("disables the default idle watchdog for local provider baseUrl %s", (baseUrl) => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(0);
+  });
+
+  it.each([
+    "http://172.32.0.1:11434",
+    "http://192.169.1.1:11434",
+    "http://100.63.255.254:11434",
+    "http://100.128.0.1:11434",
+  ])("keeps the default idle watchdog for non-private IPv4 baseUrl %s", (baseUrl) => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  // Node's URL parser normalizes every IPv4-mapped loopback form
+  // (`::ffff:127.0.0.1`, `::ffff:7F00:1`, mixed case, …) to the canonical
+  // `::ffff:7f00:1`. Exercise the user-facing input shapes here so the full
+  // parse → lowercase → bracket-strip → exact-match chain is regression-tested
+  // against future URL parser behavior, not just the canonical literal.
+  it.each([
+    "http://[::ffff:127.0.0.1]:11434",
+    "http://[::ffff:7f00:1]:11434",
+    "http://[::FFFF:127.0.0.1]:11434",
+  ])("disables the default idle watchdog for IPv4-mapped loopback baseUrl %s", (baseUrl) => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(0);
+  });
+
+  it.each([
+    // Just outside fc00::/7 (fe.. and 00fc::/16 are not unique-local).
+    "http://[fec0::1]:11434",
+    "http://[fbff::1]:11434",
+    // Just outside fe80::/10 (fec0:: was deprecated site-local, fe7f:: not LL).
+    "http://[fe7f::1]:11434",
+    // Public IPv6.
+    "http://[2001:db8::1]:11434",
+    // Abbreviated `fc::1` expands to 00fc:0:0:...:1, first byte is 0x00, not
+    // 0xfc — outside fc00::/7. Strict first-hextet match keeps this remote.
+    "http://[fc::1]:11434",
+    // IPv4-mapped IPv6 outside loopback (private RFC 1918 in mapped form is
+    // intentionally not matched, mirroring the SSRF policy helper).
+    "http://[::ffff:10.0.0.5]:11434",
+    "http://[::ffff:192.168.1.20]:11434",
+  ])("keeps the default idle watchdog for non-private IPv6 baseUrl %s", (baseUrl) => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it.each([
+    "http://10.0.0.5evil:11434",
+    "http://127.0.0.1foo:11434",
+    "http://192.168.1.20attacker.com:11434",
+    "http://10.0.0.5.evil.com:11434",
+    "http://1.2.3.4.5:11434",
+  ])(
+    "keeps the default idle watchdog for numeric-looking hostnames that are not IPv4 literals (%s)",
+    (baseUrl) => {
+      expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    },
+  );
+
+  it("keeps the default idle watchdog for remote provider baseUrls", () => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl: "https://api.openai.com/v1" } })).toBe(
+      DEFAULT_LLM_IDLE_TIMEOUT_MS,
+    );
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl: "https://ollama.com" } })).toBe(
+      DEFAULT_LLM_IDLE_TIMEOUT_MS,
+    );
+  });
+
+  it("ignores malformed baseUrl and keeps the default idle watchdog", () => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl: "not-a-url" } })).toBe(
+      DEFAULT_LLM_IDLE_TIMEOUT_MS,
+    );
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl: "" } })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it("still honors an explicit provider request timeout for local providers", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        model: { baseUrl: "http://127.0.0.1:11434" },
+        modelRequestTimeoutMs: 600_000,
+      }),
+    ).toBe(600_000);
+  });
+
+  it("still applies agents.defaults.timeoutSeconds cap for local providers", () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 30 } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg, model: { baseUrl: "http://127.0.0.1:11434" } })).toBe(
+      30_000,
+    );
   });
 });
 

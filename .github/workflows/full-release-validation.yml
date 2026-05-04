@@ -54,7 +54,7 @@ on:
           - qa-live
           - npm-telegram
       live_suite_filter:
-        description: Optional exact live suite id for focused live/E2E reruns; blank runs all selected live suites
+        description: Optional exact live/E2E suite id, or comma-separated QA live lanes such as qa-live-matrix,qa-live-telegram; blank runs all selected live suites
         required: false
         default: ""
         type: string
@@ -98,6 +98,8 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GH_REPO: ${{ github.repository }}
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.32.1"
 
 jobs:
   resolve_target:
@@ -165,7 +167,7 @@ jobs:
             if [[ -n "${NPM_TELEGRAM_PACKAGE_SPEC// }" ]]; then
               echo "- Published-package Telegram E2E: \`${NPM_TELEGRAM_PACKAGE_SPEC}\`"
             elif [[ "$RERUN_GROUP" == "all" && "$RELEASE_PROFILE" == "full" ]]; then
-              echo "- Package Telegram E2E: release package artifact from \`OpenClaw Release Checks\`"
+              echo "- Package Telegram E2E: parent \`release-package-under-test\` artifact"
             else
               echo "- Package Telegram E2E: skipped unless \`release_profile=full\` or \`npm_telegram_package_spec\` is provided"
             fi
@@ -494,9 +496,80 @@ jobs:
 
           dispatch_and_wait openclaw-release-checks.yml "${args[@]}"
 
+  prepare_release_package:
+    name: Prepare release package artifact
+    needs: [resolve_target]
+    if: ${{ inputs.npm_telegram_package_spec == '' && inputs.rerun_group == 'all' && inputs.release_profile == 'full' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      artifact_name: ${{ steps.artifact.outputs.name }}
+      package_sha256: ${{ steps.package.outputs.sha256 }}
+      package_version: ${{ steps.package.outputs.package_version }}
+      source_sha: ${{ steps.package.outputs.source_sha }}
+    steps:
+      - name: Checkout trusted workflow ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Set artifact metadata
+        id: artifact
+        run: echo "name=release-package-under-test" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+          install-deps: "false"
+
+      - name: Resolve release package artifact
+        id: package
+        shell: bash
+        env:
+          PACKAGE_REF: ${{ needs.resolve_target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          node scripts/resolve-openclaw-package-candidate.mjs \
+            --source ref \
+            --package-ref "$PACKAGE_REF" \
+            --output-dir .artifacts/docker-e2e-package \
+            --output-name openclaw-current.tgz \
+            --metadata .artifacts/docker-e2e-package/package-candidate.json \
+            --github-output "$GITHUB_OUTPUT"
+          digest="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).sha256")"
+          version="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).version")"
+          source_sha="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).packageSourceSha")"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Release package artifact"
+            echo
+            echo "- Artifact: \`release-package-under-test\`"
+            echo "- Package ref: \`$PACKAGE_REF\`"
+            echo "- SHA-256: \`$digest\`"
+            echo "- Version: \`$version\`"
+            echo "- Source SHA: \`$source_sha\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-package-under-test
+          path: |
+            .artifacts/docker-e2e-package/openclaw-current.tgz
+            .artifacts/docker-e2e-package/package-candidate.json
+          if-no-files-found: error
+
   npm_telegram:
     name: Run package Telegram E2E
-    needs: [resolve_target, release_checks]
+    needs: [resolve_target, prepare_release_package]
     if: ${{ always() && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || (inputs.rerun_group == 'all' && inputs.release_profile == 'full')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -512,7 +585,8 @@ jobs:
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
-          RELEASE_CHECKS_RUN_ID: ${{ needs.release_checks.outputs.run_id }}
+          PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_release_package.outputs.artifact_name }}
+          PREPARE_PACKAGE_RESULT: ${{ needs.prepare_release_package.result }}
           PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
           SCENARIO: ${{ inputs.npm_telegram_scenario }}
         run: |
@@ -522,13 +596,13 @@ jobs:
 
           args=(-f package_spec="${PACKAGE_SPEC:-openclaw@beta}" -f harness_ref="$TARGET_SHA" -f provider_mode="$PROVIDER_MODE")
           if [[ -z "${PACKAGE_SPEC// }" ]]; then
-            if [[ -z "${RELEASE_CHECKS_RUN_ID// }" ]]; then
-              echo "Full release Telegram requires either npm_telegram_package_spec or a release_checks child run with the release-package-under-test artifact." >&2
+            if [[ "$PREPARE_PACKAGE_RESULT" != "success" || -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then
+              echo "Full release Telegram requires either npm_telegram_package_spec or a prepared release-package-under-test artifact." >&2
               exit 1
             fi
             args+=(
-              -f package_artifact_name=release-package-under-test
-              -f package_artifact_run_id="$RELEASE_CHECKS_RUN_ID"
+              -f package_artifact_name="$PACKAGE_ARTIFACT_NAME"
+              -f package_artifact_run_id="${GITHUB_RUN_ID}"
               -f package_label="full-release-${TARGET_SHA:0:12}"
             )
           fi

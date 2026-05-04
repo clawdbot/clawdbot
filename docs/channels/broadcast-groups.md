@@ -258,14 +258,16 @@ In group `120363403215116621@g.us` with agents `["alfred", "baerbel"]`:
     {
       "agents": {
         "reviewer": {
-          "tools": { "allow": ["read", "exec"] } // Read-only
+          "tools": { "allow": ["read", "exec"] }
         },
         "fixer": {
-          "tools": { "allow": ["read", "write", "edit", "exec"] } // Read-write
+          "tools": { "allow": ["read", "write", "edit", "exec"] }
         }
       }
     }
     ```
+
+    `reviewer` is read-only. `fixer` can read and write.
 
   </Accordion>
   <Accordion title="4. Monitor performance">

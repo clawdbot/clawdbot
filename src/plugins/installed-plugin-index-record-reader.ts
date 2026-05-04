@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { readJsonFile, readJsonFileSync } from "../infra/json-files.js";
+import { resolveDefaultPluginNpmDir, validatePluginId } from "./install-paths.js";
 import {
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
@@ -28,6 +31,111 @@ function readRecordMap(value: unknown): Record<string, PluginInstallRecord> | nu
     }
   }
   return records;
+}
+
+function readJsonObjectFileSync(filePath: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function readStringRecord(value: unknown): Record<string, string> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  const record: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (typeof raw === "string" && raw.trim()) {
+      record[key] = raw.trim();
+    }
+  }
+  return record;
+}
+
+function hasPackagePluginMetadata(manifest: Record<string, unknown>): boolean {
+  const openclaw = manifest.openclaw;
+  if (!isRecord(openclaw)) {
+    return false;
+  }
+  const extensions = openclaw.extensions;
+  return Array.isArray(extensions) && extensions.some((entry) => typeof entry === "string");
+}
+
+function readManifestPluginId(packageDir: string): string | undefined {
+  const manifest = readJsonObjectFileSync(path.join(packageDir, "openclaw.plugin.json"));
+  const id = typeof manifest?.id === "string" ? manifest.id.trim() : "";
+  return id || undefined;
+}
+
+function resolveRecoveredManagedNpmPluginId(params: {
+  packageName: string;
+  packageDir: string;
+}): string | undefined {
+  const packageManifest = readJsonObjectFileSync(path.join(params.packageDir, "package.json"));
+  if (!packageManifest || !hasPackagePluginMetadata(packageManifest)) {
+    return undefined;
+  }
+  const packageName =
+    typeof packageManifest.name === "string" && packageManifest.name.trim()
+      ? packageManifest.name.trim()
+      : params.packageName;
+  const pluginId = readManifestPluginId(params.packageDir) ?? packageName;
+  return validatePluginId(pluginId) ? undefined : pluginId;
+}
+
+function buildRecoveredManagedNpmInstallRecords(
+  options: InstalledPluginIndexStoreOptions = {},
+): Record<string, PluginInstallRecord> {
+  const npmRoot = options.stateDir
+    ? path.join(options.stateDir, "npm")
+    : resolveDefaultPluginNpmDir(options.env);
+  const rootManifest = readJsonObjectFileSync(path.join(npmRoot, "package.json"));
+  const dependencies = readStringRecord(rootManifest?.dependencies);
+  const records: Record<string, PluginInstallRecord> = {};
+  for (const [packageName, dependencySpec] of Object.entries(dependencies)) {
+    const packageDir = path.join(npmRoot, "node_modules", packageName);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(packageDir);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory()) {
+      continue;
+    }
+    const pluginId = resolveRecoveredManagedNpmPluginId({ packageName, packageDir });
+    if (!pluginId) {
+      continue;
+    }
+    const packageManifest = readJsonObjectFileSync(path.join(packageDir, "package.json"));
+    const version =
+      typeof packageManifest?.version === "string" && packageManifest.version.trim()
+        ? packageManifest.version.trim()
+        : undefined;
+    records[pluginId] = {
+      source: "npm",
+      spec: `${packageName}@${dependencySpec}`,
+      installPath: packageDir,
+      ...(version ? { version, resolvedName: packageName, resolvedVersion: version } : {}),
+      ...(version ? { resolvedSpec: `${packageName}@${version}` } : {}),
+    };
+  }
+  return records;
+}
+
+function mergeRecoveredManagedNpmInstallRecords(
+  persisted: Record<string, PluginInstallRecord> | null,
+  options: InstalledPluginIndexStoreOptions,
+): Record<string, PluginInstallRecord> {
+  return {
+    ...buildRecoveredManagedNpmInstallRecords(options),
+    ...persisted,
+  };
 }
 
 function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(
@@ -66,11 +174,21 @@ export function readPersistedInstalledPluginIndexInstallRecordsSync(
 export async function loadInstalledPluginIndexInstallRecords(
   params: InstalledPluginIndexStoreOptions = {},
 ): Promise<Record<string, PluginInstallRecord>> {
-  return cloneInstallRecords((await readPersistedInstalledPluginIndexInstallRecords(params)) ?? {});
+  return cloneInstallRecords(
+    mergeRecoveredManagedNpmInstallRecords(
+      await readPersistedInstalledPluginIndexInstallRecords(params),
+      params,
+    ),
+  );
 }
 
 export function loadInstalledPluginIndexInstallRecordsSync(
   params: InstalledPluginIndexStoreOptions = {},
 ): Record<string, PluginInstallRecord> {
-  return cloneInstallRecords(readPersistedInstalledPluginIndexInstallRecordsSync(params) ?? {});
+  return cloneInstallRecords(
+    mergeRecoveredManagedNpmInstallRecords(
+      readPersistedInstalledPluginIndexInstallRecordsSync(params),
+      params,
+    ),
+  );
 }

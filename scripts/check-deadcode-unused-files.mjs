@@ -9,7 +9,7 @@ import {
 const KNIP_VERSION = "6.8.0";
 const KNIP_ARGS = [
   "--config",
-  "knip.config.ts",
+  "config/knip.config.ts",
   "--production",
   "--no-progress",
   "--reporter",

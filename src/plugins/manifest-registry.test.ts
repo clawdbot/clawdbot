@@ -62,6 +62,7 @@ function createPluginCandidate(params: {
   origin: "bundled" | "global" | "workspace" | "config";
   format?: "openclaw" | "bundle";
   bundleFormat?: "codex" | "claude" | "cursor";
+  packageName?: string;
   packageManifest?: OpenClawPackageManifest;
   packageDir?: string;
   bundledManifest?: PluginCandidate["bundledManifest"];
@@ -74,6 +75,7 @@ function createPluginCandidate(params: {
     origin: params.origin,
     format: params.format,
     bundleFormat: params.bundleFormat,
+    packageName: params.packageName,
     packageManifest: params.packageManifest,
     packageDir: params.packageDir,
     bundledManifest: params.bundledManifest,
@@ -308,12 +310,12 @@ describe("loadPluginManifestRegistry", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "cached-manifest");
     mkdirSafe(pluginDir);
-    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export default function () {}", "utf-8");
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
       JSON.stringify({
         name: "@openclaw/cached-manifest",
-        openclaw: { extensions: ["./index.ts"] },
+        openclaw: { extensions: ["./index.js"] },
       }),
       "utf-8",
     );
@@ -400,6 +402,70 @@ describe("loadPluginManifestRegistry", () => {
     expect(warning?.message).toContain(path.join(configDir, "index.ts"));
   });
 
+  it("deduplicates compatibility diagnostics when a config plugin replaces a global candidate", () => {
+    const globalDir = makeTempDir();
+    const configDir = makeTempDir();
+    const manifest = {
+      id: "external-chat",
+      channels: ["external-chat"],
+      configSchema: { type: "object" },
+    };
+    writeManifest(globalDir, manifest);
+    writeManifest(configDir, manifest);
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "external-chat",
+        rootDir: globalDir,
+        origin: "global",
+      }),
+      createPluginCandidate({
+        idHint: "external-chat",
+        rootDir: configDir,
+        origin: "config",
+      }),
+    ]);
+
+    const channelConfigWarnings = registry.diagnostics.filter((diagnostic) =>
+      diagnostic.message.includes("without channelConfigs metadata"),
+    );
+    expect(channelConfigWarnings).toHaveLength(1);
+  });
+
+  it("suppresses missing channel config diagnostics for inactive external channel plugins", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-chat",
+      channels: ["external-chat"],
+      configSchema: { type: "object" },
+    });
+    const candidate = createPluginCandidate({
+      idHint: "external-chat",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    const disabledRegistry = loadPluginManifestRegistry({
+      config: { plugins: { entries: { "external-chat": { enabled: false } } } },
+      candidates: [candidate],
+    });
+    expect(
+      disabledRegistry.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("without channelConfigs metadata"),
+      ),
+    ).toBe(false);
+
+    const allowlistRegistry = loadPluginManifestRegistry({
+      config: { plugins: { allow: ["other-plugin"] } },
+      candidates: [candidate],
+    });
+    expect(
+      allowlistRegistry.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("without channelConfigs metadata"),
+      ),
+    ).toBe(false);
+  });
+
   it("suppresses duplicate warnings for explicit installed globals overriding bundled plugins", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
@@ -471,6 +537,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(dir, {
       id: "openai",
       enabledByDefault: true,
+      enabledByDefaultOnPlatforms: ["darwin", "not-a-platform"],
       providers: ["openai", "openai-codex"],
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
@@ -594,6 +661,7 @@ describe("loadPluginManifestRegistry", () => {
       "openai-codex": "openai",
     });
     expect(registry.plugins[0]?.enabledByDefault).toBe(true);
+    expect(registry.plugins[0]?.enabledByDefaultOnPlatforms).toEqual(["darwin"]);
     expect(registry.plugins[0]?.providerAuthChoices).toEqual([
       {
         provider: "openai",
@@ -1066,6 +1134,81 @@ describe("loadPluginManifestRegistry", () => {
     ).toBe(false);
   });
 
+  it("hydrates supplemental official external catalog contracts for lagging npm manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "wecom-openclaw-plugin",
+      channels: ["wecom"],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "wecom-openclaw-plugin",
+        rootDir: dir,
+        origin: "global",
+        packageName: "@wecom/wecom-openclaw-plugin",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.contracts?.tools).toEqual(["wecom_mcp"]);
+    expect(registry.plugins[0]?.channelConfigs?.wecom).toEqual(
+      expect.objectContaining({
+        label: "WeCom",
+        schema: expect.objectContaining({
+          type: "object",
+        }),
+      }),
+    );
+    expect(
+      registry.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("without channelConfigs metadata"),
+      ),
+    ).toBe(false);
+  });
+
+  it("fills missing official external catalog descriptors for partial npm channel configs", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "wecom-openclaw-plugin",
+      channels: ["wecom"],
+      configSchema: { type: "object" },
+      channelConfigs: {
+        wecom: {
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              corpId: { type: "string" },
+            },
+          },
+        },
+      },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "wecom-openclaw-plugin",
+        rootDir: dir,
+        origin: "global",
+        packageName: "@wecom/wecom-openclaw-plugin",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.channelConfigs?.wecom).toEqual(
+      expect.objectContaining({
+        label: "WeCom",
+        description: "Enterprise WeChat conversation channel.",
+        schema: expect.objectContaining({
+          additionalProperties: false,
+          properties: {
+            corpId: { type: "string" },
+          },
+        }),
+      }),
+    );
+  });
+
   it("drops prototype-polluting channel config keys from plugin manifests", () => {
     const dir = makeTempDir();
     writeTextFile(
@@ -1273,6 +1416,7 @@ describe("loadPluginManifestRegistry", () => {
       },
       toolMetadata: {
         image_generate: {
+          optional: true,
           authSignals: [
             {
               provider: "openai-codex",
@@ -1341,6 +1485,7 @@ describe("loadPluginManifestRegistry", () => {
     });
     expect(registry.plugins[0]?.toolMetadata).toEqual({
       image_generate: {
+        optional: true,
         authSignals: [
           {
             provider: "openai-codex",

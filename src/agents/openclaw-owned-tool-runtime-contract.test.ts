@@ -291,6 +291,8 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
         tool: "message",
         provider: "telegram",
         to: "chat-1",
+        text: "hello from Pi",
+        mediaUrls: ["/tmp/pi-reply.png"],
       }),
     ]);
     await vi.waitFor(() => {

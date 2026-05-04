@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
@@ -234,6 +235,40 @@ type ChatSendOriginatingRoute = {
   messageThreadId?: string | number;
   explicitDeliverRoute: boolean;
 };
+
+const ACTIVE_CHAT_SEND_DEDUPE_PREFIX = "chat:active-send";
+
+function resolveActiveChatSendRunId(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const runId = (value as { runId?: unknown }).runId;
+  return typeof runId === "string" && runId.trim() ? runId : null;
+}
+
+function buildActiveChatSendDedupeKey(params: {
+  attachmentCount: number;
+  explicitDeliverRoute: boolean;
+  message: string;
+  originatingChannel: string;
+  sessionKey: string;
+}): string | null {
+  const message = params.message.trim();
+  if (
+    !message ||
+    message.startsWith("/") ||
+    params.attachmentCount > 0 ||
+    params.explicitDeliverRoute ||
+    normalizeMessageChannel(params.originatingChannel) !== INTERNAL_MESSAGE_CHANNEL
+  ) {
+    return null;
+  }
+  const digest = createHash("sha256")
+    .update(JSON.stringify([params.sessionKey, message]))
+    .digest("hex")
+    .slice(0, 32);
+  return `${ACTIVE_CHAT_SEND_DEDUPE_PREFIX}:${digest}`;
+}
 
 type ChatSendExplicitOrigin = {
   originatingChannel?: string;
@@ -2015,6 +2050,35 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+    const clientInfo = client?.connect?.client;
+    const originatingRoute = resolveChatSendOriginatingRoute({
+      client: clientInfo,
+      deliver: p.deliver,
+      entry,
+      explicitOrigin: explicitOriginResult.value,
+      hasConnectedClient: client?.connect !== undefined,
+      mainKey: cfg.session?.mainKey,
+      sessionKey,
+    });
+    const activeChatSendDedupeKey = buildActiveChatSendDedupeKey({
+      attachmentCount: normalizedAttachments.length,
+      explicitDeliverRoute: originatingRoute.explicitDeliverRoute,
+      message: rawMessage,
+      originatingChannel: originatingRoute.originatingChannel,
+      sessionKey,
+    });
+    if (activeChatSendDedupeKey) {
+      const activeRunId = resolveActiveChatSendRunId(
+        context.dedupe.get(activeChatSendDedupeKey)?.payload,
+      );
+      if (activeRunId && context.chatAbortControllers.has(activeRunId)) {
+        respond(true, { runId: activeRunId, status: "in_flight" as const }, undefined, {
+          cached: true,
+          runId: activeRunId,
+        });
+        return;
+      }
+    }
     const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
       explicitOriginResult.value,
     );
@@ -2097,6 +2161,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
         return;
       }
+      if (activeChatSendDedupeKey) {
+        context.dedupe.set(activeChatSendDedupeKey, {
+          ts: now,
+          ok: true,
+          payload: { runId: clientRunId },
+        });
+      }
       context.addChatRun(clientRunId, {
         sessionKey,
         clientRunId,
@@ -2126,22 +2197,13 @@ export const chatHandlers: GatewayRequestHandlers = {
       const messageForAgent = systemProvenanceReceipt
         ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
         : parsedMessage;
-      const clientInfo = client?.connect?.client;
       const {
         originatingChannel,
         originatingTo,
         accountId,
         messageThreadId,
         explicitDeliverRoute,
-      } = resolveChatSendOriginatingRoute({
-        client: clientInfo,
-        deliver: p.deliver,
-        entry,
-        explicitOrigin: explicitOriginResult.value,
-        hasConnectedClient: client?.connect !== undefined,
-        mainKey: cfg.session?.mainKey,
-        sessionKey,
-      });
+      } = originatingRoute;
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
@@ -2402,6 +2464,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       })
         .then(async () => {
           await rewriteUserTranscriptMedia();
+          // WebChat persistence has two owners. Agent runs persist model-visible turns
+          // through Pi's SessionManager; this dispatcher only owns live delivery payloads.
+          // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
+          // duplicate normal Pi assistant turns. The non-agent branch below has no Pi
+          // assistant turn, so it appends a gateway-injected assistant entry before
+          // broadcasting the final UI event.
           if (!agentRunStarted) {
             await emitUserTranscriptUpdate();
             const btwReplies = deliveredReplies

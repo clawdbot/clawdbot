@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   applyExclusiveSlotSelection,
   buildPluginDiagnosticsReport,
+  buildPluginSnapshotReport,
   clearPluginRegistryLoadCache,
   enablePluginInConfig,
   loadPluginManifestRegistry,
@@ -122,6 +123,107 @@ describe("persistPluginInstall", () => {
     expect(
       runtimeLogs.some((line) => line.includes("Plugin runtime cache invalidation failed")),
     ).toBe(true);
+  });
+
+  it("warns when an installed npm plugin remains shadowed by a config-selected source", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          discord: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "config",
+          source: "/tmp/openclaw-upstream/extensions/discord/index.ts",
+          status: "error",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "discord",
+      install: {
+        source: "npm",
+        spec: "@openclaw/discord",
+        installPath: "/tmp/openclaw/npm/node_modules/@openclaw/discord/index.ts",
+      },
+    });
+
+    expect(next).toEqual(enabledConfig);
+    expect(buildPluginSnapshotReport).toHaveBeenCalledWith({
+      config: enabledConfig,
+      effectiveOnly: true,
+      onlyPluginIds: ["discord"],
+    });
+    expect(runtimeLogs.join("\n")).toContain(
+      'Warning: installed plugin "discord" is not the active source',
+    );
+    expect(runtimeLogs.join("\n")).toContain(
+      "active config source: /tmp/openclaw-upstream/extensions/discord/index.ts",
+    );
+    expect(runtimeLogs.join("\n")).toContain(
+      "installed npm source: /tmp/openclaw/npm/node_modules/@openclaw/discord/index.ts",
+    );
+    expect(runtimeLogs.join("\n")).toContain("openclaw plugins doctor");
+  });
+
+  it("does not warn when the config-selected source is inside the npm install path", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          discord: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "config",
+          source: "/tmp/openclaw/npm/node_modules/@openclaw/discord/dist/index.js",
+          status: "loaded",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "discord",
+      install: {
+        source: "npm",
+        spec: "@openclaw/discord",
+        installPath: "/tmp/openclaw/npm/node_modules/@openclaw/discord",
+      },
+    });
+
+    expect(runtimeLogs.join("\n")).not.toContain("is not the active source");
   });
 
   it("invalidates runtime cache even when registry refresh fails", async () => {

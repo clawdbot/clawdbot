@@ -161,8 +161,18 @@ export const pl: TranslationMap = {
     store: "Magazyn: {path}",
     active: "Aktywny",
     limit: "Limit",
+    filters: "Filtry",
+    showFilters: "Pokaż filtry",
+    hideFilters: "Ukryj filtry",
+    sourceFilters: "Filtry źródła sesji",
     global: "Globalne",
     unknown: "Nieznane",
+    showArchived: "Pokaż zarchiwizowane",
+    activeTooltip: "Zaktualizowano w ciągu ostatnich {count} minut.",
+    limitTooltip: "Maksymalna liczba sesji do wczytania.",
+    globalTooltip: "Uwzględnij sesje globalne.",
+    unknownTooltip: "Uwzględnij nieznane sesje.",
+    showArchivedTooltip: "Uwzględnij zarchiwizowane sesje.",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filtruj według klucza, agenta, etykiety, rodzaju…",
     selected: "Wybrano: {count}",
@@ -726,6 +736,17 @@ export const pl: TranslationMap = {
       sessionsCsv: "CSV sesji",
       dailyCsv: "CSV dzienne",
       json: "JSON",
+    },
+    cacheStatus: {
+      warning:
+        "Pamięć podręczna użycia jest odbudowywana w tle. Wyświetlane sumy mogą być nieaktualne.",
+      title:
+        "{status}: oczekujące: {pending}, nieaktualne: {stale}, z pamięci podręcznej: {cached}",
+      status: {
+        refreshing: "odświeżanie",
+        stale: "nieaktualne",
+        partial: "częściowe",
+      },
     },
     empty: {
       title: "Zacznij od zakresu dat",

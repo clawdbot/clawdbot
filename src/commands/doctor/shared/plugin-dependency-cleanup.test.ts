@@ -91,4 +91,41 @@ describe("cleanupLegacyPluginDependencyState", () => {
     await expect(fs.stat(explicitStageDir)).rejects.toThrow();
     await expect(fs.stat(path.join(stateDirectory, "plugin-runtime-deps"))).rejects.toThrow();
   });
+
+  it("removes dangling global plugin-runtime symlinks that point at legacy runtime deps", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const packageRoot = path.join(tempDir, "prefix", "lib", "node_modules", "openclaw");
+    const nodeModulesRoot = path.dirname(packageRoot);
+    const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
+    const legacyTarget = path.join(
+      legacyRuntimeRoot,
+      "openclaw-2026.4.29-slack",
+      "node_modules",
+      "@slack",
+      "web-api",
+    );
+    const slackScope = path.join(nodeModulesRoot, "@slack");
+    const slackLink = path.join(slackScope, "web-api");
+    const liveTarget = path.join(tempDir, "live", "@slack", "bolt");
+    const liveLink = path.join(slackScope, "bolt");
+
+    await fs.mkdir(legacyTarget, { recursive: true });
+    await fs.writeFile(path.join(legacyTarget, "package.json"), "{}\n");
+    await fs.mkdir(liveTarget, { recursive: true });
+    await fs.writeFile(path.join(liveTarget, "package.json"), "{}\n");
+    await fs.mkdir(slackScope, { recursive: true });
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.symlink(legacyTarget, slackLink, "dir");
+    await fs.symlink(liveTarget, liveLink, "dir");
+
+    const result = await cleanupLegacyPluginDependencyState({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      packageRoot,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toContain(`Removed stale plugin-runtime symlink: ${slackLink}`);
+    await expect(fs.lstat(slackLink)).rejects.toThrow();
+    await expect(fs.lstat(liveLink)).resolves.toBeDefined();
+  });
 });

@@ -88,6 +88,8 @@ const REQUIRED_SPAN_NAMES = [
 ] as const;
 const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.runId",
+  "openclaw.chatId",
+  "openclaw.messageId",
   "openclaw.sessionKey",
   "openclaw.sessionId",
   "openclaw.callId",

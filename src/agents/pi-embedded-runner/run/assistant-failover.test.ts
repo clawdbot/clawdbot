@@ -170,10 +170,9 @@ describe("handleAssistantFailover", () => {
 
     it("leaves plain timeouts on the continue_normal path for the runner's timeout-payload synthesis", async () => {
       // `run.ts` already emits an explicit timeout payload when
-      // `buildEmbeddedRunPayloads` produces no assistant content (see
-      // the `timedOut && !timedOutDuringCompaction &&
-      // !payloadsWithToolMedia.length` block). Throwing a FailoverError
-      // here would short-circuit that synthesis and break
+      // `buildEmbeddedRunPayloads` produces no assistant content or only a
+      // partial prompt-timeout fragment. Throwing a FailoverError here would
+      // short-circuit that synthesis and break
       // timeout-compaction retry coverage in
       // `run.timeout-triggered-compaction.test.ts`. The throw path is
       // reserved for concrete provider failures that have no other

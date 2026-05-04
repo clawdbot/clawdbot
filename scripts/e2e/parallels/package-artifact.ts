@@ -24,6 +24,37 @@ export async function packageBuildCommitFromTgz(tgzPath: string): Promise<string
   return info.commit ?? "";
 }
 
+export function resolveOpenClawRegistryVersion(specOrAlias: string): string {
+  const rawValue = specOrAlias.trim();
+  const value = rawValue.startsWith("openclaw@") ? rawValue.slice("openclaw@".length) : rawValue;
+  if (!value) {
+    return "";
+  }
+  if (value === "latest" || value === "beta" || /^\d/.test(value)) {
+    return npmViewVersion(`openclaw@${value}`);
+  }
+  const betaMatch = /^beta(\d+)$/u.exec(value);
+  if (betaMatch) {
+    const betaSuffix = `-beta.${betaMatch[1]}`;
+    const versions = JSON.parse(
+      run("npm", ["view", "openclaw", "versions", "--json"], { quiet: true }).stdout,
+    ) as string[];
+    const match = versions
+      .filter((version) => version.endsWith(betaSuffix))
+      .toSorted((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .at(-1);
+    if (!match) {
+      die(`no openclaw registry version found for alias ${value}`);
+    }
+    return match;
+  }
+  return "";
+}
+
+function npmViewVersion(spec: string): string {
+  return run("npm", ["view", spec, "version"], { quiet: true }).stdout.trim();
+}
+
 export async function ensureCurrentBuild(input: {
   lockDir: string;
   requireControlUi?: boolean;

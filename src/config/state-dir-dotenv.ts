@@ -54,6 +54,28 @@ export function readStateDirDotEnvVars(
   return readStateDirDotEnvVarsFromStateDir(stateDir);
 }
 
+export type DurableServiceEnvVarSources = {
+  stateDirDotEnvEnvironment: Record<string, string>;
+  configEnvironment: Record<string, string>;
+  durableEnvironment: Record<string, string>;
+};
+
+export function collectDurableServiceEnvVarSources(params: {
+  env: Record<string, string | undefined>;
+  config?: OpenClawConfig;
+}): DurableServiceEnvVarSources {
+  const stateDirDotEnvEnvironment = readStateDirDotEnvVars(params.env);
+  const configEnvironment = collectConfigServiceEnvVars(params.config);
+  return {
+    stateDirDotEnvEnvironment,
+    configEnvironment,
+    durableEnvironment: {
+      ...stateDirDotEnvEnvironment,
+      ...configEnvironment,
+    },
+  };
+}
+
 /**
  * Durable service env sources survive beyond the invoking shell and are safe to
  * persist into owner-only gateway service environment sources.
@@ -66,8 +88,5 @@ export function collectDurableServiceEnvVars(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
 }): Record<string, string> {
-  return {
-    ...readStateDirDotEnvVars(params.env),
-    ...collectConfigServiceEnvVars(params.config),
-  };
+  return collectDurableServiceEnvVarSources(params).durableEnvironment;
 }

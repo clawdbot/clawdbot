@@ -465,6 +465,60 @@ describe("repairSessionFileIfNeeded", () => {
     expect(after).toBe(original);
   });
 
+  it("preserves final text assistant turn that follows a tool-call/tool-result pair", async () => {
+    // Regression: a trailing assistant message with stopReason "stop" that follows a
+    // tool-call turn and its matching tool-result must never be trimmed by the repair
+    // pass. This is the exact sequence produced by any agent run that calls at least
+    // one tool before returning a final text response, and it must survive intact so
+    // subsequent user messages are parented to the correct leaf node.
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const toolCallAssistant = {
+      type: "message",
+      id: "msg-asst-tc",
+      parentId: "msg-1",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "get_tasks", input: {} }],
+        stopReason: "toolUse",
+      },
+    };
+    const toolResult = {
+      type: "message",
+      id: "msg-tool-result",
+      parentId: "msg-asst-tc",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "get_tasks",
+        content: [{ type: "text", text: "Task A, Task B" }],
+        isError: false,
+      },
+    };
+    const finalAssistant = {
+      type: "message",
+      id: "msg-asst-final",
+      parentId: "msg-tool-result",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Here are your tasks: Task A, Task B." }],
+        stopReason: "stop",
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(toolResult)}\n${JSON.stringify(finalAssistant)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(false);
+
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(original);
+  });
+
   it("preserves assistant-only session history after the header", async () => {
     const { file } = await createTempSessionPath();
     const { header } = buildSessionHeaderAndMessage();

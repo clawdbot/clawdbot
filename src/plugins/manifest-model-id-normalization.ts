@@ -1,123 +1,90 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginManifestModelIdNormalizationProvider } from "./manifest.js";
+import {
+  loadPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
+type ManifestModelIdNormalizationLookupParams = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  plugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+};
 
-function normalizeTrimmedString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => normalizeTrimmedString(entry))
-    .filter((entry): entry is string => entry !== undefined);
-}
-
-function normalizePrefixRules(
-  value: unknown,
-): PluginManifestModelIdNormalizationProvider["prefixWhenBareAfterAliasStartsWith"] {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const rules: NonNullable<
-    PluginManifestModelIdNormalizationProvider["prefixWhenBareAfterAliasStartsWith"]
-  > = [];
-  for (const rawRule of value) {
-    if (!isRecord(rawRule)) {
-      continue;
-    }
-    const modelPrefix = normalizeTrimmedString(rawRule.modelPrefix);
-    const prefix = normalizeTrimmedString(rawRule.prefix);
-    if (modelPrefix && prefix) {
-      rules.push({ modelPrefix, prefix });
-    }
-  }
-  return rules.length > 0 ? rules : undefined;
-}
-
-function normalizeModelIdNormalizationPolicy(
-  value: unknown,
-): PluginManifestModelIdNormalizationProvider | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-
-  const aliases: Record<string, string> = {};
-  if (isRecord(value.aliases)) {
-    for (const [aliasRaw, canonicalRaw] of Object.entries(value.aliases)) {
-      const alias = normalizeLowercaseStringOrEmpty(aliasRaw);
-      const canonical = normalizeTrimmedString(canonicalRaw);
-      if (alias && canonical) {
-        aliases[alias] = canonical;
-      }
-    }
-  }
-
-  const stripPrefixes = normalizeStringList(value.stripPrefixes);
-  const prefixWhenBare = normalizeTrimmedString(value.prefixWhenBare);
-  const prefixWhenBareAfterAliasStartsWith = normalizePrefixRules(
-    value.prefixWhenBareAfterAliasStartsWith,
-  );
-  const policy = {
-    ...(Object.keys(aliases).length > 0 ? { aliases } : {}),
-    ...(stripPrefixes.length > 0 ? { stripPrefixes } : {}),
-    ...(prefixWhenBare ? { prefixWhenBare } : {}),
-    ...(prefixWhenBareAfterAliasStartsWith ? { prefixWhenBareAfterAliasStartsWith } : {}),
-  } satisfies PluginManifestModelIdNormalizationProvider;
-
-  return Object.keys(policy).length > 0 ? policy : undefined;
-}
-
-function readManifestModelIdNormalizationPolicies(
-  manifest: Record<string, unknown>,
-): Array<[string, PluginManifestModelIdNormalizationProvider]> {
-  const modelIdNormalization = manifest.modelIdNormalization;
-  if (!isRecord(modelIdNormalization) || !isRecord(modelIdNormalization.providers)) {
-    return [];
-  }
-
-  const entries: Array<[string, PluginManifestModelIdNormalizationProvider]> = [];
-  for (const [providerRaw, rawPolicy] of Object.entries(modelIdNormalization.providers)) {
-    const provider = normalizeLowercaseStringOrEmpty(providerRaw);
-    const policy = normalizeModelIdNormalizationPolicy(rawPolicy);
-    if (provider && policy) {
-      entries.push([provider, policy]);
-    }
-  }
-  return entries;
-}
-
-function collectManifestModelIdNormalizationPolicies(): Map<
-  string,
-  PluginManifestModelIdNormalizationProvider
-> {
+function collectManifestModelIdNormalizationPolicies(
+  plugins: readonly Pick<PluginManifestRecord, "modelIdNormalization">[],
+): Map<string, PluginManifestModelIdNormalizationProvider> {
   const policies = new Map<string, PluginManifestModelIdNormalizationProvider>();
-  for (const { manifest } of listOpenClawPluginManifestMetadata()) {
-    for (const [provider, policy] of readManifestModelIdNormalizationPolicies(manifest)) {
-      policies.set(provider, policy);
+  for (const plugin of plugins) {
+    for (const [provider, policy] of Object.entries(plugin.modelIdNormalization?.providers ?? {})) {
+      policies.set(normalizeLowercaseStringOrEmpty(provider), policy);
     }
   }
   return policies;
 }
 
-function loadManifestModelIdNormalizationPolicies(): Map<
-  string,
-  PluginManifestModelIdNormalizationProvider
-> {
-  return collectManifestModelIdNormalizationPolicies();
+type ManifestModelIdNormalizationPolicyCache = {
+  configFingerprint: string;
+  policies: Map<string, PluginManifestModelIdNormalizationProvider>;
+};
+
+let cachedPolicies: ManifestModelIdNormalizationPolicyCache | undefined;
+
+function resolveMetadataSnapshotForPolicies(
+  params: ManifestModelIdNormalizationLookupParams = {},
+): {
+  snapshot: PluginMetadataSnapshot;
+  cacheable: boolean;
+} {
+  const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const current = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    env,
+    workspaceDir,
+  });
+  if (current) {
+    return { snapshot: current, cacheable: true };
+  }
+  return {
+    snapshot: loadPluginMetadataSnapshot({
+      config: params.config ?? {},
+      env,
+      workspaceDir,
+    }),
+    cacheable: false,
+  };
+}
+
+function loadManifestModelIdNormalizationPolicies(
+  params: ManifestModelIdNormalizationLookupParams = {},
+): Map<string, PluginManifestModelIdNormalizationProvider> {
+  if (params.plugins) {
+    return collectManifestModelIdNormalizationPolicies(params.plugins);
+  }
+  const { snapshot, cacheable } = resolveMetadataSnapshotForPolicies(params);
+  const configFingerprint = snapshot.configFingerprint;
+  if (cacheable && configFingerprint && cachedPolicies?.configFingerprint === configFingerprint) {
+    return cachedPolicies.policies;
+  }
+  const policies = collectManifestModelIdNormalizationPolicies(snapshot.plugins);
+  if (cacheable && configFingerprint) {
+    cachedPolicies = { configFingerprint, policies };
+  }
+  return policies;
 }
 
 function resolveManifestModelIdNormalizationPolicy(
   provider: string,
+  params: ManifestModelIdNormalizationLookupParams = {},
 ): PluginManifestModelIdNormalizationProvider | undefined {
   const providerId = normalizeLowercaseStringOrEmpty(provider);
-  return loadManifestModelIdNormalizationPolicies().get(providerId);
+  return loadManifestModelIdNormalizationPolicies(params).get(providerId);
 }
 
 function hasProviderPrefix(modelId: string): boolean {
@@ -130,12 +97,16 @@ function formatPrefixedModelId(prefix: string, modelId: string): string {
 
 export function normalizeProviderModelIdWithManifest(params: {
   provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  plugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
   context: {
     provider: string;
     modelId: string;
   };
 }): string | undefined {
-  const policy = resolveManifestModelIdNormalizationPolicy(params.provider);
+  const policy = resolveManifestModelIdNormalizationPolicy(params.provider, params);
   if (!policy) {
     return undefined;
   }

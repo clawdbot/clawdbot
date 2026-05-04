@@ -8,9 +8,24 @@ const mocks = vi.hoisted(() => ({
     hostnameAllowlist: hosts,
   })),
   fetchWithSsrFGuard: vi.fn(),
-  gaxiosCtor: vi.fn(function MockGaxios(this: { defaults: Record<string, unknown> }, defaults) {
-    this.defaults = defaults as Record<string, unknown>;
-  }),
+  gaxiosCtor: vi.fn(
+    function MockGaxios(
+      this: {
+        defaults: Record<string, unknown>;
+        interceptors: {
+          request: { add: ReturnType<typeof vi.fn> };
+          response: { add: ReturnType<typeof vi.fn> };
+        };
+      },
+      defaults,
+    ) {
+      this.defaults = defaults as Record<string, unknown>;
+      this.interceptors = {
+        request: { add: vi.fn() },
+        response: { add: vi.fn() },
+      };
+    },
+  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
@@ -330,12 +345,57 @@ describe("googlechat google auth runtime", () => {
           fetchImplementation: expect.any(Function),
         },
       });
+      expect(transport.interceptors.request.add).toHaveBeenCalledWith({
+        resolved: expect.any(Function),
+      });
+      expect(transport.interceptors.response.add).toHaveBeenCalledWith({
+        resolved: expect.any(Function),
+      });
       expect("window" in globalThis).toBe(false);
     } finally {
       if (originalWindowDescriptor) {
         Object.defineProperty(globalThis, "window", originalWindowDescriptor);
       }
     }
+  });
+
+  it("keeps auth transports isolated from google-auth interceptor mutations", async () => {
+    const first = await getGoogleAuthTransport();
+    const second = await getGoogleAuthTransport();
+
+    expect(first).not.toBe(second);
+    expect(mocks.gaxiosCtor).toHaveBeenCalledTimes(2);
+    expect(first.interceptors.request.add).toHaveBeenCalledOnce();
+    expect(first.interceptors.response.add).toHaveBeenCalledOnce();
+    expect(second.interceptors.request.add).toHaveBeenCalledOnce();
+    expect(second.interceptors.response.add).toHaveBeenCalledOnce();
+  });
+
+  it("normalizes Google auth request headers before upstream interceptors run", async () => {
+    const config = {
+      headers: { "x-test": "1" },
+      url: new URL("https://www.googleapis.com/oauth2/v1/certs"),
+    };
+
+    const normalized = __testing.normalizeGoogleAuthPreparedRequestHeaders(config);
+
+    expect(normalized.headers).toBeInstanceOf(Headers);
+    expect(normalized.headers.has("x-test")).toBe(true);
+    expect(normalized.headers.get("x-test")).toBe("1");
+  });
+
+  it("normalizes Google auth response headers before upstream cache-control reads", () => {
+    const response = {
+      data: {},
+      headers: {
+        "cache-control": "public, max-age=3600",
+      },
+    };
+
+    const normalized = __testing.normalizeGoogleAuthResponseHeaders(response);
+
+    expect(normalized.headers).toBeInstanceOf(Headers);
+    expect(normalized.headers.get("cache-control")).toBe("public, max-age=3600");
   });
 
   it("rejects service-account credentials that override Google auth endpoints", async () => {

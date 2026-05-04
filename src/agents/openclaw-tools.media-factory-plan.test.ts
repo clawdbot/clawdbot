@@ -13,6 +13,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { __testing, createOpenClawTools } from "./openclaw-tools.js";
+import * as pdfModelConfigModule from "./tools/pdf-tool.model-config.js";
 
 function createAuthStore(providers: string[] = []): AuthProfileStore {
   return {
@@ -246,6 +247,92 @@ describe("optional media tool factory planning", () => {
     });
   });
 
+  it("skips tools that the resolved denylist blocks", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, [
+      createPlugin({
+        id: "image-owner",
+        contracts: { imageGenerationProviders: ["image-owner"] },
+        setupProviders: [{ id: "image-owner", envVars: ["IMAGE_OWNER_API_KEY"] }],
+      }),
+      createPlugin({
+        id: "media-owner",
+        contracts: { mediaUnderstandingProviders: ["anthropic"] },
+        setupProviders: [{ id: "anthropic", envVars: ["ANTHROPIC_API_KEY"] }],
+      }),
+    ]);
+
+    expect(
+      __testing.resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(["image-owner", "anthropic"]),
+        toolDenylist: ["image_generate", "pdf"],
+      }),
+    ).toEqual({
+      imageGenerate: false,
+      videoGenerate: false,
+      musicGenerate: false,
+      pdf: false,
+    });
+  });
+
+  it("applies global tool policy before optional media factories run", () => {
+    const config: OpenClawConfig = { tools: { deny: ["pdf"] } };
+    installSnapshot(config, [
+      createPlugin({
+        id: "media-owner",
+        contracts: { mediaUnderstandingProviders: ["anthropic"] },
+        setupProviders: [{ id: "anthropic", envVars: ["ANTHROPIC_API_KEY"] }],
+      }),
+    ]);
+
+    expect(
+      __testing.resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(["anthropic"]),
+      }).pdf,
+    ).toBe(false);
+  });
+
+  it("applies wildcard deny patterns to optional factory planning", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, [
+      createPlugin({
+        id: "image-owner",
+        contracts: { imageGenerationProviders: ["image-owner"] },
+        setupProviders: [{ id: "image-owner", envVars: ["IMAGE_OWNER_API_KEY"] }],
+      }),
+      createPlugin({
+        id: "video-owner",
+        contracts: { videoGenerationProviders: ["video-owner"] },
+        setupProviders: [{ id: "video-owner", envVars: ["VIDEO_OWNER_API_KEY"] }],
+      }),
+      createPlugin({
+        id: "music-owner",
+        contracts: { musicGenerationProviders: ["music-owner"] },
+        setupProviders: [{ id: "music-owner", envVars: ["MUSIC_OWNER_API_KEY"] }],
+      }),
+      createPlugin({
+        id: "media-owner",
+        contracts: { mediaUnderstandingProviders: ["anthropic"] },
+        setupProviders: [{ id: "anthropic", envVars: ["ANTHROPIC_API_KEY"] }],
+      }),
+    ]);
+
+    expect(
+      __testing.resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(["image-owner", "video-owner", "music-owner", "anthropic"]),
+        toolDenylist: ["*_generate", "p*"],
+      }),
+    ).toEqual({
+      imageGenerate: false,
+      videoGenerate: false,
+      musicGenerate: false,
+      pdf: false,
+    });
+  });
+
   it("keeps auth-backed providers on the factory path", () => {
     const config: OpenClawConfig = {};
     installSnapshot(config, [
@@ -283,6 +370,21 @@ describe("optional media tool factory planning", () => {
       musicGenerate: true,
       pdf: true,
     });
+  });
+
+  it("defers PDF model resolution from the tool-prep hot path", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, []);
+    const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
+
+    const tools = createOpenClawTools({
+      config,
+      agentDir: "/tmp/openclaw-agent-main",
+      authProfileStore: createAuthStore(["anthropic"]),
+    });
+
+    expect(tools.map((tool) => tool.name)).toContain("pdf");
+    expect(resolveSpy).not.toHaveBeenCalled();
   });
 
   it("keeps enabled external manifest capability providers on the factory path", () => {

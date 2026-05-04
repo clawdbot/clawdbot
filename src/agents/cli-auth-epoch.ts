@@ -126,6 +126,7 @@ function getLocalCliCredentialFingerprint(provider: string): string | undefined 
     case "codex-cli": {
       const credential = cliAuthEpochDeps.readCodexCliCredentialsCached({
         ttlMs: 5000,
+        allowKeychainPrompt: false,
       });
       return credential ? hashCliAuthEpochPart(encodeCodexCredential(credential)) : undefined;
     }

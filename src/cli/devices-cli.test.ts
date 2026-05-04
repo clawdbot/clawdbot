@@ -171,6 +171,36 @@ describe("devices cli approve", () => {
     );
   });
 
+  it("retries explicit approval with admin scope when a paired-device session is ownership-denied", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [],
+        paired: [],
+      })
+      .mockRejectedValueOnce(new Error("GatewayClientRequestError: device pairing approval denied"))
+      .mockResolvedValueOnce({ device: { deviceId: "device-2" } });
+
+    await runDevicesApprove(["req-cross-device"]);
+
+    expect(callGateway).toHaveBeenCalledTimes(3);
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "device.pair.approve",
+        params: { requestId: "req-cross-device" },
+        scopes: undefined,
+      }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        method: "device.pair.approve",
+        params: { requestId: "req-cross-device" },
+        scopes: ["operator.admin"],
+      }),
+    );
+  });
+
   it("uses admin scope when a repair approval would inherit an admin token", async () => {
     callGateway
       .mockResolvedValueOnce({

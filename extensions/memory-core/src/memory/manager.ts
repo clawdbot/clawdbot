@@ -120,6 +120,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected readonly vector: {
     enabled: boolean;
     available: boolean | null;
+    semanticAvailable?: boolean;
     extensionPath?: string;
     loadError?: string;
     dims?: number;
@@ -806,7 +807,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         : undefined,
       vector: {
         enabled: this.vector.enabled,
-        available: this.vector.available ?? undefined,
+        storeAvailable: this.vector.available ?? undefined,
+        semanticAvailable: this.vector.semanticAvailable,
+        available: this.vector.semanticAvailable,
         extensionPath: this.vector.extensionPath,
         loadError: this.vector.loadError,
         dims: this.vector.dims,
@@ -837,14 +840,26 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   async probeVectorAvailability(): Promise<boolean> {
     if (!this.vector.enabled) {
+      this.vector.semanticAvailable = false;
       return false;
     }
     await this.ensureProviderInitialized();
     // FTS-only mode: vector search not available
     if (!this.provider) {
+      this.vector.semanticAvailable = false;
       return false;
     }
-    return this.ensureVectorReady();
+    const ready = await this.probeVectorStoreAvailability();
+    this.vector.semanticAvailable = ready;
+    return ready;
+  }
+
+  async probeVectorStoreAvailability(): Promise<boolean> {
+    if (!this.vector.enabled) {
+      this.vector.available = false;
+      return false;
+    }
+    return await this.ensureVectorReady();
   }
 
   private cacheProbeResult(result: MemoryEmbeddingProbeResult): MemoryEmbeddingProbeResult {

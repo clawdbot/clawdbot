@@ -12,6 +12,7 @@ import {
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 type ArchiveFileReason = SessionArchiveReason;
 export type ArchivedSessionTranscript = {
@@ -127,6 +128,16 @@ export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): 
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
+  // Notify the session transcript subscribers (memory index, sessions-history
+  // HTTP, etc.) that a mutation landed on a session-owned path. Without this
+  // emit the memory sync's incremental path never learns the new archive
+  // exists: chokidar does not watch the sessions directory, and the event bus
+  // is the only channel gateway code uses to signal session-file mutations.
+  // All other in-process mutations (append, compaction, tool-result rewrite,
+  // chat inject, command execution) already emit here; archive was the sole
+  // remaining gap, which is why `.jsonl.reset.<iso>` / `.jsonl.deleted.<iso>`
+  // files only surfaced in the index after a full reindex.
+  emitSessionTranscriptUpdate({ sessionFile: archived });
   return archived;
 }
 

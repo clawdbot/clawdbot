@@ -2,8 +2,8 @@
 
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
-import { renderUsageInsights } from "./usage-render-overview.ts";
-import type { UsageAggregates, UsageTotals } from "./usageTypes.ts";
+import { renderSessionsCard, renderUsageInsights } from "./usage-render-overview.ts";
+import type { UsageAggregates, UsageSessionEntry, UsageTotals } from "./usageTypes.ts";
 
 const totals: UsageTotals = {
   input: 100,
@@ -65,5 +65,63 @@ describe("renderUsageInsights", () => {
     expect(container.textContent).toContain("30.0%");
     expect(container.textContent).toContain("300 cached");
     expect(container.textContent).toContain("1.0K prompt");
+  });
+});
+
+describe("renderSessionsCard", () => {
+  const noop = () => {};
+
+  it("sorts cost by the selected day values when day filters are active", () => {
+    const container = document.createElement("div");
+    const sessions: UsageSessionEntry[] = [
+      {
+        key: "all-time-winner",
+        label: "All time winner",
+        updatedAt: 2,
+        usage: {
+          ...totals,
+          totalCost: 100,
+          totalTokens: 100,
+          dailyBreakdown: [{ date: "2026-02-05", cost: 1, tokens: 1 }],
+        },
+      } as UsageSessionEntry,
+      {
+        key: "day-winner",
+        label: "Day winner",
+        updatedAt: 1,
+        usage: {
+          ...totals,
+          totalCost: 50,
+          totalTokens: 50,
+          dailyBreakdown: [{ date: "2026-02-05", cost: 10, tokens: 10 }],
+        },
+      } as UsageSessionEntry,
+    ];
+
+    render(
+      renderSessionsCard(
+        sessions,
+        [],
+        ["2026-02-05"],
+        false,
+        "cost",
+        "desc",
+        [],
+        "all",
+        noop,
+        noop,
+        noop,
+        noop,
+        [],
+        sessions.length,
+        noop,
+      ),
+      container,
+    );
+
+    const titles = Array.from(container.querySelectorAll(".session-bar-title")).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(titles.slice(0, 2)).toEqual(["Day winner", "All time winner"]);
   });
 });

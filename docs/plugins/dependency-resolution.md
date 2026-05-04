@@ -118,8 +118,11 @@ not a supported way to prepare bundled plugin dependencies.
 
 Older OpenClaw versions generated bundled-plugin dependency roots at startup or
 during doctor repair. Current doctor cleanup removes those stale directories and
-symlinks when `--fix` is used, including old `plugin-runtime-deps` roots,
+symlinks when `--fix` is used, including old `plugin-runtime-deps` roots, global
+Node-prefix package symlinks that point at pruned `plugin-runtime-deps` targets,
 `.openclaw-runtime-deps*` manifests, generated plugin `node_modules`, install
-stage directories, and package-local pnpm stores.
+stage directories, and package-local pnpm stores. Packaged postinstall also
+removes those global symlinks before pruning the legacy target roots so upgrades
+do not leave dangling ESM package imports.
 
 These paths are legacy debris only. New installs should not create them.

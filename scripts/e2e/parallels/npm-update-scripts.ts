@@ -4,6 +4,7 @@ import {
   psSingleQuote,
   windowsAgentTurnConfigPatchScript,
   windowsOpenClawResolver,
+  windowsScopedEnvFunction,
 } from "./powershell.ts";
 import {
   modelProviderConfigBatchJson,
@@ -71,6 +72,65 @@ if [ "$agent_ok" != true ]; then
   echo "openclaw agent finished without OK response" >&2
   exit 1
 fi`;
+}
+
+function windowsUpdateWithBundledPluginsDisabled(input: NpmUpdateScriptInput): string {
+  return `$script:OpenClawUpdateExit = 0
+$updateOutput = Invoke-WithScopedEnv @{ OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'; OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1' } {
+  Invoke-OpenClaw update --tag ${psSingleQuote(input.updateTarget)} --yes --json --no-restart 2>&1
+  $script:OpenClawUpdateExit = $LASTEXITCODE
+}
+$updateExit = $script:OpenClawUpdateExit
+$updateOutput`;
+}
+
+function windowsGatewayReadyScript(): string {
+  return `function Wait-OpenClawGateway {
+  $deadline = (Get-Date).AddSeconds(180)
+  $attempt = 0
+  while ((Get-Date) -lt $deadline) {
+    Invoke-OpenClaw gateway status --deep --require-rpc --timeout 15000
+    if ($LASTEXITCODE -eq 0) { return }
+    $attempt += 1
+    if ($attempt -eq 4) {
+      Invoke-OpenClaw gateway start *>&1 | Out-Host
+    }
+    Start-Sleep -Seconds 5
+  }
+  throw "gateway did not become ready after update"
+}
+Invoke-OpenClaw gateway restart *>&1 | Out-Host
+if ($LASTEXITCODE -ne 0) {
+  "gateway restart exited with code $LASTEXITCODE; probing readiness before failing" | Out-Host
+}
+Wait-OpenClawGateway`;
+}
+
+function windowsAssertAgentOkScript(input: NpmUpdateScriptInput): string {
+  return `${windowsAgentTurnConfigPatchScript(input.auth.modelId)}
+$sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\parallels-npm-update-windows.jsonl'
+Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
+${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
+Set-Item -Path ('Env:' + ${psSingleQuote(input.auth.apiKeyEnv)}) -Value ${psSingleQuote(input.auth.apiKeyValue)}
+$agentOk = $false
+for ($attempt = 1; $attempt -le 2; $attempt++) {
+  $sessionId = if ($attempt -eq 1) { 'parallels-npm-update-windows' } else { "parallels-npm-update-windows-retry-$attempt" }
+  $sessionsDir = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions'
+  $sessionPath = Join-Path $sessionsDir "$sessionId.jsonl"
+  Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
+  $output = Invoke-OpenClaw agent --local --agent main --session-id $sessionId --model ${psSingleQuote(input.auth.modelId)} --message 'Reply with exact ASCII text OK only.' --thinking minimal --timeout ${resolveParallelsModelTimeoutSeconds("windows")} --json 2>&1
+  if ($null -ne $output) { $output | ForEach-Object { $_ } }
+  if ($LASTEXITCODE -ne 0) { throw "agent failed with exit code $LASTEXITCODE" }
+  if (($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
+    $agentOk = $true
+    break
+  }
+  if ($attempt -lt 2) {
+    Write-Host "agent turn attempt $attempt finished without OK response; retrying"
+    Start-Sleep -Seconds 3
+  }
+}
+if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`;
 }
 
 export function macosUpdateScript(input: NpmUpdateScriptInput): string {
@@ -145,6 +205,7 @@ export function windowsUpdateScript(input: NpmUpdateScriptInput): string {
   return `$ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 ${windowsOpenClawResolver}
+${windowsScopedEnvFunction}
 function Remove-FuturePluginEntries {
   $configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
   if (-not (Test-Path $configPath)) { return }
@@ -175,11 +236,7 @@ function Stop-OpenClawGatewayProcesses {
 }
 Remove-FuturePluginEntries
 Stop-OpenClawGatewayProcesses
-$env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
-$env:OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'
-$updateOutput = Invoke-OpenClaw update --tag ${psSingleQuote(input.updateTarget)} --yes --json --no-restart 2>&1
-$updateExit = $LASTEXITCODE
-$updateOutput
+${windowsUpdateWithBundledPluginsDisabled(input)}
 if ($updateExit -ne 0) {
   $updateText = $updateOutput | Out-String
   $stalePostSwapImport = $updateText -match 'ERR_MODULE_NOT_FOUND' -and $updateText -match ${psSingleQuote(windowsStalePostSwapImportRegex)}
@@ -187,49 +244,8 @@ if ($updateExit -ne 0) {
   Write-Host "openclaw update returned a stale post-swap module import; continuing to post-update health checks"
 }
 ${windowsVersionCheck(input.expectedNeedle)}
-function Wait-OpenClawGateway {
-  $deadline = (Get-Date).AddSeconds(180)
-  $attempt = 0
-  while ((Get-Date) -lt $deadline) {
-    Invoke-OpenClaw gateway status --deep --require-rpc --timeout 15000
-    if ($LASTEXITCODE -eq 0) { return }
-    $attempt += 1
-    if ($attempt -eq 4) {
-      Invoke-OpenClaw gateway start *>&1 | Out-Host
-    }
-    Start-Sleep -Seconds 5
-  }
-  throw "gateway did not become ready after update"
-}
-Invoke-OpenClaw gateway restart *>&1 | Out-Host
-if ($LASTEXITCODE -ne 0) {
-  "gateway restart exited with code $LASTEXITCODE; probing readiness before failing" | Out-Host
-}
-Wait-OpenClawGateway
-${windowsAgentTurnConfigPatchScript(input.auth.modelId)}
-$sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\parallels-npm-update-windows.jsonl'
-Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
-${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-Set-Item -Path ('Env:' + ${psSingleQuote(input.auth.apiKeyEnv)}) -Value ${psSingleQuote(input.auth.apiKeyValue)}
-$agentOk = $false
-for ($attempt = 1; $attempt -le 2; $attempt++) {
-  $sessionId = if ($attempt -eq 1) { 'parallels-npm-update-windows' } else { "parallels-npm-update-windows-retry-$attempt" }
-  $sessionsDir = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions'
-  $sessionPath = Join-Path $sessionsDir "$sessionId.jsonl"
-  Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
-  $output = Invoke-OpenClaw agent --local --agent main --session-id $sessionId --model ${psSingleQuote(input.auth.modelId)} --message 'Reply with exact ASCII text OK only.' --thinking minimal --timeout ${resolveParallelsModelTimeoutSeconds("windows")} --json 2>&1
-  if ($null -ne $output) { $output | ForEach-Object { $_ } }
-  if ($LASTEXITCODE -ne 0) { throw "agent failed with exit code $LASTEXITCODE" }
-  if (($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
-    $agentOk = $true
-    break
-  }
-  if ($attempt -lt 2) {
-    Write-Host "agent turn attempt $attempt finished without OK response; retrying"
-    Start-Sleep -Seconds 3
-  }
-}
-if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`;
+${windowsGatewayReadyScript()}
+${windowsAssertAgentOkScript(input)}`;
 }
 
 export function linuxUpdateScript(input: NpmUpdateScriptInput): string {

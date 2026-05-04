@@ -88,9 +88,23 @@
     {
       "count": 1,
       "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/chat/build-chat-items.ts",
+      "text": "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/chat/build-chat-items.ts",
-      "text": "Compaction"
+      "text": "Compacted history"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/chat/build-chat-items.ts",
+      "text": "Open checkpoints"
     },
     {
       "count": 1,
@@ -1448,6 +1462,13 @@
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/ui/views/chat.ts",
+      "text": "Dismiss error"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/chat.ts",
       "text": "Exit focus mode"
     },
     {
@@ -1491,6 +1512,13 @@
       "name": "title",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Attach file"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Dismiss error"
     },
     {
       "count": 1,
@@ -4151,6 +4179,13 @@
       "name": "text",
       "path": "ui/src/ui/views/overview.ts",
       "text": "openclaw doctor --generate-gateway-token"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/sessions.ts",
+      "text": "Session filters"
     },
     {
       "count": 1,

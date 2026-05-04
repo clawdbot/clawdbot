@@ -182,6 +182,8 @@ export type PluginManifestActivation = {
   onCapabilities?: PluginManifestActivationCapability[];
 };
 
+export type PluginManifestDefaultPlatform = NodeJS.Platform;
+
 export type PluginManifestSetupProvider = {
   /** Provider id surfaced during setup/onboarding. */
   id: string;
@@ -290,6 +292,7 @@ export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
   enabledByDefault?: boolean;
+  enabledByDefaultOnPlatforms?: PluginManifestDefaultPlatform[];
   /** Legacy plugin ids that should normalize to this plugin id. */
   legacyPluginIds?: string[];
   /** Provider ids that should auto-enable this plugin when referenced in auth/config/models. */
@@ -455,7 +458,9 @@ export type PluginManifestCapabilityProviderMetadata = {
   configSignals?: PluginManifestCapabilityProviderConfigSignal[];
 };
 
-export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata;
+export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata & {
+  optional?: boolean;
+};
 
 export type PluginManifestProviderAuthChoice = {
   /** Provider id owned by this manifest entry. */
@@ -712,6 +717,22 @@ function normalizeCapabilityProviderConfigSignals(
   return signals.length > 0 ? signals : undefined;
 }
 
+function normalizeCapabilityProviderMetadataEntry(
+  rawMetadata: Record<string, unknown>,
+): PluginManifestCapabilityProviderMetadata | undefined {
+  const aliases = normalizeTrimmedStringList(rawMetadata.aliases);
+  const authProviders = normalizeTrimmedStringList(rawMetadata.authProviders);
+  const authSignals = normalizeCapabilityProviderAuthSignals(rawMetadata.authSignals);
+  const configSignals = normalizeCapabilityProviderConfigSignals(rawMetadata.configSignals);
+  const metadata = {
+    ...(aliases.length > 0 ? { aliases } : {}),
+    ...(authProviders.length > 0 ? { authProviders } : {}),
+    ...(authSignals ? { authSignals } : {}),
+    ...(configSignals ? { configSignals } : {}),
+  } satisfies PluginManifestCapabilityProviderMetadata;
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
 function normalizeCapabilityProviderMetadata(
   value: unknown,
 ): Record<string, PluginManifestCapabilityProviderMetadata> | undefined {
@@ -724,18 +745,33 @@ function normalizeCapabilityProviderMetadata(
     if (!providerId || isBlockedObjectKey(providerId) || !isRecord(rawMetadata)) {
       continue;
     }
-    const aliases = normalizeTrimmedStringList(rawMetadata.aliases);
-    const authProviders = normalizeTrimmedStringList(rawMetadata.authProviders);
-    const authSignals = normalizeCapabilityProviderAuthSignals(rawMetadata.authSignals);
-    const configSignals = normalizeCapabilityProviderConfigSignals(rawMetadata.configSignals);
-    const metadata = {
-      ...(aliases.length > 0 ? { aliases } : {}),
-      ...(authProviders.length > 0 ? { authProviders } : {}),
-      ...(authSignals ? { authSignals } : {}),
-      ...(configSignals ? { configSignals } : {}),
-    } satisfies PluginManifestCapabilityProviderMetadata;
-    if (Object.keys(metadata).length > 0) {
+    const metadata = normalizeCapabilityProviderMetadataEntry(rawMetadata);
+    if (metadata) {
       normalized[providerId] = metadata;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizePluginToolMetadata(
+  value: unknown,
+): Record<string, PluginManifestToolMetadata> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestToolMetadata> = Object.create(null);
+  for (const [rawToolName, rawMetadata] of Object.entries(value)) {
+    const toolName = normalizeOptionalString(rawToolName) ?? "";
+    if (!toolName || isBlockedObjectKey(toolName) || !isRecord(rawMetadata)) {
+      continue;
+    }
+    const providerMetadata = normalizeCapabilityProviderMetadataEntry(rawMetadata);
+    const metadata = {
+      ...providerMetadata,
+      ...(rawMetadata.optional === true ? { optional: true } : {}),
+    } satisfies PluginManifestToolMetadata;
+    if (Object.keys(metadata).length > 0) {
+      normalized[toolName] = metadata;
     }
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
@@ -1156,6 +1192,27 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
   return Object.keys(activation).length > 0 ? activation : undefined;
 }
 
+const MANIFEST_DEFAULT_ENABLEMENT_PLATFORMS = new Set<PluginManifestDefaultPlatform>([
+  "aix",
+  "android",
+  "darwin",
+  "freebsd",
+  "haiku",
+  "linux",
+  "openbsd",
+  "sunos",
+  "win32",
+  "cygwin",
+  "netbsd",
+]);
+
+function normalizeManifestDefaultPlatforms(value: unknown): PluginManifestDefaultPlatform[] {
+  return normalizeTrimmedStringList(value).filter(
+    (platform): platform is PluginManifestDefaultPlatform =>
+      MANIFEST_DEFAULT_ENABLEMENT_PLATFORMS.has(platform as PluginManifestDefaultPlatform),
+  );
+}
+
 function normalizeManifestSetupProviders(
   value: unknown,
 ): PluginManifestSetupProvider[] | undefined {
@@ -1520,6 +1577,9 @@ export function loadPluginManifest(
 
   const kind = parsePluginKind(raw.kind);
   const enabledByDefault = raw.enabledByDefault === true;
+  const enabledByDefaultOnPlatforms = normalizeManifestDefaultPlatforms(
+    raw.enabledByDefaultOnPlatforms,
+  );
   const legacyPluginIds = normalizeTrimmedStringList(raw.legacyPluginIds);
   const autoEnableWhenConfiguredProviders = normalizeTrimmedStringList(
     raw.autoEnableWhenConfiguredProviders,
@@ -1569,7 +1629,7 @@ export function loadPluginManifest(
   const musicGenerationProviderMetadata = normalizeCapabilityProviderMetadata(
     raw.musicGenerationProviderMetadata,
   );
-  const toolMetadata = normalizeCapabilityProviderMetadata(raw.toolMetadata);
+  const toolMetadata = normalizePluginToolMetadata(raw.toolMetadata);
   const configContracts = normalizeManifestConfigContracts(raw.configContracts);
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
@@ -1584,6 +1644,7 @@ export function loadPluginManifest(
       id,
       configSchema,
       ...(enabledByDefault ? { enabledByDefault } : {}),
+      ...(enabledByDefaultOnPlatforms.length > 0 ? { enabledByDefaultOnPlatforms } : {}),
       ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),
       ...(autoEnableWhenConfiguredProviders.length > 0
         ? { autoEnableWhenConfiguredProviders }

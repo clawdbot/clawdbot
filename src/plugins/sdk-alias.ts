@@ -274,6 +274,7 @@ const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".cts",
   ".cjs",
 ] as const;
+const BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN = /^(?:api|runtime-api|test-api|.+-api)$/u;
 const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
   /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(\.{1,2}\/[^"']+)["']/g;
 
@@ -318,6 +319,145 @@ function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
   } catch {
     return [];
   }
+}
+
+function readBundledPluginPackageName(packageJsonPath: string): string | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as { name?: unknown };
+    const name = typeof parsed.name === "string" ? parsed.name.trim() : "";
+    return name.startsWith("@openclaw/") ? name : null;
+  } catch {
+    return null;
+  }
+}
+
+function isBundledPluginPublicSurfaceSourceBasename(params: {
+  basename: string;
+  includePrivateQa: boolean;
+}): boolean {
+  if (params.basename === "test-api") {
+    return params.includePrivateQa;
+  }
+  return BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN.test(params.basename);
+}
+
+function listBundledPluginPublicSurfaceSourceBasenames(params: {
+  extensionSourceRoot: string;
+  includePrivateQa: boolean;
+}): string[] {
+  try {
+    return fs
+      .readdirSync(params.extensionSourceRoot, { withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name)
+      .flatMap((fileName) => {
+        const ext = PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS.find((candidateExt) =>
+          fileName.endsWith(candidateExt),
+        );
+        if (!ext) {
+          return [];
+        }
+        const basename = fileName.slice(0, -ext.length);
+        return isBundledPluginPublicSurfaceSourceBasename({
+          basename,
+          includePrivateQa: params.includePrivateQa,
+        })
+          ? [basename]
+          : [];
+      })
+      .toSorted();
+  } catch {
+    return [];
+  }
+}
+
+function resolveBundledPluginPublicSurfaceAliasTarget(params: {
+  packageRoot: string;
+  dirName: string;
+  basename: string;
+  orderedKinds: PluginSdkAliasCandidateKind[];
+}): string | null {
+  for (const kind of params.orderedKinds) {
+    if (kind === "dist") {
+      const candidate = path.join(
+        params.packageRoot,
+        "dist",
+        "extensions",
+        params.dirName,
+        `${params.basename}.js`,
+      );
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+      continue;
+    }
+    for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+      const candidate = path.join(
+        params.packageRoot,
+        "extensions",
+        params.dirName,
+        `${params.basename}${ext}`,
+      );
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+
+function resolveBundledPluginPackagePublicSurfaceAliasMap(params: {
+  modulePath: string;
+  argv1?: string;
+  moduleUrl?: string;
+  pluginSdkResolution: PluginSdkResolutionPreference;
+}): Record<string, string> {
+  const packageRoot = resolveLoaderPluginSdkPackageRoot(params);
+  if (!packageRoot) {
+    return {};
+  }
+  const extensionsRoot = path.join(packageRoot, "extensions");
+  let extensionDirs: fs.Dirent[];
+  try {
+    extensionDirs = fs.readdirSync(extensionsRoot, { withFileTypes: true });
+  } catch {
+    return {};
+  }
+  const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+    modulePath: params.modulePath,
+    isProduction: process.env.NODE_ENV === "production",
+    pluginSdkResolution: params.pluginSdkResolution,
+  });
+  const includePrivateQa = shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
+  const aliasMap: Record<string, string> = {};
+  for (const entry of extensionDirs) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const dirName = entry.name;
+    const packageName = readBundledPluginPackageName(
+      path.join(extensionsRoot, dirName, "package.json"),
+    );
+    if (!packageName) {
+      continue;
+    }
+    for (const basename of listBundledPluginPublicSurfaceSourceBasenames({
+      extensionSourceRoot: path.join(extensionsRoot, dirName),
+      includePrivateQa,
+    })) {
+      const target = resolveBundledPluginPublicSurfaceAliasTarget({
+        packageRoot,
+        dirName,
+        basename,
+        orderedKinds,
+      });
+      if (!target) {
+        continue;
+      }
+      aliasMap[`${packageName}/${basename}.js`] = normalizeJitiAliasTargetPath(target);
+    }
+  }
+  return aliasMap;
 }
 
 function shouldIncludePrivateLocalOnlyPluginSdkSubpaths() {
@@ -626,6 +766,12 @@ export function buildPluginLoaderAliasMap(
     ...(extensionApiAlias
       ? { "openclaw/extension-api": normalizeJitiAliasTargetPath(extensionApiAlias) }
       : {}),
+    ...resolveBundledPluginPackagePublicSurfaceAliasMap({
+      modulePath,
+      argv1,
+      moduleUrl,
+      pluginSdkResolution,
+    }),
     ...(pluginSdkAlias
       ? Object.fromEntries(
           PLUGIN_SDK_PACKAGE_NAMES.map((packageName) => [

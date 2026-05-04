@@ -8,6 +8,10 @@ export type PluginEntryConfig = {
      * Non-bundled plugins must opt in explicitly; bundled plugins stay allowed unless disabled.
      */
     allowConversationAccess?: boolean;
+    /** Default timeout in milliseconds for this plugin's typed hooks. */
+    timeoutMs?: number;
+    /** Per typed-hook timeout overrides in milliseconds. */
+    timeouts?: Record<string, number>;
   };
   subagent?: {
     /** Explicitly allow this plugin to request per-run provider/model overrides for subagent runs. */

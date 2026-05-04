@@ -880,6 +880,35 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     );
   });
 
+  it("sends skipped voice text when voice media degrades to a file attachment", async () => {
+    sendMediaFeishuMock.mockResolvedValueOnce({
+      messageId: "file_msg",
+      voiceIntentDegradedToFile: true,
+    });
+
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "spoken reply",
+      mediaUrl: "https://example.com/reply.mp3",
+      audioAsVoice: true,
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "spoken reply",
+      }),
+    );
+  });
+
   it("suppresses duplicate text for native voice media without audioAsVoice", async () => {
     await feishuOutbound.sendMedia?.({
       cfg: emptyConfig,

@@ -93,7 +93,7 @@ Enable the tool:
     "list": [
       {
         "id": "main",
-        "tools": { "allow": ["llm-task"] }
+        "tools": { "alsoAllow": ["llm-task"] }
       }
     ]
   }
@@ -191,7 +191,7 @@ Or per-agent:
 Avoid using `tools.allow: ["lobster"]` unless you intend to run in restrictive allowlist mode.
 
 <Note>
-Allowlists are opt-in for optional plugins. If your allowlist only names plugin tools (like `lobster`), OpenClaw keeps core tools enabled. To restrict core tools, include the core tools or groups you want in the allowlist too.
+Allowlists are opt-in for optional plugins. `alsoAllow` enables only the named optional plugin tools while preserving the normal core tool set. To restrict core tools, use `tools.allow` with the core tools or groups you want.
 </Note>
 
 ## Example: Email triage

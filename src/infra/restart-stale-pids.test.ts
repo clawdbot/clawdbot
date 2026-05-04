@@ -256,6 +256,33 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(pids).not.toContain(process.pid);
     });
 
+    it("verifies argv when lsof reports the node process name instead of openclaw", () => {
+      const stalePid = process.pid + 101;
+      mockSpawnSync.mockImplementation((command: unknown) => {
+        if (command === "ps") {
+          return {
+            error: null,
+            status: 0,
+            stdout: "node /opt/openclaw/dist/entry.js gateway\n",
+            stderr: "",
+          };
+        }
+        return {
+          error: null,
+          status: 0,
+          stdout: lsofOutput([{ pid: stalePid, cmd: "cnode" }]),
+          stderr: "",
+        };
+      });
+
+      expect(findGatewayPidsOnPortSync(18789)).toEqual([stalePid]);
+      expect(mockSpawnSync).toHaveBeenCalledWith(
+        "ps",
+        ["-ww", "-p", String(stalePid), "-o", "command="],
+        expect.objectContaining({ timeout: 2000 }),
+      );
+    });
+
     it("excludes ancestor pids so a sidecar cannot kill its parent gateway — regression for #68451", () => {
       // Regression: openclaw-weixin sidecar (child of the gateway) invoked
       // cleanStaleGatewayProcessesSync during init. lsof reported the parent
@@ -1174,8 +1201,9 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       vi.spyOn(process, "kill").mockReturnValue(true);
       // Should complete cleanly — no openclaw pids in status-1 output → free
       expect(() => cleanStaleGatewayProcessesSync()).not.toThrow();
-      // Completed in exactly 2 calls (initial find + 1 free poll)
-      expect(getCallCount()).toBe(2);
+      // Completed with one argv verification after the status-1 poll output:
+      // initial lsof + poll lsof + ps argv check.
+      expect(getCallCount()).toBe(3);
     });
   });
 

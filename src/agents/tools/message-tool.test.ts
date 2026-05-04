@@ -427,6 +427,34 @@ describe("message tool path passthrough", () => {
   });
 });
 
+describe("message tool Telegram topic targets", () => {
+  it("passes numeric forum topic targets and thread ids to outbound resolution", async () => {
+    mockSendResult({ to: "telegram:-1001234567890:topic:42" });
+
+    const call = await executeSend({
+      toolOptions: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:-1001234567890:topic:42",
+      },
+      action: {
+        channel: "telegram",
+        target: "-1001234567890:topic:42",
+        threadId: "42",
+        message: "topic hello",
+      },
+    });
+
+    expect(call?.params).toEqual(
+      expect.objectContaining({
+        channel: "telegram",
+        target: "-1001234567890:topic:42",
+        threadId: "42",
+        message: "topic hello",
+      }),
+    );
+  });
+});
+
 describe("message tool schema scoping", () => {
   const telegramPlugin = createChannelPlugin({
     id: "telegram",
@@ -1107,6 +1135,20 @@ describe("message tool reasoning tag sanitization", () => {
       target: "signal:+15551234567",
       channel: "signal",
     },
+    {
+      field: "message",
+      input: "Reasoning:\n_internal plan_\n\nVisible answer",
+      expected: "Visible answer",
+      target: "telegram:123",
+      channel: "telegram",
+    },
+    {
+      field: "message",
+      input: "Reasoning:\n_internal plan_\n_more internal notes_",
+      expected: "",
+      target: "telegram:123",
+      channel: "telegram",
+    },
   ])(
     "sanitizes reasoning tags in $field before sending",
     async ({ channel, target, field, input, expected }) => {
@@ -1121,6 +1163,57 @@ describe("message tool reasoning tag sanitization", () => {
       expect(call?.params?.[field]).toBe(expected);
     },
   );
+
+  it("sanitizes visible presentation text before sending", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        presentation: {
+          title: "<think>internal title</think>Deploy ready",
+          blocks: [
+            { type: "text", text: "<think>internal note</think>Ship it" },
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "<think>button rationale</think>Approve",
+                  value: "approve",
+                },
+              ],
+            },
+            {
+              type: "select",
+              placeholder: "<think>selection rationale</think>Pick a lane",
+              options: [
+                {
+                  label: "<think>option rationale</think>Main",
+                  value: "main",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(call?.params?.presentation).toEqual({
+      title: "Deploy ready",
+      blocks: [
+        { type: "text", text: "Ship it" },
+        {
+          type: "buttons",
+          buttons: [{ label: "Approve", value: "approve" }],
+        },
+        {
+          type: "select",
+          placeholder: "Pick a lane",
+          options: [{ label: "Main", value: "main" }],
+        },
+      ],
+    });
+  });
 });
 
 describe("message tool sandbox passthrough", () => {

@@ -15,6 +15,7 @@ function createResolvedMattermostAccount(accountId: string): ResolvedMattermostA
     enabled: true,
     botTokenSource: "config",
     baseUrlSource: "config",
+    streamingMode: "partial",
     config: {},
   };
 }

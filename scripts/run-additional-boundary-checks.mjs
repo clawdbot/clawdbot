@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { performance } from "node:perf_hooks";
 
 export const BOUNDARY_CHECKS = [
   ["prompt:snapshots:check", "pnpm", ["prompt:snapshots:check"]],
@@ -63,12 +64,43 @@ export function resolveConcurrency(value, fallback = 4) {
   return parsed;
 }
 
+export function parseShardSpec(value) {
+  if (!value) {
+    return null;
+  }
+  const match = String(value).match(/^(\d+)\/(\d+)$/u);
+  if (!match) {
+    throw new Error(`Invalid shard spec '${value}' (expected N/TOTAL)`);
+  }
+  const index = Number.parseInt(match[1], 10);
+  const count = Number.parseInt(match[2], 10);
+  if (
+    !Number.isInteger(index) ||
+    !Number.isInteger(count) ||
+    index < 1 ||
+    count < 1 ||
+    index > count
+  ) {
+    throw new Error(`Invalid shard spec '${value}' (expected 1 <= N <= TOTAL)`);
+  }
+  return { count, index: index - 1, label: `${index}/${count}` };
+}
+
+export function selectChecksForShard(checks, shardSpec) {
+  const shard = typeof shardSpec === "string" ? parseShardSpec(shardSpec) : shardSpec;
+  if (!shard) {
+    return checks;
+  }
+  return checks.filter((_check, index) => index % shard.count === shard.index);
+}
+
 export function formatCommand({ command, args }) {
   return [command, ...args].join(" ");
 }
 
 function runSingleCheck(check, { cwd, env }) {
   return new Promise((resolve) => {
+    const startedAt = performance.now();
     const child = spawn(check.command, check.args, {
       cwd,
       env,
@@ -83,12 +115,34 @@ function runSingleCheck(check, { cwd, env }) {
     child.stderr.on("data", (chunk) => chunks.push(chunk));
     child.on("error", (error) => {
       chunks.push(`${error.stack ?? error.message}\n`);
-      resolve({ check, code: 1, signal: null, output: chunks.join("") });
+      resolve({
+        check,
+        code: 1,
+        durationMs: Math.round(performance.now() - startedAt),
+        signal: null,
+        output: chunks.join(""),
+      });
     });
     child.on("close", (code, signal) => {
-      resolve({ check, code: code ?? 1, signal, output: chunks.join("") });
+      resolve({
+        check,
+        code: code ?? 1,
+        durationMs: Math.round(performance.now() - startedAt),
+        signal,
+        output: chunks.join(""),
+      });
     });
   });
+}
+
+function formatDuration(ms) {
+  if (!Number.isFinite(ms)) {
+    return "";
+  }
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 function writeGroupedResult(result, output) {
@@ -99,14 +153,23 @@ function writeGroupedResult(result, output) {
     output.write(result.output.endsWith("\n") ? result.output : `${result.output}\n`);
   }
   if (success) {
-    output.write(`[ok] ${result.check.label}\n`);
+    output.write(`[ok] ${result.check.label} in ${formatDuration(result.durationMs)}\n`);
   } else {
     const suffix = result.signal ? ` (signal ${result.signal})` : ` (exit ${result.code})`;
     output.write(
-      `::error title=${result.check.label} failed::${result.check.label} failed${suffix}\n`,
+      `::error title=${result.check.label} failed::${result.check.label} failed${suffix} after ${formatDuration(result.durationMs)}\n`,
     );
   }
   output.write("::endgroup::\n");
+}
+
+function writeTimingSummary(results, output) {
+  output.write("Additional boundary check timings:\n");
+  for (const result of [...results].toSorted((left, right) => right.durationMs - left.durationMs)) {
+    output.write(
+      `${result.check.label.padEnd(48)} ${formatDuration(result.durationMs).padStart(8)}\n`,
+    );
+  }
 }
 
 export async function runChecks(
@@ -149,7 +212,20 @@ export async function runChecks(
       failures += 1;
     }
   }
+  writeTimingSummary(results, output);
   return failures;
+}
+
+function resolveCliShardSpec(args, env) {
+  const shardIndex = args.indexOf("--shard");
+  if (shardIndex !== -1) {
+    return args[shardIndex + 1] ?? "";
+  }
+  const inlineShard = args.find((arg) => arg.startsWith("--shard="));
+  if (inlineShard) {
+    return inlineShard.slice("--shard=".length);
+  }
+  return env.OPENCLAW_ADDITIONAL_BOUNDARY_SHARD ?? "";
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -157,6 +233,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY ??
       process.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY,
   );
-  const failures = await runChecks(BOUNDARY_CHECKS, { concurrency });
+  const shard = parseShardSpec(resolveCliShardSpec(process.argv.slice(2), process.env));
+  const checks = selectChecksForShard(BOUNDARY_CHECKS, shard);
+  if (shard) {
+    process.stdout.write(
+      `Running ${checks.length}/${BOUNDARY_CHECKS.length} additional boundary checks (shard ${shard.label})\n`,
+    );
+  }
+  const failures = await runChecks(checks, { concurrency });
   process.exitCode = failures === 0 ? 0 : 1;
 }

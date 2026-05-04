@@ -14,7 +14,8 @@ import {
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { DiscordAccountConfig, DiscordActionConfig, OpenClawConfig } from "./runtime-api.js";
-import { resolveDiscordToken } from "./token.js";
+import { selectDiscordRuntimeConfig } from "./runtime-config.js";
+import { resolveDiscordToken, type DiscordCredentialStatus } from "./token.js";
 
 export type ResolvedDiscordAccount = {
   accountId: string;
@@ -22,6 +23,7 @@ export type ResolvedDiscordAccount = {
   name?: string;
   token: string;
   tokenSource: "env" | "config" | "none";
+  tokenStatus: DiscordCredentialStatus;
   config: DiscordAccountConfig;
 };
 
@@ -100,20 +102,20 @@ export function resolveDiscordAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedDiscordAccount {
-  const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
-  );
-  const baseEnabled = params.cfg.channels?.discord?.enabled !== false;
-  const merged = mergeDiscordAccountConfig(params.cfg, accountId);
+  const cfg = selectDiscordRuntimeConfig(params.cfg);
+  const accountId = normalizeAccountId(params.accountId ?? resolveDefaultDiscordAccountId(cfg));
+  const baseEnabled = cfg.channels?.discord?.enabled !== false;
+  const merged = mergeDiscordAccountConfig(cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
-  const tokenResolution = resolveDiscordToken(params.cfg, { accountId });
+  const tokenResolution = resolveDiscordToken(cfg, { accountId });
   return {
     accountId,
     enabled,
     name: normalizeOptionalString(merged.name),
     token: tokenResolution.token,
     tokenSource: tokenResolution.source,
+    tokenStatus: tokenResolution.tokenStatus,
     config: merged,
   };
 }

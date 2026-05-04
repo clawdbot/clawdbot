@@ -60,6 +60,7 @@ type CaseResult = {
 
 type CliOptions = {
   cases: GatewayBenchCase[];
+  cpuProfDir?: string;
   entry: string;
   json: boolean;
   output?: string;
@@ -159,6 +160,10 @@ function hasFlag(flag: string): boolean {
   return process.argv.includes(flag);
 }
 
+function hasHelpFlag(): boolean {
+  return hasFlag("--help") || hasFlag("-h");
+}
+
 function parseRepeatableFlag(flag: string): string[] {
   const values: string[] = [];
   for (let index = 0; index < process.argv.length; index += 1) {
@@ -197,6 +202,7 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
 function parseOptions(): CliOptions {
   return {
     cases: resolveCases(parseRepeatableFlag("--case")),
+    cpuProfDir: parseFlagValue("--cpu-prof-dir"),
     entry: parseFlagValue("--entry") ?? DEFAULT_ENTRY,
     json: hasFlag("--json"),
     output: parseFlagValue("--output"),
@@ -204,6 +210,29 @@ function parseOptions(): CliOptions {
     timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS),
     warmup: parsePositiveInt(parseFlagValue("--warmup"), DEFAULT_WARMUP),
   };
+}
+
+function printUsage(): void {
+  console.log(`OpenClaw Gateway startup benchmark
+
+Usage:
+  pnpm test:startup:gateway -- [options]
+  node --import tsx scripts/bench-gateway-startup.ts [options]
+
+Options:
+  --case <id>          Specific case id to run; repeatable
+  --entry <path>       Gateway CLI entry file (default: ${DEFAULT_ENTRY})
+  --runs <n>           Measured runs per case (default: ${DEFAULT_RUNS})
+  --warmup <n>         Warmup runs per case (default: ${DEFAULT_WARMUP})
+  --timeout-ms <ms>    Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
+  --cpu-prof-dir <dir> Write one V8 CPU profile per run
+  --output <path>      Write machine-readable JSON to a file
+  --json               Emit machine-readable JSON
+  --help, -h           Show this text
+
+Case ids:
+  ${GATEWAY_CASES.map((benchCase) => `${benchCase.id} (${benchCase.name})`).join("\n  ")}
+`);
 }
 
 function median(values: number[]): number {
@@ -338,6 +367,13 @@ function formatRatioStats(stats: SummaryStats | null): string {
     return "n/a";
   }
   return `p50=${formatRatio(stats.p50)} avg=${formatRatio(stats.avg)} min=${formatRatio(stats.min)} max=${formatRatio(stats.max)}`;
+}
+
+function getStartupTraceStat(
+  startupTrace: Record<string, SummaryStats>,
+  key: string,
+): SummaryStats | null {
+  return startupTrace[key] ?? null;
 }
 
 async function getFreePort(): Promise<number> {
@@ -542,7 +578,13 @@ function parseStartupTraceMetrics(raw: string): Array<{ key: string; value: numb
     }
     const key = metricMatch[1];
     const value = Number(metricMatch[2]);
-    if (!Number.isFinite(value) || (key !== "eventLoopMax" && !key.endsWith("Ms"))) {
+    if (
+      !Number.isFinite(value) ||
+      (key !== "eventLoopMax" &&
+        !key.endsWith("Ms") &&
+        !key.endsWith("Mb") &&
+        !key.endsWith("Count"))
+    ) {
       continue;
     }
     metrics.push({ key, value });
@@ -632,7 +674,9 @@ function readProcessTreeCpuMs(rootPid: number | undefined): number | null {
 
 async function runGatewaySample(options: {
   benchCase: GatewayBenchCase;
+  cpuProfDir?: string;
   entry: string;
+  sampleIndex: number;
   timeoutMs: number;
 }): Promise<GatewaySample> {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-bench-"));
@@ -648,24 +692,34 @@ async function runGatewaySample(options: {
   let readyLogMs: number | null = null;
   let childExited = false;
 
-  const child = spawn(
-    process.execPath,
-    [
-      options.entry,
-      "gateway",
-      "run",
-      "--port",
-      String(port),
-      "--bind",
-      "loopback",
-      "--auth",
-      "none",
-      "--tailscale",
-      "off",
-      "--allow-unconfigured",
-    ],
-    { cwd: process.cwd(), detached: process.platform !== "win32", env },
-  );
+  const childArgs = [
+    ...(options.cpuProfDir
+      ? [
+          "--cpu-prof",
+          "--cpu-prof-dir",
+          options.cpuProfDir,
+          "--cpu-prof-name",
+          `openclaw-gateway-${options.benchCase.id}-${options.sampleIndex}-${Date.now()}.cpuprofile`,
+        ]
+      : []),
+    options.entry,
+    "gateway",
+    "run",
+    "--port",
+    String(port),
+    "--bind",
+    "loopback",
+    "--auth",
+    "none",
+    "--tailscale",
+    "off",
+    "--allow-unconfigured",
+  ];
+  const child = spawn(process.execPath, childArgs, {
+    cwd: process.cwd(),
+    detached: process.platform !== "win32",
+    env,
+  });
   const cpuStartMs = readProcessTreeCpuMs(child.pid);
   const sampleRss = () => {
     const rssMb = readProcessRssMb(child.pid);
@@ -747,6 +801,7 @@ async function runGatewaySample(options: {
 
 async function runCase(options: {
   benchCase: GatewayBenchCase;
+  cpuProfDir?: string;
   entry: string;
   runs: number;
   timeoutMs: number;
@@ -757,17 +812,21 @@ async function runCase(options: {
   for (let index = 0; index < total; index += 1) {
     const sample = await runGatewaySample({
       benchCase: options.benchCase,
+      cpuProfDir: options.cpuProfDir,
       entry: options.entry,
+      sampleIndex: index + 1,
       timeoutMs: options.timeoutMs,
     });
     if (index >= options.warmup) {
       samples.push(sample);
+      const heapUsedMb = sample.startupTrace["memory.ready.heapUsedMb"] ?? null;
       console.log(
-        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} readyLog=${formatMs(sample.readyLogMs)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)}`,
+        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} readyLog=${formatMs(sample.readyLogMs)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)} heap=${formatMb(heapUsedMb)}`,
       );
     } else {
+      const heapUsedMb = sample.startupTrace["memory.ready.heapUsedMb"] ?? null;
       console.log(
-        `[gateway-startup-bench] ${options.benchCase.id} warmup ${index + 1}/${options.warmup}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)}`,
+        `[gateway-startup-bench] ${options.benchCase.id} warmup ${index + 1}/${options.warmup}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)} heap=${formatMb(heapUsedMb)}`,
       );
     }
   }
@@ -783,8 +842,14 @@ function printResult(result: CaseResult): void {
   console.log(`  ready log:    ${formatStats(result.summary.readyLogMs)}`);
   console.log(`  /readyz:      ${formatStats(result.summary.readyzMs)}`);
   console.log(`  max RSS:      ${formatMemoryStats(result.summary.maxRssMb)}`);
+  console.log(
+    `  ready memory: rss=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.ready.rssMb"))} heap=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.ready.heapUsedMb"))} external=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.ready.externalMb"))}`,
+  );
+  console.log(
+    `  post-ready memory: rss=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.rssMb"))} heap=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.heapUsedMb"))} external=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.externalMb"))}`,
+  );
   const trace = Object.entries(result.summary.startupTrace)
-    .filter(([name]) => !name.endsWith(".total"))
+    .filter(([name]) => !name.endsWith(".total") && !name.startsWith("memory."))
     .toSorted((a, b) => (b[1].avg ?? 0) - (a[1].avg ?? 0))
     .slice(0, 8);
   if (trace.length > 0) {
@@ -796,12 +861,21 @@ function printResult(result: CaseResult): void {
 }
 
 async function main() {
+  if (hasHelpFlag()) {
+    printUsage();
+    return;
+  }
+
   const options = parseOptions();
+  if (options.cpuProfDir) {
+    mkdirSync(options.cpuProfDir, { recursive: true });
+  }
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
     results.push(
       await runCase({
         benchCase,
+        cpuProfDir: options.cpuProfDir,
         entry: options.entry,
         runs: options.runs,
         timeoutMs: options.timeoutMs,

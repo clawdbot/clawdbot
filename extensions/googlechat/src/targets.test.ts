@@ -37,6 +37,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => {
 vi.mock("gaxios", () => ({
   Gaxios: class {
     defaults: unknown;
+    interceptors = {
+      request: { add: vi.fn() },
+      response: { add: vi.fn() },
+    };
 
     constructor(defaults?: unknown) {
       this.defaults = defaults;

@@ -1,5 +1,11 @@
 # OpenClaw iOS Changelog
 
+## 2026.5.4 - 2026-05-04
+
+Maintenance update for the current OpenClaw development release.
+
+- Gateway pairing now supports scanning QR codes from Settings and accepts full copied setup-code messages while keeping non-loopback `ws://` setup links blocked.
+
 ## 2026.5.3 - 2026-05-03
 
 Maintenance update for the current OpenClaw development release.

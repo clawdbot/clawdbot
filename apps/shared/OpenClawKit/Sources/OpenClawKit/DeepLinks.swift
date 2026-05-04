@@ -6,6 +6,16 @@ public enum DeepLinkRoute: Sendable, Equatable {
 }
 
 public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
+    private struct SetupPayload: Decodable {
+        let url: String?
+        let host: String?
+        let port: Int?
+        let tls: Bool?
+        let bootstrapToken: String?
+        let token: String?
+        let password: String?
+    }
+
     public let host: String
     public let port: Int
     public let tls: Bool
@@ -27,28 +37,118 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         return URL(string: "\(scheme)://\(self.host):\(self.port)")
     }
 
-    /// Parse a device-pair setup code (base64url-encoded JSON: `{url, bootstrapToken?, token?, password?}`).
+    /// Parse a gateway setup input from the QR/scanner/manual entry surfaces.
+    ///
+    /// Accepted inputs are:
+    /// - device-pair setup code (base64url-encoded JSON)
+    /// - raw setup JSON
+    /// - a copied message containing a `Setup code:` line
+    /// - an `openclaw://gateway?...` deep link
+    /// - a raw `ws://` or `wss://` gateway URL
+    public static func fromSetupInput(_ input: String) -> GatewayConnectDeepLink? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let link = fromSetupCode(trimmed) {
+            return link
+        }
+        if let url = URL(string: trimmed),
+           let route = DeepLinkParser.parse(url),
+           case let .gateway(link) = route
+        {
+            return link
+        }
+        return fromGatewayURLString(
+            trimmed,
+            bootstrapToken: nil,
+            token: nil,
+            password: nil)
+    }
+
+    /// Parse a gateway setup payload from a device-pair setup code or copied setup text.
+    ///
+    /// Accepted inputs are:
+    /// - base64url-encoded setup JSON
+    /// - raw setup JSON
+    /// - copied text/message content containing one or more extractable setup-code candidates
+    ///
+    /// Accepted payload shapes are:
+    /// - `{url, bootstrapToken?, token?, password?}`
+    /// - `{host, port?, tls?, bootstrapToken?, token?, password?}`
+    ///
+    /// URL-based payloads provide the gateway WebSocket URL via `url`. Host-based payloads
+    /// provide `host` plus optional `port` and `tls`. In both cases, the optional
+    /// `bootstrapToken`, `token`, and `password` fields are also supported.
     public static func fromSetupCode(_ code: String) -> GatewayConnectDeepLink? {
-        guard let data = decodeBase64Url(code) else { return nil }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        guard let urlString = json["url"] as? String,
-              let parsed = URLComponents(string: urlString),
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let link = decodeSetupPayload(from: Data(trimmed.utf8)) {
+            return link
+        }
+        if let data = decodeBase64Url(trimmed),
+           let link = decodeSetupPayload(from: data)
+        {
+            return link
+        }
+        for candidate in setupCodeCandidates(in: trimmed) where candidate != trimmed {
+            if let data = decodeBase64Url(candidate),
+               let link = decodeSetupPayload(from: data)
+            {
+                return link
+            }
+        }
+        return nil
+    }
+
+    private static func decodeSetupPayload(from data: Data) -> GatewayConnectDeepLink? {
+        guard let payload = try? JSONDecoder().decode(SetupPayload.self, from: data) else { return nil }
+        if let urlString = payload.url?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !urlString.isEmpty
+        {
+            return fromGatewayURLString(
+                urlString,
+                bootstrapToken: payload.bootstrapToken,
+                token: payload.token,
+                password: payload.password)
+        }
+        guard let host = payload.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !host.isEmpty
+        else {
+            return nil
+        }
+        let tls = payload.tls ?? true
+        if !tls, !LoopbackHost.isLoopbackHost(host) {
+            return nil
+        }
+        return GatewayConnectDeepLink(
+            host: host,
+            port: payload.port ?? (tls ? 443 : 18789),
+            tls: tls,
+            bootstrapToken: payload.bootstrapToken,
+            token: payload.token,
+            password: payload.password)
+    }
+
+    private static func fromGatewayURLString(
+        _ urlString: String,
+        bootstrapToken: String?,
+        token: String?,
+        password: String?) -> GatewayConnectDeepLink?
+    {
+        guard let parsed = URLComponents(string: urlString),
               let hostname = parsed.host, !hostname.isEmpty
         else { return nil }
 
         let scheme = (parsed.scheme ?? "ws").lowercased()
-        guard scheme == "ws" || scheme == "wss" else { return nil }
-        let tls = scheme == "wss"
+        guard scheme == "ws" || scheme == "wss" || scheme == "http" || scheme == "https" else {
+            return nil
+        }
+        let tls = scheme == "wss" || scheme == "https"
         if !tls, !LoopbackHost.isLoopbackHost(hostname) {
             return nil
         }
-        let port = parsed.port ?? (tls ? 443 : 18789)
-        let bootstrapToken = json["bootstrapToken"] as? String
-        let token = json["token"] as? String
-        let password = json["password"] as? String
         return GatewayConnectDeepLink(
             host: hostname,
-            port: port,
+            port: parsed.port ?? (tls ? 443 : 18789),
             tls: tls,
             bootstrapToken: bootstrapToken,
             token: token,
@@ -64,6 +164,19 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             base64.append(contentsOf: String(repeating: "=", count: 4 - remainder))
         }
         return Data(base64Encoded: base64)
+    }
+
+    private static func setupCodeCandidates(in input: String) -> [String] {
+        let surroundingPunctuation = CharacterSet(charactersIn: "`'\"“”‘’()[]{}<>.,;:")
+        return input
+            .components(separatedBy: .whitespacesAndNewlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines.union(surroundingPunctuation)) }
+            .filter { candidate in
+                guard candidate.count >= 24 else { return false }
+                return candidate.allSatisfy { ch in
+                    ch.isLetter || ch.isNumber || ch == "-" || ch == "_" || ch == "="
+                }
+            }
     }
 }
 

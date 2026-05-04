@@ -208,10 +208,6 @@ if [[ "${1:-}" == "setup-host" ]]; then
   if [[ -f "$SETUP_PODMAN" ]]; then
     exec "$SETUP_PODMAN" "$@"
   fi
-  SETUP_PODMAN="$REPO_ROOT/setup-podman.sh"
-  if [[ -f "$SETUP_PODMAN" ]]; then
-    exec "$SETUP_PODMAN" "$@"
-  fi
   echo "Podman setup script not found. Run from repo root: ./scripts/podman/setup.sh" >&2
   exit 1
 fi

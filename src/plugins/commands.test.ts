@@ -901,6 +901,27 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it("normalizes undefined plugin command handler results to an empty reply payload", async () => {
+    const handler = async () => undefined as never;
+
+    const result = await executePluginCommand({
+      command: {
+        name: "silentcheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "telegram",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      commandBody: "/silentcheck",
+      config: {} as never,
+    });
+
+    expect(result).toEqual({});
+  });
+
   it("passes the effective default account to plugin command handlers when accountId is omitted", async () => {
     setActivePluginRegistry(
       createTestRegistry([

@@ -1,3 +1,4 @@
+import { resolveCommandAnalysisSummaryForDisplay } from "../../infra/command-analysis/explain.js";
 import {
   resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
@@ -207,6 +208,13 @@ export function createExecApprovalHandlers(
       }
       const envBinding = buildSystemRunApprovalEnvBinding(p.env);
       const warningText = normalizeOptionalString(p.warningText);
+      const commandAnalysis = resolveCommandAnalysisSummaryForDisplay({
+        host,
+        commandText: effectiveCommandText,
+        commandArgv: effectiveCommandArgv,
+        cwd: effectiveCwd,
+        sanitizeText: sanitizeExecApprovalWarningText,
+      });
       const systemRunBinding =
         host === "node"
           ? buildSystemRunApprovalBinding({
@@ -241,6 +249,7 @@ export function createExecApprovalHandlers(
         security: p.security ?? null,
         ask: p.ask ?? null,
         warningText: warningText ? sanitizeExecApprovalWarningText(warningText) : null,
+        commandAnalysis,
         allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: p.ask ?? null }),
         agentId: effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ?? null,

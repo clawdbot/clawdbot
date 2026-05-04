@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { clearConfigCache } from "../config/config.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
 import {
@@ -319,6 +320,113 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
       dispatchRelease.resolve();
+      await vi.waitFor(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+    } finally {
+      dispatchRelease.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.send reuses an active internal run for duplicate WebChat text sends", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const dispatchRelease = createDeferred<void>();
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const callSend = (id: string, idempotencyKey: string) =>
+        chatHandlers["chat.send"]({
+          req: {
+            type: "req",
+            id,
+            method: "chat.send",
+            params: {
+              sessionKey: "main",
+              message: "?",
+              idempotencyKey,
+            },
+          },
+          params: {
+            sessionKey: "main",
+            message: "?",
+            idempotencyKey,
+          },
+          client: {
+            connect: {
+              client: {
+                id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+                mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              },
+              scopes: ["operator.write"],
+            },
+          } as never,
+          isWebchatConnect: () => true,
+          respond: ((ok, payload, error) => {
+            responses.push({ id, ok, payload, error });
+          }) as RespondFn,
+          context,
+        });
+
+      const first = Promise.resolve(callSend("first", "idem-active-a"));
+      await vi.waitFor(() => {
+        expect(responses).toContainEqual({
+          id: "first",
+          ok: true,
+          payload: { runId: "idem-active-a", status: "started" },
+          error: undefined,
+        });
+      }, FAST_WAIT_OPTS);
+
+      await callSend("duplicate", "idem-active-b");
+
+      expect(responses).toContainEqual({
+        id: "duplicate",
+        ok: true,
+        payload: { runId: "idem-active-a", status: "in_flight" },
+        error: undefined,
+      });
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      expect(context.addChatRun).toHaveBeenCalledTimes(1);
+
+      dispatchRelease.resolve();
+      await first;
       await vi.waitFor(() => {
         expect(context.removeChatRun).toHaveBeenCalledTimes(1);
       }, FAST_WAIT_OPTS);

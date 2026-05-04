@@ -190,6 +190,7 @@ describe("buildInworldSpeechProvider", () => {
       text: "Hello",
       cfg: {} as never,
       providerConfig: { apiKey: "key", voiceId: "Sarah", modelId: "inworld-tts-1.5-max" },
+      providerOverrides: { voice: "Ashley", model: "inworld-tts-1.5-mini", temperature: 0.6 },
       timeoutMs: 30_000,
     });
 
@@ -197,11 +198,11 @@ describe("buildInworldSpeechProvider", () => {
       text: "Hello",
       apiKey: "key",
       baseUrl: "https://api.inworld.ai",
-      voiceId: "Sarah",
-      modelId: "inworld-tts-1.5-max",
+      voiceId: "Ashley",
+      modelId: "inworld-tts-1.5-mini",
       audioEncoding: "PCM",
       sampleRateHertz: 22_050,
-      temperature: undefined,
+      temperature: 0.6,
       timeoutMs: 30_000,
     });
     expect(result).toEqual({

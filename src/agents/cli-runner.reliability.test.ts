@@ -889,4 +889,14 @@ describe("resolveCliNoOutputTimeoutMs", () => {
     });
     expect(timeoutMs).toBe(42_000);
   });
+
+  it("lets explicit cron timeouts lift the default resume no-output ceiling", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: { command: "codex" },
+      timeoutMs: 600_000,
+      useResume: true,
+      trigger: "cron",
+    });
+    expect(timeoutMs).toBe(480_000);
+  });
 });

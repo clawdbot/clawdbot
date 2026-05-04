@@ -146,7 +146,7 @@ Per-agent override: `agents.list[].tools.profile`.
 
 | Profile     | What it includes                                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `full`      | Unrestricted baseline for broader command/control access; same as leaving `tools.profile` unset                                                   |
+| `full`      | All core and optional plugin tools; unrestricted baseline for broader command/control access                                                      |
 | `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `music_generate`, `video_generate` |
 | `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
 | `minimal`   | `session_status` only                                                                                                                             |

@@ -167,7 +167,7 @@ import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
 import { defaultRuntime } from "../../runtime.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
-import { readRegistry, updateRegistry } from "./registry.js";
+import { readRegistryEntry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
@@ -580,8 +580,7 @@ export async function ensureSandboxContainer(params: {
       }
     | undefined;
   if (hasContainer) {
-    const registry = await readRegistry();
-    registryEntry = registry.entries.find((entry) => entry.containerName === containerName);
+    registryEntry = (await readRegistryEntry(containerName)) ?? undefined;
     currentHash = await readContainerConfigHash(containerName);
     if (!currentHash) {
       currentHash = registryEntry?.configHash ?? null;

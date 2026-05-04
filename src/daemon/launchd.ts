@@ -437,6 +437,11 @@ type LaunchAgentBootstrapRepairResult =
   | { ok: true; status: "repaired" | "already-loaded" }
   | { ok: false; status: "bootstrap-failed" | "kickstart-failed"; detail?: string };
 
+function isLaunchctlAlreadyLoaded(res: { stdout: string; stderr: string; code: number }): boolean {
+  const detail = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
+  return res.code === 130 || detail.includes("already exists in domain");
+}
+
 export async function repairLaunchAgentBootstrap(args: {
   env?: Record<string, string | undefined>;
 }): Promise<LaunchAgentBootstrapRepairResult> {
@@ -444,19 +449,22 @@ export async function repairLaunchAgentBootstrap(args: {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
-  await execLaunchctl(["enable", `${domain}/${label}`]);
+  const serviceTarget = `${domain}/${label}`;
+  await execLaunchctl(["enable", serviceTarget]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
-  let repairStatus: LaunchAgentBootstrapRepairResult["status"] = "repaired";
+  let repairStatus: "repaired" | "already-loaded" = "repaired";
   if (boot.code !== 0) {
     const detail = (boot.stderr || boot.stdout).trim();
-    const normalized = normalizeLowercaseStringOrEmpty(detail);
-    const alreadyLoaded = boot.code === 130 || normalized.includes("already exists in domain");
-    if (!alreadyLoaded) {
+    if (!isLaunchctlAlreadyLoaded(boot)) {
       return { ok: false, status: "bootstrap-failed", detail: detail || undefined };
     }
     repairStatus = "already-loaded";
   }
-  const kick = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
+  if (repairStatus === "repaired") {
+    return { ok: true, status: repairStatus };
+  }
+
+  const kick = await execLaunchctl(["kickstart", serviceTarget]);
   if (kick.code !== 0) {
     return {
       ok: false,
@@ -845,12 +853,6 @@ export async function restartLaunchAgent({
     plistPath,
     actionHint: "openclaw gateway restart",
   });
-
-  const retry = await execLaunchctl(["kickstart", "-k", serviceTarget]);
-  if (retry.code !== 0) {
-    await ensureLaunchAgentLoadedAfterFailure({ domain, serviceTarget, plistPath });
-    throw new Error(`launchctl kickstart failed: ${retry.stderr || retry.stdout}`.trim());
-  }
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
   return { outcome: "completed" };
 }

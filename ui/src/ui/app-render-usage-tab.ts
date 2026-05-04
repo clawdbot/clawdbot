@@ -4,6 +4,33 @@ import type { UsageState } from "./controllers/usage.ts";
 import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./controllers/usage.ts";
 import { renderUsage } from "./views/usage.ts";
 
+type UsageCacheStatus = NonNullable<NonNullable<UsageState["usageResult"]>["cacheStatus"]>;
+
+function mergeUsageCacheStatus(
+  sessionsStatus?: UsageCacheStatus,
+  costStatus?: UsageCacheStatus,
+): UsageCacheStatus | undefined {
+  if (!sessionsStatus) {
+    return costStatus;
+  }
+  if (!costStatus) {
+    return sessionsStatus;
+  }
+  const rank = { fresh: 0, partial: 1, stale: 2, refreshing: 3 } as const;
+  const status =
+    rank[costStatus.status] > rank[sessionsStatus.status]
+      ? costStatus.status
+      : sessionsStatus.status;
+  return {
+    status,
+    cachedFiles: Math.max(sessionsStatus.cachedFiles, costStatus.cachedFiles),
+    pendingFiles: Math.max(sessionsStatus.pendingFiles, costStatus.pendingFiles),
+    staleFiles: Math.max(sessionsStatus.staleFiles, costStatus.staleFiles),
+    refreshedAt:
+      Math.max(sessionsStatus.refreshedAt ?? 0, costStatus.refreshedAt ?? 0) || undefined,
+  };
+}
+
 // Module-scope debounce for usage date changes (avoids type-unsafe hacks on state object)
 let usageDateDebounceTimeout: number | null = null;
 const debouncedLoadUsage = (state: UsageState) => {
@@ -27,6 +54,10 @@ export function renderUsageTab(state: AppViewState) {
       totals: state.usageResult?.totals ?? null,
       aggregates: state.usageResult?.aggregates ?? null,
       costDaily: state.usageCostSummary?.daily ?? [],
+      cacheStatus: mergeUsageCacheStatus(
+        state.usageResult?.cacheStatus,
+        state.usageCostSummary?.cacheStatus,
+      ),
     },
     filters: {
       startDate: state.usageStartDate,

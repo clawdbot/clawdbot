@@ -126,7 +126,6 @@
           "type": "string"
         }
       }
-    },
-    "required": ["embedding"]
+    }
   }
 }

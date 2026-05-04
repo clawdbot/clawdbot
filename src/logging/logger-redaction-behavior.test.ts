@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   createDiagnosticTraceContext,
@@ -7,12 +8,14 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { getChildLogger, getLogger, resetLogger, setLoggerOverride } from "../logging.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
+import { __test__ as loggerTest } from "./logger.js";
 
 const secret = "sk-testsecret1234567890abcd";
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SPAN_ID = "00f067aa0ba902b7";
 const logPathTracker = createSuiteLogPathTracker("openclaw-log-redaction-");
 const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+const originalHome = process.env.HOME;
 const originalTestFileLog = process.env.OPENCLAW_TEST_FILE_LOG;
 
 beforeAll(async () => {
@@ -24,6 +27,11 @@ afterEach(() => {
     delete process.env.OPENCLAW_CONFIG_PATH;
   } else {
     process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+  }
+  if (originalHome === undefined) {
+    delete process.env.HOME;
+  } else {
+    process.env.HOME = originalHome;
   }
   if (originalTestFileLog === undefined) {
     delete process.env.OPENCLAW_TEST_FILE_LOG;
@@ -82,6 +90,15 @@ describe("file log redaction", () => {
 
     const content = fs.readFileSync(logPath, "utf8");
     expect(content).toContain("configured log path works");
+  });
+
+  it("expands leading tilde in logging.file", () => {
+    const home = path.join(path.dirname(logPathTracker.nextPath()), "home");
+    process.env.HOME = home;
+
+    expect(loggerTest.resolveActiveLogFile("~/custom-openclaw.log")).toBe(
+      path.join(home, "custom-openclaw.log"),
+    );
   });
 
   it("writes trace context as top-level JSONL fields", () => {

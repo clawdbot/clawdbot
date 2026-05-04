@@ -84,6 +84,7 @@ describe("gateway startup web fetch config", () => {
       await writeConfig({
         gateway: {
           mode: "local",
+          bind: "loopback",
           auth: { mode: "none" },
         },
         plugins: {

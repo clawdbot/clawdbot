@@ -791,6 +791,33 @@ describe("qa bundled plugin dir", () => {
     ).toBe(path.join(repoRoot, "extensions", "qa-channel"));
   });
 
+  it("resolves bundled plugins by manifest id when the directory name differs", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-manifest-id-root-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "kimi-coding"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "kimi-coding", "openclaw.plugin.json"),
+      JSON.stringify({ id: "kimi", providers: ["kimi"] }),
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "kimi-coding", "package.json"),
+      "{}",
+      "utf8",
+    );
+
+    expect(
+      __testing.resolveQaBundledPluginSourceDir({
+        repoRoot,
+        pluginId: "kimi",
+      }),
+    ).toBe(path.join(repoRoot, "dist", "extensions", "kimi-coding"));
+  });
+
   it("uses a source bundled plugin when the built copy is missing CLI metadata", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-cli-metadata-root-"));
     cleanups.push(async () => {

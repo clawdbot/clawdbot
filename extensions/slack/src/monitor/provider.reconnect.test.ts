@@ -5,6 +5,7 @@ import {
   publishSlackDisconnectedStatus,
   startSlackSocketAndWaitForDisconnect,
 } from "./provider-support.js";
+import { formatSlackSocketReconnectMessage } from "./provider.js";
 import { waitForSlackSocketDisconnect } from "./reconnect-policy.js";
 
 class FakeEmitter {
@@ -83,6 +84,17 @@ describe("slack socket reconnect helpers", () => {
       },
       lastError: null,
     });
+  });
+
+  it("formats recoverable disconnects as a single reconnect status line", () => {
+    expect(
+      formatSlackSocketReconnectMessage({
+        event: "disconnect",
+        attempt: 1,
+        maxAttempts: 12,
+        delayMs: 2_340,
+      }),
+    ).toBe("slack socket disconnected (disconnect); reconnecting in 2s (attempt 1/12)");
   });
 
   it("resolves disconnect waiter on socket disconnect event", async () => {

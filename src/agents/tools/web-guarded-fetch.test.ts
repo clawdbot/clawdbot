@@ -30,7 +30,7 @@ describe("web-guarded-fetch", () => {
     vi.clearAllMocks();
   });
 
-  it("uses strict SSRF policy for trusted web tools endpoints", async () => {
+  it("uses a host-scoped fake-IP SSRF policy for trusted web tools endpoints", async () => {
     vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
       response: new Response("ok", { status: 200 }),
       finalUrl: "https://example.com",
@@ -42,7 +42,11 @@ describe("web-guarded-fetch", () => {
     expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://example.com",
-        policy: {},
+        policy: {
+          allowRfc2544BenchmarkRange: true,
+          allowIpv6UniqueLocalRange: true,
+          hostnameAllowlist: ["example.com"],
+        },
         mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
       }),
     );
@@ -63,6 +67,7 @@ describe("web-guarded-fetch", () => {
         policy: expect.objectContaining({
           dangerouslyAllowPrivateNetwork: true,
           allowRfc2544BenchmarkRange: true,
+          allowIpv6UniqueLocalRange: true,
         }),
         mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
       }),

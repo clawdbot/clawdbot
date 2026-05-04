@@ -1,5 +1,5 @@
 ---
-summary: "Google Meet plugin: join explicit Meet URLs through Chrome or Twilio with realtime voice defaults"
+summary: "Google Meet plugin: join explicit Meet URLs through Chrome or Twilio with agent talk-back defaults"
 read_when:
   - You want an OpenClaw agent to join a Google Meet call
   - You want an OpenClaw agent to create a new Google Meet call
@@ -12,12 +12,12 @@ Google Meet participant support for OpenClaw — the plugin is explicit by desig
 - It only joins an explicit `https://meet.google.com/...` URL.
 - It can create a new Meet space through the Google Meet API, then join the
   returned URL.
-- `realtime` voice is the default mode.
-- Realtime voice can call back into the full OpenClaw agent when deeper
-  reasoning or tools are needed.
-- Agents choose the join behavior with `mode`: use `realtime` for live
-  listen/talk-back, or `transcribe` to join/control the browser without the
-  realtime voice bridge.
+- `agent` is the default talk-back mode: realtime transcription listens, the
+  configured OpenClaw agent answers, and regular OpenClaw TTS speaks into Meet.
+- `bidi` remains available as the fallback direct realtime voice model mode.
+- Agents choose the join behavior with `mode`: use `agent` for live
+  listen/talk-back, `bidi` for direct realtime voice fallback, or `transcribe`
+  to join/control the browser without the talk-back bridge.
 - Auth starts as personal Google OAuth or an already signed-in Chrome profile.
 - There is no automatic consent announcement.
 - The default Chrome audio backend is `BlackHole 2ch`.
@@ -29,14 +29,15 @@ Google Meet participant support for OpenClaw — the plugin is explicit by desig
 
 ## Quick start
 
-Install the local audio dependencies and configure a backend realtime voice
-provider. OpenAI is the default; Google Gemini Live also works with
-`realtime.provider: "google"`:
+Install the local audio dependencies and configure a realtime transcription
+provider plus regular OpenClaw TTS. OpenAI is the default transcription
+provider; Google Gemini Live also works as a separate `bidi` voice fallback with
+`realtime.voiceProvider: "google"`:
 
 ```bash
 brew install blackhole-2ch sox
 export OPENAI_API_KEY=sk-...
-# or
+# only needed when realtime.voiceProvider is "google" for bidi mode
 export GEMINI_API_KEY=...
 ```
 
@@ -116,21 +117,21 @@ Or let an agent join through the `google_meet` tool:
   "action": "join",
   "url": "https://meet.google.com/abc-defg-hij",
   "transport": "chrome-node",
-  "mode": "realtime"
+  "mode": "agent"
 }
 ```
 
 The agent-facing `google_meet` tool stays available on non-macOS hosts for
 artifact, calendar, setup, transcribe, Twilio, and `chrome-node` flows. Local
-Chrome realtime actions are blocked there because the bundled realtime Chrome
-audio path currently depends on macOS `BlackHole 2ch`. On Linux, use
-`mode: "transcribe"`, Twilio dial-in, or a macOS `chrome-node` host for realtime
-Chrome participation.
+Chrome talk-back actions are blocked there because the bundled Chrome audio path
+currently depends on macOS `BlackHole 2ch`. On Linux, use `mode: "transcribe"`,
+Twilio dial-in, or a macOS `chrome-node` host for Chrome talk-back
+participation.
 
 Create a new meeting and join it:
 
 ```bash
-openclaw googlemeet create --transport chrome-node --mode realtime
+openclaw googlemeet create --transport chrome-node --mode agent
 ```
 
 For API-created rooms, use Google Meet `SpaceConfig.accessType` when you want
@@ -138,7 +139,7 @@ the room's no-knock policy to be explicit instead of inherited from the Google
 account defaults:
 
 ```bash
-openclaw googlemeet create --access-type OPEN --transport chrome-node --mode realtime
+openclaw googlemeet create --access-type OPEN --transport chrome-node --mode agent
 ```
 
 `OPEN` lets anyone with the Meet URL join without knocking. `TRUSTED` lets the
@@ -177,20 +178,20 @@ can explain which path was used. `create` joins the new meeting by default and
 returns `joined: true` plus the join session. To only mint the URL, use
 `create --no-join` on the CLI or pass `"join": false` to the tool.
 
-Or tell an agent: "Create a Google Meet, join it with realtime voice, and send
-me the link." The agent should call `google_meet` with `action: "create"` and
-then share the returned `meetingUri`.
+Or tell an agent: "Create a Google Meet, join it with the agent talk-back mode,
+and send me the link." The agent should call `google_meet` with
+`action: "create"` and then share the returned `meetingUri`.
 
 ```json
 {
   "action": "create",
   "transport": "chrome-node",
-  "mode": "realtime"
+  "mode": "agent"
 }
 ```
 
 For an observe-only/browser-control join, set `"mode": "transcribe"`. That does
-not start the duplex realtime model bridge, does not require BlackHole or SoX,
+not start the duplex realtime voice bridge, does not require BlackHole or SoX,
 and will not talk back into the meeting. Chrome joins in this mode also avoid
 OpenClaw's microphone/camera permission grant and avoid the Meet **Use
 microphone** path. If Meet shows an audio-choice interstitial, automation tries
@@ -395,7 +396,7 @@ Common failure checks:
 
 ## Install notes
 
-The Chrome realtime default uses two external tools:
+The Chrome talk-back default uses two external tools:
 
 - `sox`: command-line audio utility. The plugin uses explicit CoreAudio
   device commands for the default 24 kHz PCM16 audio bridge.
@@ -444,7 +445,7 @@ Enable the Voice Call plugin on the Gateway host, not on the Chrome node:
 ```json5
 {
   plugins: {
-    allow: ["google-meet", "voice-call"],
+    allow: ["google-meet", "voice-call", "google"],
     entries: {
       "google-meet": {
         enabled: true,
@@ -457,7 +458,23 @@ Enable the Voice Call plugin on the Gateway host, not on the Chrome node:
         enabled: true,
         config: {
           provider: "twilio",
+          inboundPolicy: "allowlist",
+          realtime: {
+            enabled: true,
+            provider: "google",
+            instructions: "Join this Google Meet as an OpenClaw agent. Be brief.",
+            toolPolicy: "safe-read-only",
+            providers: {
+              google: {
+                silenceDurationMs: 500,
+                startSensitivity: "high",
+              },
+            },
+          },
         },
+      },
+      google: {
+        enabled: true,
       },
     },
   },
@@ -471,7 +488,11 @@ secrets out of `openclaw.json`:
 export TWILIO_ACCOUNT_SID=AC...
 export TWILIO_AUTH_TOKEN=...
 export TWILIO_FROM_NUMBER=+15550001234
+export GEMINI_API_KEY=...
 ```
+
+Use `realtime.provider: "openai"` with the OpenAI provider plugin and
+`OPENAI_API_KEY` instead if that is your realtime voice provider.
 
 Restart or reload the Gateway after enabling `voice-call`; plugin config changes
 do not appear in an already running Gateway process until it reloads.
@@ -818,7 +839,7 @@ Agents can also create an API-backed room with an explicit access policy:
 {
   "action": "create",
   "transport": "chrome-node",
-  "mode": "realtime",
+  "mode": "agent",
   "accessType": "OPEN"
 }
 ```
@@ -970,9 +991,11 @@ Workspace Developer Preview Program for Meet media APIs.
 
 ## Config
 
-The common Chrome realtime path only needs the plugin enabled, BlackHole, SoX,
-and a backend realtime voice provider key. OpenAI is the default; set
-`realtime.provider: "google"` to use Google Gemini Live:
+The common Chrome agent path only needs the plugin enabled, BlackHole, SoX, a
+realtime transcription provider key, and a configured OpenClaw TTS provider.
+OpenAI is the default transcription provider; set `realtime.voiceProvider` to
+`"google"` and `realtime.model` to use Google Gemini Live for `bidi` mode
+without changing the default agent-mode transcription provider:
 
 ```bash
 brew install blackhole-2ch sox
@@ -999,7 +1022,8 @@ Set the plugin config under `plugins.entries.google-meet.config`:
 Defaults:
 
 - `defaultTransport: "chrome"`
-- `defaultMode: "realtime"`
+- `defaultMode: "agent"` (`"realtime"` is accepted only as a legacy
+  compatibility alias for `"agent"`; new tool calls should say `"agent"`)
 - `chromeNode.node`: optional node id/name/IP for `chrome-node`
 - `chrome.audioBackend: "blackhole-2ch"`
 - `chrome.guestName: "OpenClaw Agent"`: name used on the signed-out Meet guest
@@ -1009,10 +1033,14 @@ Defaults:
 - `chrome.reuseExistingTab: true`: activate an existing Meet tab instead of
   opening duplicates
 - `chrome.waitForInCallMs: 20000`: wait for the Meet tab to report in-call
-  before the realtime intro is triggered
+  before the talk-back intro is triggered
 - `chrome.audioFormat: "pcm16-24khz"`: command-pair audio format. Use
   `"g711-ulaw-8khz"` only for legacy/custom command pairs that still emit
   telephony audio.
+- `chrome.audioBufferBytes: 4096`: SoX processing buffer for generated Chrome
+  command-pair audio commands. This is half of SoX's default 8192-byte buffer,
+  reducing default pipe latency while leaving room to raise it on busy hosts.
+  Values below SoX's minimum are clamped to 17 bytes.
 - `chrome.audioInputCommand`: SoX command reading from CoreAudio `BlackHole 2ch`
   and writing audio in `chrome.audioFormat`
 - `chrome.audioOutputCommand`: SoX command reading audio in `chrome.audioFormat`
@@ -1027,7 +1055,21 @@ Defaults:
   interruption on `chrome.bargeInInputCommand`
 - `chrome.bargeInCooldownMs: 900`: minimum delay between repeated human
   interruption clears
-- `realtime.provider: "openai"`
+- `mode: "agent"`: default talk-back mode. Participant speech is transcribed by
+  the configured realtime transcription provider, sent to the configured
+  OpenClaw agent in a per-meeting sub-agent session, and spoken back through the
+  normal OpenClaw TTS runtime.
+- `mode: "bidi"`: fallback direct bidirectional realtime model mode. The
+  realtime voice provider answers participant speech directly and may call
+  `openclaw_agent_consult` for deeper/tool-backed answers.
+- `mode: "transcribe"`: observe-only mode without the talk-back bridge.
+- `realtime.provider: "openai"`: compatibility fallback used when the scoped
+  provider fields below are unset.
+- `realtime.transcriptionProvider: "openai"`: provider id used by `agent` mode
+  for realtime transcription.
+- `realtime.voiceProvider`: provider id used by `bidi` mode for direct realtime
+  voice. Set this to `"google"` to use Gemini Live while keeping agent-mode
+  transcription on OpenAI.
 - `realtime.toolPolicy: "safe-read-only"`
 - `realtime.instructions`: brief spoken replies, with
   `openclaw_agent_consult` for deeper answers
@@ -1071,20 +1113,67 @@ Optional overrides:
   chromeNode: {
     node: "parallels-macos",
   },
+  defaultMode: "agent",
   realtime: {
-    provider: "google",
+    provider: "openai",
+    transcriptionProvider: "openai",
+    voiceProvider: "google",
+    model: "gemini-2.5-flash-native-audio-preview-12-2025",
     agentId: "jay",
     toolPolicy: "owner",
     introMessage: "Say exactly: I'm here.",
     providers: {
       google: {
-        model: "gemini-2.5-flash-native-audio-preview-12-2025",
         voice: "Kore",
       },
     },
   },
 }
 ```
+
+ElevenLabs for both agent-mode listening and speaking:
+
+```json5
+{
+  messages: {
+    tts: {
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          modelId: "eleven_v3",
+          voiceId: "pMsXgVXv3BLzUgSXRplE",
+        },
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      "google-meet": {
+        config: {
+          realtime: {
+            transcriptionProvider: "elevenlabs",
+            providers: {
+              elevenlabs: {
+                modelId: "scribe_v2_realtime",
+                audioFormat: "ulaw_8000",
+                sampleRate: 8000,
+                commitStrategy: "vad",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The persistent Meet voice comes from
+`messages.tts.providers.elevenlabs.voiceId`. Agent replies can also use
+per-reply `[[tts:voiceId=... model=eleven_v3]]` directives when TTS model
+overrides are enabled, but config is the deterministic default for meetings.
+On join, the logs should show `transcriptionProvider=elevenlabs` and each
+spoken reply should log `provider=elevenlabs model=eleven_v3 voice=<voiceId>`.
 
 Twilio-only config:
 
@@ -1117,20 +1206,28 @@ Agents can use the `google_meet` tool:
   "action": "join",
   "url": "https://meet.google.com/abc-defg-hij",
   "transport": "chrome-node",
-  "mode": "realtime"
+  "mode": "agent"
 }
 ```
 
 Use `transport: "chrome"` when Chrome runs on the Gateway host. Use
 `transport: "chrome-node"` when Chrome runs on a paired node such as a Parallels
-VM. In both cases the realtime model and `openclaw_agent_consult` run on the
-Gateway host, so model credentials stay there.
+VM. In both cases the model providers and `openclaw_agent_consult` run on the
+Gateway host, so model credentials stay there. With the default `mode: "agent"`,
+the realtime transcription provider handles listening, the configured OpenClaw
+agent produces the answer, and regular OpenClaw TTS speaks it into Meet. Use
+`mode: "bidi"` when you want the realtime voice model to answer directly.
+Raw `mode: "realtime"` remains accepted as a legacy compatibility alias for
+`mode: "agent"`, but it is no longer advertised in the agent tool schema.
+Agent-mode logs include the resolved transcription provider/model at bridge
+startup and the TTS provider, model, voice, output format, and sample rate after
+each synthesized reply.
 
 Use `action: "status"` to list active sessions or inspect a session ID. Use
 `action: "speak"` with `sessionId` and `message` to make the realtime agent
 speak immediately. Use `action: "test_speech"` to create or reuse the session,
 trigger a known phrase, and return `inCall` health when the Chrome host can
-report it. `test_speech` always forces `mode: "realtime"` and fails if asked to
+report it. `test_speech` always forces `mode: "agent"` and fails if asked to
 run in `mode: "transcribe"` because observe-only sessions intentionally cannot
 emit speech. Its `speechOutputVerified` result is based on realtime audio output
 bytes increasing during this test call, so a reused session with older audio
@@ -1149,6 +1246,8 @@ a session ended.
   not send the intro/test phrase into the audio bridge.
 - `providerConnected` / `realtimeReady`: realtime voice bridge state
 - `lastInputAt` / `lastOutputAt`: last audio seen from or sent to the bridge
+- `audioOutputRouted` / `audioOutputDeviceLabel`: whether the Meet tab's media
+  output was actively routed to the BlackHole device used by the bridge
 - `lastSuppressedInputAt` / `suppressedInputBytes`: loopback input ignored while
   assistant playback is active
 
@@ -1160,21 +1259,40 @@ a session ended.
 }
 ```
 
-## Realtime agent consult
+## Agent And Bidi Modes
 
-Chrome realtime mode is optimized for a live voice loop. The realtime voice
-provider hears the meeting audio and speaks through the configured audio bridge.
-When the realtime model needs deeper reasoning, current information, or normal
-OpenClaw tools, it can call `openclaw_agent_consult`.
+Chrome `agent` mode is optimized for "my agent is in the meeting" behavior. The
+realtime transcription provider hears the meeting audio, final participant
+transcripts are routed through the configured OpenClaw agent, and the answer is
+spoken through the normal OpenClaw TTS runtime. Set `mode: "bidi"` when you want
+the realtime voice model to answer directly.
+Nearby final transcript fragments are coalesced before the consult so one spoken
+turn does not produce several stale partial answers. Realtime input is also
+suppressed while queued assistant audio is still playing,
+and recent assistant-like transcript echoes are ignored before the agent consult
+so BlackHole loopback does not make the agent answer its own speech.
+
+| Mode    | Who decides the answer        | Speech output path                     | Use when                                              |
+| ------- | ----------------------------- | -------------------------------------- | ----------------------------------------------------- |
+| `agent` | The configured OpenClaw agent | Normal OpenClaw TTS runtime            | You want "my agent is in the meeting" behavior        |
+| `bidi`  | The realtime voice model      | Realtime voice provider audio response | You want the lowest-latency conversational voice loop |
+
+In `bidi` mode, when the realtime model needs deeper reasoning, current
+information, or normal OpenClaw tools, it can call `openclaw_agent_consult`.
 
 The consult tool runs the regular OpenClaw agent behind the scenes with recent
-meeting transcript context and returns a concise spoken answer to the realtime
-voice session. The voice model can then speak that answer back into the meeting.
-It uses the same shared realtime consult tool as Voice Call.
+meeting transcript context and returns a concise spoken answer. In `agent` mode,
+OpenClaw sends that answer directly to the TTS runtime; in `bidi` mode, the
+realtime voice model can speak the consult result back into the meeting. It uses
+the same shared consult machinery as Voice Call.
 
 By default, consults run against the `main` agent. Set `realtime.agentId` when a
 Meet lane should consult a dedicated OpenClaw agent workspace, model defaults,
 tool policy, memory, and session history.
+
+Agent-mode consults use a per-meeting `agent:<id>:subagent:google-meet:<session>`
+session key so follow-up questions keep meeting context while inheriting normal
+agent policy from the configured agent.
 
 `realtime.toolPolicy` controls the consult run:
 
@@ -1276,10 +1394,10 @@ The running agent only sees plugin tools registered by the current Gateway
 process.
 
 On non-macOS Gateway hosts, the agent-facing `google_meet` tool stays visible,
-but local Chrome realtime actions are blocked before they hit the audio bridge.
-Local Chrome realtime audio currently depends on macOS `BlackHole 2ch`, so
+but local Chrome talk-back actions are blocked before they hit the audio bridge.
+Local Chrome talk-back audio currently depends on macOS `BlackHole 2ch`, so
 Linux agents should use `mode: "transcribe"`, Twilio dial-in, or a macOS
-`chrome-node` host instead of the default local Chrome realtime path.
+`chrome-node` host instead of the default local Chrome agent path.
 
 ### No connected Google Meet-capable node
 
@@ -1393,8 +1511,9 @@ openclaw googlemeet setup
 openclaw googlemeet doctor
 ```
 
-Use `mode: "realtime"` for listen/talk-back. `mode: "transcribe"` intentionally
-does not start the duplex realtime voice bridge. For observe-only debugging,
+Use `mode: "agent"` for the normal STT -> OpenClaw agent -> TTS talk-back path,
+or `mode: "bidi"` for the direct realtime voice fallback. `mode: "transcribe"`
+intentionally does not start the talk-back bridge. For observe-only debugging,
 run `openclaw googlemeet status --json <session-id>` after participants speak
 and check `captioning`, `transcriptLines`, and `lastCaptionText`. If `inCall` is
 true but `transcriptLines` stays at `0`, Meet captions may be disabled, no one
@@ -1414,7 +1533,8 @@ Also verify:
 - `BlackHole 2ch` is visible on the Chrome host.
 - `sox` exists on the Chrome host.
 - Meet microphone and speaker are routed through the virtual audio path used by
-  OpenClaw.
+  OpenClaw. `doctor` should show `meet output routed: yes` for local Chrome
+  realtime joins.
 
 `googlemeet doctor [session-id]` prints the session, node, in-call state,
 manual action reason, realtime provider connection, `realtimeReady`, audio
@@ -1575,14 +1695,22 @@ call still needs a participant path. This plugin keeps that boundary visible:
 Chrome handles browser participation and local audio routing; Twilio handles
 phone dial-in participation.
 
-Chrome realtime mode needs `BlackHole 2ch` plus either:
+Chrome talk-back modes need `BlackHole 2ch` plus either:
 
 - `chrome.audioInputCommand` plus `chrome.audioOutputCommand`: OpenClaw owns the
-  realtime model bridge and pipes audio in `chrome.audioFormat` between those
-  commands and the selected realtime voice provider. The default Chrome path is
-  24 kHz PCM16; 8 kHz G.711 mu-law remains available for legacy command pairs.
+  bridge and pipes audio in `chrome.audioFormat` between those commands and the
+  selected provider. Agent mode uses realtime transcription plus regular TTS;
+  bidi mode uses the realtime voice provider. The default Chrome path is 24 kHz
+  PCM16 with `chrome.audioBufferBytes: 4096`; 8 kHz G.711 mu-law remains
+  available for legacy command pairs.
 - `chrome.audioBridgeCommand`: an external bridge command owns the whole local
-  audio path and must exit after starting or validating its daemon.
+  audio path and must exit after starting or validating its daemon. This is only
+  valid for `bidi` because `agent` mode needs direct command-pair access for TTS.
+
+When an agent calls the `google_meet` tool in agent mode, the meeting consultant
+session forks the caller's current transcript before answering participant
+speech. The Meet session still stays separate (`agent:<agentId>:subagent:google-meet:<sessionId>`)
+so meeting follow-ups do not mutate the caller transcript directly.
 
 For clean duplex audio, route Meet output and Meet microphone through separate
 virtual devices or a Loopback-style virtual device graph. A single shared
@@ -1596,7 +1724,7 @@ Like `chrome.audioInputCommand` and `chrome.audioOutputCommand`, it is an
 operator-configured local command. Use an explicit trusted command path or
 argument list, and do not point it at scripts from untrusted locations.
 
-`googlemeet speak` triggers the active realtime audio bridge for a Chrome
+`googlemeet speak` triggers the active talk-back audio bridge for a Chrome
 session. `googlemeet leave` stops that bridge. For Twilio sessions delegated
 through the Voice Call plugin, `leave` also hangs up the underlying voice call.
 Use `googlemeet end-active-conference` when you also want to close the active

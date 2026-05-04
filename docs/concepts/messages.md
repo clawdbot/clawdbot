@@ -166,7 +166,7 @@ OpenClaw can expose or hide model reasoning:
 
 - `/reasoning on|off|stream` controls visibility.
 - Reasoning content still counts toward token usage when produced by the model.
-- Telegram supports reasoning stream into the draft bubble.
+- Telegram supports reasoning stream into a transient draft bubble that is deleted after final delivery; use `/reasoning on` for persistent reasoning output.
 
 Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/reference/token-use).
 

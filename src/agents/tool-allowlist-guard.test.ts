@@ -19,7 +19,9 @@ describe("tool allowlist guard", () => {
 
   it("fails closed for runtime toolsAllow when tools are disabled", () => {
     const error = buildEmptyExplicitToolAllowlistError({
-      sources: [{ label: "runtime toolsAllow", entries: ["query_db"] }],
+      sources: [
+        { label: "runtime toolsAllow", entries: ["query_db"], enforceWhenToolsDisabled: true },
+      ],
       callableToolNames: [],
       toolsEnabled: true,
       disableTools: true,
@@ -27,6 +29,17 @@ describe("tool allowlist guard", () => {
 
     expect(error?.message).toContain("runtime toolsAllow: query_db");
     expect(error?.message).toContain("tools are disabled for this run");
+  });
+
+  it("allows inherited config allowlists when a run intentionally disables tools", () => {
+    expect(
+      buildEmptyExplicitToolAllowlistError({
+        sources: [{ label: "tools.allow", entries: ["lobster", "llm-task"] }],
+        callableToolNames: [],
+        toolsEnabled: true,
+        disableTools: true,
+      }),
+    ).toBeNull();
   });
 
   it("fails closed when the selected model cannot use requested tools", () => {
@@ -63,13 +76,21 @@ describe("tool allowlist guard", () => {
   it("keeps source labels for config and runtime allowlists", () => {
     const sources = collectExplicitToolAllowlistSources([
       { label: "tools.allow", allow: [" read ", ""] },
-      { label: "runtime toolsAllow", allow: ["query_db"] },
+      {
+        label: "runtime toolsAllow",
+        allow: ["query_db"],
+        enforceWhenToolsDisabled: true,
+      },
       { label: "tools.byProvider.allow" },
     ]);
 
     expect(sources).toEqual([
       { label: "tools.allow", entries: ["read"] },
-      { label: "runtime toolsAllow", entries: ["query_db"] },
+      {
+        label: "runtime toolsAllow",
+        entries: ["query_db"],
+        enforceWhenToolsDisabled: true,
+      },
     ]);
   });
 });

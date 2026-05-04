@@ -342,6 +342,35 @@ describe("media store", () => {
       },
     },
     {
+      name: "saves buffers when the best-effort fsync step reports EPERM",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const originalOpen = fs.open.bind(fs);
+          vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+            const handle = await originalOpen(...args);
+            const filePath = args[0];
+            if (
+              typeof filePath === "string" &&
+              filePath.includes(`${path.sep}fsync-eperm${path.sep}`)
+            ) {
+              vi.spyOn(handle, "sync").mockRejectedValueOnce(
+                Object.assign(new Error("operation not permitted"), { code: "EPERM" }),
+              );
+            }
+            return handle;
+          });
+
+          const saved = await store.saveMediaBuffer(
+            Buffer.from("docx"),
+            "application/zip",
+            "fsync-eperm",
+          );
+
+          await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("docx");
+        });
+      },
+    },
+    {
       name: "rejects traversal media subdirs before saving buffers",
       run: async () => {
         await withTempStore(async (store, home) => {

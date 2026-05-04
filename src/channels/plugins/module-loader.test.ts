@@ -1,12 +1,18 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
+import type { PluginModuleLoaderFactory } from "../../plugins/plugin-module-loader-cache.js";
 import { resolveExistingPluginModulePath } from "./module-loader.js";
 
 const tempDirs: string[] = [];
+const pluginModuleLoaderJitiFactoryOverrideKey = Symbol.for(
+  "openclaw.pluginModuleLoaderJitiFactoryOverride",
+);
+const testRequire = createRequire(import.meta.url);
 
 afterEach(() => {
   for (const tempDir of tempDirs.splice(0)) {
@@ -15,7 +21,20 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("jiti");
+  delete (
+    globalThis as typeof globalThis & {
+      [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
+    }
+  )[pluginModuleLoaderJitiFactoryOverrideKey];
 });
+
+function stubPluginModuleLoaderJitiFactory(createJiti: PluginModuleLoaderFactory): void {
+  (
+    globalThis as typeof globalThis & {
+      [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
+    }
+  )[pluginModuleLoaderJitiFactoryOverrideKey] = createJiti;
+}
 
 function createTempDir(): string {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-module-loader-"));
@@ -63,16 +82,20 @@ describe("channel plugin module loader helpers", () => {
     expect(createJiti).not.toHaveBeenCalled();
   });
 
-  it("loads TypeScript channel plugin modules through Jiti when no native hook exists", async () => {
+  it("loads TypeScript channel plugin modules through Jiti when native loading is unavailable", async () => {
     const loadWithJiti = vi.fn((target: string) => ({
       loadedBy: "jiti",
       target,
     }));
     const createJiti = vi.fn(() => loadWithJiti);
+    const sourceExtensions = [".ts", ".tsx", ".mts", ".cts"] as const;
+    const sourceHooks = new Map<string, NodeJS.RequireExtensions[string] | undefined>();
+    for (const extension of sourceExtensions) {
+      sourceHooks.set(extension, testRequire.extensions[extension]);
+      delete testRequire.extensions[extension];
+    }
     vi.resetModules();
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
+    stubPluginModuleLoaderJitiFactory(createJiti as unknown as PluginModuleLoaderFactory);
     const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
       import.meta.url,
       "./module-loader.js?scope=source-ts-jiti-fallback",
@@ -80,22 +103,32 @@ describe("channel plugin module loader helpers", () => {
     const rootDir = createTempDir();
     const modulePath = path.join(rootDir, "extensions", "demo", "index.ts");
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });
-    fs.writeFileSync(modulePath, "export const ok = true;\n", "utf8");
+    fs.writeFileSync(modulePath, 'throw new Error("native source load failed");\n', "utf8");
 
-    expect(
-      loaderModule.loadChannelPluginModule({
-        modulePath,
-        rootDir,
-      }),
-    ).toEqual({
-      loadedBy: "jiti",
-      target: fs.realpathSync.native(modulePath),
-    });
-    expect(createJiti).toHaveBeenCalledOnce();
-    expect(createJiti).toHaveBeenCalledWith(
-      expect.stringContaining("module-loader.ts"),
-      expect.objectContaining({ tryNative: false }),
-    );
-    expect(loadWithJiti).toHaveBeenCalledWith(fs.realpathSync.native(modulePath));
+    try {
+      expect(
+        loaderModule.loadChannelPluginModule({
+          modulePath,
+          rootDir,
+        }),
+      ).toEqual({
+        loadedBy: "jiti",
+        target: fs.realpathSync.native(modulePath),
+      });
+      expect(createJiti).toHaveBeenCalledOnce();
+      expect(createJiti).toHaveBeenCalledWith(
+        expect.stringContaining("module-loader.ts"),
+        expect.objectContaining({ tryNative: false }),
+      );
+      expect(loadWithJiti).toHaveBeenCalledWith(fs.realpathSync.native(modulePath));
+    } finally {
+      for (const [extension, hook] of sourceHooks) {
+        if (hook) {
+          testRequire.extensions[extension] = hook;
+        } else {
+          delete testRequire.extensions[extension];
+        }
+      }
+    }
   });
 });

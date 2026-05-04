@@ -56,9 +56,9 @@ export function parseCommand(input: string): ParsedCommand {
 }
 
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
-  const thinkLevels =
-    options.thinkingLevels?.map((level) => level.label) ??
-    listThinkingLevelLabels(options.provider, options.model);
+  const thinkLevels = options.thinkingLevels?.length
+    ? options.thinkingLevels.map((level) => level.label)
+    : listThinkingLevelLabels(options.provider, options.model);
   const verboseCompletions = createLevelCompletion(VERBOSE_LEVELS);
   const traceCompletions = createLevelCompletion(TRACE_LEVELS);
   const fastCompletions = createLevelCompletion(FAST_LEVELS);

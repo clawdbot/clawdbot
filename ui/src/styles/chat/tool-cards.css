@@ -361,7 +361,15 @@
 
 .chat-tool-card__block-content {
   color: var(--text);
-  overflow-x: auto;
+  overflow: auto;
+  max-height: min(520px, 60vh);
+}
+
+.chat-tool-card__inline {
+  margin-top: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-tool-card__block-preview {

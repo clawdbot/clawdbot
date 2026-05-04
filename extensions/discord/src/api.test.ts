@@ -1,6 +1,6 @@
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DiscordApiError, fetchDiscord } from "./api.js";
+import { DiscordApiError, fetchDiscord, requestDiscord } from "./api.js";
 import { jsonResponse } from "./test-http-helpers.js";
 
 describe("fetchDiscord", () => {
@@ -126,5 +126,24 @@ describe("fetchDiscord", () => {
 
     expect(result).toHaveLength(1);
     expect(calls).toBe(2);
+  });
+
+  it("sends JSON request bodies through the shared retry helper", async () => {
+    let request: RequestInit | undefined;
+    const fetcher = withFetchPreconnect(async (_url, init) => {
+      request = init;
+      return jsonResponse({ id: "42" }, 200);
+    });
+
+    const result = await requestDiscord<{ id: string }>("/channels/c/messages", "test", {
+      body: { content: "hello" },
+      fetcher,
+      retry: { attempts: 1 },
+    });
+
+    expect(result).toEqual({ id: "42" });
+    expect(request?.method).toBe("POST");
+    expect(request?.body).toBe(JSON.stringify({ content: "hello" }));
+    expect(new Headers(request?.headers).get("content-type")).toBe("application/json");
   });
 });

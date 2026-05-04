@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   removeManagedNpmRootDependency,
+  readManagedNpmRootInstalledDependency,
   resolveManagedNpmRootDependencySpec,
   upsertManagedNpmRootDependency,
 } from "./npm-managed-root.js";
@@ -60,7 +61,7 @@ describe("managed npm root", () => {
     });
   });
 
-  it("uses the requested selector before falling back to resolved version", () => {
+  it("pins managed dependencies to the resolved version", () => {
     expect(
       resolveManagedNpmRootDependencySpec({
         parsedSpec: {
@@ -77,7 +78,7 @@ describe("managed npm root", () => {
           resolvedAt: "2026-05-03T00:00:00.000Z",
         },
       }),
-    ).toBe("stable");
+    ).toBe("2026.5.2");
 
     expect(
       resolveManagedNpmRootDependencySpec({
@@ -95,6 +96,38 @@ describe("managed npm root", () => {
         },
       }),
     ).toBe("2026.5.2");
+  });
+
+  it("reads installed dependency metadata from package-lock", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(npmRoot, "package-lock.json"),
+      `${JSON.stringify(
+        {
+          lockfileVersion: 3,
+          packages: {
+            "node_modules/@openclaw/discord": {
+              version: "2026.5.2",
+              resolved: "https://registry.npmjs.org/@openclaw/discord/-/discord-2026.5.2.tgz",
+              integrity: "sha512-discord",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await expect(
+      readManagedNpmRootInstalledDependency({
+        npmRoot,
+        packageName: "@openclaw/discord",
+      }),
+    ).resolves.toEqual({
+      version: "2026.5.2",
+      resolved: "https://registry.npmjs.org/@openclaw/discord/-/discord-2026.5.2.tgz",
+      integrity: "sha512-discord",
+    });
   });
 
   it("removes one managed dependency without dropping unrelated metadata", async () => {

@@ -598,10 +598,11 @@ export async function applyPluginUninstallDirectoryRemoval(
         "--no-audit",
         "--no-fund",
         "--prefix",
-        removal.cleanup.npmRoot,
+        ".",
         removal.cleanup.packageName,
       ],
       {
+        cwd: removal.cleanup.npmRoot,
         timeoutMs: 300_000,
         env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
       },

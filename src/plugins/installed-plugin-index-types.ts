@@ -101,6 +101,7 @@ export type InstalledPluginIndexRecord = {
   origin: PluginManifestRecord["origin"];
   enabled: boolean;
   enabledByDefault?: boolean;
+  enabledByDefaultOnPlatforms?: readonly string[];
   syntheticAuthRefs?: readonly string[];
   startup: InstalledPluginStartupInfo;
   compat: readonly PluginCompatCode[];

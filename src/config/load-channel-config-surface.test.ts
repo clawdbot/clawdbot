@@ -1,8 +1,27 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { createJiti as createJitiType } from "jiti";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+
+const jitiFactoryOverrideKey = Symbol.for("openclaw.channelConfigSurfaceJitiFactoryOverride");
+
+function stubChannelConfigSurfaceJitiFactory(createJiti: typeof createJitiType): void {
+  (
+    globalThis as typeof globalThis & {
+      [jitiFactoryOverrideKey]?: typeof createJitiType;
+    }
+  )[jitiFactoryOverrideKey] = createJiti;
+}
+
+afterEach(() => {
+  delete (
+    globalThis as typeof globalThis & {
+      [jitiFactoryOverrideKey]?: typeof createJitiType;
+    }
+  )[jitiFactoryOverrideKey];
+});
 
 async function importLoaderWithMissingBun() {
   const spawnSync = vi.fn(() => ({
@@ -41,7 +60,7 @@ async function importLoaderWithFailingJitiAndWorkingBun() {
     throw new Error("jiti failed");
   });
   vi.doMock("node:child_process", () => ({ spawnSync }));
-  vi.doMock("jiti", () => ({ createJiti }));
+  stubChannelConfigSurfaceJitiFactory(createJiti as unknown as typeof createJitiType);
 
   try {
     const imported = await importFreshModule<
@@ -54,7 +73,6 @@ async function importLoaderWithFailingJitiAndWorkingBun() {
     };
   } finally {
     vi.doUnmock("node:child_process");
-    vi.doUnmock("jiti");
   }
 }
 

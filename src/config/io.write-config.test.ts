@@ -1219,6 +1219,69 @@ describe("config io write", () => {
     });
   });
 
+  it("skipPluginValidation bypasses plugin schema rejection on writeConfigFile (#76800)", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, "{}\n", "utf-8");
+      mockLoadPluginManifestRegistry.mockReturnValue({
+        diagnostics: [],
+        plugins: [
+          {
+            id: "strict-plugin",
+            origin: "bundled",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            rootDir: "/tmp/openclaw-test-strict-plugin",
+            source: "/tmp/openclaw-test-strict-plugin/index.ts",
+            manifestPath: "/tmp/openclaw-test-strict-plugin/openclaw.plugin.json",
+            configSchema: {
+              type: "object",
+              properties: { token: { type: "string" } },
+              required: ["token"],
+              additionalProperties: false,
+            },
+          },
+        ],
+      } satisfies PluginManifestRegistry);
+
+      try {
+        // Plugin is enabled but missing required "token" — validation fails without skip.
+        const cfg: OpenClawConfig = {
+          agents: { list: [{ id: "main", default: true }] },
+          plugins: { entries: { "strict-plugin": { enabled: true } } },
+        };
+
+        await expect(writeConfigFile(cfg, { skipPluginValidation: true })).resolves.not.toThrow();
+        await expect(fs.readFile(configPath, "utf-8")).resolves.toContain('"strict-plugin"');
+
+        await expect(writeConfigFile(cfg, { skipPluginValidation: false })).rejects.toThrow(
+          /Config validation failed/,
+        );
+        await expect(
+          writeConfigFile({ agents: { list: "not-array" } } as unknown as OpenClawConfig, {
+            skipPluginValidation: true,
+          }),
+        ).rejects.toThrow(/Config validation failed/);
+      } finally {
+        mockLoadPluginManifestRegistry.mockReturnValue({
+          diagnostics: [],
+          plugins: [],
+        } satisfies PluginManifestRegistry);
+        if (previousConfigPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+        }
+      }
+    });
+  });
+
   it("preserves authored tilde paths when runtime-shaped writes hand back absolute paths", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

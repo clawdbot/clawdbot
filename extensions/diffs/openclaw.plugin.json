@@ -8,6 +8,11 @@
   "contracts": {
     "tools": ["diffs"]
   },
+  "toolMetadata": {
+    "diffs": {
+      "optional": true
+    }
+  },
   "skills": ["./skills"],
   "uiHints": {
     "viewerBaseUrl": {

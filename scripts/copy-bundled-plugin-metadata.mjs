@@ -1,9 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import JSON5 from "json5";
 import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "./lib/bundled-plugin-build-entries.mjs";
 import { shouldBuildBundledCluster } from "./lib/optional-bundled-clusters.mjs";
+import {
+  mergeGeneratedChannelConfigs,
+  readGeneratedBundledChannelConfigs,
+} from "./lib/plugin-npm-package-manifest.mjs";
 import {
   removeFileIfExists,
   removePathIfExists,
@@ -11,8 +14,6 @@ import {
 } from "./runtime-postbuild-shared.mjs";
 
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
-const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH =
-  "src/config/bundled-channel-config-metadata.generated.ts";
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
 const COPY_RETRY_DELAYS_MS = [10, 25, 50];
 
@@ -218,86 +219,6 @@ function copyDeclaredPluginSkillPaths(params) {
     copiedSkills.push(target.manifestPath);
   }
   return copiedSkills;
-}
-
-function readGeneratedBundledChannelConfigs(repoRoot) {
-  const metadataPath = path.join(repoRoot, GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH);
-  if (!fs.existsSync(metadataPath)) {
-    return new Map();
-  }
-  const source = fs.readFileSync(metadataPath, "utf8");
-  const match = source.match(
-    /export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = ([\s\S]*?) as const;/u,
-  );
-  if (!match?.[1]) {
-    return new Map();
-  }
-  let entries;
-  try {
-    entries = JSON5.parse(match[1]);
-  } catch {
-    return new Map();
-  }
-  if (!Array.isArray(entries)) {
-    return new Map();
-  }
-  const byPlugin = new Map();
-  for (const entry of entries) {
-    if (
-      !entry ||
-      typeof entry !== "object" ||
-      typeof entry.pluginId !== "string" ||
-      typeof entry.channelId !== "string" ||
-      !entry.schema ||
-      typeof entry.schema !== "object"
-    ) {
-      continue;
-    }
-    const pluginConfigs = byPlugin.get(entry.pluginId) ?? {};
-    pluginConfigs[entry.channelId] = {
-      schema: entry.schema,
-      ...(typeof entry.label === "string" && entry.label ? { label: entry.label } : {}),
-      ...(typeof entry.description === "string" && entry.description
-        ? { description: entry.description }
-        : {}),
-      ...(entry.uiHints && typeof entry.uiHints === "object" ? { uiHints: entry.uiHints } : {}),
-    };
-    byPlugin.set(entry.pluginId, pluginConfigs);
-  }
-  return byPlugin;
-}
-
-function mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs) {
-  if (!generatedChannelConfigs || Object.keys(generatedChannelConfigs).length === 0) {
-    return manifest;
-  }
-  const existingChannelConfigs =
-    manifest.channelConfigs && typeof manifest.channelConfigs === "object"
-      ? manifest.channelConfigs
-      : {};
-  const channelConfigs = { ...existingChannelConfigs };
-  for (const [channelId, generated] of Object.entries(generatedChannelConfigs)) {
-    const existing =
-      existingChannelConfigs[channelId] && typeof existingChannelConfigs[channelId] === "object"
-        ? existingChannelConfigs[channelId]
-        : {};
-    channelConfigs[channelId] = {
-      ...generated,
-      ...existing,
-      schema: generated.schema,
-      ...(generated.uiHints || existing.uiHints
-        ? { uiHints: { ...generated.uiHints, ...existing.uiHints } }
-        : {}),
-      ...(existing.label || generated.label ? { label: existing.label ?? generated.label } : {}),
-      ...(existing.description || generated.description
-        ? { description: existing.description ?? generated.description }
-        : {}),
-    };
-  }
-  return {
-    ...manifest,
-    channelConfigs,
-  };
 }
 
 /**

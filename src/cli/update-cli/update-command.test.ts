@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildGatewayInstallEntrypointCandidates as resolveGatewayInstallEntrypointCandidates,
   resolveGatewayInstallEntrypoint,
 } from "../../daemon/gateway-entrypoint.js";
 import {
   collectMissingPluginInstallPayloads,
+  recoverInstalledLaunchAgentAfterUpdate,
+  recoverLaunchAgentAndRecheckGatewayHealth,
   resolvePostInstallDoctorEnv,
   shouldPrepareUpdatedInstallRestart,
   resolveUpdatedGatewayRestartPort,
@@ -232,5 +234,204 @@ describe("shouldUseLegacyProcessRestartAfterUpdate", () => {
   it("keeps the in-process restart path for non-package updates", () => {
     expect(shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "git" })).toBe(true);
     expect(shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "unknown" })).toBe(true);
+  });
+});
+describe("recoverInstalledLaunchAgentAfterUpdate", () => {
+  it("re-bootstraps an installed-but-not-loaded macOS LaunchAgent after update", async () => {
+    const service = {} as never;
+    const serviceEnv = { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv;
+    const recoveredEnv = { ...serviceEnv, OPENCLAW_PORT: "18790" } as NodeJS.ProcessEnv;
+    const readState = vi.fn(async () => ({
+      installed: true,
+      loaded: false,
+      running: false,
+      env: recoveredEnv,
+      command: null,
+      runtime: { status: "unknown", missingSupervision: true },
+    }));
+    const recover = vi.fn(async () => ({
+      result: "restarted" as const,
+      loaded: true as const,
+      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+    }));
+
+    await expect(
+      recoverInstalledLaunchAgentAfterUpdate({
+        service,
+        env: serviceEnv,
+        deps: {
+          platform: "darwin",
+          readState: readState as never,
+          recover: recover as never,
+        },
+      }),
+    ).resolves.toEqual({
+      attempted: true,
+      recovered: true,
+      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+    });
+
+    expect(readState).toHaveBeenCalledWith(service, { env: serviceEnv });
+    expect(recover).toHaveBeenCalledWith({ result: "restarted", env: recoveredEnv });
+  });
+
+  it("does not touch non-macOS service managers", async () => {
+    const readState = vi.fn();
+    const recover = vi.fn();
+
+    await expect(
+      recoverInstalledLaunchAgentAfterUpdate({
+        service: {} as never,
+        deps: {
+          platform: "linux",
+          readState: readState as never,
+          recover: recover as never,
+        },
+      }),
+    ).resolves.toEqual({ attempted: false, recovered: false });
+
+    expect(readState).not.toHaveBeenCalled();
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it("does not recover a loaded LaunchAgent", async () => {
+    const readState = vi.fn(async () => ({
+      installed: true,
+      loaded: true,
+      running: true,
+      env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
+      command: null,
+      runtime: { status: "running" },
+    }));
+    const recover = vi.fn();
+
+    await expect(
+      recoverInstalledLaunchAgentAfterUpdate({
+        service: {} as never,
+        deps: {
+          platform: "darwin",
+          readState: readState as never,
+          recover: recover as never,
+        },
+      }),
+    ).resolves.toEqual({ attempted: false, recovered: false });
+
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it("returns an explicit failed recovery state when bootstrap repair fails", async () => {
+    const readState = vi.fn(async () => ({
+      installed: true,
+      loaded: false,
+      running: false,
+      env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
+      command: null,
+      runtime: { status: "unknown", missingSupervision: true },
+    }));
+    const recover = vi.fn(async () => null);
+
+    await expect(
+      recoverInstalledLaunchAgentAfterUpdate({
+        service: {} as never,
+        deps: {
+          platform: "darwin",
+          readState: readState as never,
+          recover: recover as never,
+        },
+      }),
+    ).resolves.toEqual({
+      attempted: true,
+      recovered: false,
+      detail:
+        "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.",
+    });
+  });
+});
+
+describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
+  it("does not report recovered update health until the gateway passes the post-recovery wait", async () => {
+    const service = {} as never;
+    const unhealthy = {
+      runtime: { status: "stopped" },
+      portUsage: { port: 18790, status: "free", listeners: [], hints: [] },
+      healthy: false,
+      staleGatewayPids: [],
+      waitOutcome: "stopped-free",
+    } as never;
+    const healthy = {
+      runtime: { status: "running", pid: 4242 },
+      portUsage: { port: 18790, status: "busy", listeners: [{ pid: 4242 }], hints: [] },
+      healthy: true,
+      staleGatewayPids: [],
+      gatewayVersion: "2026.5.3",
+      waitOutcome: "healthy",
+    } as never;
+    const recoverLaunchAgent = vi.fn(async () => ({
+      attempted: true as const,
+      recovered: true as const,
+      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+    }));
+    const waitForHealthy = vi.fn(async () => healthy);
+
+    await expect(
+      recoverLaunchAgentAndRecheckGatewayHealth({
+        health: unhealthy,
+        service,
+        port: 18790,
+        expectedVersion: "2026.5.3",
+        env: { OPENCLAW_PROFILE: "stomme", OPENCLAW_PORT: "18790" },
+        deps: { recoverLaunchAgent, waitForHealthy },
+      }),
+    ).resolves.toEqual({
+      health: healthy,
+      launchAgentRecovery: {
+        attempted: true,
+        recovered: true,
+        message:
+          "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+      },
+    });
+
+    expect(waitForHealthy).toHaveBeenCalledWith({
+      service,
+      port: 18790,
+      expectedVersion: "2026.5.3",
+      env: { OPENCLAW_PROFILE: "stomme", OPENCLAW_PORT: "18790" },
+    });
+  });
+
+  it("keeps the update unhealthy when LaunchAgent repair succeeds but health does not recover", async () => {
+    const service = {} as never;
+    const unhealthySnapshot = {
+      runtime: { status: "stopped" },
+      portUsage: { port: 18790, status: "free", listeners: [], hints: [] },
+      healthy: false,
+      staleGatewayPids: [],
+      waitOutcome: "stopped-free",
+    };
+    const unhealthy = unhealthySnapshot as never;
+    const stillUnhealthy = {
+      ...unhealthySnapshot,
+      waitOutcome: "timeout",
+    } as never;
+    const recoverLaunchAgent = vi.fn(async () => ({
+      attempted: true as const,
+      recovered: true as const,
+      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+    }));
+    const waitForHealthy = vi.fn(async () => stillUnhealthy);
+
+    await expect(
+      recoverLaunchAgentAndRecheckGatewayHealth({
+        health: unhealthy,
+        service,
+        port: 18790,
+        expectedVersion: "2026.5.3",
+        deps: { recoverLaunchAgent, waitForHealthy },
+      }),
+    ).resolves.toMatchObject({
+      health: { healthy: false, waitOutcome: "timeout" },
+      launchAgentRecovery: { attempted: true, recovered: true },
+    });
   });
 });

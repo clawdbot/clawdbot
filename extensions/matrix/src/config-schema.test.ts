@@ -88,14 +88,28 @@ describe("MatrixConfigSchema SecretInput", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts scalar progress Matrix streaming mode", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      streaming: "progress",
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts Matrix streaming preview tool progress config", () => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
       accessToken: "token",
       streaming: {
-        mode: "partial",
-        preview: {
+        mode: "progress",
+        progress: {
+          label: "Shelling",
+          maxLines: 4,
           toolProgress: false,
+        },
+        preview: {
+          toolProgress: true,
         },
       },
     });

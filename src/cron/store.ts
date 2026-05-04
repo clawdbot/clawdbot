@@ -321,6 +321,7 @@ export function loadCronStoreSync(storePath: string): CronStoreFile {
 
 type SaveCronStoreOptions = {
   skipBackup?: boolean;
+  stateOnly?: boolean;
 };
 
 async function setSecureFileMode(filePath: string): Promise<void> {
@@ -361,6 +362,7 @@ export async function saveCronStore(
   store: CronStoreFile,
   opts?: SaveCronStoreOptions,
 ) {
+  const stateOnly = opts?.stateOnly === true;
   const configJson = JSON.stringify(stripRuntimeOnlyCronFields(store), null, 2);
   const stateFile = extractStateFile(store);
   const stateJson = JSON.stringify(stateFile, null, 2);
@@ -368,13 +370,17 @@ export async function saveCronStore(
   const statePath = resolveStatePath(storePath);
   const cache = serializedStoreCache.get(storePath);
 
-  const configChanged = cache?.configJson !== configJson;
+  const configChanged = !stateOnly && cache?.configJson !== configJson;
   const stateChanged = cache?.stateJson !== stateJson;
   const migrating = cache?.needsSplitMigration === true;
-  const configNeedsWrite = await serializedFileNeedsWrite(storePath, configJson, configChanged);
+  const configNeedsWrite = stateOnly
+    ? false
+    : await serializedFileNeedsWrite(storePath, configJson, configChanged);
   const stateNeedsWrite = await serializedFileNeedsWrite(statePath, stateJson, stateChanged);
 
-  if (!configNeedsWrite && !stateNeedsWrite && !migrating) {
+  if (
+    stateOnly ? !stateNeedsWrite && !migrating : !configNeedsWrite && !stateNeedsWrite && !migrating
+  ) {
     return;
   }
 
@@ -386,7 +392,7 @@ export async function saveCronStore(
     updatedCache.stateJson = stateJson;
   }
 
-  if (configNeedsWrite || migrating) {
+  if (!stateOnly && (configNeedsWrite || migrating)) {
     // Determine backup need: only when config actually changed (not migration-only).
     const skipBackup = opts?.skipBackup === true || !configChanged;
     if (!skipBackup) {
@@ -401,7 +407,7 @@ export async function saveCronStore(
     await atomicWrite(storePath, configJson);
     updatedCache.configJson = configJson;
   }
-  updatedCache.needsSplitMigration = false;
+  updatedCache.needsSplitMigration = stateOnly && migrating;
 }
 
 const RENAME_MAX_RETRIES = 3;

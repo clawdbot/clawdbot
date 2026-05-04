@@ -48,6 +48,18 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   if (typeof item.content === "string") {
     return item.content;
   }
+  if (Array.isArray(item.content)) {
+    const parts = item.content.flatMap((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return [];
+      }
+      const text = (entry as { text?: unknown }).text;
+      return typeof text === "string" ? [text] : [];
+    });
+    if (parts.length > 0) {
+      return parts.join("\n");
+    }
+  }
   return undefined;
 }
 

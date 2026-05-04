@@ -91,14 +91,17 @@ function formatAccountLine(params: {
 }
 async function loadUsageWithProgress(
   runtime: RuntimeEnv,
+  progress = true,
 ): Promise<Awaited<ReturnType<typeof loadProviderUsageSummary>> | null> {
   try {
     return await withProgress(
-      { label: "Fetching usage snapshot…", indeterminate: true, enabled: true },
+      { label: "Fetching usage snapshot…", indeterminate: true, enabled: progress },
       async () => await loadProviderUsageSummary({ skipPluginAuthWithoutCredentialSource: true }),
     );
   } catch (err) {
-    runtime.error(String(err));
+    if (progress) {
+      runtime.error(String(err));
+    }
     return null;
   }
 }
@@ -125,9 +128,7 @@ export async function channelsListCommand(
     isExternal: false,
   }));
   if (opts.json) {
-    const usage = includeUsage
-      ? await loadProviderUsageSummary({ skipPluginAuthWithoutCredentialSource: true })
-      : undefined;
+    const usage = includeUsage ? await loadUsageWithProgress(runtime, false) : undefined;
     const chat: Record<string, string[]> = {};
     for (const plugin of plugins) {
       chat[plugin.id] = plugin.config.listAccountIds(cfg);

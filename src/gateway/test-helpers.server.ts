@@ -64,6 +64,8 @@ const GATEWAY_TEST_ENV_KEYS = [
   "USERPROFILE",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_AGENT_DIR",
+  "PI_CODING_AGENT_DIR",
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
   "OPENCLAW_SKIP_GMAIL_WATCHER",
@@ -225,6 +227,8 @@ async function setupGatewayTestHome() {
   process.env.USERPROFILE = tempHome;
   process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
   delete process.env.OPENCLAW_CONFIG_PATH;
+  delete process.env.OPENCLAW_AGENT_DIR;
+  delete process.env.PI_CODING_AGENT_DIR;
 }
 
 function applyGatewaySkipEnv() {

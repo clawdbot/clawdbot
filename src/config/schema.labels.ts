@@ -296,6 +296,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.maxRedirects": "Web Fetch Max Redirects",
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
   "tools.web.fetch.readability": "Web Fetch Readability Extraction",
+  "tools.web.fetch.useTrustedEnvProxy": "Web Fetch Trusted Env Proxy",
   "tools.web.fetch.ssrfPolicy": "Web Fetch SSRF Policy",
   "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
     "Web Fetch Allow RFC 2544 Benchmark Range",
@@ -915,6 +916,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.hooks": "Plugin Hook Policy",
   "plugins.entries.*.hooks.allowConversationAccess": "Allow Conversation Access Hooks",
   "plugins.entries.*.hooks.allowPromptInjection": "Allow Prompt Injection Hooks",
+  "plugins.entries.*.hooks.timeoutMs": "Plugin Hook Timeout (ms)",
+  "plugins.entries.*.hooks.timeouts": "Plugin Hook Timeout Overrides",
   "plugins.entries.*.subagent": "Plugin Subagent Policy",
   "plugins.entries.*.subagent.allowModelOverride": "Allow Plugin Subagent Model Override",
   "plugins.entries.*.subagent.allowedModels": "Plugin Subagent Allowed Models",

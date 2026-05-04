@@ -25,6 +25,7 @@ const BROWSER_SAFE_THINKING_LEVELS: ThinkLevel[] = [
 type DefineChatCommandInput = {
   key: string;
   nativeName?: string;
+  nativeAliases?: string[];
   description: string;
   args?: ChatCommandDefinition["args"];
   argsParsing?: ChatCommandDefinition["argsParsing"];
@@ -50,6 +51,7 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
   return {
     key: command.key,
     nativeName: command.nativeName,
+    nativeAliases: command.nativeAliases?.map((alias) => alias.trim()).filter(Boolean),
     description: command.description,
     acceptsArgs,
     args: command.args,
@@ -105,17 +107,22 @@ export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
       if (nativeName) {
         throw new Error(`Text-only command has native name: ${command.key}`);
       }
+      if (command.nativeAliases?.length) {
+        throw new Error(`Text-only command has native aliases: ${command.key}`);
+      }
       if (command.textAliases.length === 0) {
         throw new Error(`Text-only command missing text alias: ${command.key}`);
       }
     } else if (!nativeName) {
       throw new Error(`Native command missing native name: ${command.key}`);
     } else {
-      const nativeKey = normalizeOptionalLowercaseString(nativeName) ?? "";
-      if (nativeNames.has(nativeKey)) {
-        throw new Error(`Duplicate native command: ${nativeName}`);
+      for (const alias of [nativeName, ...(command.nativeAliases ?? [])]) {
+        const nativeKey = normalizeOptionalLowercaseString(alias) ?? "";
+        if (nativeNames.has(nativeKey)) {
+          throw new Error(`Duplicate native command: ${alias}`);
+        }
+        nativeNames.add(nativeKey);
       }
-      nativeNames.add(nativeKey);
     }
 
     if (command.scope === "native" && command.textAliases.length > 0) {
@@ -268,8 +275,9 @@ export function buildBuiltinChatCommands(
     defineChatCommand({
       key: "btw",
       nativeName: "btw",
+      nativeAliases: ["side"],
       description: "Ask a side question without changing future session context.",
-      textAlias: "/btw",
+      textAliases: ["/btw", "/side"],
       acceptsArgs: true,
       category: "tools",
       tier: "standard",
@@ -504,16 +512,11 @@ export function buildBuiltinChatCommands(
     defineChatCommand({
       key: "steer",
       nativeName: "steer",
-      description: "Send guidance to a running subagent.",
+      description: "Send guidance to the active run in this session.",
       textAlias: "/steer",
       category: "management",
       tier: "standard",
       args: [
-        {
-          name: "target",
-          description: "Label, run id, or index",
-          type: "string",
-        },
         {
           name: "message",
           description: "Steering message",

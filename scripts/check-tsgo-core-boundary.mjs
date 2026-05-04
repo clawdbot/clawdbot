@@ -8,9 +8,9 @@ const tsgoPath = path.join(repoRoot, "node_modules", ".bin", "tsgo");
 
 const coreGraphs = [
   { name: "core", config: "tsconfig.core.json" },
-  { name: "core-test", config: "tsconfig.core.test.json" },
-  { name: "core-test-agents", config: "tsconfig.core.test.agents.json" },
-  { name: "core-test-non-agents", config: "tsconfig.core.test.non-agents.json" },
+  { name: "core-test", config: "test/tsconfig/tsconfig.core.test.json" },
+  { name: "core-test-agents", config: "test/tsconfig/tsconfig.core.test.agents.json" },
+  { name: "core-test-non-agents", config: "test/tsconfig/tsconfig.core.test.non-agents.json" },
 ];
 
 function normalizeFilePath(filePath) {

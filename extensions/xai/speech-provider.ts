@@ -230,6 +230,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
     },
     synthesizeTelephony: async (req) => {
       const config = readXaiProviderConfig(req.providerConfig);
+      const overrides = readXaiOverrides(req.providerOverrides);
       const apiKey = config.apiKey || process.env.XAI_API_KEY;
       if (!apiKey) {
         throw new Error("xAI API key missing");
@@ -240,9 +241,9 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
         text: req.text,
         apiKey,
         baseUrl: config.baseUrl,
-        voiceId: config.voiceId,
-        language: config.language,
-        speed: config.speed,
+        voiceId: overrides.voiceId ?? config.voiceId,
+        language: overrides.language ?? config.language,
+        speed: overrides.speed ?? config.speed,
         responseFormat: outputFormat,
         timeoutMs: req.timeoutMs,
       });

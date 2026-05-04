@@ -198,6 +198,45 @@ function createPluginSdkAliasTargetFixture(params?: {
   };
 }
 
+function createBundledPluginPackagePublicSurfaceAliasFixture() {
+  const fixture = createPluginSdkAliasTargetFixture();
+  const extensionRoot = path.join(fixture.fixture.root, bundledPluginRoot("slack"));
+  const distExtensionRoot = path.join(fixture.fixture.root, "dist", "extensions", "slack");
+  mkdirSafeDir(extensionRoot);
+  mkdirSafeDir(distExtensionRoot);
+  fs.writeFileSync(
+    path.join(extensionRoot, "package.json"),
+    JSON.stringify({ name: "@openclaw/slack", type: "module" }, null, 2),
+    "utf-8",
+  );
+  const sourceApiPath = path.join(extensionRoot, "api.ts");
+  const sourceRuntimeApiPath = path.join(extensionRoot, "runtime-api.ts");
+  const sourceTestApiPath = path.join(extensionRoot, "test-api.ts");
+  const distApiPath = path.join(distExtensionRoot, "api.js");
+  const distRuntimeApiPath = path.join(distExtensionRoot, "runtime-api.js");
+  const distTestApiPath = path.join(distExtensionRoot, "test-api.js");
+  fs.writeFileSync(sourceApiPath, "export const slackApi = 'source';\n", "utf-8");
+  fs.writeFileSync(sourceRuntimeApiPath, "export const slackRuntimeApi = 'source';\n", "utf-8");
+  fs.writeFileSync(sourceTestApiPath, "export const slackTestApi = 'source';\n", "utf-8");
+  fs.writeFileSync(distApiPath, "export const slackApi = 'dist';\n", "utf-8");
+  fs.writeFileSync(distRuntimeApiPath, "export const slackRuntimeApi = 'dist';\n", "utf-8");
+  fs.writeFileSync(distTestApiPath, "export const slackTestApi = 'dist';\n", "utf-8");
+  fs.writeFileSync(
+    path.join(extensionRoot, "internal.ts"),
+    "export const internal = true;\n",
+    "utf-8",
+  );
+  return {
+    ...fixture,
+    distApiPath,
+    distRuntimeApiPath,
+    distTestApiPath,
+    sourceApiPath,
+    sourceRuntimeApiPath,
+    sourceTestApiPath,
+  };
+}
+
 function writePluginEntry(root: string, relativePath: string) {
   const pluginEntry = path.join(root, relativePath);
   fs.mkdirSync(path.dirname(pluginEntry), { recursive: true });
@@ -775,6 +814,64 @@ describe("plugin sdk alias helpers", () => {
       rootAliasPath: distRootAlias,
       channelRuntimePath: distChannelRuntimePath,
     });
+  });
+
+  it("aliases bundled plugin package public surfaces for source plugin transforms", () => {
+    const { fixture, sourceApiPath, sourceRuntimeApiPath } =
+      createBundledPluginPackagePublicSurfaceAliasFixture();
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("qa-lab", "src/live-transports/slack/slack-live.runtime.ts"),
+    );
+
+    const aliases = withEnv({ NODE_ENV: undefined }, () =>
+      buildPluginLoaderAliasMap(sourcePluginEntry),
+    );
+
+    expect(fs.realpathSync(aliases["@openclaw/slack/api.js"] ?? "")).toBe(
+      fs.realpathSync(sourceApiPath),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/slack/runtime-api.js"] ?? "")).toBe(
+      fs.realpathSync(sourceRuntimeApiPath),
+    );
+    expect(aliases["@openclaw/slack/test-api.js"]).toBeUndefined();
+    expect(aliases["@openclaw/slack/internal.js"]).toBeUndefined();
+  });
+
+  it("aliases bundled plugin package test surfaces only in private QA mode", () => {
+    const { fixture, sourceTestApiPath } = createBundledPluginPackagePublicSurfaceAliasFixture();
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("qa-lab", "src/live-transports/slack/slack-live.runtime.ts"),
+    );
+
+    const aliases = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1", NODE_ENV: undefined }, () =>
+      buildPluginLoaderAliasMap(sourcePluginEntry),
+    );
+
+    expect(fs.realpathSync(aliases["@openclaw/slack/test-api.js"] ?? "")).toBe(
+      fs.realpathSync(sourceTestApiPath),
+    );
+  });
+
+  it("aliases bundled plugin package public surfaces to dist when dist resolution is requested", () => {
+    const { fixture, distApiPath, distRuntimeApiPath } =
+      createBundledPluginPackagePublicSurfaceAliasFixture();
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("qa-lab", "src/live-transports/slack/slack-live.runtime.ts"),
+    );
+
+    const aliases = withEnv({ NODE_ENV: undefined }, () =>
+      buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
+    );
+
+    expect(fs.realpathSync(aliases["@openclaw/slack/api.js"] ?? "")).toBe(
+      fs.realpathSync(distApiPath),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/slack/runtime-api.js"] ?? "")).toBe(
+      fs.realpathSync(distRuntimeApiPath),
+    );
   });
 
   it("falls back to source plugin-sdk subpath aliases when dist chunks are stale", () => {

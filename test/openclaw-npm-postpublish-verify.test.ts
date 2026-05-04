@@ -2,24 +2,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
+  collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors,
   collectInstalledRootDependencyManifestErrors,
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
   resolveInstalledBinaryPath,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
-
-const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
-  (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
-);
-const REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS = [
-  ...PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS,
-] as const;
 
 describe("buildPublishedInstallScenarios", () => {
   it("uses a single fresh scenario for plain stable releases", () => {
@@ -66,7 +58,11 @@ describe("buildPublishedInstallCommandArgs", () => {
 });
 
 describe("collectInstalledPackageErrors", () => {
-  it("flags version mismatches and missing runtime sidecars", () => {
+  function makeInstalledPackageRoot(): string {
+    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-package-"));
+  }
+
+  it("flags version mismatches", () => {
     const errors = collectInstalledPackageErrors({
       expectedVersion: "2026.3.23-2",
       installedVersion: "2026.3.23",
@@ -76,17 +72,35 @@ describe("collectInstalledPackageErrors", () => {
     expect(errors[0]).toBe(
       "installed package version mismatch: expected 2026.3.23-2, found 2026.3.23.",
     );
-    expect(errors).toEqual(
-      expect.arrayContaining(
-        REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS.map(
-          (relativePath) =>
-            `installed package is missing required bundled runtime sidecar: ${relativePath}`,
-        ),
-      ),
-    );
-    expect(errors.length).toBeGreaterThanOrEqual(
-      1 + REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS.length,
-    );
+  });
+
+  it("requires runtime sidecars for bundled extensions included in the package", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n', "utf8");
+      mkdirSync(join(packageRoot, "dist", "extensions", "slack"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "extensions", "slack", "package.json"),
+        "{}\n",
+        "utf8",
+      );
+
+      expect(collectInstalledBundledRuntimeSidecarPaths(packageRoot)).toContain(
+        "dist/extensions/slack/runtime-api.js",
+      );
+      expect(
+        collectInstalledPackageErrors({
+          expectedVersion: "2026.3.23",
+          installedVersion: "2026.3.23",
+          packageRoot,
+        }),
+      ).toContain(
+        "installed package is missing required bundled runtime sidecar: dist/extensions/slack/runtime-api.js",
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
   });
 });
 
@@ -212,6 +226,32 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
+  it("accepts optional or externalized runtime imports", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "optional-runtime.js"),
+        'await import("@lancedb/lancedb");\n',
+        "utf8",
+      );
+      writeFileSync(
+        join(packageRoot, "dist", "discord-voice-runtime.js"),
+        'const OpusScript = require("opusscript");\nexport { OpusScript };\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
   it("flags undeclared imports from mjs and cjs root dist files", () => {
     const packageRoot = makeInstalledPackageRoot();
 
@@ -318,12 +358,12 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(
         join(packageRoot, "dist", "oversized.js"),
-        "x".repeat(2 * 1024 * 1024 + 1),
+        "x".repeat(4 * 1024 * 1024 + 1),
         "utf8",
       );
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        "installed package root dist file 'oversized.js' is invalid or exceeds 2097152 bytes.",
+        "installed package root dist file 'oversized.js' is invalid or exceeds 4194304 bytes.",
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });

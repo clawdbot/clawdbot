@@ -5,6 +5,11 @@ on:
     - cron: "11 5 * * *"
   workflow_dispatch:
     inputs:
+      target_ref:
+        description: OpenClaw ref to benchmark; defaults to the workflow ref
+        required: false
+        default: ""
+        type: string
       profile:
         description: Kova profile to run
         required: false
@@ -36,9 +41,9 @@ on:
         default: false
         type: boolean
       kova_ref:
-        description: Kova Git ref to install
+        description: openclaw/Kova Git ref to install
         required: false
-        default: 51947110f5cacb6ab2c0947594ea9628031c9fcf
+        default: b63b6f9e20efb23641df00487e982230d81a90ac
         type: string
 
 permissions:
@@ -51,6 +56,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   OCM_VERSION: v0.2.15
+  KOVA_REPOSITORY: openclaw/Kova
   PERFORMANCE_MODEL_ID: gpt-5.4
 
 jobs:
@@ -84,13 +90,15 @@ jobs:
             live: "true"
             include_filters: "scenario:agent-cold-warm-message"
     env:
-      KOVA_REF: ${{ inputs.kova_ref || '51947110f5cacb6ab2c0947594ea9628031c9fcf' }}
+      KOVA_REF: ${{ inputs.kova_ref || 'b63b6f9e20efb23641df00487e982230d81a90ac' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
+      PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
       BUNDLE_DIR: ${{ github.workspace }}/.artifacts/kova/bundles/${{ matrix.lane }}
       SUMMARY_DIR: ${{ github.workspace }}/.artifacts/kova/summaries
       SOURCE_PERF_DIR: ${{ github.workspace }}/.artifacts/openclaw-performance/source/${{ matrix.lane }}
       LANE_ID: ${{ matrix.lane }}
+      TARGET_REF: ${{ inputs.target_ref || github.ref_name }}
       PROFILE: ${{ inputs.profile || 'diagnostic' }}
       REQUESTED_REPEAT: ${{ inputs.repeat || '3' }}
       FAIL_ON_REGRESSION: ${{ inputs.fail_on_regression || 'false' }}
@@ -138,8 +146,33 @@ jobs:
         if: steps.lane.outputs.run == 'true'
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.target_ref || github.ref }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Checkout performance workflow helpers
+        if: steps.lane.outputs.run == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: .artifacts/performance-workflow
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Record tested revision
+        if: steps.lane.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tested_sha="$(git rev-parse HEAD)"
+          echo "TESTED_REF=${TARGET_REF}" >> "$GITHUB_ENV"
+          echo "TESTED_SHA=${tested_sha}" >> "$GITHUB_ENV"
+          {
+            echo "Tested ref: ${TARGET_REF}"
+            echo "Tested SHA: ${tested_sha}"
+            echo "Workflow ref: ${GITHUB_REF_NAME}"
+            echo "Workflow SHA: ${GITHUB_SHA}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Node environment
         if: steps.lane.outputs.run == 'true'
@@ -157,7 +190,7 @@ jobs:
           mkdir -p "$HOME/.local/bin" "$(dirname "$KOVA_SRC")"
           curl -fsSL https://raw.githubusercontent.com/shakkernerd/ocm/main/install.sh \
             | bash -s -- --version "$OCM_VERSION" --prefix "$HOME/.local" --force
-          git clone --filter=blob:none https://github.com/shakkernerd/Kova.git "$KOVA_SRC"
+          git clone --filter=blob:none "https://github.com/${KOVA_REPOSITORY}.git" "$KOVA_SRC"
           git -C "$KOVA_SRC" checkout "$KOVA_REF"
           cat > "$HOME/.local/bin/kova" <<EOF
           #!/usr/bin/env bash
@@ -280,18 +313,35 @@ jobs:
 
           kova report bundle "$report_json" --output-dir "$BUNDLE_DIR" --json | tee "$BUNDLE_DIR/bundle.json"
 
-          ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
+          ref_slug="$(printf '%s' "${TESTED_REF}" | tr -c 'A-Za-z0-9._-' '-')"
           run_slug="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           report_url=""
           if [[ "${CLAWGRIT_REPORTS_TOKEN_PRESENT:-false}" == "true" ]]; then
             report_url="https://github.com/openclaw/clawgrit-reports/tree/main/openclaw-performance/${ref_slug}/${run_slug}/${LANE_ID}"
           fi
           summary_path="$SUMMARY_DIR/${LANE_ID}.md"
-          summary_args=(node scripts/kova-ci-summary.mjs --report "$report_json" --output "$summary_path" --lane "$LANE_ID")
+          summary_args=(node "$PERFORMANCE_HELPER_DIR/scripts/kova-ci-summary.mjs" --report "$report_json" --output "$summary_path" --lane "$LANE_ID")
           if [[ -n "$report_url" ]]; then
             summary_args+=(--report-url "$report_url")
           fi
           "${summary_args[@]}"
+          cat >> "$summary_path" <<EOF
+
+          ## Test scope
+
+          - Repository: ${GITHUB_REPOSITORY}
+          - Tested ref: ${TESTED_REF}
+          - Tested SHA: ${TESTED_SHA}
+          - Workflow ref: ${GITHUB_REF_NAME}
+          - Workflow SHA: ${GITHUB_SHA}
+          - Kova repository: ${KOVA_REPOSITORY}
+          - Kova ref: ${KOVA_REF}
+          - Kova profile: ${PROFILE}
+          - Lane auth: ${AUTH_MODE}
+          - Lane model: ${PERFORMANCE_MODEL_ID}
+          - Lane repeat: ${repeat}
+          - Include filters: ${INCLUDE_FILTERS}
+          EOF
           cat "$summary_path" >> "$GITHUB_STEP_SUMMARY"
 
           if [[ "$FAIL_ON_REGRESSION" == "true" && "$status" != "0" ]]; then
@@ -309,6 +359,24 @@ jobs:
           fi
 
           mkdir -p "$SOURCE_PERF_DIR/mock-hello"
+          if ! node -e "const fs=require('node:fs'); const scripts=require('./package.json').scripts||{}; process.exit(scripts['test:gateway:cpu-scenarios'] && scripts.openclaw && fs.existsSync('scripts/bench-cli-startup.ts') ? 0 : 1)"; then
+            cat > "$SOURCE_PERF_DIR/index.md" <<EOF
+          # OpenClaw Source Performance
+
+          Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          Source probes skipped for this tested ref because one or more probe entry points are not present in the checked-out source tree.
+
+          ## Test scope
+
+          - Tested ref: ${TESTED_REF}
+          - Tested SHA: ${TESTED_SHA}
+          - Required scripts: test:gateway:cpu-scenarios, openclaw, scripts/bench-cli-startup.ts
+          EOF
+            cat "$SOURCE_PERF_DIR/index.md" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           pnpm build
 
           pnpm test:gateway:cpu-scenarios \
@@ -392,7 +460,7 @@ jobs:
           cleanup_gateway
           trap - EXIT
 
-          pnpm perf:source:summary \
+          node "$PERFORMANCE_HELPER_DIR/scripts/openclaw-performance-source-summary.mjs" \
             --source-dir "$SOURCE_PERF_DIR" \
             --output "$SOURCE_PERF_DIR/index.md"
 
@@ -437,7 +505,7 @@ jobs:
         run: |
           set -euo pipefail
           reports_root=".artifacts/clawgrit-reports"
-          ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
+          ref_slug="$(printf '%s' "${TESTED_REF}" | tr -c 'A-Za-z0-9._-' '-')"
           run_slug="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           dest="${reports_root}/openclaw-performance/${ref_slug}/${run_slug}/${LANE_ID}"
           mkdir -p "$dest"
@@ -465,8 +533,12 @@ jobs:
           cat > "${reports_root}/openclaw-performance/${ref_slug}/latest-${LANE_ID}.json" <<EOF
           {
             "repository": "${GITHUB_REPOSITORY}",
-            "ref": "${GITHUB_REF_NAME}",
-            "sha": "${GITHUB_SHA}",
+            "ref": "${TESTED_REF}",
+            "sha": "${TESTED_SHA}",
+            "tested_ref": "${TESTED_REF}",
+            "tested_sha": "${TESTED_SHA}",
+            "workflow_ref": "${GITHUB_REF_NAME}",
+            "workflow_sha": "${GITHUB_SHA}",
             "workflow": "${GITHUB_WORKFLOW}",
             "run_id": "${GITHUB_RUN_ID}",
             "run_attempt": "${GITHUB_RUN_ATTEMPT}",
@@ -482,5 +554,15 @@ jobs:
             echo "No clawgrit report changes to publish."
             exit 0
           fi
-          git -C "$reports_root" commit -m "perf: add OpenClaw ${LANE_ID} report ${GITHUB_SHA::12}"
-          git -C "$reports_root" push origin HEAD:main
+          git -C "$reports_root" commit -m "perf: add OpenClaw ${LANE_ID} report ${TESTED_SHA::12}"
+          for attempt in 1 2 3 4 5; do
+            if git -C "$reports_root" push origin HEAD:main; then
+              exit 0
+            fi
+            if [[ "$attempt" == "5" ]]; then
+              exit 1
+            fi
+            sleep $((attempt * 2))
+            git -C "$reports_root" fetch --depth=1 origin main
+            git -C "$reports_root" rebase FETCH_HEAD
+          done

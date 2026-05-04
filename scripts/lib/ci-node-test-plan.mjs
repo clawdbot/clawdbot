@@ -187,6 +187,26 @@ function resolveGatewayServerShardName(file) {
   ) {
     return "agentic-control-plane-auth-node";
   }
+  if (
+    name.startsWith("server-startup") ||
+    name.startsWith("server-restart") ||
+    name.startsWith("server-runtime") ||
+    name.startsWith("server.lazy") ||
+    name.startsWith("server.health") ||
+    name.startsWith("server/health-state") ||
+    name.startsWith("server/readiness") ||
+    name === "server-close.test.ts"
+  ) {
+    return "agentic-control-plane-startup-runtime";
+  }
+  if (
+    name.includes("plugin") ||
+    name.includes("hooks") ||
+    name.includes("http") ||
+    name.includes("ws-connection")
+  ) {
+    return "agentic-control-plane-http-plugin-ws";
+  }
   return "agentic-control-plane-runtime";
 }
 
@@ -200,7 +220,9 @@ function createGatewayServerSplitShards() {
     "agentic-control-plane-agent-chat",
     "agentic-control-plane-auth-node",
     "agentic-control-plane-http-models",
+    "agentic-control-plane-http-plugin-ws",
     "agentic-control-plane-runtime",
+    "agentic-control-plane-startup-runtime",
   ]
     .map((shardName) => ({
       configs: ["test/vitest/vitest.gateway-server.config.ts"],
@@ -217,12 +239,8 @@ const SPLIT_NODE_SHARDS = new Map([
     "core-unit-fast",
     [
       {
-        shardName: "core-unit-fast-support",
-        configs: [
-          "test/vitest/vitest.unit-fast.config.ts",
-          "test/vitest/vitest.unit-support.config.ts",
-        ],
-        includeExternalConfigs: true,
+        shardName: "core-unit-fast",
+        configs: ["test/vitest/vitest.unit-fast.config.ts"],
         requiresDist: false,
       },
     ],
@@ -242,16 +260,32 @@ const SPLIT_NODE_SHARDS = new Map([
     ],
   ],
   ["core-unit-security", []],
-  ["core-unit-support", []],
+  [
+    "core-unit-support",
+    [
+      {
+        shardName: "core-unit-support",
+        configs: ["test/vitest/vitest.unit-support.config.ts"],
+        requiresDist: false,
+      },
+    ],
+  ],
   [
     "core-runtime",
     [
       {
-        shardName: "core-runtime-infra",
+        shardName: "core-runtime-infra-state",
         configs: [
           "test/vitest/vitest.infra.config.ts",
           "test/vitest/vitest.hooks.config.ts",
           "test/vitest/vitest.secrets.config.ts",
+        ],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+      },
+      {
+        shardName: "core-runtime-infra-process",
+        configs: [
           "test/vitest/vitest.logging.config.ts",
           "test/vitest/vitest.process.config.ts",
           "test/vitest/vitest.runtime-config.config.ts",

@@ -597,6 +597,67 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     );
   });
 
+  it("retains managed .env values for macOS LaunchAgent env files", async () => {
+    await writeStateDirDotEnv("TAVILY_API_KEY=dotenv-tavily\nOPENROUTER_API_KEY=or-key\n", {
+      stateDir: path.join(tmpDir, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+    });
+
+    expect(plan.environment.TAVILY_API_KEY).toBe("dotenv-tavily");
+    expect(plan.environment.OPENROUTER_API_KEY).toBe("or-key");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
+      "OPENROUTER_API_KEY,TAVILY_API_KEY",
+    );
+  });
+
+  it("does not retain config env values for macOS LaunchAgent env files", async () => {
+    await writeStateDirDotEnv("OPENROUTER_API_KEY=or-dotenv\nTAVILY_API_KEY=dotenv-tavily\n", {
+      stateDir: path.join(tmpDir, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+      config: {
+        env: {
+          vars: {
+            BRAVE_API_KEY: "brave-config-key",
+            OPENROUTER_API_KEY: "or-config-key",
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.BRAVE_API_KEY).toBeUndefined();
+    expect(plan.environment.OPENROUTER_API_KEY).toBeUndefined();
+    expect(plan.environment.TAVILY_API_KEY).toBe("dotenv-tavily");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
+      "BRAVE_API_KEY,OPENROUTER_API_KEY,TAVILY_API_KEY",
+    );
+  });
+
   it("works when .env file does not exist", async () => {
     mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
 
@@ -836,6 +897,38 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.TAVILY_API_KEY).toBeUndefined();
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("TAVILY_API_KEY");
     expect(plan.environment.CUSTOM_TOOL_HOME).toBe("/Users/test/.custom-tool");
+  });
+
+  it("keeps source metadata for EnvironmentFile-backed preserved vars", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      existingEnvironment: {
+        OPENROUTER_API_KEY: "or-operator-key",
+        CUSTOM_TOOL_HOME: "/Users/test/.custom-tool",
+        OPENCLAW_GATEWAY_TOKEN: "old-token",
+      },
+      existingEnvironmentValueSources: {
+        OPENROUTER_API_KEY: "file",
+        CUSTOM_TOOL_HOME: "inline",
+        OPENCLAW_GATEWAY_TOKEN: "file",
+      },
+    });
+
+    expect(plan.environment.OPENROUTER_API_KEY).toBe("or-operator-key");
+    expect(plan.environmentValueSources?.OPENROUTER_API_KEY).toBe("file");
+    expect(plan.environment.CUSTOM_TOOL_HOME).toBe("/Users/test/.custom-tool");
+    expect(plan.environmentValueSources?.CUSTOM_TOOL_HOME).toBe("inline");
+    expect(plan.environment.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+    expect(plan.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
   });
 
   it("does not embed auth-profile env refs when the key is already durable", async () => {

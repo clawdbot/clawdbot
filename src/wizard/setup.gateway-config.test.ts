@@ -121,6 +121,56 @@ describe("configureGatewayForSetup", () => {
     }
   });
 
+  it("keeps OPENCLAW_GATEWAY_TOKEN in advanced flow when user confirms keeping existing", async () => {
+    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "advanced-env-token";
+    mocks.randomToken.mockReturnValue("should-not-be-used");
+    mocks.randomToken.mockClear();
+
+    try {
+      const selectQueue = ["loopback", "token", "off"];
+      const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+        const next = selectQueue.shift();
+        if (next !== undefined) {
+          return next;
+        }
+        return params.initialValue ?? params.options[0]?.value;
+      }) as unknown as WizardPrompter["select"];
+      const text = vi.fn(async () => "18789") as unknown as WizardPrompter["text"];
+      const confirm = vi.fn(async () => true);
+      const prompter = buildWizardPrompter({ select, text, confirm });
+
+      const result = await configureGatewayForSetup({
+        flow: "advanced",
+        baseConfig: {},
+        nextConfig: {},
+        localPort: 18789,
+        quickstartGateway: {
+          hasExisting: false,
+          port: 18789,
+          bind: "loopback",
+          authMode: "token",
+          tailscaleMode: "off",
+          token: undefined,
+          password: undefined,
+          customBindHost: undefined,
+          tailscaleResetOnExit: false,
+        },
+        prompter,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      });
+
+      expect(result.settings.gatewayToken).toBe("advanced-env-token");
+      expect(mocks.randomToken).not.toHaveBeenCalled();
+    } finally {
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
+    }
+  });
+
   it("enables insecure local control ui auth for fresh quickstart loopback setups", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
 

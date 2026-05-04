@@ -29,6 +29,12 @@
   margin: 0;
 }
 
+.chat-text :where(table) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 .chat-text :where(p + p, p + ul, p + ol, p + pre, p + blockquote) {
   margin-top: 0.75em;
 }

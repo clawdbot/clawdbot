@@ -36,6 +36,28 @@ vi.mock("./runtime-api.js", () => ({
     return phone ? `+${phone}` : null;
   },
   logVerbose: () => {},
+  resolveChannelSourceReplyDeliveryMode: ({
+    cfg,
+    ctx,
+  }: {
+    cfg: {
+      messages?: {
+        visibleReplies?: "automatic" | "message_tool";
+        groupChat?: { visibleReplies?: "automatic" | "message_tool" };
+      };
+    };
+    ctx: { ChatType?: string; CommandSource?: "native" };
+  }) => {
+    if (ctx.CommandSource === "native") {
+      return "automatic";
+    }
+    if (ctx.ChatType === "group" || ctx.ChatType === "channel") {
+      const configuredMode =
+        cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies;
+      return configuredMode === "automatic" ? "automatic" : "message_tool_only";
+    }
+    return cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
+  },
   resolveChunkMode: () => "length",
   resolveIdentityNamePrefix: (cfg: {
     agents?: { list?: Array<{ id?: string; default?: boolean; identity?: { name?: string } }> };
@@ -137,6 +159,17 @@ function getCapturedOnError() {
       };
     }
   )?.dispatcherOptions?.onError;
+}
+
+function getCapturedReplyOptions() {
+  return (
+    capturedDispatchParams as {
+      replyOptions?: {
+        disableBlockStreaming?: boolean;
+        sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+      };
+    }
+  )?.replyOptions;
 }
 
 type BufferedReplyParams = Parameters<typeof dispatchWhatsAppBufferedReply>[0];
@@ -575,13 +608,7 @@ describe("whatsapp inbound dispatch", () => {
   it("maps WhatsApp blockStreaming=true to disableBlockStreaming=false", async () => {
     await dispatchBufferedReply();
 
-    expect(
-      (
-        capturedDispatchParams as {
-          replyOptions?: { disableBlockStreaming?: boolean };
-        }
-      )?.replyOptions?.disableBlockStreaming,
-    ).toBe(false);
+    expect(getCapturedReplyOptions()?.disableBlockStreaming).toBe(false);
   });
 
   it("maps WhatsApp blockStreaming=false to disableBlockStreaming=true", async () => {
@@ -589,13 +616,7 @@ describe("whatsapp inbound dispatch", () => {
       cfg: { channels: { whatsapp: { blockStreaming: false } } } as never,
     });
 
-    expect(
-      (
-        capturedDispatchParams as {
-          replyOptions?: { disableBlockStreaming?: boolean };
-        }
-      )?.replyOptions?.disableBlockStreaming,
-    ).toBe(true);
+    expect(getCapturedReplyOptions()?.disableBlockStreaming).toBe(true);
   });
 
   it("leaves disableBlockStreaming undefined when WhatsApp blockStreaming is unset", async () => {
@@ -603,13 +624,47 @@ describe("whatsapp inbound dispatch", () => {
       cfg: { channels: { whatsapp: {} } } as never,
     });
 
-    expect(
-      (
-        capturedDispatchParams as {
-          replyOptions?: { disableBlockStreaming?: boolean };
-        }
-      )?.replyOptions?.disableBlockStreaming,
-    ).toBeUndefined();
+    expect(getCapturedReplyOptions()?.disableBlockStreaming).toBeUndefined();
+  });
+
+  it("leaves WhatsApp direct reply mode unset by default", async () => {
+    await dispatchBufferedReply({
+      context: { Body: "hi", ChatType: "direct" },
+      msg: makeMsg({ from: "+15550001000", chatType: "direct" }),
+    });
+
+    expect(getCapturedReplyOptions()).toMatchObject({
+      disableBlockStreaming: false,
+    });
+    expect(getCapturedReplyOptions()?.sourceReplyDeliveryMode).toBeUndefined();
+  });
+
+  it("defaults WhatsApp group replies to message-tool-only and disables source streaming", async () => {
+    await dispatchBufferedReply({
+      context: { Body: "hi", ChatType: "group" },
+      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group" }),
+    });
+
+    expect(getCapturedReplyOptions()).toMatchObject({
+      sourceReplyDeliveryMode: "message_tool_only",
+      disableBlockStreaming: true,
+    });
+  });
+
+  it("honors automatic visible replies for WhatsApp groups", async () => {
+    await dispatchBufferedReply({
+      cfg: {
+        channels: { whatsapp: { blockStreaming: true } },
+        messages: { groupChat: { visibleReplies: "automatic" } },
+      } as never,
+      context: { Body: "hi", ChatType: "group" },
+      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group" }),
+    });
+
+    expect(getCapturedReplyOptions()).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+      disableBlockStreaming: false,
+    });
   });
 
   it("treats block-only turns as visible replies instead of silent turns", async () => {

@@ -133,6 +133,48 @@ describe("provider-usage.load", () => {
     }
   });
 
+  it("keeps usage summary available when one provider fetch rejects", async () => {
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
+      async ({ provider }): Promise<ProviderUsageSnapshot | null> => {
+        if (provider === "anthropic") {
+          throw new Error("fetch failed");
+        }
+        const usageProvider = provider as ProviderUsageSnapshot["provider"];
+        return {
+          provider: usageProvider,
+          displayName: "Codex",
+          windows: [{ label: "3h", usedPercent: 12 }],
+        };
+      },
+    );
+    const mockFetch = createProviderUsageFetch(async () => {
+      throw new Error("legacy fetch should not run");
+    });
+
+    const summary = await loadUsageWithAuth(
+      loadProviderUsageSummary,
+      [
+        { provider: "anthropic", token: "token-a" },
+        { provider: "openai-codex", token: "token-codex" },
+      ],
+      mockFetch,
+    );
+
+    expect(summary.providers).toEqual([
+      {
+        provider: "anthropic",
+        displayName: "Claude",
+        windows: [],
+        error: "fetch failed",
+      },
+      {
+        provider: "openai-codex",
+        displayName: "Codex",
+        windows: [{ label: "3h", usedPercent: 12 }],
+      },
+    ]);
+  });
+
   it("throws when fetch is unavailable", async () => {
     const previousFetch = globalThis.fetch;
     vi.stubGlobal("fetch", undefined);

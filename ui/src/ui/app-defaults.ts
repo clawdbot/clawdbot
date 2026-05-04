@@ -10,6 +10,11 @@ export const DEFAULT_LOG_LEVEL_FILTERS: Record<LogLevel, boolean> = {
   fatal: true,
 };
 
+export const DEFAULT_SESSIONS_FILTERS = {
+  activeMinutes: "120",
+  limit: "200",
+} as const;
+
 export const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
   description: "",

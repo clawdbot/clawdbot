@@ -83,6 +83,29 @@ export function getGatewayModelPricingCacheMeta(): {
   };
 }
 
+function stablePricingValue(value: unknown): string {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? JSON.stringify(value) : JSON.stringify(String(value));
+  }
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stablePricingValue(entry)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .toSorted()
+    .map((key) => `${JSON.stringify(key)}:${stablePricingValue(record[key])}`)
+    .join(",")}}`;
+}
+
+export function getGatewayModelPricingCacheFingerprint(): string {
+  const entries = Array.from(cachedPricing.entries()).toSorted(([a], [b]) => a.localeCompare(b));
+  return stablePricingValue(entries);
+}
+
 export function __resetGatewayModelPricingCacheForTest(): void {
   clearGatewayModelPricingCacheState();
 }

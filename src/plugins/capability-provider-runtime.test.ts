@@ -156,7 +156,8 @@ function collectActiveRegistryLookups() {
       Boolean(
         options &&
         typeof options === "object" &&
-        Object.hasOwn(options as Record<string, unknown>, "onlyPluginIds"),
+        Object.hasOwn(options as Record<string, unknown>, "onlyPluginIds") &&
+        !Object.hasOwn(options as Record<string, unknown>, "activate"),
       ),
     );
 }
@@ -468,6 +469,62 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenLastCalledWith({
       onlyPluginIds: ["external-image"],
     });
+    expect(mocks.loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
+  });
+
+  it("cold-loads enabled external manifest-contract providers missing from startup registry", () => {
+    const loaded = createEmptyPluginRegistry();
+    loaded.speechProviders.push({
+      pluginId: "fish-audio",
+      pluginName: "Fish Audio",
+      source: "test",
+      provider: {
+        id: "fish-audio",
+        label: "Fish Audio",
+        isConfigured: () => true,
+        synthesize: async () => ({ kind: "audio", data: Buffer.from([]), mimeType: "audio/mpeg" }),
+      },
+    } as never);
+    mocks.loadPluginRegistrySnapshot.mockReturnValue({
+      plugins: [{ pluginId: "fish-audio", origin: "global", enabled: true }],
+    });
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "fish-audio",
+          origin: "global",
+          enabledByDefault: false,
+          contracts: { speechProviders: ["fish-audio"] },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((options?: unknown) => {
+      if (
+        options &&
+        typeof options === "object" &&
+        (options as { activate?: unknown }).activate === false
+      ) {
+        return loaded;
+      }
+      return undefined;
+    });
+
+    const provider = resolvePluginCapabilityProvider({
+      key: "speechProviders",
+      providerId: "fish-audio",
+    });
+
+    expect(provider?.id).toBe("fish-audio");
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
+      onlyPluginIds: ["fish-audio"],
+    });
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activate: false,
+        onlyPluginIds: ["fish-audio"],
+      }),
+    );
     expect(mocks.loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
   });
 

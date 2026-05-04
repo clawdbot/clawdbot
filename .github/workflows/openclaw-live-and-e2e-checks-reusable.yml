@@ -395,6 +395,9 @@ jobs:
               add_profile_suite native-live-src-agents "stable full"
               add_profile_suite native-live-src-gateway-core "minimum stable full"
               add_profile_suite native-live-src-gateway-profiles-anthropic "stable full"
+              add_profile_suite native-live-src-gateway-profiles-anthropic-smoke "stable"
+              add_profile_suite native-live-src-gateway-profiles-anthropic-opus "full"
+              add_profile_suite native-live-src-gateway-profiles-anthropic-sonnet-haiku "full"
               add_profile_suite native-live-src-gateway-profiles-google "stable full"
               add_profile_suite native-live-src-gateway-profiles-minimax "stable full"
               add_profile_suite native-live-src-gateway-profiles-openai "minimum stable full"
@@ -418,6 +421,9 @@ jobs:
               add_profile_suite live-gateway-google-docker "stable full"
               add_profile_suite live-gateway-minimax-docker "stable full"
               add_profile_suite live-gateway-advisory-docker "full"
+              add_profile_suite live-gateway-advisory-docker-deepseek-fireworks "full"
+              add_profile_suite live-gateway-advisory-docker-opencode-openrouter "full"
+              add_profile_suite live-gateway-advisory-docker-xai-zai "full"
               add_profile_suite live-cli-backend-docker "stable full"
               add_profile_suite live-acp-bind-docker "stable full"
               add_profile_suite live-codex-harness-docker "stable full"
@@ -811,6 +817,9 @@ jobs:
           export OPENCLAW_DOCKER_ALL_LOG_DIR=".artifacts/docker-tests/release-${DOCKER_E2E_CHUNK}"
           export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/release-${DOCKER_E2E_CHUNK}-timings.json"
           export OPENCLAW_DOCKER_ALL_PNPM_COMMAND="$(command -v pnpm)"
+          if [[ "${{ steps.plan.outputs.needs_live_image }}" == "1" ]]; then
+            OPENCLAW_DOCKER_BUILD_ON_MISSING=1 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-build-docker.sh
+          fi
 
           node .release-harness/scripts/test-docker-all.mjs
 
@@ -1054,7 +1063,7 @@ jobs:
           export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/targeted-${{ steps.plan.outputs.artifact_suffix }}-timings.json"
           export OPENCLAW_DOCKER_ALL_PNPM_COMMAND="$(command -v pnpm)"
           if [[ "${{ steps.plan.outputs.needs_live_image }}" == "1" ]]; then
-            OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-build-docker.sh
+            OPENCLAW_DOCKER_BUILD_ON_MISSING=1 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-build-docker.sh
           fi
           export OPENCLAW_DOCKER_ALL_BUILD=0
 
@@ -1182,6 +1191,9 @@ jobs:
           export OPENCLAW_DOCKER_ALL_LOG_DIR=".artifacts/docker-tests/release-openwebui"
           export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/release-openwebui-timings.json"
           export OPENCLAW_DOCKER_ALL_PNPM_COMMAND="$(command -v pnpm)"
+          if [[ "${{ steps.plan.outputs.needs_live_image }}" == "1" ]]; then
+            OPENCLAW_DOCKER_BUILD_ON_MISSING=1 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-build-docker.sh
+          fi
 
           node .release-harness/scripts/test-docker-all.mjs
 
@@ -1868,12 +1880,27 @@ jobs:
             timeout_minutes: 90
             profile_env_only: false
             profiles: minimum stable full
-          - suite_id: native-live-src-gateway-profiles-anthropic
-            label: Native live gateway profiles Anthropic
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+          - suite_id: native-live-src-gateway-profiles-anthropic-smoke
+            suite_group: native-live-src-gateway-profiles-anthropic
+            label: Native live gateway profiles Anthropic smoke
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 45
+            profile_env_only: false
+            profiles: stable
+          - suite_id: native-live-src-gateway-profiles-anthropic-opus
+            suite_group: native-live-src-gateway-profiles-anthropic
+            label: Native live gateway profiles Anthropic Opus
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-4-7,anthropic/claude-opus-4-6 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
             profile_env_only: false
-            profiles: stable full
+            profiles: full
+          - suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku
+            suite_group: native-live-src-gateway-profiles-anthropic
+            label: Native live gateway profiles Anthropic Sonnet/Haiku
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 90
+            profile_env_only: false
+            profiles: full
           - suite_id: native-live-src-gateway-profiles-google
             label: Native live gateway profiles Google
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview,google/gemini-3-flash-preview node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
@@ -2050,14 +2077,14 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
@@ -2065,7 +2092,7 @@ jobs:
           path: .release-harness
 
       - name: Setup Node environment
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -2073,11 +2100,11 @@ jobs:
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Configure suite-specific env
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         shell: bash
         run: |
           set -euo pipefail
@@ -2130,7 +2157,7 @@ jobs:
           esac
 
       - name: Run ${{ matrix.label }}
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
           OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
@@ -2182,10 +2209,25 @@ jobs:
             timeout_minutes: 30
             profile_env_only: false
             profiles: stable full
-          - suite_id: live-gateway-advisory-docker
-            label: Docker live gateway advisory providers
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks,opencode-go,openrouter,xai,zai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=6 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 40
+          - suite_id: live-gateway-advisory-docker-deepseek-fireworks
+            suite_group: live-gateway-advisory-docker
+            label: Docker live gateway advisory DeepSeek/Fireworks
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 30
+            profile_env_only: false
+            profiles: full
+          - suite_id: live-gateway-advisory-docker-opencode-openrouter
+            suite_group: live-gateway-advisory-docker
+            label: Docker live gateway advisory OpenCode/OpenRouter
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 30
+            profile_env_only: false
+            profiles: full
+          - suite_id: live-gateway-advisory-docker-xai-zai
+            suite_group: live-gateway-advisory-docker
+            label: Docker live gateway advisory xAI/Z.ai
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 30
             profile_env_only: false
             profiles: full
           - suite_id: live-cli-backend-docker
@@ -2259,14 +2301,14 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
@@ -2274,7 +2316,7 @@ jobs:
           path: .release-harness
 
       - name: Setup Node environment
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -2282,11 +2324,11 @@ jobs:
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Log in to GHCR
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ghcr.io
@@ -2294,7 +2336,7 @@ jobs:
           password: ${{ github.token }}
 
       - name: Configure suite-specific env
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
         shell: bash
         run: |
           set -euo pipefail
@@ -2328,7 +2370,7 @@ jobs:
           esac
 
       - name: Run ${{ matrix.label }}
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
         run: bash .release-harness/scripts/ci-live-command-retry.sh

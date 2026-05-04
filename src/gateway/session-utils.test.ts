@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -81,6 +81,64 @@ describe("gateway session utils", () => {
   test("capArrayByJsonBytes trims from the front", () => {
     const res = capArrayByJsonBytes(["a", "b", "c"], 10);
     expect(res.items).toEqual(["b", "c"]);
+  });
+
+  test("session lists apply a bounded default and expose truncation metadata", async () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = Object.fromEntries(
+      Array.from({ length: 105 }, (_value, index) => [
+        `session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          updatedAt: 1_000 - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+
+    const listed = await listSessionsFromStoreAsync({
+      cfg,
+      storePath: "",
+      store,
+      opts: {},
+    });
+
+    expect(listed.sessions).toHaveLength(100);
+    expect(listed.count).toBe(100);
+    expect(listed.totalCount).toBe(105);
+    expect(listed.limitApplied).toBe(100);
+    expect(listed.hasMore).toBe(true);
+    expect(listed.sessions[0]?.key).toBe("session-0");
+    expect(listed.sessions.at(-1)?.key).toBe("session-99");
+  });
+
+  test("session lists honor explicit caller limits", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = Object.fromEntries(
+      Array.from({ length: 5 }, (_value, index) => [
+        `session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          updatedAt: 1_000 - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { limit: 3 },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual([
+      "session-0",
+      "session-1",
+      "session-2",
+    ]);
+    expect(listed.count).toBe(3);
+    expect(listed.totalCount).toBe(5);
+    expect(listed.limitApplied).toBe(3);
+    expect(listed.hasMore).toBe(true);
   });
 
   test("parseGroupKey handles group keys", () => {
@@ -199,6 +257,93 @@ describe("gateway session utils", () => {
     ]);
     expect(defaults.thinkingDefault).toBe("medium");
     expect(row.thinkingDefault).toBe("medium");
+  });
+
+  test("session list memoizes repeated thinking enrichment per provider model", async () => {
+    const resolveThinkingProfile = vi.fn(() => ({
+      levels: [{ id: "off" as const }, { id: "medium" as const }],
+      defaultLevel: "medium" as const,
+    }));
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "test",
+      source: "test",
+      provider: {
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        auth: [],
+        resolveThinkingProfile,
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const cfg = createModelDefaultsConfig({ primary: "openai-codex/gpt-5.5" });
+    const store = Object.fromEntries(
+      Array.from({ length: 5 }, (_value, index) => [
+        `session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          modelProvider: "openai-codex",
+          model: "gpt-5.5",
+          updatedAt: Date.now() - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+
+    const result = await listSessionsFromStoreAsync({
+      cfg,
+      storePath: "",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions).toHaveLength(5);
+    expect(resolveThinkingProfile).toHaveBeenCalledTimes(3);
+  });
+
+  test("session list thinking cache preserves case-distinct model catalog entries", async () => {
+    const cfg = createModelDefaultsConfig({ primary: "custom/CaseModel" });
+    const modelCatalog = [
+      {
+        provider: "custom",
+        id: "CaseModel",
+        name: "CaseModel",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+      },
+      {
+        provider: "custom",
+        id: "casemodel",
+        name: "casemodel",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+      },
+    ];
+    const result = await listSessionsFromStoreAsync({
+      cfg,
+      storePath: "",
+      modelCatalog,
+      store: {
+        upper: {
+          sessionId: "upper",
+          modelProvider: "custom",
+          model: "CaseModel",
+          updatedAt: 2,
+        } satisfies SessionEntry,
+        lower: {
+          sessionId: "lower",
+          modelProvider: "custom",
+          model: "casemodel",
+          updatedAt: 1,
+        } satisfies SessionEntry,
+      },
+      opts: {},
+    });
+
+    const upper = result.sessions.find((session) => session.key === "upper");
+    const lower = result.sessions.find((session) => session.key === "lower");
+    expect(upper?.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
+    expect(lower?.thinkingLevels?.map((level) => level.id)).not.toContain("xhigh");
   });
 
   test("session defaults and rows expose xhigh from configured catalog compat", () => {
@@ -1144,7 +1289,7 @@ describe("listSessionsFromStore selected model display", () => {
         }),
       );
       expect(listed.sessions[0]?.agentRuntime).toEqual({ id: "pi", source: "implicit" });
-      expect(listed.sessions[0]?.thinkingOptions).toEqual([]);
+      expect(listed.sessions[0]?.thinkingOptions?.length).toBeGreaterThan(0);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

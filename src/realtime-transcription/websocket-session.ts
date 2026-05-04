@@ -20,6 +20,7 @@ export type RealtimeTranscriptionWebSocketTransport = {
 
 export type RealtimeTranscriptionWebSocketSessionOptions<Event = unknown> = {
   callbacks: RealtimeTranscriptionSessionCallbacks;
+  connectClosedBeforeReadyMessage?: string;
   connectTimeoutMessage?: string;
   connectTimeoutMs?: number;
   closeTimeoutMs?: number;
@@ -267,7 +268,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
         if (!opened || !settled) {
           failConnect(
             new Error(
-              this.options.connectTimeoutMessage ??
+              this.options.connectClosedBeforeReadyMessage ??
                 `${this.options.providerId} realtime transcription connection closed before ready`,
             ),
           );

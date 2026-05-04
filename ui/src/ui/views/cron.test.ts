@@ -277,6 +277,45 @@ describe("cron view", () => {
     expect(container.querySelector('input[placeholder="https://example.com/cron"]')).toBeNull();
   });
 
+  it("collapses the new job sidebar without rendering the full form", () => {
+    const container = document.createElement("div");
+    const onToggleFormCollapsed = vi.fn();
+    const expandedProps = createProps() as CronProps & {
+      cronFormCollapsed: boolean;
+      onToggleFormCollapsed: (collapsed: boolean) => void;
+    };
+    expandedProps.cronFormCollapsed = false;
+    expandedProps.onToggleFormCollapsed = onToggleFormCollapsed;
+
+    render(renderCron(expandedProps), container);
+
+    const collapseButton = container.querySelector('[data-test-id="cron-form-collapse-toggle"]');
+    expect(collapseButton).not.toBeNull();
+    expect(collapseButton?.getAttribute("aria-expanded")).toBe("true");
+    collapseButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleFormCollapsed).toHaveBeenCalledWith(true);
+    expect(container.querySelector(".cron-form")).not.toBeNull();
+
+    const collapsedProps = createProps() as CronProps & {
+      cronFormCollapsed: boolean;
+      onToggleFormCollapsed: (collapsed: boolean) => void;
+    };
+    collapsedProps.cronFormCollapsed = true;
+    collapsedProps.onToggleFormCollapsed = onToggleFormCollapsed;
+
+    render(renderCron(collapsedProps), container);
+
+    const collapsedButton = container.querySelector('[data-test-id="cron-form-collapse-toggle"]');
+    expect(container.querySelector(".cron-workspace--form-collapsed")).not.toBeNull();
+    expect(container.querySelector(".cron-workspace-form--collapsed")).not.toBeNull();
+    expect(collapsedButton?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".cron-form")?.hasAttribute("hidden")).toBe(true);
+    expect(container.querySelector(".cron-form-actions")?.hasAttribute("hidden")).toBe(true);
+
+    collapsedButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleFormCollapsed).toHaveBeenLastCalledWith(false);
+  });
+
   it("shows webhook delivery details for jobs", () => {
     const container = document.createElement("div");
     const job = {

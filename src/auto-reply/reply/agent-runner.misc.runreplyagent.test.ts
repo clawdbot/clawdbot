@@ -1718,7 +1718,7 @@ describe("runReplyAgent claude-cli routing", () => {
   });
 });
 
-describe("runReplyAgent messaging tool suppression", () => {
+describe("runReplyAgent messaging tool dedupe", () => {
   function createRun(
     messageProvider = "slack",
     opts: { storePath?: string; sessionKey?: string } = {},
@@ -1782,10 +1782,23 @@ describe("runReplyAgent messaging tool suppression", () => {
     });
   }
 
-  it("drops replies when a messaging tool sent via the same provider + target", async () => {
+  it("delivers distinct replies when a messaging tool sent via the same provider + target", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
       messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      meta: {},
+    });
+
+    const result = await createRun("slack");
+
+    expect(result).toMatchObject({ text: "hello world!" });
+  });
+
+  it("drops duplicate replies when a messaging tool sent the same text via the same provider + target", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["hello world!"],
       messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
       meta: {},
     });

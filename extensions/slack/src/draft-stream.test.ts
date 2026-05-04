@@ -59,6 +59,28 @@ describe("createSlackDraftStream", () => {
     });
   });
 
+  it("sends and edits rich draft blocks with text fallback", async () => {
+    const { stream, send, edit } = createDraftStreamHarness();
+    const blocks = [{ type: "divider" }] as const;
+
+    stream.update({ text: "fallback", blocks: [...blocks] });
+    await stream.flush();
+    stream.update({ text: "updated fallback", blocks: [...blocks] });
+    await stream.flush();
+
+    expect(send).toHaveBeenCalledWith(
+      "channel:C123",
+      "fallback",
+      expect.objectContaining({ blocks: [...blocks] }),
+    );
+    expect(edit).toHaveBeenCalledWith(
+      "C123",
+      "111.222",
+      "updated fallback",
+      expect.objectContaining({ blocks: [...blocks] }),
+    );
+  });
+
   it("does not send duplicate text", async () => {
     const { stream, send, edit } = createDraftStreamHarness();
 

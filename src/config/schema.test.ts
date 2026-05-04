@@ -177,6 +177,15 @@ describe("config schema", () => {
     expect(channelProps?.accessToken).toBeTruthy();
     expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
     expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
+    expect(res.uiHints["channels.matrix.streaming.progress.label"]?.label).toBe(
+      "Matrix Progress Label",
+    );
+    expect(res.uiHints["channels.discord.streaming.progress.toolProgress"]?.label).toBe(
+      "Discord Progress Tool Lines",
+    );
+    expect(res.uiHints["channels.mattermost.streaming.progress.label"]?.label).toBe(
+      "Mattermost Progress Label",
+    );
   });
 
   it("omits a single oversized plugin schema from the full schema response", () => {
@@ -382,6 +391,18 @@ describe("config schema", () => {
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
     });
+  });
+
+  it("accepts web fetch trusted env proxy opt-in in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({
+      web: {
+        fetch: {
+          useTrustedEnvProxy: true,
+        },
+      },
+    });
+
+    expect(parsed?.web?.fetch?.useTrustedEnvProxy).toBe(true);
   });
 
   it("rejects allowPrivateNetwork on media-understanding request config", () => {

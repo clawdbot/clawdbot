@@ -145,6 +145,14 @@ describe("resolveNpmPublishPlan", () => {
     });
   });
 
+  it("can publish stable correction releases directly to latest when requested", () => {
+    expect(resolveNpmPublishPlan("2026.3.29-1", undefined, "latest")).toEqual({
+      channel: "stable",
+      publishTag: "latest",
+      mirrorDistTags: [],
+    });
+  });
+
   it("ignores current beta dist-tag state for stable publishes", () => {
     expect(resolveNpmPublishPlan("2026.3.29", "2026.4.1-beta.1")).toEqual({
       channel: "stable",

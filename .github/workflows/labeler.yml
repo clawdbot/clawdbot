@@ -92,7 +92,7 @@ jobs:
             const excludedLockfiles = new Set(["pnpm-lock.yaml", "package-lock.json", "yarn.lock", "bun.lockb"]);
             const totalChangedLines = files.reduce((total, file) => {
               const path = file.filename ?? "";
-              if (path === "docs.acp.md" || path.startsWith("docs/") || excludedLockfiles.has(path)) {
+              if (path.startsWith("docs/") || excludedLockfiles.has(path)) {
                 return total;
               }
               return total + (file.additions ?? 0) + (file.deletions ?? 0);
@@ -274,7 +274,7 @@ jobs:
 
             const activePrLimitLabel = "r: too-many-prs";
             const activePrLimitOverrideLabel = "r: too-many-prs-override";
-            const activePrLimit = 10;
+            const activePrLimit = 20;
             const labelColor = "B60205";
             const labelDescription = `Author has more than ${activePrLimit} active PRs in this repo`;
             const authorLogin = pullRequest.user?.login;
@@ -606,7 +606,7 @@ jobs:
               const excludedLockfiles = new Set(["pnpm-lock.yaml", "package-lock.json", "yarn.lock", "bun.lockb"]);
               const totalChangedLines = files.reduce((total, file) => {
                 const path = file.filename ?? "";
-                if (path === "docs.acp.md" || path.startsWith("docs/") || excludedLockfiles.has(path)) {
+                if (path.startsWith("docs/") || excludedLockfiles.has(path)) {
                   return total;
                 }
                 return total + (file.additions ?? 0) + (file.deletions ?? 0);

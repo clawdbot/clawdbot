@@ -326,6 +326,10 @@ describe("resolveModelAuthMode", () => {
 
     try {
       expect(resolveModelAuthMode("codex", undefined, { version: 1, profiles: {} })).toBe("oauth");
+      expect(readCodexCliCredentialsCached).toHaveBeenCalledWith({
+        ttlMs: 5_000,
+        allowKeychainPrompt: false,
+      });
     } finally {
       readCodexCliCredentialsCached.mockRestore();
     }

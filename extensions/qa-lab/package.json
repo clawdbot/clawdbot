@@ -12,7 +12,9 @@
     "zod": "^4.4.1"
   },
   "devDependencies": {
+    "@openclaw/discord": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
+    "@openclaw/slack": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

@@ -79,8 +79,15 @@ function resolveMatrixStreamingMode(streaming: MatrixConfig["streaming"]): Matri
   if (streaming === "quiet") {
     return "quiet";
   }
+  if (streaming === "progress") {
+    return "progress";
+  }
   if (isMatrixStreamingConfig(streaming)) {
-    if (streaming.mode === "partial" || streaming.mode === "quiet") {
+    if (
+      streaming.mode === "partial" ||
+      streaming.mode === "quiet" ||
+      streaming.mode === "progress"
+    ) {
       return streaming.mode;
     }
   }
@@ -90,6 +97,9 @@ function resolveMatrixStreamingMode(streaming: MatrixConfig["streaming"]): Matri
 function resolveMatrixPreviewToolProgress(streaming: MatrixConfig["streaming"]): boolean {
   if (!isMatrixStreamingConfig(streaming)) {
     return true;
+  }
+  if (resolveMatrixStreamingMode(streaming) === "progress") {
+    return streaming.progress?.toolProgress ?? streaming.preview?.toolProgress ?? true;
   }
   return streaming.preview?.toolProgress ?? true;
 }
@@ -368,6 +378,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       core,
       cfg,
       accountId: effectiveAccountId,
+      accountConfig,
       runtime,
       logger,
       logVerboseMessage,

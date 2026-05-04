@@ -61,6 +61,7 @@ export function setupGoogleMeetPlugin(
       options?: { timeoutMs?: number },
     ) => Promise<CommandResult>;
     registerPlatform?: NodeJS.Platform;
+    toolContext?: Record<string, unknown>;
   } = {},
 ) {
   const methods = new Map<string, unknown>();
@@ -154,7 +155,13 @@ export function setupGoogleMeetPlugin(
     } as unknown as OpenClawPluginApi["runtime"],
     logger: noopLogger,
     registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
-    registerTool: (tool: unknown) => tools.push(tool),
+    registerTool: (tool: unknown) => {
+      tools.push(
+        typeof tool === "function"
+          ? (tool as (ctx: Record<string, unknown>) => unknown)(options.toolContext ?? {})
+          : tool,
+      );
+    },
     registerCli: (_registrar: unknown, opts: unknown) => cliRegistrations.push(opts),
     registerNodeHostCommand: (command: unknown) => nodeHostCommands.push(command),
   });

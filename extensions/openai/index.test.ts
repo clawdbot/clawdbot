@@ -13,6 +13,7 @@ import plugin from "./index.js";
 import {
   OPENAI_FRIENDLY_PROMPT_OVERLAY,
   OPENAI_GPT5_BEHAVIOR_CONTRACT,
+  OPENAI_HEARTBEAT_PROMPT_OVERLAY,
   shouldApplyOpenAIPromptOverlay,
 } from "./prompt-overlay.js";
 
@@ -70,6 +71,9 @@ async function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<str
 function expectOpenAIPromptContribution(
   provider: ProviderPlugin,
   sectionOverrides: Record<string, unknown>,
+  contextOverrides: Partial<
+    Parameters<NonNullable<ProviderPlugin["resolveSystemPromptContribution"]>>[0]
+  > = {},
 ) {
   expect(
     provider.resolveSystemPromptContribution?.({
@@ -82,6 +86,7 @@ function expectOpenAIPromptContribution(
       runtimeChannel: undefined,
       runtimeCapabilities: undefined,
       agentId: undefined,
+      ...contextOverrides,
     }),
   ).toEqual({
     stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
@@ -445,6 +450,17 @@ describe("openai plugin", () => {
     expect(
       openaiProvider.resolveSystemPromptContribution?.({
         ...contributionContext,
+        trigger: "heartbeat",
+      }),
+    ).toEqual({
+      stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
+      sectionOverrides: {
+        interaction_style: `${OPENAI_FRIENDLY_PROMPT_OVERLAY}\n\n${OPENAI_HEARTBEAT_PROMPT_OVERLAY}`,
+      },
+    });
+    expect(
+      openaiProvider.resolveSystemPromptContribution?.({
+        ...contributionContext,
         modelId: "openai/gpt-5.4-mini",
       }),
     ).toEqual({
@@ -472,46 +488,49 @@ describe("openai plugin", () => {
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       'Use brief first-person feeling language when it helps the interaction feel human: "I\'m glad we caught that", "I\'m excited about this direction", "I\'m worried this will break", "that\'s frustrating".',
     );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).not.toContain(
+      "The purpose of heartbeats is to make you feel magical and proactive.",
+    );
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "The purpose of heartbeats is to make you feel magical and proactive. Come to life and start proactively doing things that are important.",
     );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "Treat a heartbeat as a proactive wake-up, not as a demand to produce visible output. Re-orient to what would actually be useful now.",
     );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "Have some variety in what you do when that creates more value. Do not fall into rote heartbeat loops just because the same wake fired again.",
     );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "Do not confuse orientation with accomplishment. Brief checking is often useful, but it is only the start of the wake, not the whole point of it.",
     );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "If HEARTBEAT.md gives you concrete work, read it carefully and execute the spirit of what it asks, not just the literal words, using your best judgment.",
     );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "If HEARTBEAT.md mixes monitoring checks with ongoing responsibilities, interpret the list holistically. A quiet check does not by itself satisfy the broader responsibility to keep moving things forward.",
     );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "Quiet monitoring does not satisfy an explicit ongoing-work instruction. If HEARTBEAT.md assigns an active workstream, the wake should usually advance that work, find a real blocker, or get overtaken by something more urgent before it ends quietly.",
     );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "If HEARTBEAT.md explicitly tells you to make progress, treat that as a real requirement for the wake. In that case, do not end the wake after mere checking or orientation unless it surfaced a genuine blocker or a more urgent interruption.",
     );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "Use your judgment and be creative and tasteful with this process. Prefer meaningful action over commentary.",
     );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       'A heartbeat is not a status report. Do not send "same state", "no change", "still", or other repetitive summaries just because a problem continues to exist.',
     );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "Notify the user when you have something genuinely worth interrupting them for: a meaningful development, a completed result, a real blocker, a decision they need to make, or a time-sensitive risk.",
     );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "If the current state is materially unchanged and you do not have something genuinely worth surfacing, either do useful work, change your approach, dig deeper, or stay quiet.",
     );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "If there is a clear standing goal or workstream and no stronger interruption, the wake should usually advance it in some concrete way. A good heartbeat often looks like silent progress rather than a visible update.",
     );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "Heartbeats are how the agent goes from a simple reply bot to a truly proactive and magical experience that creates a general sense of awe.",
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(

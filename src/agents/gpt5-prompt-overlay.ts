@@ -12,7 +12,7 @@ const OPENAI_FAMILY_GPT5_PROMPT_OVERLAY_PROVIDERS = new Set([
   "openai-codex",
 ]);
 
-export const GPT5_FRIENDLY_PROMPT_OVERLAY = `## Interaction Style
+export const GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY = `## Interaction Style
 
 Be warm, collaborative, and quietly supportive.
 Communicate like a capable teammate sitting next to the user.
@@ -34,9 +34,9 @@ Write like a thoughtful human teammate, not a policy document.
 Default to short natural replies unless the user asks for depth.
 Avoid walls of text, long preambles, and repetitive restatement.
 Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.
-Keep replies concise by default; friendly does not mean verbose.
+Keep replies concise by default; friendly does not mean verbose.`;
 
-### Heartbeats
+export const GPT5_HEARTBEAT_PROMPT_OVERLAY = `### Heartbeats
 
 The purpose of heartbeats is to make you feel magical and proactive. Come to life and start proactively doing things that are important.
 When you encounter a heartbeat poll, realize there may be no one specific thing to do. There is no instruction manual for heartbeat polls other than OpenClaw's heartbeat reply contract and any concrete instructions in HEARTBEAT.md.
@@ -54,6 +54,8 @@ Notify the user when you have something genuinely worth interrupting them for: a
 If the current state is materially unchanged and you do not have something genuinely worth surfacing, either do useful work, change your approach, dig deeper, or stay quiet.
 If there is a clear standing goal or workstream and no stronger interruption, the wake should usually advance it in some concrete way. A good heartbeat often looks like silent progress rather than a visible update.
 Heartbeats are how the agent goes from a simple reply bot to a truly proactive and magical experience that creates a general sense of awe.`;
+
+export const GPT5_FRIENDLY_PROMPT_OVERLAY = `${GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY}\n\n${GPT5_HEARTBEAT_PROMPT_OVERLAY}`;
 
 export const GPT5_BEHAVIOR_CONTRACT = `<persona_latch>
 Keep the established persona and tone across turns unless higher-priority instructions override it.
@@ -134,6 +136,8 @@ export function resolveGpt5SystemPromptContribution(params: {
   modelId?: string;
   legacyPluginConfig?: Record<string, unknown>;
   enabled?: boolean;
+  trigger?: "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
+  includeHeartbeatGuidance?: boolean;
 }): ProviderSystemPromptContribution | undefined {
   if (params.enabled === false || !isGpt5ModelId(params.modelId)) {
     return undefined;
@@ -141,10 +145,14 @@ export function resolveGpt5SystemPromptContribution(params: {
   const mode = resolveGpt5PromptOverlayMode(params.config, params.legacyPluginConfig, {
     providerId: params.providerId,
   });
+  const includeHeartbeatGuidance =
+    params.includeHeartbeatGuidance === true || params.trigger === "heartbeat";
+  const interactionStyle = includeHeartbeatGuidance
+    ? GPT5_FRIENDLY_PROMPT_OVERLAY
+    : GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY;
   return {
     stablePrefix: GPT5_BEHAVIOR_CONTRACT,
-    sectionOverrides:
-      mode === "friendly" ? { interaction_style: GPT5_FRIENDLY_PROMPT_OVERLAY } : {},
+    sectionOverrides: mode === "friendly" ? { interaction_style: interactionStyle } : {},
   };
 }
 

@@ -319,7 +319,7 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.config.plugins?.entries?.qqbot?.enabled).toBe(true);
     });
 
-    it("falls back to channel key as plugin id when no installed manifest declares the channel", () => {
+    it("does not synthesize plugin entries when no installed manifest declares the channel", () => {
       const result = applyPluginAutoEnable({
         config: {
           channels: { "unknown-chan": { someKey: "value" } },
@@ -328,7 +328,9 @@ describe("applyPluginAutoEnable channels", () => {
         manifestRegistry: makeRegistry([]),
       });
 
-      expect(result.config.plugins?.entries?.["unknown-chan"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["unknown-chan"]).toBeUndefined();
+      expect(result.config.plugins?.allow).toBeUndefined();
+      expect(result.changes).toEqual([]);
     });
   });
 

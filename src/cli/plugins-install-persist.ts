@@ -1,6 +1,7 @@
 import { replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type HookInstallUpdate, recordHookInstall } from "../hooks/installs.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -9,8 +10,10 @@ import {
 } from "../plugins/installed-plugin-index-records.js";
 import type { PluginInstallUpdate } from "../plugins/installs.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
+import { buildPluginSnapshotReport } from "../plugins/status.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
 import {
   applySlotSelectionForPlugin,
   enableInternalHookEntries,
@@ -57,6 +60,55 @@ export type ConfigSnapshotForInstallPersist = {
   config: OpenClawConfig;
   baseHash: string | undefined;
 };
+
+function sourceMatchesInstalledPath(params: {
+  activeSource: string;
+  installedSource: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const activeSource = resolveUserPath(params.activeSource, params.env);
+  const installedSource = resolveUserPath(params.installedSource, params.env);
+  return activeSource === installedSource || isPathInside(installedSource, activeSource);
+}
+
+function logShadowedNpmInstallWarning(params: {
+  config: OpenClawConfig;
+  pluginId: string;
+  install: Omit<PluginInstallUpdate, "pluginId">;
+  runtime: RuntimeEnv;
+}): void {
+  if (params.install.source !== "npm") {
+    return;
+  }
+  const installedSource = params.install.installPath ?? params.install.sourcePath;
+  if (!installedSource) {
+    return;
+  }
+  const report = buildPluginSnapshotReport({
+    config: params.config,
+    effectiveOnly: true,
+    onlyPluginIds: [params.pluginId],
+  });
+  const active = report.plugins.find((plugin) => plugin.id === params.pluginId);
+  if (
+    !active ||
+    active.origin !== "config" ||
+    sourceMatchesInstalledPath({ activeSource: active.source, installedSource })
+  ) {
+    return;
+  }
+
+  params.runtime.log(
+    theme.warn(
+      [
+        `Warning: installed plugin "${params.pluginId}" is not the active source because a config-selected plugin with the same id is currently selected:`,
+        `  active config source: ${shortenHomePath(active.source)}`,
+        `  installed npm source: ${shortenHomePath(installedSource)}`,
+        "Run `openclaw plugins doctor` for repair options.",
+      ].join("\n"),
+    ),
+  );
+}
 
 export async function persistPluginInstall(params: {
   snapshot: ConfigSnapshotForInstallPersist;
@@ -127,6 +179,12 @@ export async function persistPluginInstall(params: {
     runtime.log(theme.warn(params.warningMessage));
   }
   runtime.log(params.successMessage ?? `Installed plugin: ${params.pluginId}`);
+  logShadowedNpmInstallWarning({
+    config: next,
+    pluginId: params.pluginId,
+    install: params.install,
+    runtime,
+  });
   runtime.log("Restart the gateway to load plugins.");
   return next;
 }

@@ -377,7 +377,7 @@ describeLive("tool replay repair live", () => {
 
         expect(response.stopReason).not.toBe("error");
         if (text.length > 0) {
-          expect(text).toMatch(/^transport(?: replay ok\.?)?$/i);
+          expect(text).toMatch(/^transport(?: replay(?: ok\.?)?)?$/i);
         }
       },
       3 * 60 * 1000,

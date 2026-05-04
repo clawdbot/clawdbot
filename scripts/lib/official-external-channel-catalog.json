@@ -10,6 +10,9 @@
           "id": "wecom-openclaw-plugin",
           "label": "WeCom"
         },
+        "contracts": {
+          "tools": ["wecom_mcp"]
+        },
         "channel": {
           "id": "wecom",
           "label": "WeCom",
@@ -20,6 +23,16 @@
           "blurb": "Enterprise messaging and documents, scheduling, task tools.",
           "aliases": ["qywx", "wework", "enterprise-wechat"],
           "order": 45
+        },
+        "channelConfigs": {
+          "wecom": {
+            "label": "WeCom",
+            "description": "Enterprise WeChat conversation channel.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
         },
         "install": {
           "npmSpec": "@wecom/wecom-openclaw-plugin@2026.4.23",
@@ -38,6 +51,9 @@
           "id": "openclaw-plugin-yuanbao",
           "label": "Yuanbao"
         },
+        "contracts": {
+          "tools": ["query_group_info", "query_session_members", "yuanbao_remind"]
+        },
         "channel": {
           "id": "yuanbao",
           "label": "Yuanbao",
@@ -48,6 +64,16 @@
           "blurb": "Tencent Yuanbao AI assistant conversation channel.",
           "aliases": ["yuanbao", "yb", "tencent-yuanbao", "元宝"],
           "order": 85
+        },
+        "channelConfigs": {
+          "yuanbao": {
+            "label": "Yuanbao",
+            "description": "Tencent Yuanbao AI assistant channel.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
         },
         "install": {
           "npmSpec": "openclaw-plugin-yuanbao@2.11.0",

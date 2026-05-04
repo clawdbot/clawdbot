@@ -332,6 +332,39 @@ describe("EmbeddedTuiBackend", () => {
     ]);
   });
 
+  it("emits side-result events for local /side alias runs", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    agentCommandFromIngressMock.mockResolvedValueOnce({
+      payloads: [{ text: "alias answer" }],
+      meta: {},
+    });
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "/side what changed?",
+      runId: "run-side-1",
+    });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat.side_result",
+      payload: {
+        kind: "btw",
+        runId: "run-side-1",
+        sessionKey: "agent:main:main",
+        question: "what changed?",
+        text: "alias answer",
+      },
+    });
+  });
+
   it("registers tool-first local runs before forwarding agent events", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const pending = deferred<{

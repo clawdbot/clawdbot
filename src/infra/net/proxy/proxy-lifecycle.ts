@@ -9,6 +9,7 @@
 
 import http from "node:http";
 import https from "node:https";
+import { isIP } from "node:net";
 import { bootstrap as bootstrapGlobalAgent } from "global-agent";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { logInfo, logWarn } from "../../../logger.js";
@@ -67,17 +68,30 @@ type ActiveProxyRegistration = {
   proxyUrl: string;
   stopped: boolean;
 };
+type GlobalAgentConnectConfiguration = Record<string, unknown> & {
+  host: string;
+  tls: Record<string, unknown>;
+};
+type GlobalAgentCreateConnection = typeof https.globalAgent.createConnection;
+type GlobalAgentCreateConnectionConfiguration = Parameters<GlobalAgentCreateConnection>[0];
+type GlobalAgentCreateConnectionCallback = Parameters<GlobalAgentCreateConnection>[1];
+type GlobalAgentCreateConnectionResult = ReturnType<GlobalAgentCreateConnection>;
+type GlobalAgentHttpsAgent = {
+  createConnection: GlobalAgentCreateConnection;
+};
 
 let globalAgentBootstrapped = false;
 let nodeHttpStackSnapshot: NodeHttpStackSnapshot | null = null;
 let activeProxyRegistrations: ActiveProxyRegistration[] = [];
 let baseProxyEnvSnapshot: ProxyEnvSnapshot | null = null;
+let patchedGlobalAgentHttpsAgents = new WeakSet<object>();
 
 export function _resetGlobalAgentBootstrapForTests(): void {
   globalAgentBootstrapped = false;
   nodeHttpStackSnapshot = null;
   activeProxyRegistrations = [];
   baseProxyEnvSnapshot = null;
+  patchedGlobalAgentHttpsAgents = new WeakSet<object>();
 }
 
 function captureProxyEnv(): ProxyEnvSnapshot {
@@ -212,6 +226,7 @@ function bootstrapNodeHttpStack(proxyUrl: string): void {
   if (!globalAgentBootstrapped) {
     nodeHttpStackSnapshot = captureNodeHttpStack();
     bootstrapGlobalAgent();
+    patchGlobalAgentHttpsConnectTlsTargetHost();
     globalAgentBootstrapped = true;
   }
 
@@ -224,6 +239,67 @@ function bootstrapNodeHttpStack(proxyUrl: string): void {
     agent["HTTPS_PROXY"] = proxyUrl;
     agent["NO_PROXY"] = process.env["GLOBAL_AGENT_NO_PROXY"];
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isGlobalAgentConnectConfiguration(
+  value: unknown,
+): value is GlobalAgentConnectConfiguration {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value["host"] === "string" && isRecord(value["tls"]);
+}
+
+function isGlobalAgentHttpsAgent(value: unknown): value is GlobalAgentHttpsAgent {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value["createConnection"] === "function";
+}
+
+function withTlsTargetHost(
+  configuration: GlobalAgentCreateConnectionConfiguration,
+): GlobalAgentCreateConnectionConfiguration {
+  if (!isGlobalAgentConnectConfiguration(configuration)) {
+    return configuration;
+  }
+
+  // Compatibility shim for https://github.com/gajus/global-agent/issues/83.
+  // global-agent@4.1.3 can CONNECT to the right host while leaving Node TLS
+  // certificate validation pointed at the proxy socket host. Keep this until
+  // upstream carries the CONNECT target host through to tls.connect().
+  const tlsOptions: Record<string, unknown> = {
+    ...configuration.tls,
+    host: configuration.host,
+  };
+  if (tlsOptions["servername"] === undefined && isIP(configuration.host) === 0) {
+    tlsOptions["servername"] = configuration.host;
+  }
+  return {
+    ...configuration,
+    tls: tlsOptions,
+  } as GlobalAgentCreateConnectionConfiguration;
+}
+
+function patchGlobalAgentHttpsConnectTlsTargetHost(): void {
+  const agent = https.globalAgent;
+  if (!isGlobalAgentHttpsAgent(agent) || patchedGlobalAgentHttpsAgents.has(agent)) {
+    return;
+  }
+
+  const createConnection = agent.createConnection.bind(agent);
+  agent.createConnection = function createConnectionWithTlsTargetHost(
+    this: unknown,
+    configuration: GlobalAgentCreateConnectionConfiguration,
+    callback?: GlobalAgentCreateConnectionCallback,
+  ): GlobalAgentCreateConnectionResult {
+    return createConnection(withTlsTargetHost(configuration), callback);
+  };
+  patchedGlobalAgentHttpsAgents.add(agent);
 }
 
 function findTopActiveProxyRegistration(): ActiveProxyRegistration | null {

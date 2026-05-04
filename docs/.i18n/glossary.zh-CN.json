@@ -16,6 +16,10 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "Mantis",
+    "target": "Mantis"
+  },
+  {
     "source": "OpenClaw App SDK",
     "target": "OpenClaw 应用 SDK"
   },
@@ -78,6 +82,10 @@
   {
     "source": "Steering queue",
     "target": "Steering queue"
+  },
+  {
+    "source": "Steer",
+    "target": "Steer"
   },
   {
     "source": "Models",
@@ -282,6 +290,42 @@
   {
     "source": "Block streaming",
     "target": "分块流式传输"
+  },
+  {
+    "source": "Progress drafts",
+    "target": "进度草稿"
+  },
+  {
+    "source": "Streaming and chunking",
+    "target": "流式传输和分块"
+  },
+  {
+    "source": "Messages",
+    "target": "消息"
+  },
+  {
+    "source": "Channel configuration",
+    "target": "频道配置"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "Matrix",
+    "target": "Matrix"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
   },
   {
     "source": "Discovery + transports",

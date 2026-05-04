@@ -331,7 +331,9 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   messaging: {
     allow: [...listCoreToolIdsForProfile("messaging"), "bundle-mcp"],
   },
-  full: {},
+  full: {
+    allow: ["*"],
+  },
 };
 
 function buildCoreToolGroupMap() {

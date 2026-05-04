@@ -206,6 +206,20 @@ describe("FeishuConfigSchema optimization flags", () => {
     expect(result.resolveSenderNames).toBe(true);
   });
 
+  it("accepts top-level and account-level block streaming", () => {
+    const result = FeishuConfigSchema.parse({
+      blockStreaming: true,
+      accounts: {
+        main: {
+          blockStreaming: false,
+        },
+      },
+    });
+
+    expect(result.blockStreaming).toBe(true);
+    expect(result.accounts?.main?.blockStreaming).toBe(false);
+  });
+
   it("accepts account-level optimization flags", () => {
     const result = FeishuConfigSchema.parse({
       accounts: {

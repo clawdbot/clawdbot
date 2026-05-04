@@ -139,6 +139,20 @@ pnpm test:docker:npm-telegram-live
     - `OPENCLAW_QA_CONVEX_SITE_URL`
     - `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER`
     - `OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE=mock-openai`
+- If direct Telegram env is missing locally and `op signin` blocks, prefer dispatching the manual GitHub lane because the `qa-live-shared` environment already has Convex CI credentials:
+
+```bash
+gh workflow run "NPM Telegram Beta E2E" --repo openclaw/openclaw --ref main \
+  -f package_spec=openclaw@YYYY.M.D-beta.N \
+  -f package_label=openclaw@YYYY.M.D-beta.N \
+  -f provider_mode=mock-openai
+```
+
+- Poll the exact run id from the dispatch URL. `gh run view --json artifacts` is not supported; list artifacts with:
+
+```bash
+gh api repos/openclaw/openclaw/actions/runs/<run-id>/artifacts
+```
 
 ## Character evals
 

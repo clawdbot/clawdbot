@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import * as modelAuth from "../model-auth.js";
 import * as modelsConfig from "../models-config.js";
 import * as modelDiscovery from "../pi-model-discovery.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
+import * as pdfModelConfigModule from "./pdf-tool.model-config.js";
 import { resetPdfToolAuthEnv, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
@@ -68,6 +70,12 @@ async function withConfiguredPdfTool(
 function withPdfModel(primary: string): OpenClawConfig {
   return {
     agents: { defaults: { pdfModel: { primary } } },
+  } as OpenClawConfig;
+}
+
+function withDefaultModel(primary: string): OpenClawConfig {
+  return {
+    agents: { defaults: { model: { primary } } },
   } as OpenClawConfig;
 }
 
@@ -157,6 +165,77 @@ describe("createPdfTool", () => {
       expect(tool.label).toBe("PDF");
       expect(tool.description).toContain("PDF documents");
     });
+  });
+
+  it("defers automatic model config resolution during registration (#76644)", async () => {
+    const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
+    const cfg = withDefaultModel("openai/gpt-5.4");
+    const authProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "test-key",
+        },
+      },
+    } satisfies AuthProfileStore;
+    const createTool = await loadCreatePdfTool();
+    await withTempPdfAgentDir(async (agentDir) => {
+      expect(
+        createTool({
+          config: cfg,
+          agentDir,
+          authProfileStore,
+          deferAutoModelResolution: true,
+        })?.name,
+      ).toBe("pdf");
+      expect(resolveSpy).not.toHaveBeenCalled();
+    });
+    resolveSpy.mockRestore();
+  });
+
+  it("keeps explicit model config resolution eager even when automatic resolution is deferred", async () => {
+    const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
+    const createTool = await loadCreatePdfTool();
+    await withTempPdfAgentDir(async (agentDir) => {
+      expect(
+        createTool({
+          config: withPdfModel(ANTHROPIC_PDF_MODEL),
+          agentDir,
+          deferAutoModelResolution: true,
+        })?.name,
+      ).toBe("pdf");
+      expect(resolveSpy).toHaveBeenCalledTimes(1);
+    });
+    resolveSpy.mockRestore();
+  });
+
+  it("resolves deferred model config on execution before loading PDFs", async () => {
+    const resolveSpy = vi
+      .spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool")
+      .mockReturnValue(null);
+    const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw");
+    const createTool = await loadCreatePdfTool();
+    const cfg = withDefaultModel("openai/gpt-5.4");
+    await withTempPdfAgentDir(async (agentDir) => {
+      const tool = requirePdfTool(
+        createTool({
+          config: cfg,
+          agentDir,
+          deferAutoModelResolution: true,
+        }),
+      );
+      await expect(
+        tool.execute("t1", {
+          prompt: "summarize",
+          pdf: "/tmp/doc.pdf",
+        }),
+      ).rejects.toThrow("No PDF model configured.");
+    });
+    expect(resolveSpy).toHaveBeenCalledTimes(1);
+    expect(loadSpy).not.toHaveBeenCalled();
+    resolveSpy.mockRestore();
   });
 
   it("rejects when no pdf input provided", async () => {

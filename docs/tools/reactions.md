@@ -22,6 +22,9 @@ tool with the `react` action. Reaction behavior varies by channel and transport.
 - `emoji` is required when adding a reaction.
 - Set `emoji` to an empty string (`""`) to remove the bot's reaction(s).
 - Set `remove: true` to remove a specific emoji (requires non-empty `emoji`).
+- On channels that support status reactions, `trackToolCalls: true` on a
+  reaction lets the runtime use that reacted message for subsequent tool
+  progress reactions during the same turn.
 
 ## Channel behavior
 

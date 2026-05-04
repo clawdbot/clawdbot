@@ -39,6 +39,7 @@ openclaw gateway run
 
 ## Security defaults
 
+- IRC uses raw TCP/TLS sockets outside OpenClaw operator-managed forward proxy routing. In deployments that require all egress through that forward proxy, set `channels.irc.enabled=false` unless direct IRC egress is explicitly approved.
 - `channels.irc.dmPolicy` defaults to `"pairing"`.
 - `channels.irc.groupPolicy` defaults to `"allowlist"`.
 - With `groupPolicy="allowlist"`, set `channels.irc.groups` to define allowed channels.

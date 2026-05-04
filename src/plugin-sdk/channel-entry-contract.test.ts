@@ -4,11 +4,15 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PluginModuleLoaderFactory } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi, PluginRegistrationMode } from "../plugins/types.js";
 import { defineBundledChannelEntry, loadBundledEntryExportSync } from "./channel-entry-contract.js";
 
 const tempDirs: string[] = [];
+const pluginModuleLoaderJitiFactoryOverrideKey = Symbol.for(
+  "openclaw.pluginModuleLoaderJitiFactoryOverride",
+);
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
@@ -17,7 +21,20 @@ afterEach(() => {
   vi.resetModules();
   vi.doUnmock("jiti");
   vi.unstubAllEnvs();
+  delete (
+    globalThis as typeof globalThis & {
+      [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
+    }
+  )[pluginModuleLoaderJitiFactoryOverrideKey];
 });
+
+function stubPluginModuleLoaderJitiFactory(createJiti: PluginModuleLoaderFactory): void {
+  (
+    globalThis as typeof globalThis & {
+      [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
+    }
+  )[pluginModuleLoaderJitiFactoryOverrideKey] = createJiti;
+}
 
 function createApi(registrationMode: PluginRegistrationMode): OpenClawPluginApi {
   return {
@@ -268,10 +285,8 @@ describe("loadBundledEntryExportSync", () => {
   });
 
   it("keeps Windows dist sidecar loads off source-transform loading", async () => {
-    const createJiti = vi.fn(() => vi.fn(() => ({ load: 42 })));
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
+    const createJiti = vi.fn(() => vi.fn(() => ({ load: 0 })));
+    stubPluginModuleLoaderJitiFactory(createJiti as unknown as PluginModuleLoaderFactory);
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     try {
@@ -285,22 +300,17 @@ describe("loadBundledEntryExportSync", () => {
       fs.mkdirSync(pluginRoot, { recursive: true });
 
       const importerPath = path.join(pluginRoot, "index.js");
-      const helperPath = path.join(pluginRoot, "helper.ts");
+      const helperPath = path.join(pluginRoot, "helper.cjs");
       fs.writeFileSync(importerPath, "export default {};\n", "utf8");
-      fs.writeFileSync(helperPath, "export const load = 42;\n", "utf8");
+      fs.writeFileSync(helperPath, "module.exports = { load: 42 };\n", "utf8");
 
       expect(
         channelEntryContract.loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
-          specifier: "./helper.ts",
+          specifier: "./helper.cjs",
           exportName: "load",
         }),
       ).toBe(42);
-      expect(createJiti).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          tryNative: false,
-        }),
-      );
+      expect(createJiti).not.toHaveBeenCalled();
     } finally {
       platformSpy.mockRestore();
     }
@@ -313,9 +323,7 @@ describe("loadBundledEntryExportSync", () => {
     fs.writeFileSync(openedFdPath, "opened\n", "utf8");
     const jitiLoad = vi.fn(() => ({ load: 42 }));
     const createJiti = vi.fn(() => jitiLoad);
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
+    stubPluginModuleLoaderJitiFactory(createJiti as unknown as PluginModuleLoaderFactory);
     vi.doMock("../infra/boundary-file-read.js", () => ({
       openBoundaryFileSync: () => ({
         ok: true,
@@ -408,6 +416,9 @@ describe("loadBundledEntryExportSync", () => {
   });
 
   it("can disable source-tree fallback for dist bundled entry checks", () => {
+    stubPluginModuleLoaderJitiFactory(
+      vi.fn(() => vi.fn(() => ({ sentinel: 42 }))) as unknown as PluginModuleLoaderFactory,
+    );
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
     tempDirs.push(tempRoot);
 

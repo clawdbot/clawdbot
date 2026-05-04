@@ -24,6 +24,12 @@ export function isEnvironmentFileOnlySource(
   return source === "file";
 }
 
+export function hasEnvironmentFileSource(
+  source: GatewayServiceEnvironmentValueSource | undefined,
+): boolean {
+  return source === "file" || source === "inline-and-file";
+}
+
 function parseManagedServiceEnvKeys(value: string | undefined): Set<string> {
   const keys = new Set<string>();
   for (const entry of value?.split(",") ?? []) {

@@ -1,10 +1,12 @@
 import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
 import type {
   DreamingEntry,
   WikiImportInsights,
   WikiMemoryPalace,
 } from "../controllers/dreaming.ts";
+import { toSanitizedMarkdownHtml } from "../markdown.ts";
 
 // ── Diary entry parser ─────────────────────────────────────────────────
 
@@ -1326,7 +1328,7 @@ function renderDreamDiaryEntries(props: DreamingProps) {
         ${flattenDiaryBody(entry.body).map(
           (para, i) =>
             html`<p class="dreams-diary__para" style="animation-delay: ${0.3 + i * 0.15}s;">
-              ${para}
+              ${unsafeHTML(toSanitizedMarkdownHtml(para))}
             </p>`,
         )}
       </div>

@@ -52,18 +52,26 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
       }
       return [];
     }),
-    loadSessionCostSummary: vi.fn(async () => ({
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      totalCost: 0,
-      inputCost: 0,
-      outputCost: 0,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
-      missingCostEntries: 0,
+    loadSessionCostSummaryFromCache: vi.fn(async () => ({
+      summary: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      },
+      cacheStatus: {
+        status: "fresh",
+        cachedFiles: 1,
+        pendingFiles: 0,
+        staleFiles: 0,
+      },
     })),
     loadSessionUsageTimeSeries: vi.fn(async () => ({
       sessionId: "s-opus",
@@ -75,7 +83,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
 
 import {
   discoverAllSessions,
-  loadSessionCostSummary,
+  loadSessionCostSummaryFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
 } from "../../infra/session-cost-usage.js";
@@ -189,9 +197,16 @@ describe("sessions.usage", () => {
         const sessions = expectSuccessfulSessionsUsage(respond);
         expect(sessions).toHaveLength(1);
         expect(sessions[0]?.key).toBe(storeKey);
-        expect(vi.mocked(loadSessionCostSummary)).toHaveBeenCalled();
+        expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalled();
         expect(
-          vi.mocked(loadSessionCostSummary).mock.calls.some((call) => call[0]?.agentId === "opus"),
+          vi
+            .mocked(loadSessionCostSummaryFromCache)
+            .mock.calls.some((call) => call[0]?.agentId === "opus"),
+        ).toBe(true);
+        expect(
+          vi
+            .mocked(loadSessionCostSummaryFromCache)
+            .mock.calls.every((call) => call[0]?.refreshMode === "sync-when-empty"),
         ).toBe(true);
       });
     } finally {

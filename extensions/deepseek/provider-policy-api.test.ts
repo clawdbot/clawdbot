@@ -1,8 +1,37 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
-import { normalizeConfig } from "./provider-policy-api.js";
+import { normalizeConfig, resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("deepseek provider-policy-api", () => {
+  it("advertises max thinking levels for DeepSeek V4 models", () => {
+    const expectedV4Levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+    expect(
+      resolveThinkingProfile({
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+      })?.levels.map((level) => level.id),
+    ).toEqual(expectedV4Levels);
+    expect(
+      resolveThinkingProfile({
+        provider: "deepseek",
+        modelId: "deepseek-v4-flash",
+      })?.defaultLevel,
+    ).toBe("high");
+    expect(
+      resolveThinkingProfile({
+        provider: "deepseek",
+        modelId: "deepseek-chat",
+      }),
+    ).toBe(undefined);
+    expect(
+      resolveThinkingProfile({
+        provider: "openrouter",
+        modelId: "deepseek-v4-pro",
+      }),
+    ).toBe(null);
+  });
+
   it("hydrates contextWindow and cost from catalog for known models", () => {
     const providerConfig: ModelProviderConfig = {
       baseUrl: "https://api.deepseek.com",

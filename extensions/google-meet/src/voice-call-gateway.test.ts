@@ -28,7 +28,7 @@ describe("Google Meet voice-call gateway", () => {
     gatewayMocks.startGatewayClientWhenEventLoopReady.mockClear();
   });
 
-  it("starts Twilio Meet calls, sends delayed DTMF, then speaks the intro", async () => {
+  it("starts Twilio Meet calls, sends delayed DTMF, then speaks the intro without TwiML fallback", async () => {
     const config = resolveGoogleMeetConfig({
       voiceCall: {
         gatewayUrl: "ws://127.0.0.1:18789",
@@ -70,10 +70,39 @@ describe("Google Meet voice-call gateway", () => {
       "voicecall.speak",
       {
         callId: "call-1",
+        allowTwimlFallback: false,
         message: "Say exactly: I'm here and listening.",
       },
       { timeoutMs: 30_000 },
     );
     expect(gatewayMocks.request).toHaveBeenCalledTimes(3);
+  });
+
+  it("skips the intro without failing when the realtime bridge is not ready", async () => {
+    gatewayMocks.request
+      .mockResolvedValueOnce({ callId: "call-1" })
+      .mockResolvedValueOnce({ success: true })
+      .mockResolvedValueOnce({ success: false, error: "No active realtime bridge for call" });
+    const config = resolveGoogleMeetConfig({
+      voiceCall: {
+        gatewayUrl: "ws://127.0.0.1:18789",
+        dtmfDelayMs: 1,
+        postDtmfSpeechDelayMs: 1,
+      },
+    });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+
+    const result = await joinMeetViaVoiceCallGateway({
+      config,
+      dialInNumber: "+15551234567",
+      dtmfSequence: "123456#",
+      logger,
+      message: "Say exactly: I'm here and listening.",
+    });
+
+    expect(result).toMatchObject({ callId: "call-1", dtmfSent: true, introSent: false });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Skipped intro speech because realtime bridge was not ready"),
+    );
   });
 });

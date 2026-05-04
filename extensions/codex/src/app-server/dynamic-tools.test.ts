@@ -179,6 +179,8 @@ describe("createCodexDynamicToolBridge", () => {
           provider: "telegram",
           to: "chat-1",
           threadId: "thread-ts-1",
+          text: "hello from Codex",
+          mediaUrls: ["/tmp/reply.png"],
         },
       ],
     });

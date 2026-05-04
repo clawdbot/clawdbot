@@ -75,7 +75,7 @@ const silentRuntime = {
 };
 
 function resolveBtwQuestion(message: string): string | undefined {
-  const match = /^\/btw(?::|\s)+(.*)$/i.exec(message.trim());
+  const match = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(message.trim());
   const question = match?.[1]?.trim();
   return question ? question : undefined;
 }

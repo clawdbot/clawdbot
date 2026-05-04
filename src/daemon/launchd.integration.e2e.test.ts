@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   installLaunchAgent,
   readLaunchAgentRuntime,
+  repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
   stopLaunchAgent,
@@ -36,6 +37,10 @@ function canRunLaunchdIntegration(): boolean {
 }
 
 const describeLaunchdIntegration = canRunLaunchdIntegration() ? describe : describe.skip;
+
+function resolveGuiDomain(): string {
+  return `gui/${process.getuid?.() ?? 501}`;
+}
 
 async function withTimeout<T>(params: {
   run: () => Promise<T>;
@@ -131,6 +136,29 @@ async function initializeLaunchdRuntime(launchEnv: GatewayServiceEnv, stdout: Pa
     timeoutMs: STARTUP_TIMEOUT_MS,
     message: "Timed out initializing launchd integration runtime",
   });
+}
+
+async function writeLaunchAgentProbeScript(params: {
+  eventsPath: string;
+  scriptPath: string;
+}): Promise<void> {
+  await fs.writeFile(
+    params.scriptPath,
+    [
+      'const fs = require("node:fs");',
+      `const eventsPath = ${JSON.stringify(params.eventsPath)};`,
+      "fs.appendFileSync(eventsPath, `start ${process.pid}\\n`);",
+      'for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {',
+      "  process.on(signal, () => {",
+      "    fs.appendFileSync(eventsPath, `${signal} ${process.pid}\\n`);",
+      "    process.exit(0);",
+      "  });",
+      "}",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
 }
 
 async function expectRuntimePidReplaced(params: {
@@ -230,5 +258,43 @@ describeLaunchdIntegration("launchd integration", () => {
     await waitForNotRunningRuntime({ env: launchEnv });
     await restartLaunchAgent({ env: launchEnv, stdout });
     await expectRuntimePidReplaced({ env: launchEnv, previousPid: before.pid });
+  }, 60_000);
+
+  it("repairs a missing bootstrap without kickstarting the fresh LaunchAgent", async () => {
+    const launchEnv = launchEnvOrThrow(env);
+    const eventsPath = path.join(homeDir, "repair-probe.events.log");
+    const scriptPath = path.join(homeDir, "repair-probe.cjs");
+    await writeLaunchAgentProbeScript({ eventsPath, scriptPath });
+    await installLaunchAgent({
+      env: launchEnv,
+      stdout,
+      programArguments: [process.execPath, scriptPath],
+    });
+    await waitForRunningRuntime({ env: launchEnv });
+    const bootout = spawnSync(
+      "launchctl",
+      ["bootout", resolveGuiDomain(), resolveLaunchAgentPlistPath(launchEnv)],
+      { encoding: "utf8" },
+    );
+    expect(bootout.status).toBe(0);
+    await waitForNotRunningRuntime({ env: launchEnv });
+    await fs.access(resolveLaunchAgentPlistPath(launchEnv));
+    await fs.writeFile(eventsPath, "", "utf8");
+
+    const repair = await withTimeout({
+      run: async () => repairLaunchAgentBootstrap({ env: launchEnv }),
+      timeoutMs: STARTUP_TIMEOUT_MS,
+      message: "Timed out repairing launchd integration runtime",
+    });
+    expect(repair).toEqual({ ok: true, status: "repaired" });
+    await waitForRunningRuntime({ env: launchEnv });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_500);
+    });
+    const events = await fs.readFile(eventsPath, "utf8");
+    const lines = events.trim().split(/\r?\n/).filter(Boolean);
+    expect(lines.filter((line) => line.startsWith("start "))).toHaveLength(1);
+    expect(lines.some((line) => /^(SIGHUP|SIGINT|SIGTERM) /.test(line))).toBe(false);
   }, 60_000);
 });

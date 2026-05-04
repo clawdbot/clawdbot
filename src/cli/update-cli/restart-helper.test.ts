@@ -194,6 +194,7 @@ exit 1
       // Should clear disabled state and fall back to bootstrap when kickstart fails.
       expect(content).toContain("launchctl enable 'gui/501/ai.openclaw.gateway'");
       expect(content).toContain("launchctl bootstrap 'gui/501'");
+      expect(content).toContain("Bootstrap loads RunAtLoad agents");
       expect(content).toContain('rm -f "$0"');
       await cleanupScript(scriptPath);
     });
@@ -250,7 +251,8 @@ exit 1
 echo "launchctl $*" >&2
 case "$1" in
   kickstart) exit 42 ;;
-  enable|bootstrap) exit 0 ;;
+  enable) exit 0 ;;
+  bootstrap) exit 1 ;;
 esac
 exit 0
 `,

@@ -87,6 +87,49 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).not.toContain("sk-secret");
   });
 
+  it("bounds messaging labels without exporting raw chat identifiers", () => {
+    const store = __test__.createPrometheusMetricStore();
+
+    __test__.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.processed",
+        channel: "telegram/custom",
+        chatId: "chat-should-not-export",
+        messageId: "message-should-not-export",
+        outcome: "completed",
+        reason: "progress draft / message tool 123",
+        durationMs: 25,
+      },
+      trusted,
+    );
+    __test__.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.delivery.error",
+        channel: "discord/custom",
+        deliveryKind: "progress draft" as never,
+        durationMs: 50,
+        errorCategory: "TimeoutError",
+      },
+      trusted,
+    );
+
+    const rendered = __test__.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_message_processed_total{channel="unknown",outcome="completed",reason="none"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_delivery_total{channel="unknown",delivery_kind="other",error_category="TimeoutError",outcome="error"} 1',
+    );
+    expect(rendered).not.toContain("chat-should-not-export");
+    expect(rendered).not.toContain("message-should-not-export");
+    expect(rendered).not.toContain("progress draft");
+  });
+
   it("caps metric series growth and reports dropped series", () => {
     const store = __test__.createPrometheusMetricStore();
 

@@ -289,6 +289,34 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("marks tool-use terminal with pre-tool text as abandoned (#76477)", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [
+          { type: "text", text: "Initial analysis..." },
+          { type: "tool_use", id: "tool_1", name: "read", input: { path: "src/index.ts" } },
+        ],
+      },
+      { onAgentEvent },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = ["Initial analysis..."];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        livenessState: "abandoned",
+        replayInvalid: true,
+      },
+    });
+  });
+
   it("keeps accumulated deterministic side effects from being marked abandoned", async () => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(undefined, { onAgentEvent });

@@ -109,6 +109,7 @@ async function buildExpectedGatewayServicePlan(params: {
     runtime: params.runtime,
     nodePath: params.nodePath,
     existingEnvironment: params.command.environment,
+    existingEnvironmentValueSources: params.command.environmentValueSources,
     warn: (message, title) => note(message, title),
     config: params.cfg,
   });
@@ -593,6 +594,7 @@ export async function maybeRepairGatewayServiceConfig(
       programArguments: updatedPlan.programArguments,
       workingDirectory: updatedPlan.workingDirectory,
       environment: updatedPlan.environment,
+      environmentValueSources: updatedPlan.environmentValueSources,
     });
   } catch (err) {
     runtime.error(`Gateway service update failed: ${String(err)}`);

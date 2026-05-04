@@ -117,6 +117,22 @@ describe("unwrapEnvInvocation", () => {
       expected: ["pwsh", "-Command", "Get-Date"],
     },
     {
+      argv: ["env", "-P", "/usr/bin", "python3", "-c", "print(1)"],
+      expected: ["python3", "-c", "print(1)"],
+    },
+    {
+      argv: ["env", "-S", "python3 -c", "print(1)"],
+      expected: ["python3", "-c", "print(1)"],
+    },
+    {
+      argv: ["env", "--split-string=python3 -c", "print(1)"],
+      expected: ["python3", "-c", "print(1)"],
+    },
+    {
+      argv: ["env", "-Spython3 -c", "print(1)"],
+      expected: ["python3", "-c", "print(1)"],
+    },
+    {
       argv: ["env", "-", "bash", "-lc", "echo hi"],
       expected: ["bash", "-lc", "echo hi"],
     },

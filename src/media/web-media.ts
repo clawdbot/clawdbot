@@ -205,6 +205,23 @@ function formatCapReduce(label: string, cap: number, size: number): string {
   return `${label} could not be reduced below ${formatMb(cap, 0)}MB (got ${formatMb(size)}MB)`;
 }
 
+function isOptionalImageOptimizerUnavailable(err: unknown): boolean {
+  const messages: string[] = [];
+  let current: unknown = err;
+  while (current instanceof Error) {
+    messages.push(current.message);
+    current = current.cause;
+  }
+  const detail = messages.join("\n").toLowerCase();
+  return (
+    detail.includes("optional dependency sharp is required") ||
+    detail.includes("cannot find package 'sharp'") ||
+    detail.includes('cannot find package "sharp"') ||
+    detail.includes("cannot find module 'sharp'") ||
+    detail.includes('cannot find module "sharp"')
+  );
+}
+
 function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
   if (opts.contentType && HEIC_MIME_RE.test(opts.contentType.trim())) {
     return true;
@@ -392,7 +409,29 @@ async function loadWebMediaInternal(
     meta?: { contentType?: string; fileName?: string },
   ) => {
     const originalSize = buffer.length;
-    const optimized = await optimizeImageWithFallback({ buffer, cap, meta });
+    let optimized: OptimizedImage;
+    try {
+      optimized = await optimizeImageWithFallback({ buffer, cap, meta });
+    } catch (err) {
+      if (
+        isOptionalImageOptimizerUnavailable(err) &&
+        !isHeicSource(meta ?? {}) &&
+        buffer.length <= cap
+      ) {
+        if (shouldLogVerbose()) {
+          logVerbose(
+            `Image optimizer unavailable; sending original ${formatMb(buffer.length)}MB media without optimization`,
+          );
+        }
+        return {
+          buffer,
+          contentType: meta?.contentType,
+          kind: "image" as const,
+          fileName: meta?.fileName,
+        };
+      }
+      throw err;
+    }
     logOptimizedImage({ originalSize, optimized });
 
     if (optimized.buffer.length > cap) {

@@ -89,4 +89,67 @@ describe("createSequentialQueue", () => {
       process.off("unhandledRejection", onUnhandledRejection);
     }
   });
+
+  it("evicts a stuck task after taskTimeoutMs so newer same-key work proceeds", async () => {
+    const timeouts: Array<{ key: string; timeoutMs: number }> = [];
+    const enqueue = createSequentialQueue({
+      taskTimeoutMs: 25,
+      onTaskTimeout: (key, timeoutMs) => {
+        timeouts.push({ key, timeoutMs });
+      },
+    });
+    const order: string[] = [];
+
+    // Stuck task — never resolves until the test cleans up.
+    const stuckGate = createDeferred();
+    const stuck = enqueue("feishu:default:chat-stuck", async () => {
+      order.push("stuck:start");
+      await stuckGate.promise;
+      order.push("stuck:end");
+    });
+
+    // Second same-key task — would be starved indefinitely without the cap.
+    const followUp = enqueue("feishu:default:chat-stuck", async () => {
+      order.push("follow-up:ran");
+    });
+
+    await followUp;
+
+    expect(order).toEqual(["stuck:start", "follow-up:ran"]);
+    expect(timeouts).toEqual([{ key: "feishu:default:chat-stuck", timeoutMs: 25 }]);
+
+    // Drain the leaked stuck task so it doesn't trip the unhandled-rejection guard.
+    stuckGate.resolve();
+    await stuck;
+  });
+
+  it("disables the timeout cap when taskTimeoutMs is 0 (legacy behavior)", async () => {
+    const timeouts: Array<{ key: string; timeoutMs: number }> = [];
+    const enqueue = createSequentialQueue({
+      taskTimeoutMs: 0,
+      onTaskTimeout: (key, timeoutMs) => {
+        timeouts.push({ key, timeoutMs });
+      },
+    });
+    const gate = createDeferred();
+    const order: string[] = [];
+
+    const first = enqueue("feishu:default:chat-1", async () => {
+      order.push("first:start");
+      await gate.promise;
+      order.push("first:end");
+    });
+    const second = enqueue("feishu:default:chat-1", async () => {
+      order.push("second:ran");
+    });
+
+    // Wait long enough that a timeout would have fired if it were active.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(order).toEqual(["first:start"]);
+    expect(timeouts).toEqual([]);
+
+    gate.resolve();
+    await Promise.all([first, second]);
+    expect(order).toEqual(["first:start", "first:end", "second:ran"]);
+  });
 });

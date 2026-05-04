@@ -4,8 +4,8 @@ import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
 import { type ExecApprovalsFile, loadExecApprovals } from "../infra/exec-approvals.js";
-import { isInterpreterLikeAllowlistPattern } from "../infra/exec-inline-eval.js";
 import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,

@@ -195,7 +195,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "docs/**"
-          - "docs.acp.md"
 
 "cli":
   - changed-files:
@@ -218,10 +217,10 @@
           - "Dockerfile"
           - "Dockerfile.*"
           - "docker-compose.yml"
-          - "docker-setup.sh"
-          - "setup-podman.sh"
           - ".dockerignore"
+          - "deploy/fly.private.toml"
           - "scripts/docker/setup.sh"
+          - "scripts/docker/sandbox/Dockerfile*"
           - "scripts/podman/setup.sh"
           - "scripts/**/*docker*"
           - "scripts/**/Dockerfile*"

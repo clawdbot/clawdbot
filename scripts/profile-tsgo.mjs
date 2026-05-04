@@ -19,15 +19,15 @@ const GRAPH_DEFINITIONS = {
     description: "core production graph",
   },
   "core-test": {
-    config: "tsconfig.core.test.json",
+    config: "test/tsconfig/tsconfig.core.test.json",
     description: "core colocated test graph",
   },
   "core-test-agents": {
-    config: "tsconfig.core.test.agents.json",
+    config: "test/tsconfig/tsconfig.core.test.agents.json",
     description: "diagnostic slice: core agent colocated tests",
   },
   "core-test-non-agents": {
-    config: "tsconfig.core.test.non-agents.json",
+    config: "test/tsconfig/tsconfig.core.test.non-agents.json",
     description: "diagnostic slice: core tests excluding agent test roots",
   },
   extensions: {
@@ -35,7 +35,7 @@ const GRAPH_DEFINITIONS = {
     description: "bundled extension production graph",
   },
   "extensions-test": {
-    config: "tsconfig.extensions.test.json",
+    config: "test/tsconfig/tsconfig.extensions.test.json",
     description: "bundled extension colocated test graph",
   },
 };

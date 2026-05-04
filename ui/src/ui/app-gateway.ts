@@ -156,12 +156,18 @@ function isTerminalChatState(
   return state === "final" || state === "aborted" || state === "error";
 }
 
-function isSessionMessagePhasePayload(payload: unknown): boolean {
+function isChatTurnSessionChangedPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const record = payload as { phase?: unknown; reason?: unknown };
   return (
-    Boolean(payload) &&
-    typeof payload === "object" &&
-    !Array.isArray(payload) &&
-    (payload as { phase?: unknown }).phase === "message"
+    record.phase === "start" ||
+    record.phase === "message" ||
+    record.phase === "end" ||
+    record.phase === "error" ||
+    record.reason === "send" ||
+    record.reason === "steer"
   );
 }
 
@@ -749,12 +755,8 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "sessions.changed") {
-    const applyResult = applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
-    if (
-      applyResult.applied &&
-      applyResult.change === "updated" &&
-      isSessionMessagePhasePayload(evt.payload)
-    ) {
+    const result = applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
+    if (result.applied || isChatTurnSessionChangedPayload(evt.payload)) {
       return;
     }
     void loadSessions(host as unknown as SessionsState);

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  baseStatusExpectedUpdateChannelInfo,
+  baseStatusExpectedUpdateChannelLabel,
+} from "../status.test-support.ts";
+import {
   buildStatusGatewaySurfaceValues,
   buildStatusOverviewRows,
   buildStatusOverviewSurfaceRows,
@@ -78,12 +82,8 @@ describe("status-all format", () => {
         } as never,
       }),
     ).toEqual({
-      channelInfo: {
-        channel: "stable",
-        source: "config",
-        label: "stable (config)",
-      },
-      channelLabel: "stable (config)",
+      channelInfo: baseStatusExpectedUpdateChannelInfo,
+      channelLabel: baseStatusExpectedUpdateChannelLabel,
       gitLabel: "main · tag v1.2.3",
       updateLine: `git main · ↔ origin/main · behind 2 · npm update ${newerRegistryVersion}`,
       updateAvailable: true,
@@ -374,7 +374,7 @@ describe("status-all format", () => {
       { Item: "Version", Value: "1.0.0" },
       { Item: "Dashboard", Value: "http://127.0.0.1:18789/" },
       { Item: "Tailscale exposure", Value: "serve · box.tail.ts.net · https://box.tail.ts.net" },
-      { Item: "Channel", Value: "stable (config)" },
+      { Item: "Channel", Value: baseStatusExpectedUpdateChannelLabel },
       { Item: "Git", Value: "main · tag v1.2.3" },
       { Item: "Update", Value: "available · custom update" },
       {

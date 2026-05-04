@@ -693,7 +693,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       // Upload and send media if URL or local path provided
       if (mediaUrl) {
         try {
-          return await sendMediaFeishu({
+          const result = await sendMediaFeishu({
             cfg,
             to,
             mediaUrl,
@@ -702,6 +702,16 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             replyToMessageId,
             ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
           });
+          if (result.voiceIntentDegradedToFile && text?.trim()) {
+            await sendOutboundText({
+              cfg,
+              to,
+              text,
+              accountId: accountId ?? undefined,
+              replyToMessageId,
+            });
+          }
+          return result;
         } catch (err) {
           // Log the error for debugging
           console.error(`[feishu] sendMediaFeishu failed:`, err);

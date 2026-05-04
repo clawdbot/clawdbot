@@ -137,14 +137,19 @@ ${logSetup}
 printf '[%s] openclaw restart attempt source=update target=%s\\n' "$(date -u +%FT%TZ)" '${shellEscapeRestartLogValue(label)}' >&2
 # Try kickstart first (works when the service is still registered).
 # If it fails (e.g. after bootout), clear any persisted disabled state,
-# then re-register via bootstrap and kickstart. The final status is captured
+# then re-register via bootstrap. Bootstrap loads RunAtLoad agents, so the
+# fallback must not immediately kickstart -k the freshly spawned gateway.
+# The final status is captured
 # before self-cleanup so a genuine failure remains observable.
 status=0
 if ! launchctl kickstart -k 'gui/${uid}/${escaped}'; then
   launchctl enable 'gui/${uid}/${escaped}'
-  launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}'
-  launchctl kickstart -k 'gui/${uid}/${escaped}'
-  status=$?
+  if launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}'; then
+    status=0
+  else
+    launchctl kickstart -k 'gui/${uid}/${escaped}'
+    status=$?
+  fi
 fi
 if [ "$status" -eq 0 ]; then
   printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2

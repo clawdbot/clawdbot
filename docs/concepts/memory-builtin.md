@@ -127,7 +127,10 @@ when `memorySearch.local.modelPath` points to an existing local file.
 may miss changes in rare edge cases.
 
 **sqlite-vec not loading?** OpenClaw falls back to in-process cosine similarity
-automatically. Check logs for the specific load error.
+automatically. `openclaw memory status --deep` reports the local vector store
+separately from the embedding provider, so `Vector store: unavailable` points
+at sqlite-vec loading while `Embeddings: unavailable` points at provider/auth
+or model readiness. Check logs for the specific load error.
 
 ## Configuration
 

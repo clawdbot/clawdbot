@@ -41,6 +41,7 @@ export default definePluginEntry({
           mode: resolveOpenAIPromptOverlayMode(pluginConfig),
           modelProviderId: provider.id,
           modelId: ctx.modelId,
+          trigger: ctx.trigger,
         });
       },
     });

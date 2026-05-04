@@ -145,17 +145,23 @@ export async function joinMeetViaVoiceCallGateway(params: {
         "voicecall.speak",
         {
           callId: start.callId,
+          allowTwimlFallback: false,
           message: params.message,
         },
         { timeoutMs: params.config.voiceCall.requestTimeoutMs },
       )) as VoiceCallSpeakResult;
       if (spoken.success === false) {
-        throw new Error(spoken.error || "voicecall.speak failed");
+        params.logger?.warn?.(
+          `[google-meet] Skipped intro speech because realtime bridge was not ready: ${
+            spoken.error || "voicecall.speak failed"
+          }`,
+        );
+      } else {
+        introSent = true;
+        params.logger?.info(
+          `[google-meet] Intro speech requested after Meet dial sequence: callId=${start.callId}`,
+        );
       }
-      introSent = true;
-      params.logger?.info(
-        `[google-meet] Intro speech requested after Meet dial sequence: callId=${start.callId}`,
-      );
     }
     return {
       callId: start.callId,

@@ -348,7 +348,11 @@ export function createTelegramBotCore(
         }
       : undefined;
 
-  const bot = new botRuntime.Bot(opts.token, client ? { client } : undefined);
+  const botConfig =
+    client || opts.botInfo
+      ? { ...(client ? { client } : {}), ...(opts.botInfo ? { botInfo: opts.botInfo } : {}) }
+      : undefined;
+  const bot = new botRuntime.Bot(opts.token, botConfig);
   bot.api.config.use(botRuntime.apiThrottler());
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {

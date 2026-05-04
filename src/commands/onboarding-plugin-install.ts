@@ -9,6 +9,7 @@ import {
   resolveBundledPluginSources,
 } from "../plugins/bundled-sources.js";
 import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
+import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import { enablePluginInConfig, type PluginEnableResult } from "../plugins/enable.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { installPluginFromNpmSpec } from "../plugins/install.js";
@@ -41,6 +42,13 @@ export type OnboardingPluginInstallResult = {
   pluginId: string;
   status: OnboardingPluginInstallStatus;
 };
+
+function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boolean {
+  return (
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND
+  );
+}
 
 function resolveRealDirectory(dir: string): string | null {
   try {
@@ -852,7 +860,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       "Plugin install",
     );
 
-    if (!npmSpec) {
+    if (!npmSpec || !shouldFallbackClawHubToNpm(result)) {
       runtime.error?.(`Plugin install failed: ${sanitizeTerminalText(result.error)}`);
       return {
         cfg: next,

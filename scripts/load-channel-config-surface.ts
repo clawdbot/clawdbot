@@ -1,13 +1,40 @@
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createJiti } from "jiti";
+import type { createJiti } from "jiti";
 import { buildChannelConfigSchema } from "../src/channels/plugins/config-schema.js";
 import {
   buildPluginLoaderJitiOptions,
   resolvePluginSdkAliasFile,
   resolvePluginSdkScopedAliasMap,
 } from "../src/plugins/sdk-alias.js";
+
+type CreateJiti = typeof createJiti;
+
+const jitiFactoryOverrideKey = Symbol.for("openclaw.channelConfigSurfaceJitiFactoryOverride");
+const requireForJiti = createRequire(import.meta.url);
+let createJitiLoaderFactory: CreateJiti | undefined;
+
+function loadCreateJitiLoaderFactory(): CreateJiti {
+  const override = (
+    globalThis as typeof globalThis & {
+      [jitiFactoryOverrideKey]?: CreateJiti;
+    }
+  )[jitiFactoryOverrideKey];
+  if (override) {
+    return override;
+  }
+  if (createJitiLoaderFactory) {
+    return createJitiLoaderFactory;
+  }
+  const loaded = requireForJiti("jiti") as { createJiti?: CreateJiti };
+  if (typeof loaded.createJiti !== "function") {
+    throw new Error("jiti module did not export createJiti");
+  }
+  createJitiLoaderFactory = loaded.createJiti;
+  return createJitiLoaderFactory;
+}
 
 function isBuiltChannelConfigSchema(
   value: unknown,
@@ -137,7 +164,7 @@ export async function loadChannelConfigSurfaceModule(
         pluginSdkResolution: "src",
       }),
     };
-    const jiti = createJiti(import.meta.url, {
+    const jiti = loadCreateJitiLoaderFactory()(import.meta.url, {
       ...buildPluginLoaderJitiOptions(aliasMap),
       interopDefault: true,
       tryNative: false,

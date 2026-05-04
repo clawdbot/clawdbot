@@ -8,8 +8,8 @@ set -euo pipefail
 #
 # Env:
 #   DMG_VOLUME_NAME        default: CFBundleName (or "OpenClaw")
-#   DMG_BACKGROUND_PATH    default: assets/dmg-background.png
-#   DMG_BACKGROUND_SMALL   default: assets/dmg-background-small.png (recommended)
+#   DMG_BACKGROUND_PATH    default: apps/macos/Packaging/dmg-background.png
+#   DMG_BACKGROUND_SMALL   default: apps/macos/Packaging/dmg-background-small.png (recommended)
 #   DMG_WINDOW_BOUNDS      default: "400 100 900 420" (500x320)
 #   DMG_ICON_SIZE          default: 128
 #   DMG_APP_POS            default: "125 160"
@@ -38,8 +38,8 @@ VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP_PA
 
 DMG_NAME="${APP_NAME}-${VERSION}.dmg"
 DMG_VOLUME_NAME="${DMG_VOLUME_NAME:-$APP_NAME}"
-DMG_BACKGROUND_SMALL="${DMG_BACKGROUND_SMALL:-$ROOT_DIR/assets/dmg-background-small.png}"
-DMG_BACKGROUND_PATH="${DMG_BACKGROUND_PATH:-$ROOT_DIR/assets/dmg-background.png}"
+DMG_BACKGROUND_SMALL="${DMG_BACKGROUND_SMALL:-$ROOT_DIR/apps/macos/Packaging/dmg-background-small.png}"
+DMG_BACKGROUND_PATH="${DMG_BACKGROUND_PATH:-$ROOT_DIR/apps/macos/Packaging/dmg-background.png}"
 
 DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 900 420}"
 DMG_ICON_SIZE="${DMG_ICON_SIZE:-128}"

@@ -68,6 +68,7 @@ semantics.
 
 - `start` defaults to `127.0.0.1` unless `--host` is set.
 - `run` starts a local debug proxy and then runs the command after `--`.
+- The debug proxy's direct upstream forwarding opens upstream sockets for diagnostics. When OpenClaw managed proxy mode is active, direct forwarding for proxy requests and CONNECT tunnels is disabled by default; set `OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY=1` only for approved local diagnostics.
 - `validate` exits with code 1 when proxy config or destination checks fail.
 - Captures are local debugging data; use `openclaw proxy purge` when finished.
 

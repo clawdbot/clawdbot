@@ -95,6 +95,28 @@ function assertChannelConfig() {
   }
 }
 
+function assertStatusSurfaces() {
+  const channel = process.argv[3];
+  const channelsStatusPath = process.argv[4];
+  const statusTextPath = process.argv[5];
+  const channelsStatus = readJson(channelsStatusPath);
+  const configuredChannels = Array.isArray(channelsStatus.configuredChannels)
+    ? channelsStatus.configuredChannels
+    : [];
+  if (!configuredChannels.includes(channel)) {
+    throw new Error(
+      `channels status did not list configured channel ${channel}. Payload: ${JSON.stringify(channelsStatus)}`,
+    );
+  }
+  const statusText = fs.readFileSync(statusTextPath, "utf8");
+  if (!/channels/i.test(statusText)) {
+    throw new Error(`plain status output did not render a Channels section. Output: ${statusText}`);
+  }
+  if (!statusText.toLowerCase().includes(channel.toLowerCase())) {
+    throw new Error(`plain status output did not mention ${channel}. Output: ${statusText}`);
+  }
+}
+
 function assertAgentTurn() {
   const marker = process.argv[3];
   const logPath = process.argv[4];
@@ -112,6 +134,7 @@ const commands = {
   "assert-onboard-state": assertOnboardState,
   "configure-mock-model": configureMockModel,
   "assert-channel-config": assertChannelConfig,
+  "assert-status-surfaces": assertStatusSurfaces,
   "assert-agent-turn": assertAgentTurn,
 };
 

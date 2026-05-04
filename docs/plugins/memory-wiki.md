@@ -441,6 +441,9 @@ knowledge layer:
 {
   memory: {
     backend: "qmd",
+  },
+  plugins: {
+    entries: {
       "memory-wiki": {
         enabled: true,
         config: {

@@ -116,6 +116,9 @@ export function resolveExtraParams(params: {
     merged.cachedContent = resolvedCachedContent;
     delete merged.cached_content;
   }
+  if (params.provider === "openrouter") {
+    canonicalizeOpenRouterResponseCacheParams(merged, [defaultParams, globalParams, agentParams]);
+  }
 
   applyDefaultOpenAIGptRuntimeParams(params, merged);
 
@@ -232,6 +235,9 @@ export function resolvePreparedExtraParams(params: {
   if (resolvedCachedContent !== undefined) {
     merged.cachedContent = resolvedCachedContent;
     delete merged.cached_content;
+  }
+  if (params.provider === "openrouter") {
+    canonicalizeOpenRouterResponseCacheParams(merged, [resolvedExtraParams, override]);
   }
   const cfg = params.cfg;
   const cacheKey = cfg ? resolvePreparedExtraParamsCacheKey(params) : undefined;
@@ -433,21 +439,74 @@ function resolveAliasedParamValue(
   snakeCaseKey: string,
   camelCaseKey: string,
 ): unknown {
+  return resolveAliasedParamValueFromKeys(sources, [snakeCaseKey, camelCaseKey]);
+}
+
+function resolveAliasedParamValueFromKeys(
+  sources: Array<Record<string, unknown> | undefined>,
+  keys: readonly string[],
+): unknown {
   let resolved: unknown = undefined;
   let seen = false;
   for (const source of sources) {
     if (!source) {
       continue;
     }
-    const hasSnakeCaseKey = Object.hasOwn(source, snakeCaseKey);
-    const hasCamelCaseKey = Object.hasOwn(source, camelCaseKey);
-    if (!hasSnakeCaseKey && !hasCamelCaseKey) {
-      continue;
+    for (const key of keys) {
+      if (!Object.hasOwn(source, key)) {
+        continue;
+      }
+      resolved = source[key];
+      seen = true;
+      break;
     }
-    resolved = hasSnakeCaseKey ? source[snakeCaseKey] : source[camelCaseKey];
-    seen = true;
   }
   return seen ? resolved : undefined;
+}
+
+function applyCanonicalAliasedParamValue(params: {
+  merged: Record<string, unknown>;
+  sources: Array<Record<string, unknown> | undefined>;
+  keys: readonly string[];
+  canonicalKey: string;
+}): void {
+  const resolved = resolveAliasedParamValueFromKeys(params.sources, params.keys);
+  if (resolved === undefined) {
+    return;
+  }
+  for (const key of params.keys) {
+    delete params.merged[key];
+  }
+  params.merged[params.canonicalKey] = resolved;
+}
+
+function canonicalizeOpenRouterResponseCacheParams(
+  merged: Record<string, unknown>,
+  sources: Array<Record<string, unknown> | undefined>,
+): void {
+  applyCanonicalAliasedParamValue({
+    merged,
+    sources,
+    keys: ["responseCache", "response_cache"],
+    canonicalKey: "responseCache",
+  });
+  applyCanonicalAliasedParamValue({
+    merged,
+    sources,
+    keys: [
+      "responseCacheTtlSeconds",
+      "response_cache_ttl_seconds",
+      "responseCacheTtl",
+      "response_cache_ttl",
+    ],
+    canonicalKey: "responseCacheTtlSeconds",
+  });
+  applyCanonicalAliasedParamValue({
+    merged,
+    sources,
+    keys: ["responseCacheClear", "response_cache_clear"],
+    canonicalKey: "responseCacheClear",
+  });
 }
 
 function createParallelToolCallsWrapper(

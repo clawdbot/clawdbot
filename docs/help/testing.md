@@ -195,6 +195,9 @@ inside every shard.
     `OPENCLAW_QA_CONVEX_SITE_URL` and the role secret. If
     `OPENCLAW_QA_CONVEX_SITE_URL` and a Convex role secret are present in CI,
     the Docker wrapper selects Convex automatically.
+  - The wrapper validates Telegram or Convex credential env on the host before
+    Docker build/install work. Set `OPENCLAW_NPM_TELEGRAM_SKIP_CREDENTIAL_PREFLIGHT=1`
+    only when deliberately debugging pre-credential setup.
   - `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE=ci|maintainer` overrides the shared
     `OPENCLAW_QA_CREDENTIAL_ROLE` for this lane only.
   - GitHub Actions exposes this lane as the manual maintainer workflow

@@ -382,8 +382,8 @@ function assertExternalPluginInstall(records, pluginId, packageName) {
   const record = records[pluginId];
   assert(record, `configured external ${pluginId} plugin install record missing`);
   assert(
-    record.source === "clawhub" || record.source === "npm",
-    `configured external ${pluginId} plugin installed from unexpected source: ${record.source}`,
+    record.source === "npm",
+    `configured external ${pluginId} plugin must be installed from npm, got: ${record.source}`,
   );
   const installPath = resolveHomePath(record.installPath);
   assert(
@@ -398,22 +398,20 @@ function assertExternalPluginInstall(records, pluginId, packageName) {
     fs.existsSync(path.join(installPath, "package.json")),
     `configured external ${pluginId} plugin package.json missing: ${installPath}`,
   );
-  if (record.source === "clawhub") {
-    assert(
-      String(record.spec ?? "").startsWith(`clawhub:${packageName}`),
-      `configured external ${pluginId} plugin ClawHub spec changed`,
-    );
-  } else {
-    const npmRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "npm", "node_modules");
-    assert(
-      isPathInside(npmRoot, installPath),
-      `configured external ${pluginId} npm install path outside managed npm root: ${installPath}`,
-    );
-    assert(
-      String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),
-      `configured external ${pluginId} plugin npm spec changed`,
-    );
-  }
+  const packageJson = readJson(path.join(installPath, "package.json"));
+  assert(
+    packageJson.name === packageName,
+    `configured external ${pluginId} package name changed: ${packageJson.name}`,
+  );
+  const npmRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "npm", "node_modules");
+  assert(
+    isPathInside(npmRoot, installPath),
+    `configured external ${pluginId} npm install path outside managed npm root: ${installPath}`,
+  );
+  assert(
+    String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),
+    `configured external ${pluginId} plugin npm spec changed`,
+  );
 }
 
 function assertConfiguredPluginInstalls() {
@@ -432,7 +430,10 @@ function assertConfiguredPluginInstalls() {
   assert(!matrix, "internal matrix plugin should not be installed externally");
   assert(bundledMatrix, "configured bundled matrix plugin is missing from the plugin index");
   assert(bundledMatrix.enabled !== false, "configured bundled matrix plugin is disabled");
-  assertExternalPluginInstall(records, "discord", "@openclaw/discord");
+  const brave = (index.plugins ?? []).find((plugin) => plugin?.pluginId === "brave");
+  assert(brave, "configured external brave plugin is missing from the plugin index");
+  assert(brave.enabled !== false, "configured external brave plugin is disabled");
+  assertExternalPluginInstall(records, "brave", "@openclaw/brave-plugin");
   assert(!records.telegram, "internal telegram plugin should not be installed externally");
 }
 

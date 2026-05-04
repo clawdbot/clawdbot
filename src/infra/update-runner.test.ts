@@ -265,6 +265,14 @@ describe("runGatewayUpdate", () => {
     }
   }
 
+  async function writeGatewayEntrypoint(pkgRoot: string) {
+    const entrypoint = path.join(pkgRoot, "dist", "index.js");
+    await fs.mkdir(path.dirname(entrypoint), { recursive: true });
+    await fs.writeFile(entrypoint, "export {};\n", "utf-8");
+    await writePackageDistInventory(pkgRoot);
+    return entrypoint;
+  }
+
   async function createGlobalPackageFixture(rootDir: string) {
     const nodeModules = path.join(rootDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
@@ -1456,6 +1464,87 @@ describe("runGatewayUpdate", () => {
     );
   });
 
+  it("runs doctor after global npm updates before reporting success", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await seedGlobalPackageRoot(pkgRoot);
+
+    let doctorEnv: NodeJS.ProcessEnv | undefined;
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      onInstall: async () => {
+        await writeGlobalPackageVersion(pkgRoot);
+        await writeGatewayEntrypoint(pkgRoot);
+      },
+    });
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(
+      pkgRoot,
+      "dist",
+      "index.js",
+    )} doctor --non-interactive --fix`;
+    const runCommandWithDoctor = async (argv: string[], options?: { env?: NodeJS.ProcessEnv }) => {
+      const key = argv.join(" ");
+      if (key === doctorCommand) {
+        calls.push(key);
+        doctorEnv = options?.env;
+        return { stdout: "doctor repaired config", stderr: "", code: 0 };
+      }
+      return runCommand(argv, options);
+    };
+
+    const result = await runWithCommand(runCommandWithDoctor, { cwd: pkgRoot });
+
+    expect(result.status).toBe("ok");
+    expect(calls).toContain(doctorCommand);
+    expect(result.steps.map((step) => step.name)).toContain("openclaw doctor");
+    expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
+    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
+  });
+
+  it("fails global npm updates when post-update doctor fails", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await seedGlobalPackageRoot(pkgRoot);
+
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      onInstall: async () => {
+        await writeGlobalPackageVersion(pkgRoot);
+        await writeGatewayEntrypoint(pkgRoot);
+      },
+    });
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(
+      pkgRoot,
+      "dist",
+      "index.js",
+    )} doctor --non-interactive --fix`;
+    const runCommandWithDoctor = async (argv: string[], options?: { env?: NodeJS.ProcessEnv }) => {
+      const key = argv.join(" ");
+      if (key === doctorCommand) {
+        calls.push(key);
+        return { stdout: "", stderr: "doctor refused migration", code: 1 };
+      }
+      return runCommand(argv, options);
+    };
+
+    const result = await runWithCommand(runCommandWithDoctor, { cwd: pkgRoot });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("doctor-failed");
+    expect(calls).toContain(doctorCommand);
+    expect(result.steps.at(-1)).toMatchObject({
+      name: "openclaw doctor",
+      exitCode: 1,
+      stderrTail: "doctor refused migration",
+    });
+  });
+
   it("falls back to global npm update when git is missing from PATH", async () => {
     const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
     const { calls, runCommand } = createGlobalInstallHarness({
@@ -1556,8 +1645,11 @@ describe("runGatewayUpdate", () => {
           "utf-8",
         );
         await writeBundledRuntimeSidecars(pkgRoot);
-        await writePackageDistInventory(pkgRoot);
-        await fs.rm(path.join(pkgRoot, MATRIX_HELPER_API), { force: true });
+        const inventory = await writePackageDistInventory(pkgRoot);
+        expect(inventory).toContain(MATRIX_HELPER_API);
+        const matrixHelperApiPath = path.join(pkgRoot, MATRIX_HELPER_API);
+        await expect(pathExists(matrixHelperApiPath)).resolves.toBe(true);
+        await fs.rm(matrixHelperApiPath);
       },
     });
 

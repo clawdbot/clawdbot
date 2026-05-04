@@ -65,7 +65,7 @@ There are two related systems:
   Enables parsing `/...` in chat messages. On surfaces without native commands (WhatsApp/WebChat/Signal/iMessage/Google Chat/Microsoft Teams), text commands still work even if you set this to `false`.
 </ParamField>
 <ParamField path="commands.native" type='boolean | "auto"' default='"auto"'>
-  Registers native commands. Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support. Set `channels.discord.commands.native`, `channels.telegram.commands.native`, or `channels.slack.commands.native` to override per provider (bool or `"auto"`). `false` clears previously registered commands on Discord/Telegram at startup. Slack commands are managed in the Slack app and are not removed automatically.
+  Registers native commands. Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support. Set `channels.discord.commands.native`, `channels.telegram.commands.native`, or `channels.slack.commands.native` to override per provider (bool or `"auto"`). On Discord, `false` skips slash-command registration and cleanup during startup; previously registered commands may remain visible until you remove them from the Discord app. Slack commands are managed in the Slack app and are not removed automatically.
 </ParamField>
 On Discord, native command specs may include `descriptionLocalizations`, which OpenClaw publishes as Discord `description_localizations` and includes in reconcile comparisons.
 <ParamField path="commands.nativeSkills" type='boolean | "auto"' default='"auto"'>
@@ -145,6 +145,7 @@ Current source-of-truth:
     - `/model [name|#|status]` shows or sets the model.
     - `/models [provider] [page] [limit=<n>|size=<n>|all]` lists configured/auth-available providers or models for a provider; add `all` to browse that provider's full catalog.
     - `/queue <mode>` manages queue behavior (`steer`, legacy `queue`, `followup`, `collect`, `steer-backlog`, `interrupt`) plus options like `debounce:0.5s cap:25 drop:summarize`; `/queue default` or `/queue reset` clears the session override. See [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
+    - `/steer <message>` injects guidance into the active run for the current session, independent of `/queue` mode. It does not start a new run when the session is idle. Alias: `/tell`. See [Steer](/tools/steer).
 
   </Accordion>
   <Accordion title="Discovery and status">
@@ -164,7 +165,7 @@ Current source-of-truth:
     - `/skill <name> [input]` runs a skill by name.
     - `/allowlist [list|add|remove] ...` manages allowlist entries. Text-only.
     - `/approve <id> <decision>` resolves exec approval prompts.
-    - `/btw <question>` asks a side question without changing future session context. See [BTW](/tools/btw).
+    - `/btw <question>` asks a side question without changing future session context. Alias: `/side`. See [BTW](/tools/btw).
 
   </Accordion>
   <Accordion title="Subagents and ACP">
@@ -174,7 +175,7 @@ Current source-of-truth:
     - `/unfocus` removes the current binding.
     - `/agents` lists thread-bound agents for the current session.
     - `/kill <id|#|all>` aborts one or all running sub-agents.
-    - `/steer <id|#> <message>` sends steering to a running sub-agent. Alias: `/tell`.
+    - `/subagents steer <id|#> <message>` sends steering to a running sub-agent. See [Steer](/tools/steer).
 
   </Accordion>
   <Accordion title="Owner-only writes and admin">
@@ -457,7 +458,7 @@ Examples:
 
 ## BTW side questions
 
-`/btw` is a quick **side question** about the current session.
+`/btw` is a quick **side question** about the current session. `/side` is an alias.
 
 Unlike normal chat:
 
@@ -473,6 +474,7 @@ Example:
 
 ```text
 /btw what are we doing right now?
+/side what changed while the main run continued?
 ```
 
 See [BTW Side Questions](/tools/btw) for the full behavior and client UX details.

@@ -8,6 +8,11 @@
   "contracts": {
     "tools": ["lobster"]
   },
+  "toolMetadata": {
+    "lobster": {
+      "optional": true
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

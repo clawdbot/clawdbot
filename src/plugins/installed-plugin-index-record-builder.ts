@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import { describePluginInstallSource } from "./install-source-info.js";
@@ -226,7 +227,7 @@ export function buildInstalledPluginIndexRecords(params: {
       origin: record.origin,
       config: normalizedConfig,
       rootConfig: params.config,
-      enabledByDefault: record.enabledByDefault,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
     }).enabled;
     const indexRecord: InstalledPluginIndexRecord = {
       pluginId: record.id,
@@ -248,6 +249,9 @@ export function buildInstalledPluginIndexRecords(params: {
     }
     if (record.enabledByDefault === true) {
       indexRecord.enabledByDefault = true;
+    }
+    if (record.enabledByDefaultOnPlatforms?.length) {
+      indexRecord.enabledByDefaultOnPlatforms = [...record.enabledByDefaultOnPlatforms];
     }
     if (record.syntheticAuthRefs?.length) {
       indexRecord.syntheticAuthRefs = [...record.syntheticAuthRefs];

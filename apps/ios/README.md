@@ -241,7 +241,7 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 
 ## What Works Now (Concrete)
 
-- Pairing via setup code flow (`/pair` then `/pair approve` in Telegram).
+- Pairing via QR or setup code flow (`/pair qr` or `/pair`, then `/pair approve` in Telegram).
 - Gateway connection via discovery or manual host/port with TLS fingerprint trust prompt.
 - Chat + Talk surfaces through the operator gateway session.
 - iPhone node commands in foreground: camera snap/clip, canvas present/navigate/eval/snapshot, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.

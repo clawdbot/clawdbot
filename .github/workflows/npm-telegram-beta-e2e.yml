@@ -220,6 +220,23 @@ jobs:
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
           export OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="${output_dir}"
 
+          append_telegram_summary() {
+            local status=$?
+            local report="${output_dir}/telegram-qa-report.md"
+            if [[ -n "${GITHUB_STEP_SUMMARY:-}" && -f "${report}" ]]; then
+              {
+                echo "## Package Telegram E2E"
+                echo
+                echo "- Package: ${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-${OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC}}"
+                echo "- Provider mode: ${OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE}"
+                echo
+                cat "${report}"
+              } >> "${GITHUB_STEP_SUMMARY}"
+            fi
+            return "${status}"
+          }
+          trap append_telegram_summary EXIT
+
           if [[ -n "${PACKAGE_ARTIFACT_NAME// }" ]]; then
             mapfile -t package_tgzs < <(find .artifacts/telegram-package-under-test -type f -name "*.tgz" | sort)
             if [[ "${#package_tgzs[@]}" -ne 1 ]]; then

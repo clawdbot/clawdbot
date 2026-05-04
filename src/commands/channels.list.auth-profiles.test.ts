@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   loadAuthProfileStoreWithoutExternalProfiles: vi.fn(),
   listReadOnlyChannelPluginsForConfig: vi.fn<() => ChannelPlugin[]>(() => []),
   buildChannelAccountSnapshot: vi.fn(),
+  loadProviderUsageSummary: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -37,6 +38,11 @@ vi.mock("../channels/plugins/read-only.js", () => ({
 
 vi.mock("../channels/plugins/status.js", () => ({
   buildChannelAccountSnapshot: mocks.buildChannelAccountSnapshot,
+}));
+
+vi.mock("../infra/provider-usage.js", () => ({
+  formatUsageReportLines: () => [],
+  loadProviderUsageSummary: mocks.loadProviderUsageSummary,
 }));
 
 import { channelsListCommand } from "./channels/list.js";
@@ -64,6 +70,7 @@ describe("channels list auth profiles", () => {
     mocks.readConfigFileSnapshot.mockReset();
     mocks.resolveCommandConfigWithSecrets.mockClear();
     mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReset();
+    mocks.loadProviderUsageSummary.mockReset();
     mocks.listReadOnlyChannelPluginsForConfig.mockReset();
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
     mocks.buildChannelAccountSnapshot.mockReset();
@@ -141,6 +148,27 @@ describe("channels list auth profiles", () => {
       chat?: Record<string, string[]>;
     };
     expect(payload.chat?.telegram).toEqual(["alerts", "default"]);
+  });
+
+  it("keeps JSON output valid when usage loading fails", async () => {
+    const runtime = createTestRuntime();
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+    mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
+      profiles: {},
+    });
+    mocks.loadProviderUsageSummary.mockRejectedValue(new Error("fetch failed"));
+
+    await channelsListCommand({ json: true }, runtime);
+
+    const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
+      usage?: unknown;
+    };
+    expect(payload.usage).toBeUndefined();
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("prints configured chat channel accounts before auth providers", async () => {

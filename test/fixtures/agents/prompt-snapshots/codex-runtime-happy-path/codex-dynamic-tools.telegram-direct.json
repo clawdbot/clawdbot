@@ -1034,6 +1034,14 @@
         "topic": {
           "type": "string"
         },
+        "track_tool_calls": {
+          "description": "snake_case alias of trackToolCalls.",
+          "type": "boolean"
+        },
+        "trackToolCalls": {
+          "description": "When true for a reaction to the current inbound message, use that reacted message as the status-reaction target for subsequent tool progress when the channel supports it.",
+          "type": "boolean"
+        },
         "type": {
           "type": "number"
         },

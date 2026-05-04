@@ -83,7 +83,7 @@ updates:
 
   # Swift Package Manager - Swabble
   - package-ecosystem: swift
-    directory: /Swabble
+    directory: /apps/swabble
     schedule:
       interval: daily
     cooldown:

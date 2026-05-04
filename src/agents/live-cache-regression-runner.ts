@@ -20,6 +20,7 @@ import {
 const OPENAI_TIMEOUT_MS = 120_000;
 const ANTHROPIC_TIMEOUT_MS = 120_000;
 const LIVE_CACHE_LANE_RETRIES = 1;
+const LIVE_CACHE_RESPONSE_RETRIES = 1;
 const OPENAI_PREFIX = buildStableCachePrefix("openai");
 const OPENAI_MCP_PREFIX = buildStableCachePrefix("openai-mcp-style");
 const ANTHROPIC_PREFIX = buildStableCachePrefix("anthropic");
@@ -128,6 +129,20 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
+function shouldRetryCacheProbeText(params: {
+  attempt: number;
+  suffix: string;
+  text: string;
+}): boolean {
+  const responseTextLower = normalizeLowercaseStringOrEmpty(params.text);
+  const suffixLower = normalizeLowercaseStringOrEmpty(params.suffix);
+  const markerLower = `cache-ok ${suffixLower}`;
+  return (
+    (!responseTextLower.includes(markerLower) || !responseTextLower.includes(suffixLower)) &&
+    params.attempt <= LIVE_CACHE_RESPONSE_RETRIES
+  );
+}
+
 async function runToolOnlyTurn(params: {
   apiKey: string;
   cacheRetention: "none" | "short" | "long";
@@ -205,38 +220,48 @@ async function completeCacheProbe(params: {
   maxTokens?: number;
 }): Promise<CacheRun> {
   const timeoutMs = params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS;
-  const response = await completeSimpleWithLiveTimeout(
-    params.model,
-    {
-      systemPrompt: params.systemPrompt,
-      messages: params.messages,
-      ...(params.tools ? { tools: params.tools } : {}),
-    },
-    {
-      apiKey: params.apiKey,
-      cacheRetention: params.cacheRetention,
-      sessionId: params.sessionId,
-      maxTokens: params.maxTokens ?? 64,
-      temperature: 0,
-      ...(params.providerTag === "openai" ? { reasoning: "none" as unknown as never } : {}),
-    },
-    `${params.providerTag} cache lane ${params.suffix}`,
-    timeoutMs,
-  );
-  const text = extractAssistantText(response);
-  const responseTextLower = normalizeLowercaseStringOrEmpty(text);
-  const suffixLower = normalizeLowercaseStringOrEmpty(params.suffix);
-  assert(
-    responseTextLower.includes(suffixLower),
-    `expected response to contain ${params.suffix}, got ${JSON.stringify(text)}`,
-  );
-  const usage = normalizeCacheUsage(response.usage);
-  return {
-    suffix: params.suffix,
-    text,
-    usage,
-    hitRate: computeCacheHitRate(usage),
-  };
+  for (let attempt = 1; attempt <= 1 + LIVE_CACHE_RESPONSE_RETRIES; attempt += 1) {
+    const response = await completeSimpleWithLiveTimeout(
+      params.model,
+      {
+        systemPrompt: params.systemPrompt,
+        messages: params.messages,
+        ...(params.tools ? { tools: params.tools } : {}),
+      },
+      {
+        apiKey: params.apiKey,
+        cacheRetention: params.cacheRetention,
+        sessionId: params.sessionId,
+        maxTokens: params.maxTokens ?? 64,
+        temperature: 0,
+        ...(params.providerTag === "openai" ? { reasoning: "none" as unknown as never } : {}),
+      },
+      `${params.providerTag} cache lane ${params.suffix}`,
+      timeoutMs,
+    );
+    const text = extractAssistantText(response);
+    if (shouldRetryCacheProbeText({ attempt, suffix: params.suffix, text })) {
+      logLiveCache(
+        `${params.providerTag} cache lane ${params.suffix} response mismatch; retrying once: ${JSON.stringify(text)}`,
+      );
+      continue;
+    }
+    const responseTextLower = normalizeLowercaseStringOrEmpty(text);
+    const suffixLower = normalizeLowercaseStringOrEmpty(params.suffix);
+    const markerLower = `cache-ok ${suffixLower}`;
+    assert(
+      responseTextLower.includes(markerLower),
+      `expected response to contain CACHE-OK ${params.suffix}, got ${JSON.stringify(text)}`,
+    );
+    const usage = normalizeCacheUsage(response.usage);
+    return {
+      suffix: params.suffix,
+      text,
+      usage,
+      hitRate: computeCacheHitRate(usage),
+    };
+  }
+  throw new Error(`expected response to contain CACHE-OK ${params.suffix}`);
 }
 
 async function runRepeatedLane(params: {
@@ -507,6 +532,7 @@ function appendBaselineFindings(target: BaselineFindings, source: BaselineFindin
 export const __testing = {
   assertAgainstBaseline,
   evaluateAgainstBaseline,
+  shouldRetryCacheProbeText,
   shouldRetryBaselineFindings,
 };
 

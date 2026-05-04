@@ -77,11 +77,13 @@ type AttemptSpawnWorkspaceHoisted = {
   getGlobalHookRunnerMock: Mock<() => unknown>;
   initializeGlobalHookRunnerMock: UnknownMock;
   runContextEngineMaintenanceMock: AsyncContextEngineMaintenanceMock;
-  getDmHistoryLimitFromSessionKeyMock: Mock<
+  detectAndLoadPromptImagesMock: AsyncUnknownMock;
+  getHistoryLimitFromSessionKeyMock: Mock<
     (sessionKey: string | undefined, config: unknown) => number | undefined
   >;
   limitHistoryTurnsMock: Mock<<T>(messages: T, limit: number | undefined) => T>;
   preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][];
+  systemPromptOverrideTexts: string[];
   sessionManager: SessionManagerMocks;
 };
 
@@ -148,13 +150,20 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
   const initializeGlobalHookRunnerMock = vi.fn();
   const runContextEngineMaintenanceMock = vi.fn(async (_params?: unknown) => undefined);
-  const getDmHistoryLimitFromSessionKeyMock = vi.fn<
+  const detectAndLoadPromptImagesMock = vi.fn(async () => ({
+    images: [],
+    detectedRefs: [],
+    loadedCount: 0,
+    skippedCount: 0,
+  }));
+  const getHistoryLimitFromSessionKeyMock = vi.fn<
     (sessionKey: string | undefined, config: unknown) => number | undefined
   >(() => undefined);
   const limitHistoryTurnsMock = vi.fn<<T>(messages: T, limit: number | undefined) => T>(
     (messages) => messages,
   );
   const preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][] = [];
+  const systemPromptOverrideTexts: string[] = [];
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
     branch: vi.fn(),
@@ -187,9 +196,11 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     getGlobalHookRunnerMock,
     initializeGlobalHookRunnerMock,
     runContextEngineMaintenanceMock,
-    getDmHistoryLimitFromSessionKeyMock,
+    detectAndLoadPromptImagesMock,
+    getHistoryLimitFromSessionKeyMock,
     limitHistoryTurnsMock,
     preemptiveCompactionCalls,
+    systemPromptOverrideTexts,
     sessionManager,
   };
 });
@@ -247,7 +258,8 @@ vi.mock("../../../plugins/provider-runtime.js", () => ({
   resolveProviderReasoningOutputModeWithPlugin: () => undefined,
   resolveProviderSystemPromptContribution: () => undefined,
   resolveProviderTextTransforms: () => undefined,
-  transformProviderSystemPrompt: ({ systemPrompt }: { systemPrompt: string }) => systemPrompt,
+  transformProviderSystemPrompt: ({ context }: { context: { systemPrompt?: string } }) =>
+    context.systemPrompt,
 }));
 
 vi.mock("../../../infra/machine-name.js", () => ({
@@ -386,7 +398,8 @@ vi.mock("../runs.js", () => ({
 }));
 
 vi.mock("./images.js", () => ({
-  detectAndLoadPromptImages: async () => ({ images: [] }),
+  detectAndLoadPromptImages: (...args: unknown[]) =>
+    (hoisted.detectAndLoadPromptImagesMock as (...args: unknown[]) => unknown)(...args),
 }));
 
 vi.mock("../../system-prompt-params.js", () => ({
@@ -402,11 +415,20 @@ vi.mock("../../system-prompt-report.js", () => ({
   buildSystemPromptReport: () => undefined,
 }));
 
-vi.mock("../system-prompt.js", () => ({
-  applySystemPromptOverrideToSession: () => {},
-  buildEmbeddedSystemPrompt: () => "system prompt",
-  createSystemPromptOverride: (prompt: string) => () => prompt,
-}));
+vi.mock("../system-prompt.js", async () => {
+  const actual = await vi.importActual<typeof import("../system-prompt.js")>("../system-prompt.js");
+  return {
+    ...actual,
+    applySystemPromptOverrideToSession: (session: MutableSession, systemPrompt: string) => {
+      session.agent.state.systemPrompt = systemPrompt;
+    },
+    buildEmbeddedSystemPrompt: () => "system prompt",
+    createSystemPromptOverride: (prompt: string) => {
+      hoisted.systemPromptOverrideTexts.push(prompt);
+      return () => prompt;
+    },
+  };
+});
 
 vi.mock("../extra-params.js", async () => {
   const actual = await vi.importActual<typeof import("../extra-params.js")>("../extra-params.js");
@@ -597,8 +619,8 @@ vi.mock("../compaction-safety-timeout.js", () => ({
 }));
 
 vi.mock("../history.js", () => ({
-  getDmHistoryLimitFromSessionKey: (sessionKey: string | undefined, config: unknown) =>
-    hoisted.getDmHistoryLimitFromSessionKeyMock(sessionKey, config),
+  getHistoryLimitFromSessionKey: (sessionKey: string | undefined, config: unknown) =>
+    hoisted.getHistoryLimitFromSessionKeyMock(sessionKey, config),
   limitHistoryTurns: (messages: unknown, limit: number | undefined) =>
     hoisted.limitHistoryTurnsMock(messages, limit),
 }));
@@ -805,9 +827,10 @@ export function resetEmbeddedAttemptHarness(
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);
   hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
-  hoisted.getDmHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
+  hoisted.getHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
   hoisted.limitHistoryTurnsMock.mockReset().mockImplementation((messages) => messages);
   hoisted.preemptiveCompactionCalls.length = 0;
+  hoisted.systemPromptOverrideTexts.length = 0;
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();

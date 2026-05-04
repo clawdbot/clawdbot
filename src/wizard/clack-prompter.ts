@@ -8,6 +8,7 @@ import {
   multiselect,
   type Option,
   outro,
+  password,
   select,
   spinner,
   text,
@@ -118,6 +119,14 @@ export function createClackPrompter(): WizardPrompter {
     },
     text: async (params) => {
       const validate = params.validate;
+      if (params.sensitive) {
+        return guardCancel(
+          await password({
+            message: stylePromptMessage(params.message),
+            validate: validate ? (value) => validate(value ?? "") : undefined,
+          }),
+        );
+      }
       return guardCancel(
         await text({
           message: stylePromptMessage(params.message),

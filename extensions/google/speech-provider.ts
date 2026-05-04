@@ -640,6 +640,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
     },
     synthesizeTelephony: async (req) => {
       const config = readGoogleTtsProviderConfig(req.providerConfig);
+      const overrides = readGoogleTtsOverrides(req.providerOverrides);
       const apiKey = resolveGoogleTtsApiKey({
         cfg: req.cfg,
         providerConfig: req.providerConfig,
@@ -654,10 +655,10 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
         request: sanitizeConfiguredModelProviderRequest(
           req.cfg?.models?.providers?.google?.request,
         ),
-        model: config.model,
-        voiceName: config.voiceName,
-        audioProfile: config.audioProfile,
-        speakerName: config.speakerName,
+        model: normalizeGoogleTtsModel(overrides.model ?? config.model),
+        voiceName: normalizeGoogleTtsVoiceName(overrides.voiceName ?? config.voiceName),
+        audioProfile: overrides.audioProfile ?? config.audioProfile,
+        speakerName: overrides.speakerName ?? config.speakerName,
         timeoutMs: req.timeoutMs,
       });
       return {

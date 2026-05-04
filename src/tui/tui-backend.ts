@@ -25,6 +25,9 @@ export type TuiSessionList = {
   ts: number;
   path: string;
   count: number;
+  totalCount?: number;
+  limitApplied?: number;
+  hasMore?: boolean;
   defaults?: {
     model?: string | null;
     modelProvider?: string | null;

@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
@@ -13,6 +14,7 @@ import type { AgentInternalEvent } from "../../internal-events.js";
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
 import type {
   BlockReplyChunking,
+  ToolProgressDetailMode,
   ToolResultFormat,
 } from "../../pi-embedded-subscribe.shared-types.js";
 import type { SkillSnapshot } from "../../skills.js";
@@ -22,6 +24,14 @@ import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.typ
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
+
+export type CurrentTurnPromptContext = {
+  reply?: {
+    body: string;
+    senderLabel?: string;
+    isQuote?: boolean;
+  };
+};
 
 export type RunEmbeddedPiAgentParams = {
   sessionId: string;
@@ -85,6 +95,10 @@ export type RunEmbeddedPiAgentParams = {
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
   forceMessageTool?: boolean;
+  /** Include the heartbeat response tool for structured heartbeat outcomes. */
+  enableHeartbeatTool?: boolean;
+  /** Keep the heartbeat response tool available even when a narrow profile would omit it. */
+  forceHeartbeatTool?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   sessionFile: string;
@@ -95,6 +109,8 @@ export type RunEmbeddedPiAgentParams = {
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
+  /** Explicit current-turn context that must be visible to the model but not persisted as user text. */
+  currentTurnContext?: CurrentTurnPromptContext;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
@@ -114,6 +130,7 @@ export type RunEmbeddedPiAgentParams = {
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
+  toolProgressDetail?: ToolProgressDetailMode;
   /** If true, suppress tool error warning payloads for this run (including mutating tools). */
   suppressToolErrorWarnings?: boolean;
   /** Bootstrap context mode for workspace file injection. */
@@ -151,7 +168,7 @@ export type RunEmbeddedPiAgentParams = {
     stream: string;
     data: Record<string, unknown>;
     sessionKey?: string;
-  }) => void;
+  }) => void | Promise<void>;
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
@@ -178,6 +195,8 @@ export type RunEmbeddedPiAgentParams = {
    * where transient service pressure is often model-scoped.
    */
   allowTransientCooldownProbe?: boolean;
+  suppressNextUserMessagePersistence?: boolean;
+  onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   /**
    * Dispose bundled MCP runtimes when the overall run ends instead of preserving
    * the session-scoped cache. Intended for one-shot local CLI runs that must

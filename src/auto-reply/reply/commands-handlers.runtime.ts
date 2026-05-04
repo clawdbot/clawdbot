@@ -31,6 +31,7 @@ import {
   handleStopCommand,
   handleUsageCommand,
 } from "./commands-session.js";
+import { handleSteerCommand } from "./commands-steer.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
 import { handleTasksCommand } from "./commands-tasks.js";
 import { handleTtsCommands } from "./commands-tts.js";
@@ -56,6 +57,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleStatusCommand,
     handleDiagnosticsCommand,
     handleTasksCommand,
+    handleSteerCommand,
     handleAllowlistCommand,
     handleApproveCommand,
     handleContextCommand,

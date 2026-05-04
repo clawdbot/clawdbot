@@ -578,15 +578,9 @@ function createReloaderHarness(
   options: {
     initialCompareConfig?: OpenClawConfig;
     initialInternalWriteHash?: string | null;
-    recoverSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
     promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
     initialPluginInstallRecords?: Record<string, PluginInstallRecord>;
     readPluginInstallRecords?: () => Promise<Record<string, PluginInstallRecord>>;
-    onRecovered?: (params: {
-      reason: string;
-      snapshot: ConfigFileSnapshot;
-      recoveredSnapshot: ConfigFileSnapshot;
-    }) => void | Promise<void>;
   } = {},
 ) {
   const watcher = createWatcherMock();
@@ -612,11 +606,9 @@ function createReloaderHarness(
     initialCompareConfig: options.initialCompareConfig,
     initialInternalWriteHash: options.initialInternalWriteHash,
     readSnapshot,
-    recoverSnapshot: options.recoverSnapshot,
     promoteSnapshot: options.promoteSnapshot,
     initialPluginInstallRecords: options.initialPluginInstallRecords ?? {},
     readPluginInstallRecords: options.readPluginInstallRecords ?? (async () => ({})),
-    onRecovered: options.onRecovered,
     subscribeToWrites,
     onHotReload,
     onRestart,
@@ -740,64 +732,35 @@ describe("startGatewayConfigReloader", () => {
     }
   });
 
-  it("restores last-known-good on invalid external config edits and reloads recovered snapshot", async () => {
-    const readSnapshot = vi
-      .fn<() => Promise<ConfigFileSnapshot>>()
-      .mockResolvedValueOnce(
-        makeSnapshot({
-          valid: false,
-          raw: "{ gateway: { mode: 123 } }",
-          issues: [{ path: "gateway.mode", message: "Expected string" }],
-          hash: "bad-1",
-        }),
-      )
-      .mockResolvedValueOnce(
-        makeSnapshot({
-          config: {
-            gateway: { reload: { debounceMs: 0 } },
-            hooks: { enabled: true },
-          },
-          hash: "last-good-1",
-        }),
-      );
-    const recoverSnapshot = vi.fn(async () => true);
+  it("skips invalid external config edits without recovery", async () => {
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        valid: false,
+        raw: "{ gateway: { mode: 123 } }",
+        issues: [{ path: "gateway.mode", message: "Expected string" }],
+        hash: "bad-1",
+      }),
+    );
     const promoteSnapshot = vi.fn(async () => true);
-    const onRecovered = vi.fn();
     const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot, {
-      recoverSnapshot,
       promoteSnapshot,
-      onRecovered,
     });
 
     watcher.emit("change");
     await vi.runAllTimersAsync();
 
-    expect(recoverSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({ valid: false }),
-      "invalid-config",
-    );
-    expect(readSnapshot).toHaveBeenCalledTimes(2);
-    expect(onRecovered).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reason: "invalid-config",
-        snapshot: expect.objectContaining({ valid: false }),
-        recoveredSnapshot: expect.objectContaining({ hash: "last-good-1" }),
-      }),
-    );
-    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(onHotReload).not.toHaveBeenCalled();
     expect(onRestart).not.toHaveBeenCalled();
-    expect(promoteSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({ hash: "last-good-1" }),
-      "valid-config",
-    );
+    expect(promoteSnapshot).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
-      "config reload restored last-known-good config after invalid-config; Rejected validation details: gateway.mode: Expected string.",
+      "config reload skipped (invalid config): gateway.mode: Expected string",
     );
 
     await reloader.stop();
   });
 
-  it("queues restart in degraded mode for plugin-local invalid reloads", async () => {
+  it("skips plugin-local invalid reloads without degraded mode", async () => {
     const activeConfig: OpenClawConfig = {
       gateway: { reload: { debounceMs: 0 } },
       agents: { defaults: { model: "gpt-5.4" } },
@@ -828,7 +791,6 @@ describe("startGatewayConfigReloader", () => {
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()
       .mockResolvedValueOnce(invalidSnapshot);
-    const recoverSnapshot = vi.fn(async () => true);
     const promoteSnapshot = vi.fn(async () => true);
     const previousConfig: OpenClawConfig = {
       ...activeConfig,
@@ -843,44 +805,19 @@ describe("startGatewayConfigReloader", () => {
     };
     const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot, {
       initialCompareConfig: previousConfig,
-      recoverSnapshot,
       promoteSnapshot,
     });
 
     watcher.emit("change");
     await vi.runAllTimersAsync();
 
-    expect(recoverSnapshot).not.toHaveBeenCalled();
     expect(readSnapshot).toHaveBeenCalledTimes(1);
     expect(onRestart).not.toHaveBeenCalled();
-    expect(onHotReload).toHaveBeenCalledTimes(1);
-    expect(onHotReload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        changedPaths: ["plugins.entries.lossless-claw.config.cacheAwareCompaction"],
-        restartGateway: false,
-        reloadPlugins: true,
-        hotReasons: ["plugins.entries.lossless-claw.config.cacheAwareCompaction"],
-      }),
-      expect.objectContaining({
-        plugins: expect.objectContaining({
-          entries: expect.objectContaining({
-            "lossless-claw": expect.objectContaining({
-              enabled: true,
-              config: expect.objectContaining({
-                cacheAwareCompaction: true,
-              }),
-            }),
-          }),
-        }),
-      }),
-    );
+    expect(onHotReload).not.toHaveBeenCalled();
     expect(promoteSnapshot).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
-      "config reload recovery skipped after invalid-config: invalidity is scoped to plugin entries",
-    );
-    expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining(
-        "config reload skipped plugin config validation issue at plugins.entries.lossless-claw.config.cacheAwareCompaction:",
+        "config reload skipped (invalid config): plugins.entries.lossless-claw.config.cacheAwareCompaction:",
       ),
     );
 

@@ -174,6 +174,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           }
         }
       }
+    } catch (err) {
+      log.error?.(`health-monitor: check failed: ${String(err)}`);
     } finally {
       checkInFlight = false;
     }

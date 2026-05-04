@@ -51,4 +51,19 @@ describe("resolveCronDeliveryPreview", () => {
       "resolved from last, session agent:avery:telegram:direct:direct-123",
     );
   });
+
+  it("does not resolve routes for explicit no-delivery jobs", async () => {
+    const job = makeCronJob({
+      delivery: { mode: "none" },
+      sessionTarget: "isolated",
+    });
+
+    const preview = await resolveCronDeliveryPreview({
+      cfg: {} as never,
+      job,
+    });
+
+    expect(preview).toEqual({ label: "not requested", detail: "not requested" });
+    expect(mocks.resolveDeliveryTarget).not.toHaveBeenCalled();
+  });
 });

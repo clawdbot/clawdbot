@@ -1,8 +1,7 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { matrixConfigAdapter } from "./config-adapter.js";
-import { MatrixConfigSchema } from "./config-schema.js";
+import { MatrixChannelConfigSchema } from "./config-schema.js";
 import { resolveMatrixAccount, type ResolvedMatrixAccount } from "./matrix/accounts.js";
 import { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./setup-core.js";
 
@@ -32,7 +31,7 @@ export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     media: true,
   },
   reload: { configPrefixes: ["channels.matrix"] },
-  configSchema: buildChannelConfigSchema(MatrixConfigSchema),
+  configSchema: MatrixChannelConfigSchema,
   config: {
     ...matrixConfigAdapter,
     isConfigured: (account) => account.configured,

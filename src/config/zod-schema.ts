@@ -190,6 +190,8 @@ const PluginEntrySchema = z
       .object({
         allowPromptInjection: z.boolean().optional(),
         allowConversationAccess: z.boolean().optional(),
+        timeoutMs: z.number().int().positive().max(600_000).optional(),
+        timeouts: z.record(z.string(), z.number().int().positive().max(600_000)).optional(),
       })
       .strict()
       .optional(),

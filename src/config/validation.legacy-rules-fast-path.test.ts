@@ -7,6 +7,15 @@ const { collectChannelLegacyConfigRulesMock, listPluginDoctorLegacyConfigRulesMo
     listPluginDoctorLegacyConfigRulesMock: vi.fn((): LegacyConfigRule[] => []),
   }),
 );
+const loadPluginMetadataSnapshotMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    manifestRegistry: {
+      diagnostics: [],
+      plugins: [],
+    },
+    plugins: [],
+  })),
+);
 
 vi.mock("../channels/plugins/legacy-config.js", () => ({
   collectChannelLegacyConfigRules: collectChannelLegacyConfigRulesMock,
@@ -14,6 +23,10 @@ vi.mock("../channels/plugins/legacy-config.js", () => ({
 
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
   listPluginDoctorLegacyConfigRules: listPluginDoctorLegacyConfigRulesMock,
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
 }));
 
 import { validateConfigObjectRaw } from "./validation.js";
@@ -24,6 +37,7 @@ describe("config validation legacy rule loading", () => {
     collectChannelLegacyConfigRulesMock.mockReturnValue([]);
     listPluginDoctorLegacyConfigRulesMock.mockReset();
     listPluginDoctorLegacyConfigRulesMock.mockReturnValue([]);
+    loadPluginMetadataSnapshotMock.mockClear();
   });
 
   it("does not load channel or plugin doctor legacy rules for valid raw config", () => {
@@ -43,6 +57,7 @@ describe("config validation legacy rule loading", () => {
     expect(result.ok).toBe(true);
     expect(collectChannelLegacyConfigRulesMock).not.toHaveBeenCalled();
     expect(listPluginDoctorLegacyConfigRulesMock).not.toHaveBeenCalled();
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("does not load plugin doctor legacy rules for invalid raw config", () => {

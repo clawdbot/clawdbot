@@ -14,7 +14,7 @@ packages:
   OpenClawKit:
     path: ../shared/OpenClawKit
   Swabble:
-    path: ../../Swabble
+    path: ../swabble
 
 schemes:
   OpenClaw:
@@ -70,8 +70,8 @@ targets:
             echo "error: swiftformat not found (brew install swiftformat)" >&2
             exit 1
           fi
-          swiftformat --lint --config "$SRCROOT/../../.swiftformat" \
-            --unexclude "$SRCROOT/Sources,$SRCROOT/ShareExtension,$SRCROOT/ActivityWidget,$SRCROOT/WatchExtension,$SRCROOT/../shared/OpenClawKit,$SRCROOT/../../Swabble" \
+          swiftformat --lint --config "$SRCROOT/../../config/swiftformat" \
+            --unexclude "$SRCROOT/Sources,$SRCROOT/ShareExtension,$SRCROOT/ActivityWidget,$SRCROOT/WatchExtension,$SRCROOT/../shared/OpenClawKit,$SRCROOT/../swabble" \
             --filelist "$SRCROOT/SwiftSources.input.xcfilelist"
       - name: SwiftLint
         basedOnDependencyAnalysis: false

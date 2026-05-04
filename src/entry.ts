@@ -232,6 +232,6 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
       "[openclaw] Failed to start CLI:",
       error instanceof Error ? (error.stack ?? error.message) : error,
     );
-    process.exitCode = 1;
+    process.exit(1);
   }
 }

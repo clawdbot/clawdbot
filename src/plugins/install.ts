@@ -8,19 +8,26 @@ import {
 } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
+  readManagedNpmRootInstalledDependency,
   removeManagedNpmRootDependency,
   resolveManagedNpmRootDependencySpec,
   upsertManagedNpmRootDependency,
+  type ManagedNpmRootInstalledDependency,
 } from "../infra/npm-managed-root.js";
 import {
+  compareOpenClawReleaseVersions,
   formatPrereleaseResolutionError,
+  isExactSemverVersion,
+  isPrereleaseSemverVersion,
   isPrereleaseResolutionAllowed,
   parseRegistryNpmSpec,
+  type ParsedRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
 import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
 } from "../infra/safe-package-install.js";
+import { compareComparableSemver, parseComparableSemver } from "../infra/semver-compare.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -155,6 +162,97 @@ function isNpmPackageNotFoundMessage(error: string): boolean {
   return /E404|404 not found|not in this registry/i.test(normalized);
 }
 
+function compareNpmSemver(a: string, b: string): number {
+  const releaseCmp = compareOpenClawReleaseVersions(a, b);
+  if (releaseCmp !== null) {
+    return releaseCmp;
+  }
+  return compareComparableSemver(parseComparableSemver(a), parseComparableSemver(b)) ?? 0;
+}
+
+type TrustedOfficialPrereleaseResolution =
+  | { kind: "stable"; resolution: NpmSpecResolution }
+  | { kind: "prerelease-only"; resolution: NpmSpecResolution }
+  | { kind: "allow-prerelease-only" };
+
+async function resolveTrustedOfficialPrereleaseResolution(params: {
+  spec: ParsedRegistryNpmSpec;
+  resolvedPrereleaseVersion: string;
+  timeoutMs: number;
+  logger: PluginInstallLogger;
+}): Promise<TrustedOfficialPrereleaseResolution | null> {
+  if (!params.spec.name.startsWith("@openclaw/")) {
+    return null;
+  }
+  const versions = await runCommandWithTimeout(
+    ["npm", "view", params.spec.name, "versions", "--json"],
+    {
+      timeoutMs: Math.max(params.timeoutMs, 60_000),
+      env: {
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+        NPM_CONFIG_IGNORE_SCRIPTS: "true",
+      },
+    },
+  );
+  if (versions.code !== 0) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(versions.stdout.trim());
+  } catch {
+    return null;
+  }
+  const semverVersions = (Array.isArray(parsed) ? parsed : [parsed]).filter(
+    (value): value is string => typeof value === "string" && isExactSemverVersion(value),
+  );
+  const stableVersion = semverVersions
+    .filter((value) => !isPrereleaseSemverVersion(value))
+    .toSorted(compareNpmSemver)
+    .at(-1);
+  if (!stableVersion) {
+    const prereleaseVersion = semverVersions
+      .filter(isPrereleaseSemverVersion)
+      .toSorted(compareNpmSemver)
+      .at(-1);
+    if (prereleaseVersion && semverVersions.every(isPrereleaseSemverVersion)) {
+      if (prereleaseVersion !== params.resolvedPrereleaseVersion) {
+        const prereleaseSpec = `${params.spec.name}@${prereleaseVersion}`;
+        const metadataResult = await resolveNpmSpecMetadata({
+          spec: prereleaseSpec,
+          timeoutMs: params.timeoutMs,
+        });
+        if (!metadataResult.ok) {
+          return null;
+        }
+        params.logger.warn?.(
+          `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; using newest prerelease ${prereleaseSpec} because this trusted official OpenClaw package has no stable npm versions yet.`,
+        );
+        return { kind: "prerelease-only", resolution: metadataResult.metadata };
+      }
+      params.logger.warn?.(
+        `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; allowing it because this trusted official OpenClaw package has no stable npm versions yet.`,
+      );
+      return { kind: "allow-prerelease-only" };
+    }
+    return null;
+  }
+
+  const stableSpec = `${params.spec.name}@${stableVersion}`;
+  const metadataResult = await resolveNpmSpecMetadata({
+    spec: stableSpec,
+    timeoutMs: params.timeoutMs,
+  });
+  if (!metadataResult.ok) {
+    return null;
+  }
+  params.logger.warn?.(
+    `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; falling back to stable ${stableSpec} for this trusted official OpenClaw install.`,
+  );
+  return { kind: "stable", resolution: metadataResult.metadata };
+}
+
 function buildFileInstallResult(pluginId: string, targetFile: string): InstallPluginResult {
   return {
     ok: true,
@@ -221,10 +319,11 @@ async function rollbackManagedNpmPluginInstall(params: {
         "--no-audit",
         "--no-fund",
         "--prefix",
-        params.npmRoot,
+        ".",
         params.packageName,
       ],
       {
+        cwd: params.npmRoot,
         timeoutMs: Math.max(params.timeoutMs, 300_000),
         env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
       },
@@ -251,6 +350,23 @@ async function rollbackManagedNpmPluginInstall(params: {
       `Failed to remove managed npm dependency ${params.packageName}: ${String(error)}`,
     );
   }
+}
+
+function resolveInstalledNpmResolutionMismatch(params: {
+  packageName: string;
+  expected: NpmSpecResolution;
+  installed: ManagedNpmRootInstalledDependency | null;
+}): string | null {
+  if (!params.installed) {
+    return `npm install did not record package-lock metadata for ${params.packageName}`;
+  }
+  if (params.expected.version && params.installed.version !== params.expected.version) {
+    return `npm install resolved ${params.packageName} to version ${params.installed.version ?? "unknown"}, expected ${params.expected.version}`;
+  }
+  if (params.expected.integrity && params.installed.integrity !== params.expected.integrity) {
+    return `npm install resolved ${params.packageName} with integrity ${params.installed.integrity ?? "unknown"}, expected ${params.expected.integrity}`;
+  }
+  return null;
 }
 
 type PackageInstallCommonParams = InstallSafetyOverrides & {
@@ -799,6 +915,9 @@ async function scanAndLinkInstalledPackage(params: {
     subject: `Plugin "${params.pluginId}"`,
     scan: async () =>
       await params.runtime.scanInstalledPackageDependencyTree({
+        allowManagedNpmRootPackagePeerSymlinks:
+          params.dependencyScanRootDir !== undefined &&
+          path.resolve(params.dependencyScanRootDir) !== path.resolve(params.installedDir),
         logger: params.logger,
         packageDir: params.dependencyScanRootDir ?? params.installedDir,
         pluginId: params.pluginId,
@@ -1157,13 +1276,29 @@ export async function installPluginFromNpmSpec(
       resolvedVersion: npmResolution.version,
     })
   ) {
-    return {
-      ok: false,
-      error: formatPrereleaseResolutionError({
-        spec: parsedSpec,
-        resolvedVersion: npmResolution.version,
-      }),
-    };
+    const trustedResolution = params.trustedSourceLinkedOfficialInstall
+      ? await resolveTrustedOfficialPrereleaseResolution({
+          spec: parsedSpec,
+          resolvedPrereleaseVersion: npmResolution.version,
+          timeoutMs,
+          logger,
+        })
+      : null;
+    if (trustedResolution?.kind === "stable" || trustedResolution?.kind === "prerelease-only") {
+      Object.assign(npmResolution, trustedResolution.resolution, {
+        resolvedAt: npmResolution.resolvedAt,
+      });
+    } else if (trustedResolution?.kind === "allow-prerelease-only") {
+      // Keep the original prerelease resolution. The package has no stable line yet.
+    } else {
+      return {
+        ok: false,
+        error: formatPrereleaseResolutionError({
+          spec: parsedSpec,
+          resolvedVersion: npmResolution.version,
+        }),
+      };
+    }
   }
   const driftResult = await resolveNpmIntegrityDriftWithDefaultMessage({
     spec,
@@ -1221,10 +1356,10 @@ export async function installPluginFromNpmSpec(
         noFund: true,
       }),
       "--prefix",
-      npmRoot,
-      spec,
+      ".",
     ],
     {
+      cwd: npmRoot,
       timeoutMs: Math.max(timeoutMs, 300_000),
       env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
     },
@@ -1237,6 +1372,44 @@ export async function installPluginFromNpmSpec(
     return {
       ok: false,
       error: `npm install failed: ${install.stderr.trim() || install.stdout.trim()}`,
+    };
+  }
+
+  let installedDependency: ManagedNpmRootInstalledDependency | null;
+  try {
+    installedDependency = await readManagedNpmRootInstalledDependency({
+      npmRoot,
+      packageName: parsedSpec.name,
+    });
+  } catch (error) {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: parsedSpec.name,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+    });
+    return {
+      ok: false,
+      error: `Failed to verify npm install metadata for ${parsedSpec.name}: ${String(error)}`,
+    };
+  }
+  const resolutionMismatch = resolveInstalledNpmResolutionMismatch({
+    packageName: parsedSpec.name,
+    expected: npmResolution,
+    installed: installedDependency,
+  });
+  if (resolutionMismatch) {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: parsedSpec.name,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+    });
+    return {
+      ok: false,
+      error: resolutionMismatch,
     };
   }
 

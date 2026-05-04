@@ -288,6 +288,40 @@ export function describeChannelPluginCatalogEntriesContract() {
         },
       },
       {
+        name: "pins bare external prerelease package specs to the entry version",
+        setup: () => {
+          const dir = fs.mkdtempSync(
+            path.join(resolvePreferredOpenClawTmpDir(), "openclaw-catalog-prerelease-"),
+          );
+          const catalogPath = path.join(dir, "catalog.json");
+          writeCatalogFile(catalogPath, {
+            ...createCatalogEntry({
+              packageName: "@openclaw/prerelease-demo-channel",
+              channelId: "prerelease-demo",
+              label: "Prerelease Demo",
+              blurb: "Prerelease package pinning fixture",
+            }),
+            version: "2026.5.3-beta.1",
+          });
+          return {
+            channelId: "prerelease-demo",
+            catalogPaths: [catalogPath],
+            expected: {
+              install: { npmSpec: "@openclaw/prerelease-demo-channel@2026.5.3-beta.1" },
+              installSource: {
+                npm: {
+                  spec: "@openclaw/prerelease-demo-channel@2026.5.3-beta.1",
+                  packageName: "@openclaw/prerelease-demo-channel",
+                  selector: "2026.5.3-beta.1",
+                  selectorKind: "exact-version",
+                  exactVersion: true,
+                },
+              },
+            },
+          };
+        },
+      },
+      {
         name: "accepts external manifest entries with ClawHub-only install metadata",
         setup: () => {
           const dir = fs.mkdtempSync(

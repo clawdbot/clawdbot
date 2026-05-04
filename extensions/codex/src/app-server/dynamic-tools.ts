@@ -231,13 +231,16 @@ function collectToolTelemetry(params: {
   if (text) {
     params.telemetry.messagingToolSentTexts.push(text);
   }
-  params.telemetry.messagingToolSentMediaUrls.push(...collectMediaUrls(params.args));
+  const mediaUrls = collectMediaUrls(params.args);
+  params.telemetry.messagingToolSentMediaUrls.push(...mediaUrls);
   params.telemetry.messagingToolSentTargets.push({
     tool: params.toolName,
     provider: readFirstString(params.args, ["provider", "channel"]) ?? params.toolName,
     accountId: readFirstString(params.args, ["accountId", "account_id"]),
     to: readFirstString(params.args, ["to", "target", "recipient"]),
     threadId: readFirstString(params.args, ["threadId", "thread_id", "messageThreadId"]),
+    ...(text ? { text } : {}),
+    ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
   });
 }
 

@@ -6,9 +6,9 @@ import { beforeAll, describe, expect, it } from "vitest";
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePaths = [
   "Dockerfile",
-  "Dockerfile.sandbox",
-  "Dockerfile.sandbox-browser",
-  "Dockerfile.sandbox-common",
+  "scripts/docker/sandbox/Dockerfile",
+  "scripts/docker/sandbox/Dockerfile.browser",
+  "scripts/docker/sandbox/Dockerfile.common",
   "scripts/docker/cleanup-smoke/Dockerfile",
   "scripts/docker/install-sh-smoke/Dockerfile",
   "scripts/docker/install-sh-e2e/Dockerfile",
@@ -85,7 +85,7 @@ describe("docker build cache layout", () => {
   });
 
   it("does not leave empty shell continuation lines in sandbox-common", async () => {
-    const dockerfile = await readRepoFile("Dockerfile.sandbox-common");
+    const dockerfile = await readRepoFile("scripts/docker/sandbox/Dockerfile.common");
     expect(dockerfile).not.toContain("apt-get install -y --no-install-recommends ${PACKAGES} \\");
     expect(dockerfile).toContain(
       'RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm; fi',

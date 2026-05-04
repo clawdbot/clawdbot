@@ -914,6 +914,25 @@ describe("provider-runtime", () => {
     expect(contribution?.sectionOverrides?.interaction_style).toContain(
       "This is a live chat, not a memo.",
     );
+    expect(contribution?.sectionOverrides?.interaction_style).not.toContain(
+      "The purpose of heartbeats is to make you feel magical and proactive.",
+    );
+  });
+
+  it("passes heartbeat trigger context to the shared GPT-5 prompt overlay", () => {
+    const contribution = resolveProviderSystemPromptContribution({
+      provider: "openrouter",
+      context: {
+        provider: "openrouter",
+        modelId: "openai/gpt-5.4",
+        promptMode: "full",
+        trigger: "heartbeat",
+      } as never,
+    });
+
+    expect(contribution?.sectionOverrides?.interaction_style).toContain(
+      "The purpose of heartbeats is to make you feel magical and proactive.",
+    );
   });
 
   it("respects the shared GPT-5 prompt overlay personality config", () => {

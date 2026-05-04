@@ -78,7 +78,7 @@ When a run id is available, recent tool-call history is evaluated only within th
 
 ## Recommended setup
 
-- Start with `enabled: true`, defaults unchanged.
+- For smaller models, start with `enabled: true`, defaults unchanged. Flagship models rarely need loop detection and can leave it disabled.
 - Keep thresholds ordered as `warningThreshold < criticalThreshold < globalCircuitBreakerThreshold`.
 - If false positives occur:
   - raise `warningThreshold` and/or `criticalThreshold`

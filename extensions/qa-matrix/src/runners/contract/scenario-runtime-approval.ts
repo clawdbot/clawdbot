@@ -4,6 +4,7 @@ import { MATRIX_QA_DRIVER_DM_ROOM_KEY, resolveMatrixQaScenarioRoomId } from "./s
 import {
   advanceMatrixQaActorCursor,
   buildMatrixQaToken,
+  createMatrixQaDriverScenarioClient,
   createMatrixQaScenarioClient,
   primeMatrixQaDriverScenarioClient,
   type MatrixQaScenarioContext,
@@ -145,10 +146,7 @@ async function reactToApproval(params: {
   roomId: string;
   targetEventId: string;
 }) {
-  const client = createMatrixQaScenarioClient({
-    accessToken: params.context.driverAccessToken,
-    baseUrl: params.context.baseUrl,
-  });
+  const client = createMatrixQaDriverScenarioClient(params.context);
   const emoji =
     params.decision === "allow-once"
       ? MATRIX_QA_APPROVAL_ALLOW_ONCE_REACTION
@@ -179,6 +177,23 @@ async function reactToApproval(params: {
     messageId: params.targetEventId,
     roomId: params.roomId,
   });
+  await client
+    .waitForRoomEvent({
+      observedEvents: params.context.observedEvents,
+      predicate: (event) =>
+        event.roomId === params.roomId &&
+        event.sender === params.context.driverUserId &&
+        event.type === "m.reaction" &&
+        event.reaction?.eventId === params.targetEventId &&
+        event.reaction.key === emoji,
+      roomId: params.roomId,
+      timeoutMs: params.context.timeoutMs,
+    })
+    .catch((err: unknown) => {
+      throw new Error(
+        `Matrix approval reaction ${eventId} was not observed before waiting for the gateway decision: ${String(err)}`,
+      );
+    });
   return {
     eventId,
     reaction: {
@@ -206,6 +221,14 @@ function assertApprovalDecisionResult(params: {
     throw new Error(
       `approval decision was ${formatApprovalResultValue(result?.decision)} instead of ${params.decision}`,
     );
+  }
+}
+
+function assertApprovalResolveResult(result: unknown) {
+  const resolved =
+    typeof result === "object" && result !== null ? (result as { ok?: unknown }) : null;
+  if (resolved?.ok !== true) {
+    throw new Error(`approval resolve result was ${formatApprovalResultValue(result)}`);
   }
 }
 
@@ -283,6 +306,24 @@ async function waitForApprovalDecision(params: {
   return await gatewayCall(
     method,
     { id: params.approvalId },
+    {
+      expectFinal: true,
+      timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
+    },
+  );
+}
+
+async function resolveApprovalDecision(params: {
+  approvalId: string;
+  context: MatrixQaScenarioContext;
+  decision: MatrixQaApprovalDecision;
+  kind: MatrixQaApprovalKind;
+}) {
+  const gatewayCall = requireMatrixQaGatewayCall(params.context);
+  const method = params.kind === "exec" ? "exec.approval.resolve" : "plugin.approval.resolve";
+  return await gatewayCall(
+    method,
+    { decision: params.decision, id: params.approvalId },
     {
       expectFinal: true,
       timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
@@ -548,22 +589,13 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
   if (channelApproval.event.approval?.id !== dmApproval.event.approval?.id) {
     throw new Error("target=both delivered different approval ids to channel and DM");
   }
-  const reaction = await reactToApproval({
-    context,
-    decision: "allow-once",
-    roomId: context.roomId,
-    targetEventId: channelApproval.event.eventId,
-  });
-  const result = await waitForApprovalDecision({
+  const result = await resolveApprovalDecision({
     approvalId,
     context,
+    decision: "allow-once",
     kind: "exec",
   });
-  assertApprovalDecisionResult({
-    approvalId,
-    decision: "allow-once",
-    result,
-  });
+  assertApprovalResolveResult(result);
   const lateDuplicate = await client.waitForOptionalRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) =>
@@ -584,16 +616,13 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
         buildMatrixApprovalArtifact(channelApproval.event),
         buildMatrixApprovalArtifact(dmApproval.event),
       ],
-      reactionEmoji: reaction.reaction?.key,
-      reactionEventId: reaction.eventId,
-      reactionTargetEventId: reaction.reaction?.eventId,
       token,
     },
     details: [
       `channel approval event: ${channelApproval.event.eventId}`,
       `dm approval event: ${dmApproval.event.eventId}`,
       `approval id: ${approvalId}`,
-      `decision: allow-once`,
+      `decision: allow-once via gateway resolve`,
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }

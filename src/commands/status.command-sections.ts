@@ -168,8 +168,13 @@ export function buildStatusMemoryValue(
   const colorByTone = (tone: Tone, text: string) =>
     tone === "ok" ? params.ok(text) : tone === "warn" ? params.warn(text) : params.muted(text);
   if (params.memory.vector) {
-    const state = params.resolveMemoryVectorState(params.memory.vector);
-    const label = state.state === "disabled" ? "vector off" : `vector ${state.state}`;
+    const vector =
+      params.memory.backend === "builtin" && params.memory.vector.storeAvailable !== undefined
+        ? { ...params.memory.vector, available: params.memory.vector.storeAvailable }
+        : params.memory.vector;
+    const state = params.resolveMemoryVectorState(vector);
+    const prefix = params.memory.backend === "builtin" ? "vector store" : "vector";
+    const label = state.state === "disabled" ? `${prefix} off` : `${prefix} ${state.state}`;
     parts.push(colorByTone(state.tone, label));
   }
   if (params.memory.fts) {

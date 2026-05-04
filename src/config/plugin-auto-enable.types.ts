@@ -23,6 +23,11 @@ export type PluginAutoEnableCandidate =
     }
   | {
       pluginId: string;
+      kind: "web-search-provider-selected";
+      providerId: string;
+    }
+  | {
+      pluginId: string;
       kind: "web-fetch-provider-selected";
       providerId: string;
     }

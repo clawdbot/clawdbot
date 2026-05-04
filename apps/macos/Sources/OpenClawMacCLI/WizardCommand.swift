@@ -445,6 +445,12 @@ private func promptAnswer(for step: WizardStep) throws -> Any {
     case "text":
         let initial = anyCodableString(step.initialvalue)
         let prompt = step.placeholder ?? "Value"
+        if step.sensitive == true {
+            let sensitivePrompt = initial.isEmpty ? prompt : "\(prompt) (leave blank to keep existing)"
+            let value = try readSensitiveLineWithPrompt(sensitivePrompt)
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? initial : trimmed
+        }
         let value = try readLineWithPrompt("\(prompt)\(initial.isEmpty ? "" : " [\(initial)]")")
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? initial : trimmed
@@ -519,6 +525,31 @@ private func promptMultiSelect(_ step: WizardStep) throws -> [Any] {
 
 private func readLineWithPrompt(_ prompt: String) throws -> String {
     print("\(prompt): ", terminator: "")
+    guard let line = readLine() else {
+        throw WizardCliError.cancelled
+    }
+    return line
+}
+
+private func readSensitiveLineWithPrompt(_ prompt: String) throws -> String {
+    print("\(prompt): ", terminator: "")
+    fflush(stdout)
+
+    var original = termios()
+    guard tcgetattr(STDIN_FILENO, &original) == 0 else {
+        throw WizardCliError.gatewayError("Could not configure hidden terminal input.")
+    }
+
+    var hidden = original
+    hidden.c_lflag &= ~tcflag_t(ECHO)
+    guard tcsetattr(STDIN_FILENO, TCSANOW, &hidden) == 0 else {
+        throw WizardCliError.gatewayError("Could not configure hidden terminal input.")
+    }
+    defer {
+        _ = tcsetattr(STDIN_FILENO, TCSANOW, &original)
+        print("")
+    }
+
     guard let line = readLine() else {
         throw WizardCliError.cancelled
     }

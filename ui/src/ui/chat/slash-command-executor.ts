@@ -655,16 +655,21 @@ function resolveThinkingLevelOptionsForSession(
   if (session?.thinkingLevels?.length) {
     return session.thinkingLevels;
   }
-  if (defaults?.thinkingLevels?.length) {
+  const sessionModelMatchesDefaults =
+    (!session?.modelProvider || session.modelProvider === defaults?.modelProvider) &&
+    (!session?.model || session.model === defaults?.model);
+  if (sessionModelMatchesDefaults && defaults?.thinkingLevels?.length) {
     return defaults.thinkingLevels;
   }
   const labels =
-    session?.thinkingOptions?.length || defaults?.thinkingOptions?.length
-      ? (session?.thinkingOptions ?? defaults?.thinkingOptions ?? [])
-      : formatThinkingLevels(
-          session?.modelProvider ?? defaults?.modelProvider,
-          session?.model ?? defaults?.model,
-        ).split(/\s*,\s*/);
+    (session?.thinkingOptions?.length ? session.thinkingOptions : null) ??
+    (sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
+      ? defaults.thinkingOptions
+      : null) ??
+    formatThinkingLevels(
+      session?.modelProvider ?? defaults?.modelProvider,
+      session?.model ?? defaults?.model,
+    ).split(/\s*,\s*/);
   return labels.filter(Boolean).map((label) => ({
     id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
     label,

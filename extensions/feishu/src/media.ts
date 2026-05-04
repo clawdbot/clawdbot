@@ -399,6 +399,7 @@ export type UploadFileResult = {
 export type SendMediaResult = {
   messageId: string;
   chatId: string;
+  voiceIntentDegradedToFile?: boolean;
 };
 
 /**
@@ -872,10 +873,22 @@ export async function sendMediaFeishu(params: {
   contentType = prepared.contentType;
 
   const routing = resolveFeishuOutboundMediaKind({ fileName: name, contentType });
+  const voiceIntentDegradedToFile = audioAsVoice === true && routing.msgType !== "audio";
 
   if (routing.msgType === "image") {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
-    return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
+    const result = await sendImageFeishu({
+      cfg,
+      to,
+      imageKey,
+      replyToMessageId,
+      replyInThread,
+      accountId,
+    });
+    return {
+      ...result,
+      ...(voiceIntentDegradedToFile ? { voiceIntentDegradedToFile: true } : {}),
+    };
   }
   const { fileKey } = await uploadFileFeishu({
     cfg,
@@ -884,7 +897,7 @@ export async function sendMediaFeishu(params: {
     fileType: routing.fileType ?? "stream",
     accountId,
   });
-  return sendFileFeishu({
+  const result = await sendFileFeishu({
     cfg,
     to,
     fileKey,
@@ -893,4 +906,8 @@ export async function sendMediaFeishu(params: {
     replyInThread,
     accountId,
   });
+  return {
+    ...result,
+    ...(voiceIntentDegradedToFile ? { voiceIntentDegradedToFile: true } : {}),
+  };
 }

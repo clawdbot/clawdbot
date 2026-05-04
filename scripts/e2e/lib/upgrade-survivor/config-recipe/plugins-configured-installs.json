@@ -1,7 +1,19 @@
 {
   "enabled": true,
-  "allow": ["discord", "telegram", "matrix"],
+  "allow": ["brave", "discord", "telegram", "matrix"],
   "entries": {
+    "brave": {
+      "enabled": true,
+      "config": {
+        "webSearch": {
+          "apiKey": {
+            "source": "env",
+            "provider": "default",
+            "id": "BRAVE_API_KEY"
+          }
+        }
+      }
+    },
     "discord": {
       "enabled": true
     },

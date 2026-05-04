@@ -397,11 +397,44 @@ describe("Google speech provider", () => {
       cfg: {},
       providerConfig: {
         apiKey: "google-test-key",
+        model: "google/gemini-3.1-flash-tts",
         voice: "Kore",
+        audioProfile: "Speak calmly.",
+        speakerName: "Default speaker",
+      },
+      providerOverrides: {
+        model: "google/gemini-3.1-pro-tts",
+        voiceName: "Puck",
+        audioProfile: "Speak brightly.",
+        speakerName: "Override speaker",
       },
       timeoutMs: 5_000,
     });
 
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-tts:generateContent",
+        body: expect.objectContaining({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: "Speak brightly.\n\nSpeaker name: Override speaker\n\nPhone call audio." },
+              ],
+            },
+          ],
+          generationConfig: expect.objectContaining({
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: "Puck",
+                },
+              },
+            },
+          }),
+        }),
+      }),
+    );
     expect(result).toEqual({
       audioBuffer: pcm,
       outputFormat: "pcm",

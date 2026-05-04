@@ -21,4 +21,10 @@ describe("tool-catalog", () => {
     expect(resolveCoreToolProfilePolicy("messaging")?.allow).toContain("bundle-mcp");
     expect(resolveCoreToolProfilePolicy("minimal")?.allow).not.toContain("bundle-mcp");
   });
+
+  it("full profile uses wildcard to grant all tools (#76507)", () => {
+    const policy = resolveCoreToolProfilePolicy("full");
+    expect(policy).toBeDefined();
+    expect(policy!.allow).toContain("*");
+  });
 });

@@ -41,9 +41,69 @@ function createMatchMediaMock(width: number) {
     };
   });
 }
+
+const mountedApps = new Set<OpenClawApp>();
+
+function collectMountedApps() {
+  return new Set<OpenClawApp>([
+    ...mountedApps,
+    ...document.querySelectorAll<OpenClawApp>("openclaw-app"),
+  ]);
+}
+
+function nextMicrotask() {
+  return Promise.resolve();
+}
+
+function nextTimer() {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+}
+
+function nextFrame() {
+  return new Promise<void>((resolve) => {
+    if (typeof window.requestAnimationFrame !== "function") {
+      window.setTimeout(resolve, 0);
+      return;
+    }
+    window.requestAnimationFrame(() => resolve());
+  });
+}
+
+async function waitForAppUpdates(apps: Iterable<OpenClawApp>) {
+  for (const app of apps) {
+    await app.updateComplete;
+  }
+}
+
+async function drainAppWork(apps: Iterable<OpenClawApp>) {
+  const snapshot = [...apps];
+  await nextMicrotask();
+  await waitForAppUpdates(snapshot);
+  await nextFrame();
+  await nextMicrotask();
+  await nextFrame();
+  await nextMicrotask();
+  await waitForAppUpdates(snapshot);
+  await nextTimer();
+  await nextMicrotask();
+  await waitForAppUpdates(snapshot);
+}
+
+async function cleanupMountedApps() {
+  const apps = collectMountedApps();
+  await drainAppWork(apps);
+  for (const app of apps) {
+    app.remove();
+  }
+  document.body.replaceChildren();
+  mountedApps.clear();
+  await drainAppWork(apps);
+}
+
 export function mountApp(pathname: string) {
   window.history.replaceState({}, "", pathname);
   const app = document.createElement("openclaw-app") as OpenClawApp;
+  mountedApps.add(app);
   document.body.append(app);
   app.connected = true;
   app.requestUpdate();
@@ -96,12 +156,14 @@ export function registerAppMountHooks() {
   });
 
   afterEach(async () => {
+    await cleanupMountedApps();
     window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
     getSafeLocalStorage()?.clear();
     getSafeSessionStorage()?.clear();
-    document.body.innerHTML = "";
     await i18n.setLocale("en");
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await nextTimer();
+    await nextMicrotask();
   });
 }

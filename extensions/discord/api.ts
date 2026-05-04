@@ -5,11 +5,8 @@ export {
   handleDiscordSubagentEnded,
   handleDiscordSubagentSpawning,
 } from "./src/subagent-hooks.js";
-export {
-  type DiscordCredentialStatus,
-  inspectDiscordAccount,
-  type InspectedDiscordAccount,
-} from "./src/account-inspect.js";
+export { inspectDiscordAccount, type InspectedDiscordAccount } from "./src/account-inspect.js";
+export { type DiscordCredentialStatus } from "./src/token.js";
 export {
   createDiscordActionGate,
   listDiscordAccountIds,
@@ -22,6 +19,7 @@ export {
   resolveDiscordMaxLinesPerMessage,
 } from "./src/accounts.js";
 export { tryHandleDiscordMessageActionGuildAdmin } from "./src/actions/handle-action.guild-admin.js";
+export { DiscordApiError, fetchDiscord, requestDiscord } from "./src/api.js";
 export { buildDiscordComponentMessage } from "./src/components.js";
 type DiscordMessageActionHandler =
   typeof import("./src/channel-actions.runtime.js").handleDiscordMessageAction;

@@ -1,4 +1,4 @@
-parent_config: ../../.swiftlint.yml
+parent_config: ../../config/swiftlint.yml
 
 included:
   - Sources

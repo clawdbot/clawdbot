@@ -161,4 +161,34 @@ private func agentAction(
             token: nil,
             password: nil))
     }
+
+    @Test func parseGatewaySetupInputParsesFullCopiedSetupMessage() {
+        let payload = #"{"url":"wss://gateway.example.com","bootstrapToken":"tok"}"#
+        let link = GatewayConnectDeepLink.fromSetupInput("""
+        Pairing setup code generated.
+
+        Setup code:
+        \(setupCode(from: payload))
+        """)
+
+        #expect(link == .init(
+            host: "gateway.example.com",
+            port: 443,
+            tls: true,
+            bootstrapToken: "tok",
+            token: nil,
+            password: nil))
+    }
+
+    @Test func parseGatewaySetupInputParsesRawGatewayURL() {
+        let link = GatewayConnectDeepLink.fromSetupInput("wss://gateway.example.com:444")
+
+        #expect(link == .init(
+            host: "gateway.example.com",
+            port: 444,
+            tls: true,
+            bootstrapToken: nil,
+            token: nil,
+            password: nil))
+    }
 }

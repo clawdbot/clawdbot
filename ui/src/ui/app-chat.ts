@@ -146,7 +146,7 @@ function confirmChatResetCommand(text: string) {
 }
 
 function isBtwCommand(text: string) {
-  return /^\/btw(?::|\s|$)/i.test(text.trim());
+  return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
 }
 
 export async function handleAbortChat(host: ChatHost) {

@@ -5176,6 +5176,7 @@ public struct UpdateRunParams: Codable, Sendable {
     public let sessionkey: String?
     public let deliverycontext: [String: AnyCodable]?
     public let note: String?
+    public let continuationmessage: String?
     public let restartdelayms: Int?
     public let timeoutms: Int?
 
@@ -5183,12 +5184,14 @@ public struct UpdateRunParams: Codable, Sendable {
         sessionkey: String?,
         deliverycontext: [String: AnyCodable]?,
         note: String?,
+        continuationmessage: String?,
         restartdelayms: Int?,
         timeoutms: Int?)
     {
         self.sessionkey = sessionkey
         self.deliverycontext = deliverycontext
         self.note = note
+        self.continuationmessage = continuationmessage
         self.restartdelayms = restartdelayms
         self.timeoutms = timeoutms
     }
@@ -5197,6 +5200,7 @@ public struct UpdateRunParams: Codable, Sendable {
         case sessionkey = "sessionKey"
         case deliverycontext = "deliveryContext"
         case note
+        case continuationmessage = "continuationMessage"
         case restartdelayms = "restartDelayMs"
         case timeoutms = "timeoutMs"
     }

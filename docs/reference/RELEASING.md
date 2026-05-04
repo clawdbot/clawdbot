@@ -78,8 +78,9 @@ the maintainer-only release runbook.
 9. For beta, tag `vYYYY.M.D-beta.N`, then run `OpenClaw Release Publish` from
    the matching `release/YYYY.M.D` branch. It verifies `pnpm plugins:sync:check`,
    publishes all publishable plugin packages to npm first, publishes the same
-   set to ClawHub second, and then promotes the prepared OpenClaw npm preflight
-   artifact with the matching dist-tag. After publish, run post-publish package
+   set to ClawHub second as ClawPack npm-pack tarballs, and then promotes the
+   prepared OpenClaw npm preflight artifact with the matching dist-tag. After
+   publish, run post-publish package
    acceptance against the published `openclaw@YYYY.M.D-beta.N` or
    `openclaw@beta` package. If a pushed or published prerelease needs a fix,
    cut the next matching prerelease number; do not delete or rewrite the old
@@ -210,6 +211,7 @@ Validation` or from the `main`/release workflow ref so workflow logic and
   against the published npm package using the shared leased Telegram credential
   pool. Local maintainer one-offs may omit the Convex vars and pass the three
   `OPENCLAW_QA_TELEGRAM_*` env credentials directly.
+- To run the full post-publish beta smoke from a maintainer machine, use `pnpm release:beta-smoke -- --beta betaN`. The helper runs Parallels npm update/fresh-target validation, dispatches `NPM Telegram Beta E2E`, polls the exact workflow run, downloads the artifact, and prints the Telegram report.
 - Maintainers can run the same post-publish check from GitHub Actions via the
   manual `NPM Telegram Beta E2E` workflow. It is intentionally manual-only and
   does not run on every merge.
@@ -286,8 +288,9 @@ gh workflow run full-release-validation.yml \
 ```
 
 The workflow resolves the target ref, dispatches manual `CI` with
-`target_ref=<release-ref>`, dispatches `OpenClaw Release Checks`, and dispatches
-standalone package Telegram E2E when `release_profile=full` with
+`target_ref=<release-ref>`, dispatches `OpenClaw Release Checks`, prepares a
+parent `release-package-under-test` artifact for package-facing checks, and
+dispatches standalone package Telegram E2E when `release_profile=full` with
 `rerun_group=all` or when `npm_telegram_package_spec` is set. `OpenClaw Release
 Checks` then fans out install smoke, cross-OS release checks, live/E2E Docker
 release-path coverage, Package Acceptance with Telegram package QA, QA Lab

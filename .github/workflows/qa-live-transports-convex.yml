@@ -18,6 +18,10 @@ on:
         description: Optional comma-separated Discord scenario ids
         required: false
         type: string
+      slack_scenario:
+        description: Optional comma-separated Slack scenario ids
+        required: false
+        type: string
       matrix_profile:
         description: Matrix QA profile for the live Matrix lane
         required: false
@@ -551,6 +555,99 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: qa-live-discord-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.run_lane.outputs.output_dir }}
+          retention-days: 14
+          if-no-files-found: warn
+
+  run_live_slack:
+    name: Run Slack live QA lane with Convex leases
+    needs: [authorize_actor, validate_selected_ref]
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    environment: qa-live-shared
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Validate required QA credential env
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_var() {
+            local key="$1"
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required ${key}." >&2
+              exit 1
+            fi
+          }
+
+          require_var OPENAI_API_KEY
+          require_var OPENCLAW_QA_CONVEX_SITE_URL
+          require_var OPENCLAW_QA_CONVEX_SECRET_CI
+
+      - name: Build private QA runtime
+        run: pnpm build
+
+      - name: Run Slack live lane
+        id: run_lane
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_SLACK_CAPTURE_CONTENT: "1"
+          INPUT_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.slack_scenario || '' }}
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/slack-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          scenario_args=()
+
+          if [[ -n "${INPUT_SCENARIO// }" ]]; then
+            IFS=',' read -r -a raw_scenarios <<<"${INPUT_SCENARIO}"
+            for raw in "${raw_scenarios[@]}"; do
+              scenario="$(printf '%s' "${raw}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+              if [[ -n "${scenario}" ]]; then
+                scenario_args+=(--scenario "${scenario}")
+              fi
+            done
+          fi
+
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          pnpm openclaw qa slack \
+            --repo-root . \
+            --output-dir "${output_dir}" \
+            --provider-mode live-frontier \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --fast \
+            --credential-source convex \
+            --credential-role ci \
+            "${scenario_args[@]}"
+
+      - name: Upload Slack QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-live-slack-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
           if-no-files-found: warn

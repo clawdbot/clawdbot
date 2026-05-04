@@ -7,7 +7,7 @@ import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import { scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
-import { prependBootstrapPromptWarning } from "../bootstrap-budget.js";
+import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
@@ -248,7 +248,7 @@ export async function executePreparedCliRun(
     ? params.prompt
     : (context.openClawHistoryPrompt ?? params.prompt);
   let prompt = applyPluginTextReplacements(
-    prependBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
+    appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
       preserveExactPrompt: context.heartbeatPrompt,
     }),
     context.backendResolved.textTransforms?.input,
@@ -383,6 +383,7 @@ export async function executePreparedCliRun(
           backend,
           timeoutMs: params.timeoutMs,
           useResume,
+          trigger: params.trigger,
         });
         const hasJsonlOutput = backend.output === "jsonl";
         if (shouldUseClaudeLiveSession(context)) {

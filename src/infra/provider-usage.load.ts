@@ -103,8 +103,14 @@ export async function loadProviderUsageSummary(
     return { updatedAt: now, providers: [] };
   }
 
-  const tasks = auths.map((auth) =>
-    withTimeout(
+  const tasks = auths.map((auth) => {
+    const failureSnapshot = (error: string): ProviderUsageSnapshot => ({
+      provider: auth.provider,
+      displayName: PROVIDER_LABELS[auth.provider] ?? auth.provider,
+      windows: [],
+      error,
+    });
+    return withTimeout(
       fetchProviderUsageSnapshot({
         auth,
         config,
@@ -121,8 +127,11 @@ export async function loadProviderUsageSummary(
         windows: [],
         error: "Timeout",
       },
-    ),
-  );
+    ).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      return failureSnapshot(message.trim() || "Fetch failed");
+    });
+  });
 
   const snapshots = await Promise.all(tasks);
   const providers = snapshots.filter((entry) => {

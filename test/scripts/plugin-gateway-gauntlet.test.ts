@@ -53,8 +53,8 @@ describe("plugin gateway gauntlet helpers", () => {
     );
     await writeManifest(
       "beta",
-      "openclaw.plugin.json5",
-      `{ id: "beta", commandAliases: ["dreaming"], onboardingScopes: ["memory"] }`,
+      "openclaw.plugin.json",
+      JSON.stringify({ id: "beta", commandAliases: ["dreaming"], onboardingScopes: ["memory"] }),
     );
 
     const matrix = discoverBundledPluginManifests(repoRoot);
@@ -75,6 +75,15 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(matrix[1].runtimeSlashAliases).toEqual([
       { name: "dreaming", kind: "runtime-slash", cliCommand: null },
     ]);
+  });
+
+  it("skips source-only plugin dirs that are excluded from the built runtime", async () => {
+    await writeManifest("qqbot", "openclaw.plugin.json", JSON.stringify({ id: "qqbot" }));
+    await writeManifest("telegram", "openclaw.plugin.json", JSON.stringify({ id: "telegram" }));
+
+    const matrix = discoverBundledPluginManifests(repoRoot);
+
+    expect(matrix.map((entry) => entry.id)).toEqual(["telegram"]);
   });
 
   it("selects plugin shards after explicit id filtering", () => {

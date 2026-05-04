@@ -45,8 +45,7 @@ export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchI
       providerBaseUrl: input.providerBaseUrl,
     });
   })();
-  const providerPluginIds =
-    provider.usesModelProviderPlugins || usesOpenAiMockImageProvider ? [imageProviderId] : [];
+  const providerPluginIds = imageProviderId ? [imageProviderId] : [];
   const enabledPluginIds = uniqueNonEmpty(providerPluginIds);
 
   return {

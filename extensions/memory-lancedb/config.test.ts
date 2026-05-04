@@ -84,6 +84,19 @@ describe("memory-lancedb config", () => {
     }).toThrow("embedding config must include at least one setting");
   });
 
+  it("allows missing embedding config in the manifest so setup can discover fields", () => {
+    const manifestResult = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-lancedb.manifest.missing-embedding",
+      value: {},
+    });
+
+    expect(manifestResult.ok).toBe(true);
+    expect(() => {
+      memoryConfigSchema.parse({});
+    }).toThrow("embedding config required");
+  });
+
   it("rejects empty embedding providers", () => {
     expect(() => {
       memoryConfigSchema.parse({

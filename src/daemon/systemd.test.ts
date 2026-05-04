@@ -815,6 +815,117 @@ describe("stageSystemdService", () => {
       expect(envFile).toBe("LLM_API_KEY=dotenv-key\n");
     });
   });
+
+  it("clears stale inline-managed keys from env file on re-stage (#76860)", async () => {
+    await withStageFixture(async ({ env, stateDir, unitPath, envFilePath }) => {
+      // Existing env file carries a stale OPENCLAW_GATEWAY_TOKEN that the
+      // operator previously wrote there but staging now supplies inline.
+      await fs.writeFile(
+        envFilePath,
+        ["OPENCLAW_GATEWAY_TOKEN=stale-gateway-token", "OPENROUTER_API_KEY=or-operator-key"].join(
+          "\n",
+        ) + "\n",
+        { encoding: "utf8", mode: 0o600 },
+      );
+
+      await fs.writeFile(path.join(stateDir, ".env"), "LLM_API_KEY=dotenv-key\n", "utf8");
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        // Staging manages OPENCLAW_GATEWAY_TOKEN inline; OPENCLAW_SERVICE_MANAGED_ENV_KEYS
+        // marks it as an OpenClaw-managed key so the stale env-file copy is cleared.
+        environment: {
+          OPENCLAW_GATEWAY_TOKEN: "fresh-gateway-token",
+          LLM_API_KEY: "dotenv-key",
+          OPENROUTER_API_KEY: "or-operator-key",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENCLAW_GATEWAY_TOKEN",
+        },
+        environmentValueSources: {
+          OPENCLAW_GATEWAY_TOKEN: "inline-and-file",
+          LLM_API_KEY: "inline",
+          OPENROUTER_API_KEY: "file",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
+        },
+      });
+
+      const [unit, envFile] = await Promise.all([
+        fs.readFile(unitPath, "utf8"),
+        fs.readFile(envFilePath, "utf8"),
+      ]);
+      // Stale inline-managed key must be removed from the env file so the
+      // fresh inline Environment= value wins (EnvironmentFile would override it).
+      expect(envFile).not.toContain("OPENCLAW_GATEWAY_TOKEN");
+      // Operator-added key not managed inline must survive.
+      expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
+      expect(envFile).toContain("LLM_API_KEY=dotenv-key");
+      expect(unit).toContain("Environment=OPENCLAW_GATEWAY_TOKEN=fresh-gateway-token");
+      expect(unit).not.toContain("Environment=OPENROUTER_API_KEY=or-operator-key");
+      expect(unit).not.toContain("Environment=LLM_API_KEY=dotenv-key");
+    });
+  });
+
+  it("preserves operator secrets when incoming .env is empty (#76860)", async () => {
+    await withStageFixture(async ({ env, envFilePath }) => {
+      // Existing env file has only operator-added secrets; state-dir .env is absent/empty.
+      await fs.writeFile(envFilePath, "OPENROUTER_API_KEY=or-operator-key\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      const envFile = await fs.readFile(envFilePath, "utf8");
+      // Operator-only secret must survive even when no dotenv vars are staged.
+      expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
+    });
+  });
+
+  it("preserves operator-added secrets in existing env file on re-stage (#76860)", async () => {
+    await withStageFixture(async ({ env, stateDir, envFilePath }) => {
+      // Simulate operator pre-populating gateway.systemd.env with provider API keys.
+      await fs.writeFile(
+        envFilePath,
+        [
+          "ANTHROPIC_API_KEY=sk-ant-operator-secret",
+          "OPENROUTER_API_KEY=or-operator-key",
+          "LLM_API_KEY=old-value",
+        ].join("\n") + "\n",
+        { encoding: "utf8", mode: 0o600 },
+      );
+
+      // State-dir .env only provides LLM_API_KEY (not the provider secrets).
+      await fs.writeFile(path.join(stateDir, ".env"), "LLM_API_KEY=new-value\n", "utf8");
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: { LLM_API_KEY: "new-value" },
+      });
+
+      const envFile = await fs.readFile(envFilePath, "utf8");
+      // Operator secrets must survive; state-dir key gets updated value.
+      expect(envFile).toContain("ANTHROPIC_API_KEY=sk-ant-operator-secret");
+      expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
+      expect(envFile).toContain("LLM_API_KEY=new-value");
+    });
+  });
 });
 
 describe("systemd service install and uninstall", () => {

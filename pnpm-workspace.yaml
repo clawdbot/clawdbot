@@ -40,6 +40,7 @@ onlyBuiltDependencies:
   - "@napi-rs/canvas"
   - "@tloncorp/api"
   - "@whiskeysockets/baileys"
+  - "@whiskeysockets/libsignal-node"
   - authenticate-pam
   - esbuild
   - node-llama-cpp

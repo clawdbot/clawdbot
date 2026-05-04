@@ -504,7 +504,7 @@ function recordDiagnosticEvent(
         "Outbound message delivery attempts by outcome.",
         {
           channel: lowCardinalityLabel(evt.channel),
-          delivery_kind: evt.deliveryKind,
+          delivery_kind: lowCardinalityLabel(evt.deliveryKind, "other"),
           error_category:
             evt.type === "message.delivery.error"
               ? lowCardinalityLabel(evt.errorCategory, "other")
@@ -517,7 +517,7 @@ function recordDiagnosticEvent(
         "Outbound message delivery duration in seconds.",
         {
           channel: lowCardinalityLabel(evt.channel),
-          delivery_kind: evt.deliveryKind,
+          delivery_kind: lowCardinalityLabel(evt.deliveryKind, "other"),
           error_category:
             evt.type === "message.delivery.error"
               ? lowCardinalityLabel(evt.errorCategory, "other")

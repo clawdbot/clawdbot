@@ -192,7 +192,7 @@ Use these identifiers for delivery and allowlists:
       groupPolicy: "allowlist",
       groups: {
         "spaces/AAAA": {
-          allow: true,
+          enabled: true,
           requireMention: true,
           users: ["users/1234567890"],
           systemPrompt: "Short answers only.",

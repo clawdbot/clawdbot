@@ -248,38 +248,23 @@ private struct ManualEntryStep: View {
             return
         }
 
-        guard let payload = GatewaySetupCode.decode(raw: raw) else {
-            self.setupStatusText = "Setup code not recognized."
+        guard let link = GatewayConnectDeepLink.fromSetupInput(raw) else {
+            self.setupStatusText = "Setup code not recognized or uses an insecure ws:// gateway URL."
             return
         }
 
-        if let urlString = payload.url, let url = URL(string: urlString) {
-            self.applyURL(url)
-        } else if let host = payload.host, !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            self.manualHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let port = payload.port {
-                self.manualPortText = String(port)
-            } else {
-                self.manualPortText = ""
-            }
-            if let tls = payload.tls {
-                self.manualUseTLS = tls
-            }
-        } else if let url = URL(string: raw), url.scheme != nil {
-            self.applyURL(url)
-        } else {
-            self.setupStatusText = "Setup code missing URL or host."
-            return
-        }
+        self.manualHost = link.host
+        self.manualPortText = String(link.port)
+        self.manualUseTLS = link.tls
 
-        if let token = payload.token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let token = link.token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.manualToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else if payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+        } else if link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             self.manualToken = ""
         }
-        if let password = payload.password, !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let password = link.password, !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.manualPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else if payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+        } else if link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             self.manualPassword = ""
         }
 
@@ -287,30 +272,12 @@ private struct ManualEntryStep: View {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedInstanceId.isEmpty {
             let trimmedBootstrapToken =
-                payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             GatewaySettingsStore.saveGatewayBootstrapToken(trimmedBootstrapToken, instanceId: trimmedInstanceId)
         }
 
         self.setupStatusText = "Setup code applied."
     }
-
-    private func applyURL(_ url: URL) {
-        guard let host = url.host, !host.isEmpty else { return }
-        self.manualHost = host
-        if let port = url.port {
-            self.manualPortText = String(port)
-        } else {
-            self.manualPortText = ""
-        }
-        let scheme = (url.scheme ?? "").lowercased()
-        if scheme == "wss" || scheme == "https" {
-            self.manualUseTLS = true
-        } else if scheme == "ws" || scheme == "http" {
-            self.manualUseTLS = false
-        }
-    }
-
-    // (GatewaySetupCode) decode raw setup codes.
 }
 
 @MainActor

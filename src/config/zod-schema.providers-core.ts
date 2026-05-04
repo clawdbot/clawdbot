@@ -84,6 +84,17 @@ const ChannelStreamingPreviewSchema = z
   .object({
     chunk: BlockStreamingChunkSchema.optional(),
     toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
+  })
+  .strict();
+const ChannelStreamingProgressSchema = z
+  .object({
+    label: z.union([z.string(), z.literal(false)]).optional(),
+    labels: z.array(z.string()).optional(),
+    maxLines: z.number().int().positive().optional(),
+    render: z.enum(["text", "rich"]).optional(),
+    toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
 const ChannelPreviewStreamingConfigSchema = z
@@ -91,6 +102,7 @@ const ChannelPreviewStreamingConfigSchema = z
     mode: UnifiedStreamingModeSchema.optional(),
     chunkMode: TextChunkModeSchema.optional(),
     preview: ChannelStreamingPreviewSchema.optional(),
+    progress: ChannelStreamingProgressSchema.optional(),
     block: ChannelStreamingBlockSchema.optional(),
   })
   .strict();
@@ -252,6 +264,15 @@ export const TelegramAccountSchemaBase = z
     streaming: ChannelPreviewStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
+    mediaGroupFlushMs: z
+      .number()
+      .int()
+      .min(10)
+      .max(60_000)
+      .optional()
+      .describe(
+        "Buffer window in milliseconds for Telegram media groups/albums before dispatching them as one inbound message. Default: 500.",
+      ),
     pollingStallThresholdMs: z.number().int().min(30_000).max(600_000).optional(),
     retry: RetryConfigSchema,
     network: z
@@ -1609,6 +1630,7 @@ export const MSTeamsConfigSchema = z
     contextVisibility: ContextVisibilityModeSchema.optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    streaming: ChannelPreviewStreamingConfigSchema.optional(),
     typingIndicator: z.boolean().optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),

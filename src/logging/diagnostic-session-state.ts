@@ -5,6 +5,7 @@ export type SessionState = {
   sessionKey?: string;
   lastActivity: number;
   lastStuckWarnAgeMs?: number;
+  lastLongRunningWarnAgeMs?: number;
   state: SessionStateValue;
   queueDepth: number;
   toolCallHistory?: ToolCallRecord[];
@@ -70,21 +71,79 @@ function resolveSessionKey({ sessionKey, sessionId }: SessionRef) {
   return sessionKey ?? sessionId ?? "unknown";
 }
 
-function findStateBySessionId(sessionId: string): SessionState | undefined {
-  for (const state of diagnosticSessionStates.values()) {
+function findStateEntryBySessionId(sessionId: string): [string, SessionState] | undefined {
+  for (const entry of diagnosticSessionStates.entries()) {
+    const [, state] = entry;
     if (state.sessionId === sessionId) {
-      return state;
+      return entry;
     }
   }
   return undefined;
 }
 
+function sessionStatePriority(state: SessionStateValue): number {
+  const priorities = {
+    idle: 0,
+    waiting: 1,
+    processing: 2,
+  } satisfies Record<SessionStateValue, number>;
+  return priorities[state];
+}
+
+function mergeSessionState(target: SessionState, source: SessionState): void {
+  const sourceIsNewer = source.lastActivity > target.lastActivity;
+  const sourceIsSameAgeAndMoreActive =
+    source.lastActivity === target.lastActivity &&
+    sessionStatePriority(source.state) > sessionStatePriority(target.state);
+  target.sessionId ??= source.sessionId;
+  target.sessionKey ??= source.sessionKey;
+  if (sourceIsNewer || sourceIsSameAgeAndMoreActive) {
+    target.state = source.state;
+  }
+  target.lastActivity = Math.max(target.lastActivity, source.lastActivity);
+  target.queueDepth += source.queueDepth;
+  target.lastStuckWarnAgeMs =
+    target.lastStuckWarnAgeMs === undefined || source.lastStuckWarnAgeMs === undefined
+      ? undefined
+      : Math.max(target.lastStuckWarnAgeMs, source.lastStuckWarnAgeMs);
+  target.lastLongRunningWarnAgeMs =
+    target.lastLongRunningWarnAgeMs === undefined || source.lastLongRunningWarnAgeMs === undefined
+      ? undefined
+      : Math.max(target.lastLongRunningWarnAgeMs, source.lastLongRunningWarnAgeMs);
+  if (source.toolCallHistory?.length) {
+    target.toolCallHistory = [...(target.toolCallHistory ?? []), ...source.toolCallHistory];
+  }
+  if (source.toolLoopWarningBuckets?.size) {
+    const buckets = (target.toolLoopWarningBuckets ??= new Map());
+    for (const [bucket, count] of source.toolLoopWarningBuckets) {
+      buckets.set(bucket, Math.max(buckets.get(bucket) ?? 0, count));
+    }
+  }
+  if (source.commandPollCounts?.size) {
+    const counts = (target.commandPollCounts ??= new Map());
+    for (const [command, value] of source.commandPollCounts) {
+      const existing = counts.get(command);
+      if (!existing || value.lastPollAt > existing.lastPollAt) {
+        counts.set(command, value);
+      }
+    }
+  }
+}
+
 export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   pruneDiagnosticSessionStates();
   const key = resolveSessionKey(ref);
-  const existing =
-    diagnosticSessionStates.get(key) ?? (ref.sessionId && findStateBySessionId(ref.sessionId));
+  const direct = diagnosticSessionStates.get(key);
+  const sessionIdEntry = ref.sessionId ? findStateEntryBySessionId(ref.sessionId) : undefined;
+  const existing = direct ?? sessionIdEntry?.[1];
   if (existing) {
+    if (direct && sessionIdEntry && sessionIdEntry[1] !== direct) {
+      mergeSessionState(direct, sessionIdEntry[1]);
+      diagnosticSessionStates.delete(sessionIdEntry[0]);
+    } else if (!direct && ref.sessionKey && sessionIdEntry) {
+      diagnosticSessionStates.delete(sessionIdEntry[0]);
+      diagnosticSessionStates.set(key, existing);
+    }
     if (ref.sessionId) {
       existing.sessionId = ref.sessionId;
     }

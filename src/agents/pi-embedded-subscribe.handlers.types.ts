@@ -186,6 +186,7 @@ type ToolHandlerParams = Pick<
   | "sessionId"
   | "agentId"
   | "toolResultFormat"
+  | "toolProgressDetail"
 >;
 
 type ToolHandlerState = Pick<

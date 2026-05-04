@@ -82,6 +82,68 @@ import { parseDiscordTarget } from "./target-parsing.js";
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
 
+function startDiscordStartupProbe(params: {
+  accountId: string;
+  token: string;
+  abortSignal: AbortSignal;
+  setStatus: (patch: { accountId: string; bot?: unknown; application?: unknown }) => void;
+  log?: {
+    warn?: (msg: string) => void;
+    info?: (msg: string) => void;
+    debug?: (msg: string) => void;
+  };
+}): void {
+  void (async () => {
+    try {
+      const probe = await (
+        await loadDiscordProbeRuntime()
+      ).probeDiscord(params.token, 2500, {
+        includeApplication: true,
+      });
+      if (params.abortSignal.aborted) {
+        return;
+      }
+      params.setStatus({
+        accountId: params.accountId,
+        bot: probe.bot,
+        application: probe.application,
+      });
+      if (probe.ok) {
+        const username = probe.bot?.username?.trim();
+        if (username) {
+          params.log?.info?.(`[${params.accountId}] Discord bot probe resolved @${username}`);
+        }
+      } else if (getDiscordRuntime().logging.shouldLogVerbose()) {
+        params.log?.debug?.(
+          `[${params.accountId}] bot probe degraded: ${probe.error ?? `status ${probe.status ?? "unknown"}`}`,
+        );
+      }
+
+      const messageContent = probe.application?.intents?.messageContent;
+      if (messageContent === "disabled") {
+        params.log?.warn?.(
+          `[${params.accountId}] Discord Message Content Intent is disabled; bot may not respond to channel messages. Enable it in Discord Dev Portal (Bot → Privileged Gateway Intents) or require mentions.`,
+        );
+      } else if (messageContent === "limited") {
+        params.log?.info?.(
+          `[${params.accountId}] Discord Message Content Intent is limited; bots under 100 servers can use it without verification.`,
+        );
+      }
+    } catch (err) {
+      if (!params.abortSignal.aborted) {
+        params.setStatus({
+          accountId: params.accountId,
+          bot: undefined,
+          application: undefined,
+        });
+      }
+      if (getDiscordRuntime().logging.shouldLogVerbose()) {
+        params.log?.debug?.(`[${params.accountId}] bot probe failed: ${String(err)}`);
+      }
+    }
+  })();
+}
+
 function shouldTreatDiscordDeliveredTextAsVisible(params: {
   kind: "tool" | "block" | "final";
   text?: string;
@@ -219,7 +281,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       agentPrompt: {
         messageToolHints: () => [
-          "- Discord mentions: use canonical outbound syntax: users `<@USER_ID>`, channels `<#CHANNEL_ID>`, and roles `<@&ROLE_ID>`. Do not use the legacy `<@!USER_ID>` nickname form.",
+          "- Discord mentions: use canonical outbound syntax: users `<@USER_ID>`, channels `<#CHANNEL_ID>`, and roles `<@&ROLE_ID>`. Plain `@name` text only pings when a configured `mentionAliases` entry rewrites it; do not use the legacy `<@!USER_ID>` nickname form.",
           "- Discord components: set `components` when sending messages to include buttons, selects, or v2 containers.",
           "- Forms: add `components.modal` (title, fields). OpenClaw adds a trigger button and routes submissions as new messages.",
         ],
@@ -551,38 +613,14 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             }
           }
           const token = account.token.trim();
-          let discordBotLabel = "";
-          try {
-            const probe = await (
-              await loadDiscordProbeRuntime()
-            ).probeDiscord(token, 2500, {
-              includeApplication: true,
-            });
-            const username = probe.ok ? probe.bot?.username?.trim() : null;
-            if (username) {
-              discordBotLabel = ` (@${username})`;
-            }
-            ctx.setStatus({
-              accountId: account.accountId,
-              bot: probe.bot,
-              application: probe.application,
-            });
-            const messageContent = probe.application?.intents?.messageContent;
-            if (messageContent === "disabled") {
-              ctx.log?.warn(
-                `[${account.accountId}] Discord Message Content Intent is disabled; bot may not respond to channel messages. Enable it in Discord Dev Portal (Bot → Privileged Gateway Intents) or require mentions.`,
-              );
-            } else if (messageContent === "limited") {
-              ctx.log?.info(
-                `[${account.accountId}] Discord Message Content Intent is limited; bots under 100 servers can use it without verification.`,
-              );
-            }
-          } catch (err) {
-            if (getDiscordRuntime().logging.shouldLogVerbose()) {
-              ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
-            }
-          }
-          ctx.log?.info(`[${account.accountId}] starting provider${discordBotLabel}`);
+          startDiscordStartupProbe({
+            accountId: account.accountId,
+            token,
+            abortSignal: ctx.abortSignal,
+            setStatus: ctx.setStatus,
+            log: ctx.log,
+          });
+          ctx.log?.info(`[${account.accountId}] starting provider`);
           return (await loadDiscordProviderRuntime()).monitorDiscordProvider({
             token,
             accountId: account.accountId,

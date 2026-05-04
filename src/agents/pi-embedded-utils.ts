@@ -353,7 +353,11 @@ export function extractThinkingFromTaggedStream(text: string): string {
   return text.slice(start).trim();
 }
 
-export function inferToolMetaFromArgs(toolName: string, args: unknown): string | undefined {
-  const display = resolveToolDisplay({ name: toolName, args });
+export function inferToolMetaFromArgs(
+  toolName: string,
+  args: unknown,
+  options?: { detailMode?: "explain" | "raw" },
+): string | undefined {
+  const display = resolveToolDisplay({ name: toolName, args, detailMode: options?.detailMode });
   return formatToolDetail(display);
 }

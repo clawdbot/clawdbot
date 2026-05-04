@@ -152,6 +152,12 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   }
   const nextConfigRecord = nextConfig as Record<string, unknown>;
 
+  if (params.writeOptions?.skipPluginValidation) {
+    // Skip the include fast path so the root writer handles the write with
+    // plugin validation disabled end-to-end (including the post-write readback).
+    return false;
+  }
+
   const validated = validateConfigObjectWithPlugins(nextConfig);
   if (!validated.ok) {
     throw createInvalidConfigError(

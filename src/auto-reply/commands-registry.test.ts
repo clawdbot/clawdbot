@@ -109,6 +109,20 @@ describe("commands registry", () => {
     expect(specs.find((spec) => spec.name === "compact")).toBeTruthy();
   });
 
+  it("exposes /side as a BTW text and native alias", () => {
+    const btw = listChatCommands().find((command) => command.key === "btw");
+    expect(btw).toMatchObject({
+      nativeName: "btw",
+      nativeAliases: ["side"],
+      textAliases: ["/btw", "/side"],
+    });
+    expect(normalizeCommandBody("/side what changed?")).toBe("/btw what changed?");
+    expect(findCommandByNativeName("side")?.key).toBe("btw");
+    expect(listNativeCommandSpecs().find((spec) => spec.name === "side")).toMatchObject({
+      acceptsArgs: true,
+    });
+  });
+
   it("filters commands based on config flags", () => {
     const disabled = listChatCommandsForConfig({
       commands: { config: false, plugins: false, debug: false },

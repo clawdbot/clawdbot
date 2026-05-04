@@ -68,6 +68,10 @@ function syncBuildOpenClawVersion(pkg: PackageJson, targetVersion: string): bool
   return true;
 }
 
+function changelogVersionForPackageVersion(version: string): string {
+  return version.replace(/-beta\.\d+$/u, "");
+}
+
 function ensureChangelogEntry(changelogPath: string, version: string, write: boolean): boolean {
   if (!existsSync(changelogPath)) {
     return false;
@@ -127,7 +131,8 @@ export function syncPluginVersions(
     }
 
     const changelogPath = join(extensionsDir, dir.name, "CHANGELOG.md");
-    if (ensureChangelogEntry(changelogPath, targetVersion, write)) {
+    const changelogVersion = changelogVersionForPackageVersion(targetVersion);
+    if (ensureChangelogEntry(changelogPath, changelogVersion, write)) {
       changelogged.push(pkg.name);
     }
 

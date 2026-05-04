@@ -44,6 +44,13 @@ function createSendMessageMock() {
   })) as unknown as typeof runtimeSendMessage;
 }
 
+const longChildCompletionOutput = [
+  "34/34 tests pass, clean build. Now docker repro:",
+  "Root cause: the requester's announce delivery accepted a prefix-only assistant payload as delivered.",
+  "PR: https://github.com/openclaw/openclaw/pull/12345",
+  "Verification: pnpm test src/agents/subagent-announce-delivery.test.ts passed with the regression enabled.",
+].join("\n");
+
 async function deliverSlackThreadAnnouncement(params: {
   callGateway: typeof runtimeCallGateway;
   isActive: boolean;
@@ -583,6 +590,272 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("uses direct fallback when announce-agent delivery returns only a child-result prefix", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "34/34 tests pass, clean build. Now docker repro:" }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-fallback-prefix",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longChildCompletionOutput,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-thread-fallback",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: longChildCompletionOutput,
+        idempotencyKey: "announce-thread-fallback-prefix",
+      }),
+    );
+  });
+
+  it("uses direct fallback when announce-agent delivery returns a word-boundary child-result prefix", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "34/34 tests pass, clean build. Now docker repro" }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-fallback-word-prefix",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longChildCompletionOutput,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-thread-fallback",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: longChildCompletionOutput,
+        idempotencyKey: "announce-thread-fallback-word-prefix",
+      }),
+    );
+  });
+
+  it("uses direct fallback when announce-agent delivery returns a mid-word child-result prefix", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "34/34 tests pass, clean build. Now dock" }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-fallback-midword-prefix",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longChildCompletionOutput,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-thread-fallback",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: longChildCompletionOutput,
+        idempotencyKey: "announce-thread-fallback-midword-prefix",
+      }),
+    );
+  });
+
+  it("keeps all grouped child results in direct completion fallback", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-fallback-grouped-results",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:first",
+          childSessionId: "child-session-1",
+          announceType: "subagent task",
+          taskLabel: "first task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "first child result",
+          replyInstruction: "Summarize the result.",
+        },
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:second",
+          childSessionId: "child-session-2",
+          announceType: "subagent task",
+          taskLabel: "second task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "second child result",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-thread-fallback",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "first task:\nfirst child result\n\nsecond task:\nsecond child result",
+        idempotencyKey: "announce-thread-fallback-grouped-results",
+      }),
+    );
+  });
+
+  it("keeps concise requester rewrites primary even when child output is long", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "Tests passed and the PR is ready for review." }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-rewrite-primary",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longChildCompletionOutput,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps copied complete-sentence requester summaries primary", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "34/34 tests pass, clean build." }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-copied-summary-primary",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longChildCompletionOutput,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("uses a direct thread fallback when announce-agent delivery fails", async () => {
     const callGateway = vi.fn(async () => {
       throw new Error("UNAVAILABLE: gateway lost final output");
@@ -1047,5 +1320,34 @@ describe("extractThreadCompletionFallbackText", () => {
         },
       ]),
     ).toBe("sample task");
+  });
+
+  it("combines multiple task completion results for grouped announce fallback", () => {
+    expect(
+      extractThreadCompletionFallbackText([
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:first",
+          announceType: "subagent task",
+          taskLabel: "first task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "first child result",
+          replyInstruction: "Summarize the result.",
+        },
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:second",
+          announceType: "subagent task",
+          taskLabel: "second task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "second child result",
+          replyInstruction: "Summarize the result.",
+        },
+      ]),
+    ).toBe("first task:\nfirst child result\n\nsecond task:\nsecond child result");
   });
 });

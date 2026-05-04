@@ -1164,6 +1164,7 @@
                 "pages": [
                   "concepts/messages",
                   "concepts/streaming",
+                  "concepts/progress-drafts",
                   "concepts/retry",
                   "concepts/queue",
                   "concepts/queue-steering"
@@ -1308,6 +1309,7 @@
                 "group": "Agent coordination",
                 "pages": [
                   "tools/agent-send",
+                  "tools/steer",
                   "tools/subagents",
                   "tools/acp-agents",
                   "tools/acp-agents-setup",

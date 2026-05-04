@@ -308,6 +308,8 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
           provider: "telegram",
           to: "chat-1",
           threadId: "thread-ts-1",
+          text: "hello from Codex",
+          mediaUrls: ["/tmp/codex-reply.png"],
         },
       ],
     });

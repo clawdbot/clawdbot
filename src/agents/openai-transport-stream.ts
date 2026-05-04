@@ -28,6 +28,7 @@ import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { flattenCompletionMessagesToStringContent } from "./openai-completions-string-content.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import {
+  isOpenAIGpt54MiniModel,
   normalizeOpenAIReasoningEffort,
   resolveOpenAIReasoningEffortForModel,
   type OpenAIApiReasoningEffort,
@@ -981,8 +982,9 @@ export function buildOpenAIResponsesParams(
     ...(isCodexResponses ? { instructions: buildOpenAICodexResponsesInstructions(context) } : {}),
     ...(metadata ? { metadata } : {}),
   };
-  if (options?.maxTokens) {
-    params.max_output_tokens = options.maxTokens;
+  const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
+  if (effectiveMaxTokens) {
+    params.max_output_tokens = effectiveMaxTokens;
   }
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
@@ -1863,11 +1865,14 @@ export function buildOpenAICompletionsParams(
   if (compat.supportsPromptCacheKey && cacheRetention !== "none" && options?.sessionId) {
     params.prompt_cache_key = options.sessionId;
   }
-  if (options?.maxTokens) {
-    if (compat.maxTokensField === "max_tokens") {
-      params.max_tokens = options.maxTokens;
-    } else {
-      params.max_completion_tokens = options.maxTokens;
+  {
+    const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
+    if (effectiveMaxTokens) {
+      if (compat.maxTokensField === "max_tokens") {
+        params.max_tokens = effectiveMaxTokens;
+      } else {
+        params.max_completion_tokens = effectiveMaxTokens;
+      }
     }
   }
   if (options?.temperature !== undefined) {
@@ -1895,6 +1900,8 @@ export function buildOpenAICompletionsParams(
         fallbackMap: compat.reasoningEffortMap,
       })
     : undefined;
+  const omitGpt54MiniToolReasoningEffort =
+    isOpenAIGpt54MiniModel(model) && Array.isArray(params.tools) && params.tools.length > 0;
   if (
     compat.thinkingFormat === "openrouter" &&
     model.reasoning &&
@@ -1906,7 +1913,8 @@ export function buildOpenAICompletionsParams(
   } else if (
     resolvedCompletionsReasoningEffort &&
     model.reasoning &&
-    compat.supportsReasoningEffort
+    compat.supportsReasoningEffort &&
+    !omitGpt54MiniToolReasoningEffort
   ) {
     params.reasoning_effort = resolvedCompletionsReasoningEffort;
   }

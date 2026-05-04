@@ -85,6 +85,7 @@ type RealtimeEvent = {
   response?: {
     id?: string;
     status?: string;
+    status_details?: unknown;
   };
   error?: unknown;
 };
@@ -272,12 +273,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (!this.isConnected() || !this.ws) {
       return;
     }
-    this.sendEvent({
-      type: "response.create",
-      response: {
-        instructions: instructions ?? this.config.instructions,
-      },
-    });
+    this.sendUserMessage(instructions ?? this.config.instructions ?? "Greet the meeting.");
   }
 
   submitToolResult(callId: string, result: unknown): void {
@@ -342,7 +338,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       });
 
       connectTimeout = setTimeout(() => {
-        if (!this.connected && !this.intentionallyClosed) {
+        if (!this.sessionConfigured && !this.intentionallyClosed) {
           this.ws?.terminate();
           settleReject(new Error("OpenAI realtime connection timeout"));
         }
@@ -363,7 +359,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           },
         });
         this.sendSessionUpdate();
-        settleResolve();
       });
 
       this.ws.on("message", (data: Buffer) => {
@@ -379,7 +374,14 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           },
         });
         try {
-          this.handleEvent(JSON.parse(data.toString()) as RealtimeEvent);
+          const event = JSON.parse(data.toString()) as RealtimeEvent;
+          this.handleEvent(event);
+          if (event.type === "session.updated") {
+            settleResolve();
+          }
+          if (event.type === "error" && !this.sessionConfigured) {
+            settleReject(new Error(readRealtimeErrorDetail(event.error)));
+          }
         } catch (error) {
           console.error("[openai] realtime event parse failed:", error);
         }
@@ -397,7 +399,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             capability: "realtime-voice",
           },
         });
-        if (!this.connected) {
+        if (!this.sessionConfigured) {
           settleReject(error instanceof Error ? error : new Error(String(error)));
         }
         this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
@@ -416,6 +418,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         if (this.intentionallyClosed) {
           settleResolve();
           this.config.onClose?.("completed");
+          return;
+        }
+        if (!this.sessionConfigured && !settled) {
+          settleReject(new Error("OpenAI realtime connection closed before ready"));
           return;
         }
         void this.attemptReconnect();
@@ -526,7 +532,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           threshold: cfg.vadThreshold ?? 0.5,
           prefix_padding_ms: cfg.prefixPaddingMs ?? 300,
           silence_duration_ms: cfg.silenceDurationMs ?? 500,
-          create_response: true,
+          create_response: cfg.autoRespondToAudio ?? true,
         },
         temperature: cfg.temperature ?? 0.8,
         ...(cfg.tools && cfg.tools.length > 0
@@ -545,6 +551,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private handleEvent(event: RealtimeEvent): void {
+    this.config.onEvent?.({
+      direction: "server",
+      type: event.type,
+      detail: this.describeServerEvent(event),
+    });
     switch (event.type) {
       case "session.created":
         return;
@@ -564,7 +575,8 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.responseActive = true;
         return;
 
-      case "response.audio.delta": {
+      case "response.audio.delta":
+      case "response.output_audio.delta": {
         if (!event.delta) {
           return;
         }
@@ -582,16 +594,20 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       }
 
       case "input_audio_buffer.speech_started":
-        this.handleBargeIn();
+        if (this.config.autoRespondToAudio ?? true) {
+          this.handleBargeIn();
+        }
         return;
 
       case "response.audio_transcript.delta":
+      case "response.output_audio_transcript.delta":
         if (event.delta) {
           this.config.onTranscript?.("assistant", event.delta, false);
         }
         return;
 
       case "response.audio_transcript.done":
+      case "response.output_audio_transcript.done":
         if (event.transcript) {
           this.config.onTranscript?.("assistant", event.transcript, true);
         }
@@ -698,6 +714,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private sendEvent(event: unknown): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
+      const type =
+        event && typeof event === "object" && typeof (event as { type?: unknown }).type === "string"
+          ? (event as { type: string }).type
+          : "unknown";
+      this.config.onEvent?.({ direction: "client", type });
       const payload = JSON.stringify(event);
       captureWsEvent({
         url: this.resolveConnectionParams().url,
@@ -712,6 +733,23 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       });
       this.ws.send(payload);
     }
+  }
+
+  private describeServerEvent(event: RealtimeEvent): string | undefined {
+    if (event.type === "error") {
+      return readRealtimeErrorDetail(event.error);
+    }
+    if (event.type === "response.done") {
+      const status = event.response?.status;
+      const details =
+        event.response?.status_details === undefined
+          ? undefined
+          : JSON.stringify(event.response.status_details);
+      return (
+        [status ? `status=${status}` : undefined, details].filter(Boolean).join(" ") || undefined
+      );
+    }
+    return undefined;
   }
 }
 
@@ -731,8 +769,12 @@ function resolveOpenAIRealtimeBrowserOfferHeaders(): Record<string, string> | un
     transport: "http",
     defaultHeaders: {},
   });
+  // Strip server-side-only attribution headers: browser direct fetches to
+  // api.openai.com fail CORS preflight when these are present (only
+  // authorization,content-type are allowed by the endpoint's CORS policy).
+  const SERVER_ONLY_HEADERS = new Set(["user-agent", "originator", "version"]);
   const browserHeaders = Object.fromEntries(
-    Object.entries(headers ?? {}).filter(([key]) => key.toLowerCase() !== "user-agent"),
+    Object.entries(headers ?? {}).filter(([key]) => !SERVER_ONLY_HEADERS.has(key.toLowerCase())),
   );
   return Object.keys(browserHeaders).length > 0 ? browserHeaders : undefined;
 }
@@ -829,6 +871,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
   return {
     id: "openai",
     label: "OpenAI Realtime Voice",
+    defaultModel: OPENAI_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 10,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>

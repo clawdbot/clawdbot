@@ -715,6 +715,33 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("/btw what changed?");
   });
 
+  it("sends /side through the detached BTW path", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return {};
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-main",
+      chatStream: "Working...",
+      chatMessage: "/side what changed?",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        message: "/side what changed?",
+        deliver: false,
+      }),
+    );
+    expect(host.chatQueue).toEqual([]);
+    expect(host.chatRunId).toBe("run-main");
+  });
+
   it("sends /btw without adopting a main chat run when idle", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {

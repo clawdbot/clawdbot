@@ -135,4 +135,24 @@ describe("resolveMattermostReplyToMode", () => {
       callbackPath: "/hooks/work",
     });
   });
+
+  it("resolves documented streaming mode from account config", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: "partial",
+            accounts: {
+              work: {
+                streaming: "off",
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(account.streamingMode).toBe("off");
+  });
 });

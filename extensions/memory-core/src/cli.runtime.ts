@@ -676,14 +676,30 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         let indexError: string | undefined;
         const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
         if (deep) {
-          await withProgress({ label: "Checking memory…", total: 2 }, async (progress) => {
-            progress.setLabel("Probing vector…");
-            await manager.probeVectorAvailability();
-            progress.tick();
-            progress.setLabel("Probing embeddings…");
-            embeddingProbe = await manager.probeEmbeddingAvailability();
-            progress.tick();
-          });
+          const initialStatus = manager.status();
+          const hasVectorStoreProbe =
+            initialStatus.backend === "builtin" &&
+            typeof manager.probeVectorStoreAvailability === "function";
+          await withProgress(
+            { label: "Checking memory…", total: hasVectorStoreProbe ? 3 : 2 },
+            async (progress) => {
+              progress.setLabel(hasVectorStoreProbe ? "Probing vector store…" : "Probing vectors…");
+              if (hasVectorStoreProbe) {
+                await manager.probeVectorStoreAvailability?.();
+              } else {
+                await manager.probeVectorAvailability();
+              }
+              progress.tick();
+              progress.setLabel("Probing embeddings…");
+              embeddingProbe = await manager.probeEmbeddingAvailability();
+              progress.tick();
+              if (hasVectorStoreProbe) {
+                progress.setLabel("Checking semantic vectors…");
+                await manager.probeVectorAvailability();
+                progress.tick();
+              }
+            },
+          );
           if (opts.index && syncFn) {
             await withProgressTotals(
               {
@@ -717,8 +733,6 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
           } else if (opts.index && !syncFn) {
             defaultRuntime.log("Memory backend does not support manual reindex.");
           }
-        } else {
-          await manager.probeVectorAvailability();
         }
         const status = manager.status();
         const sources = (
@@ -858,20 +872,31 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
     }
     if (status.vector) {
-      const vectorState = status.vector.enabled
-        ? status.vector.available === undefined
-          ? "unknown"
-          : status.vector.available
-            ? "ready"
-            : "unavailable"
-        : "disabled";
-      const vectorColor =
-        vectorState === "ready"
-          ? theme.success
-          : vectorState === "unavailable"
-            ? theme.warn
-            : theme.muted;
-      lines.push(`${label("Vector")} ${colorize(rich, vectorColor, vectorState)}`);
+      const formatVectorState = (available: boolean | undefined) =>
+        status.vector?.enabled
+          ? available === undefined
+            ? "unknown"
+            : available
+              ? "ready"
+              : "unavailable"
+          : "disabled";
+      const formatVectorLine = (lineLabel: string, state: string) => {
+        const vectorColor =
+          state === "ready" ? theme.success : state === "unavailable" ? theme.warn : theme.muted;
+        lines.push(`${label(lineLabel)} ${colorize(rich, vectorColor, state)}`);
+      };
+      if (status.backend === "builtin") {
+        const storeState = formatVectorState(status.vector.storeAvailable);
+        formatVectorLine("Vector store", storeState);
+        if (status.vector.semanticAvailable !== undefined) {
+          formatVectorLine("Semantic vectors", formatVectorState(status.vector.semanticAvailable));
+        }
+      } else {
+        const vectorState = formatVectorState(
+          status.vector.semanticAvailable ?? status.vector.available,
+        );
+        formatVectorLine("Vector", vectorState);
+      }
       if (status.vector.dims) {
         lines.push(`${label("Vector dims")} ${info(String(status.vector.dims))}`);
       }
@@ -1119,7 +1144,8 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
           }
           const postIndexStatus = manager.status();
           const vectorEnabled = postIndexStatus.vector?.enabled ?? false;
-          const vectorAvailable = postIndexStatus.vector?.available;
+          const vectorAvailable =
+            postIndexStatus.vector?.storeAvailable ?? postIndexStatus.vector?.available;
           const vectorLoadErr = postIndexStatus.vector?.loadError;
           if (vectorEnabled && vectorAvailable === false) {
             const errDetail = vectorLoadErr ? `: ${vectorLoadErr}` : "";

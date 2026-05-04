@@ -29,6 +29,7 @@ const callGatewayFromCliMock = vi.fn();
 
 type Registered = {
   methods: Map<string, unknown>;
+  methodScopes: Map<string, string | undefined>;
   tools: unknown[];
   service?: Parameters<OpenClawPluginApi["registerService"]>[0];
 };
@@ -108,6 +109,7 @@ function createServiceContext(): Parameters<NonNullable<Registered["service"]>["
 
 function setup(config: Record<string, unknown>): Registered {
   const methods = new Map<string, unknown>();
+  const methodScopes = new Map<string, string | undefined>();
   const tools: unknown[] = [];
   let service: Registered["service"];
   const api = createTestPluginApi({
@@ -120,7 +122,10 @@ function setup(config: Record<string, unknown>): Registered {
     pluginConfig: config,
     runtime: { tts: { textToSpeechTelephony: vi.fn() } } as unknown as OpenClawPluginApi["runtime"],
     logger: noopLogger,
-    registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
+    registerGatewayMethod: (method: string, handler: unknown, opts?: { scope?: string }) => {
+      methods.set(method, handler);
+      methodScopes.set(method, opts?.scope);
+    },
     registerTool: (tool: unknown) => tools.push(tool),
     registerCli: () => {},
     registerService: (registeredService) => {
@@ -129,7 +134,7 @@ function setup(config: Record<string, unknown>): Registered {
     resolvePath: (p: string) => p,
   });
   plugin.register(api);
-  return { methods, tools, service };
+  return { methods, methodScopes, tools, service };
 }
 
 function envRef(id: string) {
@@ -363,6 +368,24 @@ describe("voice-call plugin", () => {
     expect(payload.callId).toBe("call-1");
   });
 
+  it("registers voice call gateway methods with least-privilege scopes", () => {
+    const { methodScopes } = setup({ provider: "mock" });
+
+    for (const method of [
+      "voicecall.initiate",
+      "voicecall.start",
+      "voicecall.continue",
+      "voicecall.continue.start",
+      "voicecall.speak",
+      "voicecall.dtmf",
+      "voicecall.end",
+    ]) {
+      expect(methodScopes.get(method)).toBe("operator.write");
+    }
+    expect(methodScopes.get("voicecall.continue.result")).toBe("operator.read");
+    expect(methodScopes.get("voicecall.status")).toBe("operator.read");
+  });
+
   it("preserves mode on legacy voicecall.start", async () => {
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.start") as
@@ -441,6 +464,30 @@ describe("voice-call plugin", () => {
 
     expect(runtimeStub.manager.speak).toHaveBeenCalledWith("call-1", "hello");
     expect(respond.mock.calls[0]).toEqual([true, { success: true }]);
+  });
+
+  it("does not fall back to one-shot TwiML speak when realtime-only speech is requested", async () => {
+    runtimeStub.config.realtime.enabled = true;
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.speak") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({
+      params: { allowTwimlFallback: false, callId: "call-1", message: "hello" },
+      respond,
+    });
+
+    expect(runtimeStub.webhookServer.speakRealtime).toHaveBeenCalledWith("call-1", "hello");
+    expect(runtimeStub.manager.speak).not.toHaveBeenCalled();
+    expect(respond.mock.calls[0]).toEqual([
+      true,
+      { success: false, error: "No active realtime bridge for call" },
+    ]);
   });
 
   it("reports ended call history when speaking to a stale call", async () => {

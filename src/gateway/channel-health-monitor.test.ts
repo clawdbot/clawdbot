@@ -172,6 +172,25 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("keeps running after a runtime snapshot failure", async () => {
+    const manager = createMockChannelManager({
+      getRuntimeSnapshot: vi
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new Error("snapshot failed");
+        })
+        .mockReturnValue({ channels: {}, channelAccounts: {} }),
+    });
+    const monitor = startDefaultMonitor(manager);
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+
+    expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
   it("accepts timing.monitorStartupGraceMs", async () => {
     const manager = createMockChannelManager();
     const monitor = startDefaultMonitor(manager, { timing: { monitorStartupGraceMs: 60_000 } });

@@ -98,8 +98,29 @@ describe("renderSkills", () => {
     }
   });
 
+  it("defers detail dialog opening until the dialog is connected", async () => {
+    const container = document.createElement("div");
+    const showModal = vi.fn(function (this: HTMLDialogElement) {
+      expect(this.isConnected).toBe(true);
+      this.setAttribute("open", "");
+    });
+
+    installDialogMethod("showModal", showModal);
+
+    render(renderSkills(createProps({ detailKey: "repo-skill" })), container);
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    await Promise.resolve();
+
+    expect(showModal).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("dialog")?.hasAttribute("open")).toBe(true);
+  });
+
   it("opens detail dialogs and routes ClawHub actions", async () => {
     const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
     const onDetailClose = vi.fn();
     const showModal = vi.fn(function (this: HTMLDialogElement) {
       this.setAttribute("open", "");

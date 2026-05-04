@@ -17,11 +17,13 @@ export type PluginManifestCommandAlias = {
 
 export type PluginManifestCommandAliasRecord = PluginManifestCommandAlias & {
   pluginId: string;
+  enabledByDefault?: boolean;
 };
 
 export type PluginManifestCommandAliasRegistry = {
   plugins: readonly {
     id: string;
+    enabledByDefault?: boolean;
     commandAliases?: readonly PluginManifestCommandAlias[];
   }[];
 };
@@ -81,7 +83,11 @@ export function resolveManifestCommandAliasOwnerInRegistry(params: {
       (entry) => normalizeOptionalLowercaseString(entry.name) === normalizedCommand,
     );
     if (alias) {
-      return { ...alias, pluginId: plugin.id };
+      return {
+        ...alias,
+        pluginId: plugin.id,
+        ...(plugin.enabledByDefault === true ? { enabledByDefault: true } : {}),
+      };
     }
   }
   return undefined;

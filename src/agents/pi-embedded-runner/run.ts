@@ -121,6 +121,11 @@ import {
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
 import {
+  MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT,
+  createIdleTimeoutBreakerState,
+  stepIdleTimeoutBreaker,
+} from "./run/idle-timeout-breaker.js";
+import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   resolveAckExecutionFastPathInstruction,
@@ -166,6 +171,8 @@ const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
+const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
+  "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 
 function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number | undefined {
@@ -212,6 +219,16 @@ function normalizeEmbeddedRunAttemptResult(
     },
     replayMetadata: resolveAttemptReplayMetadata(raw),
   };
+}
+
+function hasCompletedModelProgressForIdleBreaker(attempt: EmbeddedRunAttemptForRunner): boolean {
+  return (
+    attempt.assistantTexts.some((text) => text.trim().length > 0) ||
+    attempt.toolMetas.length > 0 ||
+    (attempt.clientToolCalls?.length ?? 0) > 0 ||
+    hasMessagingToolDeliveryEvidence(attempt) ||
+    attempt.itemLifecycle.completedCount > 0
+  );
 }
 
 function createEmptyAuthProfileStore(): AuthProfileStore {
@@ -754,11 +771,20 @@ export async function runEmbeddedPiAgent(
       let planningOnlyRetryAttempts = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
+      let compactionContinuationRetryAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
+      // Cost-runaway breaker for #76293. State lives at the run-loop level
+      // on purpose so it survives across attempt boundaries and across
+      // profile/auth retries within this embedded run (a wrapper-local
+      // counter would reset on every iteration). The helper is pure and
+      // unit-tested in run/idle-timeout-breaker.test.ts; the run loop just
+      // feeds it the outcome of each attempt.
+      const idleTimeoutBreakerState = createIdleTimeoutBreakerState();
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
       let emptyResponseRetryInstruction: string | null = null;
+      let compactionContinuationRetryInstruction: string | null = null;
       let nextAttemptPromptOverride: string | null = null;
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
         provider,
@@ -779,6 +805,22 @@ export async function runEmbeddedPiAgent(
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
       let activeSessionId = params.sessionId;
       let activeSessionFile = params.sessionFile;
+      let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
+      // Pi owns JSONL persistence; this marker only lets the outer retry avoid
+      // replaying the same inbound channel message after overflow compaction.
+      let lastPersistedCurrentMessageId: string | number | undefined;
+      const onUserMessagePersisted: RunEmbeddedPiAgentParams["onUserMessagePersisted"] = (
+        message,
+      ) => {
+        if (params.currentMessageId !== undefined) {
+          lastPersistedCurrentMessageId = params.currentMessageId;
+        }
+        params.onUserMessagePersisted?.(message);
+      };
+      const continueFromCurrentTranscript = () => {
+        nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+        suppressNextUserMessagePersistence = true;
+      };
       const maybeEscalateRateLimitProfileFallback = (params: {
         failoverProvider: string;
         failoverModel: string;
@@ -874,6 +916,24 @@ export async function runEmbeddedPiAgent(
           if (nextSessionFile && nextSessionFile !== activeSessionFile) {
             activeSessionFile = nextSessionFile;
           }
+        };
+        const onCompactionHookMessages = async (payload: {
+          phase: "before" | "after";
+          messages: string[];
+        }) => {
+          const messages = payload.messages.filter((message) => message.trim().length > 0);
+          if (messages.length === 0) {
+            return;
+          }
+          await params.onAgentEvent?.({
+            stream: "compaction",
+            data: {
+              phase: payload.phase === "before" ? "start" : "end",
+              ...(payload.phase === "after" ? { completed: true } : {}),
+              messages,
+            },
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          });
         };
         // When the engine owns compaction, compactEmbeddedPiSessionDirect is
         // bypassed. Fire lifecycle hooks here so recovery paths still notify
@@ -974,6 +1034,7 @@ export async function runEmbeddedPiAgent(
             planningOnlyRetryInstruction,
             reasoningOnlyRetryInstruction,
             emptyResponseRetryInstruction,
+            compactionContinuationRetryInstruction,
           ].filter(
             (value): value is string => typeof value === "string" && value.trim().length > 0,
           );
@@ -1048,6 +1109,7 @@ export async function runEmbeddedPiAgent(
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             transcriptPrompt: params.transcriptPrompt,
+            currentTurnContext: params.currentTurnContext,
             images: params.images,
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,
@@ -1082,6 +1144,7 @@ export async function runEmbeddedPiAgent(
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
+            toolProgressDetail: params.toolProgressDetail,
             execOverrides: params.execOverrides,
             bashElevated: params.bashElevated,
             timeoutMs: params.timeoutMs,
@@ -1116,11 +1179,15 @@ export async function runEmbeddedPiAgent(
             ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
+            enableHeartbeatTool: params.enableHeartbeatTool,
+            forceHeartbeatTool: params.forceHeartbeatTool,
             requireExplicitMessageTarget: params.requireExplicitMessageTarget,
             internalEvents: params.internalEvents,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+            suppressNextUserMessagePersistence,
+            onUserMessagePersisted,
           });
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
 
@@ -1162,6 +1229,55 @@ export async function runEmbeddedPiAgent(
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
           lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
+          // Idle-timeout cost-runaway breaker (#76293). Logic lives in the
+          // pure helper below so it stays unit-testable; the run loop just
+          // feeds it the latest attempt outcome and bails through the
+          // existing retry-limit exhaustion path when the cap is hit.
+          const breakerStep = stepIdleTimeoutBreaker(idleTimeoutBreakerState, {
+            idleTimedOut,
+            completedModelProgress: hasCompletedModelProgressForIdleBreaker(attempt),
+            outputTokens: attemptUsage?.output,
+          });
+          if (breakerStep.tripped) {
+            const breakerMessage =
+              `Idle-timeout cost-runaway breaker tripped: ` +
+              `${breakerStep.consecutive} consecutive idle timeouts ` +
+              `without completed model progress ` +
+              `(cap=${MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT}). ` +
+              `Halting further attempts to bound paid model calls. ` +
+              `See issue #76293.`;
+            log.error(
+              `[idle-timeout-circuit-breaker-tripped] ` +
+                `sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                `provider=${provider}/${modelId} ` +
+                `consecutive=${breakerStep.consecutive} ` +
+                `cap=${MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT}`,
+            );
+            const breakerDecision = resolveRunFailoverDecision({
+              stage: "retry_limit",
+              fallbackConfigured,
+              failoverReason: lastRetryFailoverReason,
+            });
+            return handleRetryLimitExhaustion({
+              message: breakerMessage,
+              decision: breakerDecision,
+              provider,
+              model: modelId,
+              profileId: lastProfileId,
+              durationMs: Date.now() - started,
+              agentMeta: buildErrorAgentMeta({
+                sessionId: activeSessionId,
+                provider,
+                model: model.id,
+                contextTokens: ctxInfo.tokens,
+                usageAccumulator,
+                lastRunPromptUsage,
+                lastTurnTotal,
+              }),
+              replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
+              livenessState: "blocked",
+            });
+          }
           const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
           autoCompactionCount += attemptCompactionCount;
           if (
@@ -1215,7 +1331,7 @@ export async function runEmbeddedPiAgent(
                 (retryingFromTranscript ? "retrying from current transcript" : "retrying prompt"),
             );
             if (retryingFromTranscript) {
-              nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+              continueFromCurrentTranscript();
             }
             continue;
           }
@@ -1293,6 +1409,7 @@ export async function runEmbeddedPiAgent(
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                   }),
+                  onCompactionHookMessages,
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
                   trigger: "timeout_recovery",
@@ -1399,7 +1516,7 @@ export async function runEmbeddedPiAgent(
                 `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
               );
               if (preflightRecovery?.source === "mid-turn") {
-                nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                continueFromCurrentTranscript();
               }
               continue;
             }
@@ -1449,6 +1566,7 @@ export async function runEmbeddedPiAgent(
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                   }),
+                  onCompactionHookMessages,
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
                   trigger: "overflow",
@@ -1531,7 +1649,16 @@ export async function runEmbeddedPiAgent(
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 if (preflightRecovery?.source === "mid-turn") {
+                  continueFromCurrentTranscript();
+                } else if (
+                  params.currentMessageId !== undefined &&
+                  params.currentMessageId === lastPersistedCurrentMessageId
+                ) {
+                  // The first attempt reached Pi far enough to persist this user turn.
+                  // Retrying the original prompt would replay it, so resume from the
+                  // compacted transcript and suppress the next user append.
                   nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                  suppressNextUserMessagePersistence = true;
                 }
                 continue;
               }
@@ -1573,7 +1700,7 @@ export async function runEmbeddedPiAgent(
                     `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
                   );
                   if (preflightRecovery?.source === "mid-turn") {
-                    nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                    continueFromCurrentTranscript();
                   }
                   continue;
                 }
@@ -2069,6 +2196,17 @@ export async function runEmbeddedPiAgent(
             toolMediaUrls: attempt.toolMediaUrls,
             toolAudioAsVoice: attempt.toolAudioAsVoice,
           });
+          const timedOutDuringPrompt =
+            timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
+          const hasPartialAssistantTextAfterPromptTimeout =
+            timedOutDuringPrompt &&
+            (attempt.assistantTexts ?? []).some((text) => text.trim().length > 0) &&
+            !attempt.clientToolCalls &&
+            !attempt.yieldDetected &&
+            !attempt.didSendViaMessagingTool &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !attempt.lastToolError &&
+            (attempt.toolMetas?.length ?? 0) === 0;
           const attemptToolSummary = buildTraceToolSummary({
             toolMetas: attempt.toolMetas,
             hadFailure: Boolean(attempt.lastToolError),
@@ -2078,14 +2216,11 @@ export async function runEmbeddedPiAgent(
             lastToolError: attempt.lastToolError,
           });
 
-          // Timeout aborts can leave the run without any assistant payloads.
-          // Emit an explicit timeout error instead of silently completing, so
-          // callers do not lose the turn as an orphaned user message.
+          // Timeout aborts can leave the run without payloads or with only a
+          // partial assistant fragment. Emit an explicit timeout error instead.
           if (
-            timedOut &&
-            !timedOutDuringCompaction &&
-            !timedOutDuringToolExecution &&
-            !payloadsWithToolMedia?.length
+            timedOutDuringPrompt &&
+            (!payloadsWithToolMedia?.length || hasPartialAssistantTextAfterPromptTimeout)
           ) {
             const timeoutText = idleTimedOut
               ? "The model did not produce a response before the model idle timeout. " +
@@ -2094,7 +2229,7 @@ export async function runEmbeddedPiAgent(
                 "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
             const replayInvalid = resolveReplayInvalidForAttempt(null);
             const livenessState = resolveRunLivenessState({
-              payloadCount: payloads.length,
+              payloadCount: hasPartialAssistantTextAfterPromptTimeout ? 0 : payloads.length,
               aborted,
               timedOut,
               attempt,
@@ -2207,7 +2342,7 @@ export async function runEmbeddedPiAgent(
                   source: "planning_only_retry",
                 },
               });
-              params.onAgentEvent?.({
+              void params.onAgentEvent?.({
                 stream: "plan",
                 data: {
                   phase: "update",
@@ -2268,6 +2403,29 @@ export async function runEmbeddedPiAgent(
                 timedOut,
                 attempt,
               });
+          if (
+            !emptyAssistantReplyIsSilent &&
+            attemptCompactionCount > 0 &&
+            payloadCount === 0 &&
+            !aborted &&
+            !promptError &&
+            !timedOut &&
+            !attempt.clientToolCalls &&
+            !attempt.yieldDetected &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !attempt.lastToolError &&
+            !resolveAttemptReplayMetadata(attempt).hadPotentialSideEffects &&
+            compactionContinuationRetryAttempts < 1
+          ) {
+            compactionContinuationRetryAttempts += 1;
+            compactionContinuationRetryInstruction = COMPACTION_CONTINUATION_RETRY_INSTRUCTION;
+            log.warn(
+              `compaction interrupted visible final answer: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `compactions=${attemptCompactionCount} — retrying ${compactionContinuationRetryAttempts}/1 with compacted-transcript continuation`,
+            );
+            continue;
+          }
+          compactionContinuationRetryInstruction = null;
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
             log.warn(
               `reasoning-only retries exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +

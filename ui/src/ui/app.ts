@@ -25,7 +25,11 @@ import {
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
 } from "./app-chat.ts";
-import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
+import {
+  DEFAULT_CRON_FORM,
+  DEFAULT_LOG_LEVEL_FILTERS,
+  DEFAULT_SESSIONS_FILTERS,
+} from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
 import {
@@ -370,10 +374,12 @@ export class OpenClawApp extends LitElement {
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
   @state() sessionsError: string | null = null;
-  @state() sessionsFilterActive = "120";
-  @state() sessionsFilterLimit = "50";
+  @state() sessionsFilterActive = DEFAULT_SESSIONS_FILTERS.activeMinutes;
+  @state() sessionsFilterLimit = DEFAULT_SESSIONS_FILTERS.limit;
   @state() sessionsIncludeGlobal = true;
   @state() sessionsIncludeUnknown = false;
+  @state() sessionsShowArchived = false;
+  @state() sessionsFiltersCollapsed = false;
   @state() sessionsHideCron = true;
   @state() sessionsSearchQuery = "";
   @state() sessionsSortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
@@ -465,6 +471,7 @@ export class OpenClawApp extends LitElement {
   @state() cronStatus: CronStatus | null = null;
   @state() cronError: string | null = null;
   @state() cronForm: CronFormState = { ...DEFAULT_CRON_FORM };
+  @state() cronFormCollapsed = false;
   @state() cronFieldErrors: import("./controllers/cron.js").CronFieldErrors = {};
   @state() cronEditingJobId: string | null = null;
   @state() cronRunsJobId: string | null = null;
@@ -564,6 +571,7 @@ export class OpenClawApp extends LitElement {
   private logsPollInterval: number | null = null;
   private debugPollInterval: number | null = null;
   private logsScrollFrame: number | null = null;
+  private controlUiResponsivenessObserver: { disconnect: () => void } | null = null;
   private toolStreamById = new Map<string, ToolStreamEntry>();
   private toolStreamOrder: string[] = [];
   refreshSessionsAfterChat = new Set<string>();
@@ -900,13 +908,18 @@ export class OpenClawApp extends LitElement {
 
   async toggleRealtimeTalk() {
     if (this.realtimeTalkSession) {
-      this.realtimeTalkSession.stop();
-      this.realtimeTalkSession = null;
-      this.realtimeTalkActive = false;
-      this.realtimeTalkStatus = "idle";
-      this.realtimeTalkDetail = null;
-      this.realtimeTalkTranscript = null;
-      return;
+      if (this.realtimeTalkStatus === "error") {
+        this.realtimeTalkSession.stop();
+        this.realtimeTalkSession = null;
+      } else {
+        this.realtimeTalkSession.stop();
+        this.realtimeTalkSession = null;
+        this.realtimeTalkActive = false;
+        this.realtimeTalkStatus = "idle";
+        this.realtimeTalkDetail = null;
+        this.realtimeTalkTranscript = null;
+        return;
+      }
     }
     if (!this.client || !this.connected) {
       this.lastError = "Gateway not connected";

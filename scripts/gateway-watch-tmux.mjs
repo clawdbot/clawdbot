@@ -53,11 +53,18 @@ const resolveGatewayWatchBenchmarkArgs = ({ args = [], env = process.env } = {})
   const passthroughArgs = [];
   let benchmarkDir = null;
   let benchmarkFlagSeen = false;
+  let benchmarkNoForceSeen = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--benchmark") {
       benchmarkFlagSeen = true;
+      benchmarkDir ??= DEFAULT_BENCHMARK_PROFILE_DIR;
+      continue;
+    }
+    if (arg === "--benchmark-no-force") {
+      benchmarkFlagSeen = true;
+      benchmarkNoForceSeen = true;
       benchmarkDir ??= DEFAULT_BENCHMARK_PROFILE_DIR;
       continue;
     }
@@ -91,7 +98,10 @@ const resolveGatewayWatchBenchmarkArgs = ({ args = [], env = process.env } = {})
       benchmarkDir || nextEnv[RUN_NODE_CPU_PROF_DIR_ENV] || DEFAULT_BENCHMARK_PROFILE_DIR;
   }
   return {
-    args: passthroughArgs,
+    args: benchmarkNoForceSeen
+      ? passthroughArgs.filter((arg) => arg !== "--force")
+      : passthroughArgs,
+    benchmarkNoForce: benchmarkNoForceSeen,
     benchmarkProfileDir: nextEnv[RUN_NODE_CPU_PROF_DIR_ENV] || null,
     env: nextEnv,
   };
@@ -237,6 +247,9 @@ export const runGatewayWatchTmuxMain = (params = {}) => {
 
   if (resolvedArgs.benchmarkProfileDir) {
     log(deps.stderr, `gateway:watch benchmark CPU profiles: ${resolvedArgs.benchmarkProfileDir}`);
+  }
+  if (resolvedArgs.benchmarkNoForce) {
+    log(deps.stderr, "gateway:watch benchmark running without --force");
   }
 
   if (TMUX_DISABLE_VALUES.has((deps.env.OPENCLAW_GATEWAY_WATCH_TMUX ?? "").toLowerCase())) {

@@ -138,9 +138,7 @@ describe("buildQaGatewayConfig", () => {
     });
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("aimock/gpt-5.5");
-    expect(cfg.agents?.defaults?.imageGenerationModel).toEqual({
-      primary: "aimock/gpt-image-1",
-    });
+    expect(cfg.agents?.defaults).not.toHaveProperty("imageGenerationModel");
     expect(cfg.models?.providers?.aimock?.baseUrl).toBe("http://127.0.0.1:45080/v1");
     expect(cfg.models?.providers?.aimock?.api).toBe("openai-responses");
     expect(cfg.models?.providers?.openai?.baseUrl).toBe("http://127.0.0.1:45080/v1");

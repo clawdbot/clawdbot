@@ -164,6 +164,21 @@ export class TeamsHttpStream {
   }
 
   /**
+   * Replace an informative progress update with final answer text.
+   * Returns false when the stream could not safely carry the final text, so
+   * callers can deliver the answer through the normal Teams message path.
+   */
+  async replaceInformativeWithFinal(text: string): Promise<boolean> {
+    if (this.stopped || this.finalized) {
+      return false;
+    }
+    this.update(text);
+    await this.loop.flush();
+    await this.finalize();
+    return !this.streamFailed && this.hasContent;
+  }
+
+  /**
    * Finalize the stream — send the final message activity.
    */
   async finalize(): Promise<void> {
@@ -222,6 +237,7 @@ export class TeamsHttpStream {
 
       await this.sendActivity(finalActivity);
     } catch (err) {
+      this.streamFailed = true;
       this.onError?.(err);
     }
   }

@@ -32,6 +32,9 @@ describe("gateway --force helpers", () => {
     originalKill = process.kill.bind(process);
     originalPlatform = process.platform;
     tryListenOnPortMock.mockReset();
+    tryListenOnPortMock.mockRejectedValue(
+      Object.assign(new Error("in use"), { code: "EADDRINUSE" }),
+    );
     // Pin to linux so all lsof tests are platform-invariant.
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
   });
@@ -57,6 +60,19 @@ describe("gateway --force helpers", () => {
       throw err;
     });
     expect(listPortListeners(18789)).toEqual([]);
+  });
+
+  it("skips lsof when the port is already bindable", async () => {
+    tryListenOnPortMock.mockResolvedValue(undefined);
+
+    const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
+
+    expect(result).toEqual({
+      killed: [],
+      waitedMs: 0,
+      escalatedToSigkill: false,
+    });
+    expect(execFileSync).not.toHaveBeenCalled();
   });
 
   it("throws when lsof missing", () => {
@@ -164,7 +180,9 @@ describe("gateway --force helpers", () => {
       }
       return "18789/tcp: 4242\n";
     });
-    tryListenOnPortMock.mockResolvedValue(undefined);
+    tryListenOnPortMock
+      .mockRejectedValueOnce(Object.assign(new Error("in use"), { code: "EADDRINUSE" }))
+      .mockResolvedValue(undefined);
 
     const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
 
@@ -196,6 +214,7 @@ describe("gateway --force helpers", () => {
 
     const busyErr = Object.assign(new Error("in use"), { code: "EADDRINUSE" });
     tryListenOnPortMock
+      .mockRejectedValueOnce(busyErr)
       .mockRejectedValueOnce(busyErr)
       .mockRejectedValueOnce(busyErr)
       .mockRejectedValueOnce(busyErr)

@@ -54,9 +54,15 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   });
   const replayInvalid =
     ctx.state.replayState.replayInvalid || incompleteTerminalAssistant ? true : undefined;
+  // Tool-use terminal guard: when the last assistant message ended with a
+  // tool-call stop reason, the turn is incomplete even when pre-tool text
+  // exists — mark as abandoned so lifecycle consumers do not see a working
+  // end state for an interrupted tool chain. (#76477)
   const derivedWorkingTerminalState = isError
     ? "blocked"
-    : replayInvalid && !hasAssistantVisibleText && !hadDeterministicSideEffect
+    : replayInvalid &&
+        !hadDeterministicSideEffect &&
+        (!hasAssistantVisibleText || incompleteTerminalAssistant)
       ? "abandoned"
       : ctx.state.livenessState;
   const livenessState =

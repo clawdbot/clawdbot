@@ -29,6 +29,25 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts documented streaming modes and progress config", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: {
+        mode: "progress",
+        progress: {
+          label: "Shelling",
+          maxLines: 4,
+          toolProgress: false,
+        },
+      },
+      accounts: {
+        quiet: {
+          streaming: "off",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts groups with requireMention", () => {
     const result = MattermostConfigSchema.safeParse({
       groups: {

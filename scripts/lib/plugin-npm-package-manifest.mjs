@@ -96,7 +96,7 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
   };
 }
 
-function readGeneratedBundledChannelConfigs(repoRoot) {
+export function readGeneratedBundledChannelConfigs(repoRoot) {
   const metadataPath = path.join(repoRoot, GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH);
   if (!fs.existsSync(metadataPath)) {
     return new Map();
@@ -145,7 +145,7 @@ function readGeneratedBundledChannelConfigs(repoRoot) {
   return byPlugin;
 }
 
-function mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs) {
+export function mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs) {
   if (!generatedChannelConfigs || Object.keys(generatedChannelConfigs).length === 0) {
     return manifest;
   }

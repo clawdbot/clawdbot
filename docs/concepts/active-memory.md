@@ -558,25 +558,25 @@ plugins.entries.active-memory
 
 The most important fields are:
 
-| Key                          | Type                                                                                                 | Meaning                                                                                                |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `enabled`                    | `boolean`                                                                                            | Enables the plugin itself                                                                              |
-| `config.agents`              | `string[]`                                                                                           | Agent ids that may use active memory                                                                   |
-| `config.model`               | `string`                                                                                             | Optional blocking memory sub-agent model ref; when unset, active memory uses the current session model |
-| `config.allowedChatTypes`    | `("direct" \| "group" \| "channel")[]`                                                               | Session types that may run Active Memory; defaults to direct-message style sessions                    |
-| `config.allowedChatIds`      | `string[]`                                                                                           | Optional per-conversation allowlist applied after `allowedChatTypes`; non-empty lists fail closed      |
-| `config.deniedChatIds`       | `string[]`                                                                                           | Optional per-conversation denylist that overrides allowed session types and allowed ids                |
-| `config.queryMode`           | `"message" \| "recent" \| "full"`                                                                    | Controls how much conversation the blocking memory sub-agent sees                                      |
-| `config.promptStyle`         | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking memory sub-agent is when deciding whether to return memory   |
-| `config.thinking`            | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive" \| "max"`                | Advanced thinking override for the blocking memory sub-agent; default `off` for speed                  |
-| `config.promptOverride`      | `string`                                                                                             | Advanced full prompt replacement; not recommended for normal use                                       |
-| `config.promptAppend`        | `string`                                                                                             | Advanced extra instructions appended to the default or overridden prompt                               |
-| `config.timeoutMs`           | `number`                                                                                             | Hard timeout for the blocking memory sub-agent, capped at 120000 ms                                    |
-| `config.setupGraceTimeoutMs` | `number`                                                                                             | Advanced extra setup budget before the recall timeout expires; defaults to 0 and is capped at 30000 ms |
-| `config.maxSummaryChars`     | `number`                                                                                             | Maximum total characters allowed in the active-memory summary                                          |
-| `config.logging`             | `boolean`                                                                                            | Emits active memory logs while tuning                                                                  |
-| `config.persistTranscripts`  | `boolean`                                                                                            | Keeps blocking memory sub-agent transcripts on disk instead of deleting temp files                     |
-| `config.transcriptDir`       | `string`                                                                                             | Relative blocking memory sub-agent transcript directory under the agent sessions folder                |
+| Key                          | Type                                                                                                 | Meaning                                                                                                                                                                          |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                    | `boolean`                                                                                            | Enables the plugin itself                                                                                                                                                        |
+| `config.agents`              | `string[]`                                                                                           | Agent ids that may use active memory                                                                                                                                             |
+| `config.model`               | `string`                                                                                             | Optional blocking memory sub-agent model ref; when unset, active memory uses the current session model                                                                           |
+| `config.allowedChatTypes`    | `("direct" \| "group" \| "channel")[]`                                                               | Session types that may run Active Memory; defaults to direct-message style sessions                                                                                              |
+| `config.allowedChatIds`      | `string[]`                                                                                           | Optional per-conversation allowlist applied after `allowedChatTypes`; non-empty lists fail closed                                                                                |
+| `config.deniedChatIds`       | `string[]`                                                                                           | Optional per-conversation denylist that overrides allowed session types and allowed ids                                                                                          |
+| `config.queryMode`           | `"message" \| "recent" \| "full"`                                                                    | Controls how much conversation the blocking memory sub-agent sees                                                                                                                |
+| `config.promptStyle`         | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking memory sub-agent is when deciding whether to return memory                                                                             |
+| `config.thinking`            | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive" \| "max"`                | Advanced thinking override for the blocking memory sub-agent; default `off` for speed                                                                                            |
+| `config.promptOverride`      | `string`                                                                                             | Advanced full prompt replacement; not recommended for normal use                                                                                                                 |
+| `config.promptAppend`        | `string`                                                                                             | Advanced extra instructions appended to the default or overridden prompt                                                                                                         |
+| `config.timeoutMs`           | `number`                                                                                             | Hard timeout for the blocking memory sub-agent, capped at 120000 ms                                                                                                              |
+| `config.setupGraceTimeoutMs` | `number`                                                                                             | Advanced extra setup budget before the recall timeout expires; defaults to 0 and is capped at 30000 ms. See [Cold-start grace](#cold-start-grace) for v2026.4.x upgrade guidance |
+| `config.maxSummaryChars`     | `number`                                                                                             | Maximum total characters allowed in the active-memory summary                                                                                                                    |
+| `config.logging`             | `boolean`                                                                                            | Emits active memory logs while tuning                                                                                                                                            |
+| `config.persistTranscripts`  | `boolean`                                                                                            | Keeps blocking memory sub-agent transcripts on disk instead of deleting temp files                                                                                               |
+| `config.transcriptDir`       | `string`                                                                                             | Relative blocking memory sub-agent transcript directory under the agent sessions folder                                                                                          |
 
 Useful tuning fields:
 
@@ -624,6 +624,48 @@ Then move to:
 
 - `message` if you want lower latency
 - `full` if you decide extra context is worth the slower blocking memory sub-agent
+
+### Cold-start grace
+
+Before v2026.5.2 the plugin silently extended your configured `timeoutMs` by an
+extra 30000 ms during cold-start so model warm-up, embedding-index load, and
+the first recall could share one larger budget. v2026.5.2 moved that grace
+behind an explicit `setupGraceTimeoutMs` config — your configured `timeoutMs`
+is now the budget by default, unless you opt in.
+
+If you upgraded from v2026.4.x and you set `timeoutMs` to a value tuned for the
+old implicit-grace world (the recommended starter `timeoutMs: 15000` is one
+example), set `setupGraceTimeoutMs: 30000` to extend the prompt-build hook and
+outer watchdog budgets back to the pre-v5.2 effective values:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "active-memory": {
+        config: {
+          timeoutMs: 15000,
+          setupGraceTimeoutMs: 30000,
+        },
+      },
+    },
+  },
+}
+```
+
+Per the v2026.5.2 changelog: _"use the configured recall timeout as the
+blocking prompt-build hook budget by default and move cold-start setup grace
+behind explicit `setupGraceTimeoutMs` config, so the plugin no longer silently
+extends 15000 ms configs to 45000 ms on the main lane."_
+
+The embedded recall runner uses the same effective timeout budget, so
+`setupGraceTimeoutMs` covers both the outer prompt-build watchdog and the inner
+blocking recall run.
+
+For resource-tight gateways where cold-start latency is a known trade-off,
+lower values (5000–15000 ms) work too — the trade-off is a higher chance of
+the very first recall after a gateway restart returning empty while warm-up
+finishes.
 
 ## Debugging
 
@@ -679,6 +721,18 @@ default `memory-core` path uses `memory_search`; `memory-lancedb` uses
       and index health.
     - If you use `ollama`, confirm the embedding model is installed
       (`ollama list`).
+  </Accordion>
+
+  <Accordion title="First recall after gateway restart returns `status=timeout`">
+    On v2026.5.2 and later, if cold-start setup (model warm-up + embedding
+    index load) hasn't finished by the time the first recall fires, the run
+    can hit the configured `timeoutMs` budget and return `status=timeout`
+    with empty output. Gateway logs show `active-memory timeout after Nms`
+    around the first eligible reply after a restart.
+
+    See [Cold-start grace](#cold-start-grace) under Recommended setup for the
+    recommended `setupGraceTimeoutMs` value.
+
   </Accordion>
 </AccordionGroup>
 

@@ -2,7 +2,10 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { renderCodexPromptOverlay } from "../../prompt-overlay.js";
+import {
+  CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
+  renderCodexPromptOverlay,
+} from "../../prompt-overlay.js";
 import { isModernCodexModel } from "../../provider.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
@@ -22,8 +25,10 @@ import {
 } from "./protocol.js";
 import {
   clearCodexAppServerBinding,
+  isCodexAppServerNativeAuthProfile,
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
+  type CodexAppServerAuthProfileLookup,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 
@@ -37,7 +42,11 @@ export async function startOrResumeThread(params: {
   config?: JsonObject;
 }): Promise<CodexAppServerThreadBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
-  const binding = await readCodexAppServerBinding(params.params.sessionFile);
+  const binding = await readCodexAppServerBinding(params.params.sessionFile, {
+    authProfileStore: params.params.authProfileStore,
+    agentDir: params.params.agentDir,
+    config: params.params.config,
+  });
   if (binding?.threadId) {
     // `/codex resume <thread>` writes a binding before the next turn can know
     // the dynamic tool catalog, so only invalidate fingerprints we actually have.
@@ -54,28 +63,44 @@ export async function startOrResumeThread(params: {
       await clearCodexAppServerBinding(params.params.sessionFile);
     } else {
       try {
+        const authProfileId = params.params.authProfileId ?? binding.authProfileId;
         const response = assertCodexThreadResumeResponse(
           await params.client.request(
             "thread/resume",
             buildThreadResumeParams(params.params, {
               threadId: binding.threadId,
+              authProfileId,
               appServer: params.appServer,
               developerInstructions: params.developerInstructions,
               config: params.config,
             }),
           ),
         );
-        const boundAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
-        const fallbackModelProvider = resolveCodexAppServerModelProvider(params.params.provider);
-        await writeCodexAppServerBinding(params.params.sessionFile, {
-          threadId: response.thread.id,
-          cwd: params.cwd,
+        const boundAuthProfileId = authProfileId;
+        const fallbackModelProvider = resolveCodexAppServerModelProvider({
+          provider: params.params.provider,
           authProfileId: boundAuthProfileId,
-          model: params.params.modelId,
-          modelProvider: response.modelProvider ?? fallbackModelProvider,
-          dynamicToolsFingerprint,
-          createdAt: binding.createdAt,
+          authProfileStore: params.params.authProfileStore,
+          agentDir: params.params.agentDir,
+          config: params.params.config,
         });
+        await writeCodexAppServerBinding(
+          params.params.sessionFile,
+          {
+            threadId: response.thread.id,
+            cwd: params.cwd,
+            authProfileId: boundAuthProfileId,
+            model: params.params.modelId,
+            modelProvider: response.modelProvider ?? fallbackModelProvider,
+            dynamicToolsFingerprint,
+            createdAt: binding.createdAt,
+          },
+          {
+            authProfileStore: params.params.authProfileStore,
+            agentDir: params.params.agentDir,
+            config: params.params.config,
+          },
+        );
         return {
           ...binding,
           threadId: response.thread.id,
@@ -109,17 +134,31 @@ export async function startOrResumeThread(params: {
       }),
     ),
   );
-  const modelProvider = resolveCodexAppServerModelProvider(params.params.provider);
-  const createdAt = new Date().toISOString();
-  await writeCodexAppServerBinding(params.params.sessionFile, {
-    threadId: response.thread.id,
-    cwd: params.cwd,
+  const modelProvider = resolveCodexAppServerModelProvider({
+    provider: params.params.provider,
     authProfileId: params.params.authProfileId,
-    model: response.model ?? params.params.modelId,
-    modelProvider: response.modelProvider ?? modelProvider,
-    dynamicToolsFingerprint,
-    createdAt,
+    authProfileStore: params.params.authProfileStore,
+    agentDir: params.params.agentDir,
+    config: params.params.config,
   });
+  const createdAt = new Date().toISOString();
+  await writeCodexAppServerBinding(
+    params.params.sessionFile,
+    {
+      threadId: response.thread.id,
+      cwd: params.cwd,
+      authProfileId: params.params.authProfileId,
+      model: response.model ?? params.params.modelId,
+      modelProvider: response.modelProvider ?? modelProvider,
+      dynamicToolsFingerprint,
+      createdAt,
+    },
+    {
+      authProfileStore: params.params.authProfileStore,
+      agentDir: params.params.agentDir,
+      config: params.params.config,
+    },
+  );
   return {
     schemaVersion: 1,
     threadId: response.thread.id,
@@ -144,7 +183,13 @@ export function buildThreadStartParams(
     config?: JsonObject;
   },
 ): CodexThreadStartParams {
-  const modelProvider = resolveCodexAppServerModelProvider(params.provider);
+  const modelProvider = resolveCodexAppServerModelProvider({
+    provider: params.provider,
+    authProfileId: params.authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
   return {
     model: params.modelId,
     ...(modelProvider ? { modelProvider } : {}),
@@ -166,12 +211,19 @@ export function buildThreadResumeParams(
   params: EmbeddedRunAttemptParams,
   options: {
     threadId: string;
+    authProfileId?: string;
     appServer: CodexAppServerRuntimeOptions;
     developerInstructions?: string;
     config?: JsonObject;
   },
 ): CodexThreadResumeParams {
-  const modelProvider = resolveCodexAppServerModelProvider(params.provider);
+  const modelProvider = resolveCodexAppServerModelProvider({
+    provider: params.provider,
+    authProfileId: options.authProfileId ?? params.authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
   return {
     threadId: options.threadId,
     model: params.modelId,
@@ -205,7 +257,31 @@ export function buildTurnStartParams(
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
+    collaborationMode: buildTurnCollaborationMode(params),
   };
+}
+
+type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaborationMode"]>;
+
+export function buildTurnCollaborationMode(
+  params: EmbeddedRunAttemptParams,
+): CodexTurnCollaborationMode {
+  return {
+    mode: "default",
+    settings: {
+      model: params.modelId,
+      reasoning_effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
+      developer_instructions:
+        params.trigger === "heartbeat" ? buildHeartbeatCollaborationInstructions() : null,
+    },
+  };
+}
+
+function buildHeartbeatCollaborationInstructions(): string {
+  return [
+    "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.",
+    CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
+  ].join("\n\n");
 }
 
 function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
@@ -299,14 +375,30 @@ function buildUserInput(
   ];
 }
 
-function resolveCodexAppServerModelProvider(provider: string): string | undefined {
-  const normalized = provider.trim();
-  if (!normalized || normalized === "codex") {
+function resolveCodexAppServerModelProvider(params: {
+  provider: string;
+  authProfileId?: string;
+  authProfileStore?: CodexAppServerAuthProfileLookup["authProfileStore"];
+  agentDir?: string;
+  config?: CodexAppServerAuthProfileLookup["config"];
+}): string | undefined {
+  const normalized = params.provider.trim();
+  const normalizedLower = normalized.toLowerCase();
+  if (!normalized || normalizedLower === "codex") {
     // `codex` is OpenClaw's virtual provider; let Codex app-server keep its
     // native provider/auth selection instead of forcing the legacy OpenAI path.
     return undefined;
   }
-  return normalized === "openai-codex" ? "openai" : normalized;
+  if (
+    isCodexAppServerNativeAuthProfile(params) &&
+    (normalizedLower === "openai" || normalizedLower === "openai-codex")
+  ) {
+    // When OpenClaw is forwarding ChatGPT/Codex OAuth, `openai` is Codex's
+    // native provider id, not a public OpenAI API-key choice. Omit the override
+    // so app-server keeps its configured provider/auth pair for this session.
+    return undefined;
+  }
+  return normalizedLower === "openai-codex" ? "openai" : normalized;
 }
 
 // Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.2) use the

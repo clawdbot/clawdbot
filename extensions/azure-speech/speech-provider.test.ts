@@ -176,6 +176,42 @@ describe("buildAzureSpeechProvider", () => {
     });
   });
 
+  it("honors voice and language overrides for telephony output", async () => {
+    const provider = buildAzureSpeechProvider();
+    const result = await provider.synthesizeTelephony?.({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "key",
+        region: "eastus",
+        voice: "en-US-JennyNeural",
+        lang: "en-US",
+      },
+      providerOverrides: {
+        voice: "en-US-AriaNeural",
+        lang: "es-US",
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(azureSpeechTTSMock).toHaveBeenCalledWith({
+      text: "hello",
+      apiKey: "key",
+      baseUrl: "https://eastus.tts.speech.microsoft.com",
+      endpoint: undefined,
+      region: "eastus",
+      voice: "en-US-AriaNeural",
+      lang: "es-US",
+      outputFormat: "raw-8khz-8bit-mono-mulaw",
+      timeoutMs: 30_000,
+    });
+    expect(result).toEqual({
+      audioBuffer: Buffer.from("audio-bytes"),
+      outputFormat: "raw-8khz-8bit-mono-mulaw",
+      sampleRate: 8_000,
+    });
+  });
+
   it("lists voices through config or explicit request auth", async () => {
     const provider = buildAzureSpeechProvider();
     const voices = await provider.listVoices?.({

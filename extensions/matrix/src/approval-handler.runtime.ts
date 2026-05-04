@@ -408,7 +408,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
           : null,
       );
     },
-    deliverPending: async ({ cfg, accountId, context, preparedTarget, pendingPayload }) => {
+    deliverPending: async ({ cfg, accountId, context, preparedTarget, pendingPayload, view }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
         return null;
@@ -447,6 +447,13 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       );
       const reactionEventId =
         result.primaryMessageId?.trim() || messageIds[0] || result.messageId.trim();
+      registerMatrixApprovalReactionTarget({
+        roomId: result.roomId,
+        eventId: reactionEventId,
+        approvalId: pendingPayload.approvalId,
+        allowedDecisions: pendingPayload.allowedDecisions,
+        ttlMs: view.expiresAtMs - Date.now(),
+      });
       await Promise.allSettled(
         listMatrixApprovalReactionBindings(pendingPayload.allowedDecisions).map(
           async ({ emoji }) => {

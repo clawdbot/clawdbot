@@ -63,4 +63,5 @@ export type SessionsUsageResult = {
   sessions: SessionUsageEntry[];
   totals: CostUsageSummary["totals"];
   aggregates: SessionsUsageAggregates;
+  cacheStatus?: CostUsageSummary["cacheStatus"];
 };

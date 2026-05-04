@@ -95,6 +95,35 @@ describe("gateway-watch tmux wrapper", () => {
     );
   });
 
+  it("can remove --force from benchmarked watch runs", () => {
+    const stdout = createOutput();
+    const stderr = createOutput();
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
+
+    const code = runGatewayWatchTmuxMain({
+      args: ["gateway", "--force", "--benchmark-no-force"],
+      cwd: "/repo",
+      env: { SHELL: "/bin/zsh" },
+      nodePath: "/node",
+      spawnSync,
+      stderr: stderr.stream,
+      stdout: stdout.stream,
+    });
+
+    expect(code).toBe(0);
+    const command = spawnSync.mock.calls[1]?.[1]?.[6] as string;
+    expect(command).toContain("'OPENCLAW_RUN_NODE_CPU_PROF_DIR=.artifacts/gateway-watch-profiles'");
+    expect(command).not.toContain("--benchmark-no-force");
+    expect(command).toContain("'gateway'");
+    expect(command).not.toContain("'--force'");
+    expect(stderr.chunks.join("")).toContain("gateway:watch benchmark running without --force");
+  });
+
   it("preserves an explicit color override for the tmux child", () => {
     const command = buildGatewayWatchTmuxCommand({
       args: ["gateway", "--force"],

@@ -585,7 +585,10 @@ function isSupportedAppServerApprovalMethod(method: string): boolean {
 }
 
 function emitApprovalEvent(params: EmbeddedRunAttemptParams, data: AgentApprovalEventData): void {
-  params.onAgentEvent?.({ stream: "approval", data: data as unknown as Record<string, unknown> });
+  void params.onAgentEvent?.({
+    stream: "approval",
+    data: data as unknown as Record<string, unknown>,
+  });
 }
 
 function readDisplayCommandPreview(

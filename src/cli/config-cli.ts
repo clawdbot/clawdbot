@@ -470,27 +470,29 @@ function assertNonDestructiveReplacement(params: {
   }
 }
 
-function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolean {
+type UnsetAtPathResult = { removed: true; leafContainer: "array" | "object" } | { removed: false };
+
+function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetAtPathResult {
   let current: unknown = root;
   for (let i = 0; i < path.length - 1; i += 1) {
     const segment = path[i];
     if (!current || typeof current !== "object") {
-      return false;
+      return { removed: false };
     }
     if (Array.isArray(current)) {
       if (!isIndexSegment(segment)) {
-        return false;
+        return { removed: false };
       }
       const index = Number.parseInt(segment, 10);
       if (!Number.isFinite(index) || index < 0 || index >= current.length) {
-        return false;
+        return { removed: false };
       }
       current = current[index];
       continue;
     }
     const record = current as Record<string, unknown>;
     if (!hasOwnPathKey(record, segment)) {
-      return false;
+      return { removed: false };
     }
     current = record[segment];
   }
@@ -498,24 +500,24 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolea
   const last = path[path.length - 1];
   if (Array.isArray(current)) {
     if (!isIndexSegment(last)) {
-      return false;
+      return { removed: false };
     }
     const index = Number.parseInt(last, 10);
     if (!Number.isFinite(index) || index < 0 || index >= current.length) {
-      return false;
+      return { removed: false };
     }
     current.splice(index, 1);
-    return true;
+    return { removed: true, leafContainer: "array" };
   }
   if (!current || typeof current !== "object") {
-    return false;
+    return { removed: false };
   }
   const record = current as Record<string, unknown>;
   if (!hasOwnPathKey(record, last)) {
-    return false;
+    return { removed: false };
   }
   delete record[last];
-  return true;
+  return { removed: true, leafContainer: "object" };
 }
 
 async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
@@ -1313,6 +1315,7 @@ function collectDryRunSchemaErrors(params: {
 }): ConfigSetDryRunError[] {
   const validated = validateConfigObjectRaw(params.config, {
     touchedPaths: params.operations.map((operation) => operation.setPath),
+    validateBundledChannels: true,
   });
   if (validated.ok) {
     return [];
@@ -1691,8 +1694,8 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
     // instead of snapshot.config (runtime-merged with defaults).
     // This prevents runtime defaults from leaking into the written config file (issue #6070)
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
-    const removed = unsetAtPath(next, parsedPath);
-    if (!removed) {
+    const unsetResult = unsetAtPath(next, parsedPath);
+    if (!unsetResult.removed) {
       runtime.error(danger(`Config path not found: ${opts.path}`));
       runtime.exit(1);
       return;
@@ -1700,7 +1703,9 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
     await replaceConfigFile({
       nextConfig: next,
       ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-      writeOptions: { unsetPaths: [parsedPath] },
+      ...(unsetResult.leafContainer === "array"
+        ? {}
+        : { writeOptions: { unsetPaths: [parsedPath] } }),
     });
     runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
   } catch (err) {

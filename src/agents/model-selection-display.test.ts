@@ -32,6 +32,18 @@ describe("model-selection-display", () => {
         }),
       ).toBe("anthropic/claude-sonnet-4-6");
     });
+
+    it("ignores malformed persisted model values instead of throwing", () => {
+      expect(
+        resolveModelDisplayRef({
+          runtimeProvider: { provider: "openai" },
+          runtimeModel: false,
+          overrideProvider: ["anthropic"],
+          overrideModel: 123,
+          fallbackModel: " openai/gpt-5.5 ",
+        }),
+      ).toBe("openai/gpt-5.5");
+    });
   });
 
   describe("resolveModelDisplayName", () => {
@@ -98,6 +110,22 @@ describe("model-selection-display", () => {
       ).toEqual({
         modelProvider: "openai",
         model: "gpt-5.4",
+      });
+    });
+
+    it("ignores malformed persisted session model values", () => {
+      expect(
+        resolveSessionInfoModelSelection({
+          currentProvider: { provider: "openai" },
+          currentModel: false,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-sonnet-4-6",
+          entryProvider: ["openrouter"],
+          entryModel: 123,
+        }),
+      ).toEqual({
+        modelProvider: "anthropic",
+        model: "claude-sonnet-4-6",
       });
     });
   });

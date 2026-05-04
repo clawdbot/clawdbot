@@ -96,13 +96,36 @@ function toNativeCommandSpec(command: ChatCommandDefinition, provider?: string):
   return spec;
 }
 
+function resolveNativeNames(command: ChatCommandDefinition, provider?: string): string[] {
+  const primary = resolveNativeName(command, provider);
+  return [primary, ...(command.nativeAliases ?? [])].filter((name): name is string =>
+    Boolean(name),
+  );
+}
+
 function listNativeSpecsFromCommands(
   commands: ChatCommandDefinition[],
   provider?: string,
 ): NativeCommandSpec[] {
   return commands
     .filter((command) => command.scope !== "text" && command.nativeName)
-    .map((command) => toNativeCommandSpec(command, provider));
+    .flatMap((command) => {
+      const spec = toNativeCommandSpec(command, provider);
+      return resolveNativeNames(command, provider).map((name) => {
+        const nativeSpec: NativeCommandSpec = {
+          name,
+          description: spec.description,
+          acceptsArgs: spec.acceptsArgs,
+        };
+        if (spec.args) {
+          nativeSpec.args = spec.args;
+        }
+        if (spec.descriptionLocalizations) {
+          nativeSpec.descriptionLocalizations = spec.descriptionLocalizations;
+        }
+        return nativeSpec;
+      });
+    });
 }
 
 export function listNativeCommandSpecs(params?: {
@@ -134,8 +157,9 @@ export function findCommandByNativeName(
   return getChatCommands().find(
     (command) =>
       command.scope !== "text" &&
-      normalizeOptionalLowercaseString(resolveNativeName(command, provider, options)) ===
-        normalized,
+      [resolveNativeName(command, provider, options), ...(command.nativeAliases ?? [])].some(
+        (name) => normalizeOptionalLowercaseString(name) === normalized,
+      ),
   );
 }
 

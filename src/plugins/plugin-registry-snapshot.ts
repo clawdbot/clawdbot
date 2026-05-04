@@ -155,6 +155,9 @@ function hasStalePersistedPluginMetadata(index: InstalledPluginIndex): boolean {
       packageJsonPath,
       plugin.packageJson.fileSignature,
     );
+    if (packageJsonSignatureMatches === true && plugin.origin === "bundled") {
+      return false;
+    }
     if (packageJsonSignatureMatches === false) {
       return hashExistingFile(packageJsonPath) !== plugin.packageJson.hash;
     }

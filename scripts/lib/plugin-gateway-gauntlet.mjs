@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
+import { collectBundledPluginBuildEntries } from "./bundled-plugin-build-entries.mjs";
 
 const MANIFEST_NAMES = ["openclaw.plugin.json", "openclaw.plugin.json5"];
 
@@ -142,9 +143,13 @@ function buildPluginMatrixEntry(params) {
 
 function discoverBundledPluginManifests(repoRoot) {
   const extensionsDir = path.join(repoRoot, "extensions");
+  const buildEntryDirs = new Set(
+    collectBundledPluginBuildEntries({ cwd: repoRoot }).map((entry) => entry.id),
+  );
   const entries = fs
     .readdirSync(extensionsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
+    .filter((entry) => buildEntryDirs.has(entry.name))
     .flatMap((entry) => {
       const pluginDir = path.join(extensionsDir, entry.name);
       const manifestName = MANIFEST_NAMES.find((name) => fs.existsSync(path.join(pluginDir, name)));

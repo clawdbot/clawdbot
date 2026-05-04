@@ -940,6 +940,9 @@ importers:
       '@lancedb/lancedb':
         specifier: ^0.27.2
         version: 0.27.2(apache-arrow@18.1.0)
+      apache-arrow:
+        specifier: 18.1.0
+        version: 18.1.0
       openai:
         specifier: ^6.35.0
         version: 6.35.0(ws@8.20.0)(zod@4.4.1)
@@ -1189,9 +1192,15 @@ importers:
         specifier: ^4.4.1
         version: 4.4.1
     devDependencies:
+      '@openclaw/discord':
+        specifier: workspace:*
+        version: link:../discord
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@openclaw/slack':
+        specifier: workspace:*
+        version: link:../slack
       openclaw:
         specifier: workspace:*
         version: link:../..

@@ -60,7 +60,16 @@ export type CostUsageSummary = {
   days: number;
   daily: CostUsageDailyEntry[];
   totals: CostUsageTotals;
+  cacheStatus?: {
+    status: "fresh" | "partial" | "stale" | "refreshing";
+    cachedFiles: number;
+    pendingFiles: number;
+    staleFiles: number;
+    refreshedAt?: number;
+  };
 };
+
+export type UsageCacheStatus = NonNullable<CostUsageSummary["cacheStatus"]>;
 
 export type SessionDailyUsage = {
   date: string; // YYYY-MM-DD

@@ -40,7 +40,7 @@ export async function resolveCronDeliveryPreview(params: {
   job: CronJob;
 }): Promise<CronDeliveryPreview> {
   const plan = resolveCronDeliveryPlan(params.job);
-  if (!plan.requested && plan.mode === "none" && !params.job.delivery) {
+  if (plan.mode === "none") {
     return { label: "not requested", detail: "not requested" };
   }
   if (plan.mode === "webhook") {

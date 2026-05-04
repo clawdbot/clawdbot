@@ -5,6 +5,7 @@ import { loadSessionStore, resolveSessionTotalTokens } from "../config/sessions.
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
@@ -27,7 +28,7 @@ import {
 
 type SessionRow = SessionDisplayRow & {
   agentId: string;
-  kind: "direct" | "group" | "global" | "unknown";
+  kind: "cron" | "direct" | "group" | "global" | "unknown";
   agentRuntime: ReturnType<typeof resolveAgentRuntimeMetadata>;
 };
 
@@ -83,6 +84,9 @@ function classifySessionKey(key: string, entry?: { chatType?: string | null }): 
   }
   if (key === "unknown") {
     return "unknown";
+  }
+  if (isCronSessionKey(key)) {
+    return "cron";
   }
   if (entry?.chatType === "group" || entry?.chatType === "channel") {
     return "group";

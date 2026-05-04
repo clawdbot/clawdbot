@@ -351,7 +351,7 @@ async function writeSavedMediaBuffer(params: {
       await fs.writeFile(tempDest, params.buffer, { mode: MEDIA_FILE_MODE });
       const handle = await fs.open(tempDest, "r");
       try {
-        await handle.sync();
+        await syncSavedMediaHandle(handle);
       } finally {
         await handle.close();
       }
@@ -362,6 +362,17 @@ async function writeSavedMediaBuffer(params: {
     }
   });
   return dest;
+}
+
+async function syncSavedMediaHandle(handle: fs.FileHandle): Promise<void> {
+  try {
+    await handle.sync();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | undefined)?.code === "EPERM") {
+      return;
+    }
+    throw err;
+  }
 }
 
 export type SaveMediaSourceErrorCode =

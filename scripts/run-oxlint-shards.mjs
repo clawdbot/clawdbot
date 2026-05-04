@@ -23,15 +23,15 @@ if ((prepareResult.status ?? 1) !== 0) {
 const shards = [
   {
     name: "core",
-    args: ["--tsconfig", "tsconfig.oxlint.core.json", "src", "ui", "packages"],
+    args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "src", "ui", "packages"],
   },
   {
     name: "extensions",
-    args: ["--tsconfig", "tsconfig.oxlint.extensions.json", "extensions"],
+    args: ["--tsconfig", "config/tsconfig/oxlint.extensions.json", "extensions"],
   },
   {
     name: "scripts",
-    args: ["--tsconfig", "tsconfig.oxlint.scripts.json", "scripts"],
+    args: ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts"],
   },
 ];
 

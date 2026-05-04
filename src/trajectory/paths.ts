@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 
+export const TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES = 10 * 1024 * 1024;
 export const TRAJECTORY_RUNTIME_FILE_MAX_BYTES = 50 * 1024 * 1024;
 export const TRAJECTORY_RUNTIME_EVENT_MAX_BYTES = 256 * 1024;
 

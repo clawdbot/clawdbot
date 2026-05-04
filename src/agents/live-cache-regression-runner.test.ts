@@ -84,6 +84,37 @@ describe("live cache regression runner", () => {
     ).toBe(false);
   });
 
+  it("retries a cache probe once when provider text misses the sentinel", () => {
+    expect(
+      __testing.shouldRetryCacheProbeText({
+        attempt: 1,
+        suffix: "openai-stable-hit-a",
+        text: "",
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldRetryCacheProbeText({
+        attempt: 2,
+        suffix: "openai-stable-hit-a",
+        text: "",
+      }),
+    ).toBe(false);
+    expect(
+      __testing.shouldRetryCacheProbeText({
+        attempt: 1,
+        suffix: "openai-stable-hit-a",
+        text: "I saw openai-stable-hit-a.",
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldRetryCacheProbeText({
+        attempt: 1,
+        suffix: "openai-stable-hit-a",
+        text: "CACHE-OK openai-stable-hit-a",
+      }),
+    ).toBe(false);
+  });
+
   it("accepts a warmup that already hits the provider cache", () => {
     const findings = __testing.evaluateAgainstBaseline({
       lane: "image",

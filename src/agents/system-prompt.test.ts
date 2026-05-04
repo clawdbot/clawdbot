@@ -4,8 +4,11 @@ import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import {
+  appendAgentBootstrapSystemPromptSupplement,
+  buildAgentBootstrapSystemContext,
+  buildAgentBootstrapSystemPromptSections,
+  buildAgentBootstrapSystemPromptSupplement,
   buildAgentSystemPrompt,
-  buildAgentUserPromptPrefix,
   buildRuntimeLine,
 } from "./system-prompt.js";
 
@@ -502,29 +505,32 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Reminder: commit your changes in this workspace after edits.");
   });
 
-  it("keeps bootstrap instructions out of the privileged system prompt", () => {
+  it("includes bootstrap instructions in system prompt when bootstrap is pending", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      workspaceNotes: ["Reminder: commit your changes in this workspace after edits."],
+      bootstrapMode: "full",
+      contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
     });
 
-    expect(prompt).not.toContain("## Bootstrap");
-    expect(prompt).not.toContain("Bootstrap is pending for this workspace.");
-    expect(prompt).not.toContain("BOOTSTRAP.md is present in Project Context");
+    expect(prompt).toContain("## Bootstrap Pending");
+    expect(prompt).toContain("BOOTSTRAP.md is included below in Project Context");
+    expect(prompt).toContain("must follow BOOTSTRAP.md, not a generic greeting");
+    expect(prompt).toContain("## /tmp/openclaw/BOOTSTRAP.md");
+    expect(prompt).toContain("Ask who I am.");
   });
 
-  it("adds bootstrap-specific prelude text to the user prompt prefix when bootstrap is pending", () => {
-    const promptPrefix = buildAgentUserPromptPrefix({ bootstrapMode: "full" });
+  it("includes bootstrap truncation notice in system prompt without raw diagnostics", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      bootstrapTruncationNotice:
+        "[Bootstrap truncation warning]\nSome workspace bootstrap files were truncated before Project Context injection.\nTreat Project Context as partial and read the relevant files directly if details seem missing.",
+    });
 
-    expect(promptPrefix).toContain("[Bootstrap pending]");
-    expect(promptPrefix).toContain("Please read BOOTSTRAP.md from the workspace");
-    expect(promptPrefix).toContain("If this run can complete the BOOTSTRAP.md workflow, do so.");
-    expect(promptPrefix).toContain("explain the blocker briefly");
-    expect(promptPrefix).toContain("offer the simplest next step");
-    expect(promptPrefix).toContain("Do not use a generic first greeting or reply normally");
-    expect(promptPrefix).toContain(
-      "Your first user-visible reply for a bootstrap-pending workspace must follow BOOTSTRAP.md",
-    );
+    expect(prompt).toContain("## Bootstrap Context Notice");
+    expect(prompt).toContain("[Bootstrap truncation warning]");
+    expect(prompt).toContain("Treat Project Context as partial");
+    expect(prompt).not.toContain("raw ->");
+    expect(prompt).not.toContain("bootstrapMaxChars");
   });
 
   it("shows timezone section for 12h, 24h, and timezone-only modes", () => {
@@ -1073,12 +1079,15 @@ describe("buildAgentSystemPrompt", () => {
   });
 });
 
-describe("buildAgentUserPromptPrefix", () => {
+describe("buildAgentBootstrapSystemContext", () => {
   it("uses friendly full bootstrap wording that is truthful about completion blockers", () => {
-    const prompt = buildAgentUserPromptPrefix({ bootstrapMode: "full" });
+    const prompt = buildAgentBootstrapSystemContext({
+      bootstrapMode: "full",
+      hasBootstrapFileInProjectContext: true,
+    }).join("\n");
 
-    expect(prompt).toContain("[Bootstrap pending]");
-    expect(prompt).toContain("Please read BOOTSTRAP.md");
+    expect(prompt).toContain("## Bootstrap Pending");
+    expect(prompt).toContain("BOOTSTRAP.md is included below in Project Context");
     expect(prompt).toContain("If this run can complete the BOOTSTRAP.md workflow, do so.");
     expect(prompt).toContain("explain the blocker briefly");
     expect(prompt).toContain("offer the simplest next step");
@@ -1087,9 +1096,9 @@ describe("buildAgentUserPromptPrefix", () => {
   });
 
   it("uses limited bootstrap wording for constrained user-facing runs", () => {
-    const prompt = buildAgentUserPromptPrefix({ bootstrapMode: "limited" });
+    const prompt = buildAgentBootstrapSystemContext({ bootstrapMode: "limited" }).join("\n");
 
-    expect(prompt).toContain("[Bootstrap pending]");
+    expect(prompt).toContain("## Bootstrap Pending");
     expect(prompt).toContain("cannot safely complete the full BOOTSTRAP.md workflow here");
     expect(prompt).toContain("Do not claim bootstrap is complete");
     expect(prompt).toContain("do not use a generic first greeting");
@@ -1097,8 +1106,54 @@ describe("buildAgentUserPromptPrefix", () => {
   });
 
   it("returns nothing when bootstrap is not pending", () => {
-    expect(buildAgentUserPromptPrefix({ bootstrapMode: "none" })).toBeUndefined();
-    expect(buildAgentUserPromptPrefix({})).toBeUndefined();
+    expect(buildAgentBootstrapSystemContext({ bootstrapMode: "none" })).toEqual([]);
+    expect(buildAgentBootstrapSystemContext({})).toEqual([]);
+  });
+});
+
+describe("buildAgentBootstrapSystemPromptSupplement", () => {
+  it("can render bootstrap guidance without duplicating Project Context", () => {
+    const sections = buildAgentBootstrapSystemPromptSections({
+      bootstrapMode: "full",
+      bootstrapTruncationNotice: "Bootstrap context was truncated.",
+      contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
+      includeProjectContext: false,
+    }).join("\n");
+
+    expect(sections).toContain("## Bootstrap Pending");
+    expect(sections).toContain("BOOTSTRAP.md is included below in Project Context");
+    expect(sections).toContain("## Bootstrap Context Notice");
+    expect(sections).toContain("Bootstrap context was truncated.");
+    expect(sections).not.toContain("## /tmp/openclaw/BOOTSTRAP.md");
+    expect(sections).not.toContain("Ask who I am.");
+  });
+
+  it("adds pending bootstrap guidance and BOOTSTRAP.md contents for override prompts", () => {
+    const supplement = buildAgentBootstrapSystemPromptSupplement({
+      bootstrapMode: "full",
+      contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
+    });
+
+    expect(supplement).toContain("## Bootstrap Pending");
+    expect(supplement).toContain("BOOTSTRAP.md is included below in Project Context");
+    expect(supplement).toContain("## /tmp/openclaw/BOOTSTRAP.md");
+    expect(supplement).toContain("Ask who I am.");
+  });
+
+  it("appends bootstrap supplement to configured system prompt overrides", () => {
+    const prompt = appendAgentBootstrapSystemPromptSupplement({
+      systemPrompt: "Custom override prompt.",
+      bootstrapMode: "full",
+      bootstrapTruncationNotice:
+        "[Bootstrap truncation warning]\nSome workspace bootstrap files were truncated before Project Context injection.\nTreat Project Context as partial and read the relevant files directly if details seem missing.",
+      contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
+    });
+
+    expect(prompt).toContain("Custom override prompt.");
+    expect(prompt).toContain("## Bootstrap Pending");
+    expect(prompt).toContain("Ask who I am.");
+    expect(prompt).toContain("## Bootstrap Context Notice");
+    expect(prompt).toContain("[Bootstrap truncation warning]");
   });
 });
 

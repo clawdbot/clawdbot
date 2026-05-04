@@ -385,7 +385,12 @@ function compactRawCommand(raw: string, maxLength = 120): string {
   return `${oneLine.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
-export function resolveExecDetail(args: unknown): string | undefined {
+export type ToolDetailMode = "explain" | "raw";
+
+export function resolveExecDetail(
+  args: unknown,
+  options?: { detailMode?: ToolDetailMode },
+): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
@@ -414,7 +419,12 @@ export function resolveExecDetail(args: unknown): string | undefined {
   }
 
   const displaySummary = cwd ? `${summary} (in ${cwd})` : summary;
-  if (compact && compact !== displaySummary && compact !== summary) {
+  if (
+    options?.detailMode !== "explain" &&
+    compact &&
+    compact !== displaySummary &&
+    compact !== summary
+  ) {
     return `${displaySummary} · \`${compact}\``;
   }
 

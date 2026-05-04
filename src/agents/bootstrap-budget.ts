@@ -354,8 +354,17 @@ export function appendBootstrapPromptWarning(
   return prompt ? `${prompt}\n\n${warningBlock}` : warningBlock;
 }
 
-/** @deprecated Use appendBootstrapPromptWarning. */
-export const prependBootstrapPromptWarning = appendBootstrapPromptWarning;
+export function buildBootstrapPromptWarningNotice(warningLines?: string[]): string | undefined {
+  const hasWarning = (warningLines ?? []).some((line) => line.trim().length > 0);
+  if (!hasWarning) {
+    return undefined;
+  }
+  return [
+    "[Bootstrap truncation warning]",
+    "Some workspace bootstrap files were truncated before Project Context injection.",
+    "Treat Project Context as partial and read the relevant files directly if details seem missing.",
+  ].join("\n");
+}
 
 export function buildBootstrapTruncationReportMeta(params: {
   analysis: BootstrapBudgetAnalysis;

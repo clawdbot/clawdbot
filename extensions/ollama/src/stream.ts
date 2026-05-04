@@ -290,6 +290,34 @@ function resolveOllamaNumCtx(model: ProviderRuntimeModel): number {
   );
 }
 
+/**
+ * Resolves num_ctx for native /api/chat requests:
+ *  1. explicit `params.num_ctx` set on the model wins,
+ *  2. otherwise the catalog `contextWindow` / `maxTokens` is forwarded so
+ *     OpenClaw's known model windows survive the trip and `/api/chat` does
+ *     not silently truncate to Ollama's small Modelfile default (typically
+ *     2048 tokens) — which is too small for a system prompt plus tool
+ *     definitions and produces "model picks wrong tools / says nonsense"
+ *     symptoms on agent turns,
+ *  3. when neither is known, return undefined so the Modelfile decides.
+ *
+ * This intentionally differs from `resolveOllamaNumCtx` by not falling back
+ * to `DEFAULT_CONTEXT_TOKENS`: that constant is a sane wrapper-side guess for
+ * the OpenAI-compat path, but on the native path we prefer to leave num_ctx
+ * absent rather than guess a window for an unknown model.
+ */
+function resolveOllamaNativeNumCtx(model: ProviderRuntimeModel): number | undefined {
+  const configured = resolveOllamaConfiguredNumCtx(model);
+  if (configured !== undefined) {
+    return configured;
+  }
+  const catalog = model.contextWindow ?? model.maxTokens;
+  if (typeof catalog === "number" && Number.isFinite(catalog) && catalog > 0) {
+    return Math.floor(catalog);
+  }
+  return undefined;
+}
+
 function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   const params = model.params;
@@ -303,7 +331,7 @@ function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, 
       }
     }
   }
-  const numCtx = resolveOllamaConfiguredNumCtx(model);
+  const numCtx = resolveOllamaNativeNumCtx(model);
   if (numCtx !== undefined) {
     options.num_ctx = numCtx;
   }

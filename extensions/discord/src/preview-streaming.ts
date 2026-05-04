@@ -1,8 +1,9 @@
-type DiscordPreviewStreamMode = "off" | "partial" | "block";
+import {
+  resolveChannelPreviewStreamMode,
+  type StreamingMode,
+} from "openclaw/plugin-sdk/channel-streaming";
 
-function parsePreviewStreamingMode(value: unknown): DiscordPreviewStreamMode | undefined {
-  return value === "off" || value === "partial" || value === "block" ? value : undefined;
-}
+type DiscordPreviewStreamMode = StreamingMode;
 
 export function resolveDiscordPreviewStreamMode(
   params: {
@@ -10,23 +11,5 @@ export function resolveDiscordPreviewStreamMode(
     streaming?: unknown;
   } = {},
 ): DiscordPreviewStreamMode {
-  const parsedStreaming =
-    params.streaming && typeof params.streaming === "object" && !Array.isArray(params.streaming)
-      ? parsePreviewStreamingMode(
-          (params.streaming as Record<string, unknown>).mode ??
-            (params.streaming as Record<string, unknown>).streaming,
-        )
-      : parsePreviewStreamingMode(params.streaming);
-  if (parsedStreaming) {
-    return parsedStreaming;
-  }
-
-  const legacy = parsePreviewStreamingMode(params.streamMode);
-  if (legacy) {
-    return legacy;
-  }
-  if (typeof params.streaming === "boolean") {
-    return params.streaming ? "partial" : "off";
-  }
-  return "off";
+  return resolveChannelPreviewStreamMode(params, "off");
 }

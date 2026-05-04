@@ -160,8 +160,8 @@ export async function start(state: CronServiceState) {
         markedAnyInterruptedRun = true;
       }
     }
-    if (markedAnyInterruptedRun) {
-      await persist(state);
+    if (markedAnyInterruptedRun || jobs.length > 0) {
+      await persist(state, markedAnyInterruptedRun ? undefined : { stateOnly: true });
     }
   });
 

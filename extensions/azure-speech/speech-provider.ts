@@ -279,6 +279,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
     },
     synthesizeTelephony: async (req) => {
       const config = readAzureSpeechProviderConfig(req.providerConfig);
+      const overrides = readAzureSpeechOverrides(req.providerOverrides);
       const apiKey = resolveApiKey(config);
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
@@ -290,8 +291,8 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         baseUrl: config.baseUrl,
         endpoint: config.endpoint,
         region: config.region,
-        voice: config.voice,
-        lang: config.lang,
+        voice: overrides.voice ?? config.voice,
+        lang: overrides.lang ?? config.lang,
         outputFormat: DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT,
         timeoutMs: resolveTimeoutMs(config, req.timeoutMs),
       });

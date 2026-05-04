@@ -66,7 +66,7 @@ function configure() {
     defaults: {
       ...cfg.agents?.defaults,
       model: { primary: modelRef, fallbacks: [] },
-      agentRuntime: { id: "codex", fallback: "none" },
+      agentRuntime: { id: "codex" },
       workspace: path.join(state, "workspace"),
       skipBootstrap: true,
       timeoutSeconds: 420,

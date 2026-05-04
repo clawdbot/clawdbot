@@ -6,4 +6,8 @@ export default defineBundledChannelSetupEntry({
     specifier: "./setup-plugin-api.js",
     exportName: "qqbotSetupPlugin",
   },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
+  },
 });

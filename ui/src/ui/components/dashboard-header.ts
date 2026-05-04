@@ -1,4 +1,4 @@
-import { LitElement, html } from "lit";
+import { LitElement, html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { pathForTab, titleForTab, type Tab } from "../navigation.js";
 
@@ -9,6 +9,7 @@ export class DashboardHeader extends LitElement {
 
   @property() tab: Tab = "overview";
   @property() basePath = "";
+  @property() agentLabel = "";
 
   private readonly handleOverviewClick = (event: MouseEvent) => {
     if (
@@ -29,6 +30,7 @@ export class DashboardHeader extends LitElement {
 
   override render() {
     const label = titleForTab(this.tab);
+    const agentLabel = this.agentLabel.trim();
 
     return html`
       <div class="dashboard-header">
@@ -40,6 +42,16 @@ export class DashboardHeader extends LitElement {
           >
             OpenClaw
           </a>
+          ${agentLabel
+            ? html`
+                <span class="dashboard-header__breadcrumb-segment">
+                  <span class="dashboard-header__breadcrumb-sep">›</span>
+                  <span class="dashboard-header__breadcrumb-context" title=${agentLabel}>
+                    ${agentLabel}
+                  </span>
+                </span>
+              `
+            : nothing}
           <span class="dashboard-header__breadcrumb-sep">›</span>
           <span class="dashboard-header__breadcrumb-current">${label}</span>
         </div>

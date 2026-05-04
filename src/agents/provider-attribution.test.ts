@@ -115,7 +115,8 @@ describe("provider attribution", () => {
       headers: {
         "HTTP-Referer": "https://openclaw.ai",
         "X-OpenRouter-Title": "OpenClaw",
-        "X-OpenRouter-Categories": "cli-agent",
+        "X-OpenRouter-Categories":
+          "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
       },
     });
   });
@@ -128,7 +129,8 @@ describe("provider attribution", () => {
     ).toEqual({
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "cli-agent",
+      "X-OpenRouter-Categories":
+        "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
     });
   });
 

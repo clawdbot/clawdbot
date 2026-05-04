@@ -2,7 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { resolveExecDetail } from "./tool-display-exec.js";
+import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
 import { asRecord } from "./tool-display-record.js";
 
 type ToolDisplayActionSpec = {
@@ -71,6 +71,7 @@ export function resolveToolVerbAndDetailForArgs(params: {
   spec?: ToolDisplaySpec;
   fallbackDetailKeys?: string[];
   detailMode: "first" | "summary";
+  toolDetailMode?: ToolDetailMode;
   detailCoerce?: CoerceDisplayValueOptions;
   detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
@@ -83,6 +84,7 @@ export function resolveToolVerbAndDetailForArgs(params: {
     spec: params.spec,
     fallbackDetailKeys: params.fallbackDetailKeys,
     detailMode: params.detailMode,
+    toolDetailMode: params.toolDetailMode,
     detailCoerce: params.detailCoerce,
     detailMaxEntries: params.detailMaxEntries,
     detailFormatKey: params.detailFormatKey,
@@ -378,6 +380,7 @@ function resolveToolVerbAndDetail(params: {
   spec?: ToolDisplaySpec;
   fallbackDetailKeys?: string[];
   detailMode: "first" | "summary";
+  toolDetailMode?: ToolDetailMode;
   detailCoerce?: CoerceDisplayValueOptions;
   detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
@@ -393,7 +396,7 @@ function resolveToolVerbAndDetail(params: {
 
   let detail: string | undefined;
   if (params.toolKey === "exec") {
-    detail = resolveExecDetail(params.args);
+    detail = resolveExecDetail(params.args, { detailMode: params.toolDetailMode });
   }
   if (!detail && params.toolKey === "read") {
     detail = resolveReadDetail(params.args);

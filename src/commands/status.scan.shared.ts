@@ -63,6 +63,7 @@ export type GatewayProbeSnapshot = {
 };
 
 type StatusMemorySearchManager = {
+  probeVectorStoreAvailability?(): Promise<boolean>;
   probeVectorAvailability(): Promise<boolean>;
   status(): MemoryProviderStatus;
   close?(): Promise<void>;
@@ -336,7 +337,12 @@ async function resolveMemoryManagerStatusSnapshot(
   }
   try {
     try {
-      await manager.probeVectorAvailability();
+      const currentStatus = manager.status();
+      if (currentStatus.backend === "builtin" && manager.probeVectorStoreAvailability) {
+        await manager.probeVectorStoreAvailability();
+      } else {
+        await manager.probeVectorAvailability();
+      }
     } catch {}
     const status = manager.status();
     return { agentId, ...status };

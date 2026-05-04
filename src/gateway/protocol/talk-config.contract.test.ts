@@ -30,7 +30,7 @@ type TalkConfigContractFixture = {
   timeoutCases: TimeoutContractCase[];
 };
 
-const fixturePath = new URL("../../../test-fixtures/talk-config-contract.json", import.meta.url);
+const fixturePath = new URL("../../../test/fixtures/talk-config-contract.json", import.meta.url);
 const fixtures = JSON.parse(fs.readFileSync(fixturePath, "utf-8")) as TalkConfigContractFixture;
 
 describe("talk.config contract fixtures", () => {

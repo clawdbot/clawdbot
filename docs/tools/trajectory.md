@@ -181,7 +181,7 @@ OpenClaw redacts sensitive values before writing export files:
 
 The exporter also bounds input size:
 
-- runtime sidecar files: 50 MiB
+- runtime sidecar files: live capture stops at 10 MiB and records a truncation event when space remains; export accepts existing runtime sidecars up to 50 MiB
 - session files: 50 MiB
 - runtime events: 200,000
 - total exported events: 250,000

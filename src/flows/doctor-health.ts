@@ -35,9 +35,12 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
 
   const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
   const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");
+  const { noteStalePluginRuntimeSymlinks } =
+    await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
   const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
   await maybeRepairUiProtocolFreshness(effectiveRuntime, prompter);
   noteSourceInstallIssues(root);
+  await noteStalePluginRuntimeSymlinks(root);
   noteStartupOptimizationHints();
 
   const { loadAndMaybeMigrateDoctorConfig } = await import("../commands/doctor-config-flow.js");

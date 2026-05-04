@@ -1145,7 +1145,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
-        ...makeTextReplyDedupeResult(),
+        ...makeTextReplyDedupeResult({ messagingToolSentTexts: ["hello world!"] }),
         messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
         meta: {
           agentMeta: {

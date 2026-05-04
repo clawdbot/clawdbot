@@ -96,6 +96,56 @@ describe("doctor stale plugin config helpers", () => {
     });
   });
 
+  it("resets stale plugin slots without changing valid slot sentinels", () => {
+    const cfg = {
+      plugins: {
+        slots: {
+          memory: "acpx",
+          contextEngine: "missing-engine",
+        },
+      },
+    } as OpenClawConfig;
+
+    const hits = scanStalePluginConfig(cfg);
+    expect(hits).toEqual([
+      {
+        pluginId: "acpx",
+        pathLabel: "plugins.slots.memory",
+        surface: "slot",
+        slotKey: "memory",
+      },
+      {
+        pluginId: "missing-engine",
+        pathLabel: "plugins.slots.contextEngine",
+        surface: "slot",
+        slotKey: "contextEngine",
+      },
+    ]);
+
+    const result = maybeRepairStalePluginConfig(cfg);
+
+    expect(result.changes).toEqual([
+      "- plugins.slots: reset 2 stale plugin slots (memory: acpx -> memory-core, contextEngine: missing-engine -> legacy)",
+    ]);
+    expect(result.config.plugins?.slots).toEqual({
+      memory: "memory-core",
+      contextEngine: "legacy",
+    });
+  });
+
+  it("does not report slot defaults or none as stale plugin refs", () => {
+    expect(
+      scanStalePluginConfig({
+        plugins: {
+          slots: {
+            memory: "none",
+            contextEngine: "legacy",
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual([]);
+  });
+
   it("formats stale plugin warnings with a doctor hint", () => {
     const warnings = collectStalePluginConfigWarnings({
       hits: [

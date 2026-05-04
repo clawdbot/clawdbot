@@ -1,0 +1,200 @@
+name: Windows Blacksmith Testbox
+
+on:
+  workflow_dispatch:
+    inputs:
+      testbox_id:
+        type: string
+        description: "Testbox session ID"
+        required: true
+      runner_label:
+        type: string
+        description: "Windows runner label"
+        required: false
+        default: "blacksmith-16vcpu-windows-2025"
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  windows:
+    name: windows
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Begin Testbox
+        shell: bash
+        env:
+          TESTBOX_ID: ${{ inputs.testbox_id }}
+        run: |
+          set -euo pipefail
+
+          metadata_port="${METADATA_PORT:-}"
+          if [ -z "$metadata_port" ]; then
+            metadata_port="$(cat /proc/cmdline | tr ' ' '\n' | grep '^metadata_port=' | cut -d= -f2)"
+          fi
+          if [ -z "$metadata_port" ]; then
+            echo "metadata_port not found in kernel cmdline" >&2
+            exit 1
+          fi
+
+          metadata_addr="192.168.127.1:${metadata_port}"
+          state=/tmp/.testbox
+          mkdir -p "$state"
+          chmod 700 "$state"
+
+          installation_model_id="$(curl -s --connect-timeout 2 --max-time 5 "http://${metadata_addr}/installationModelID")"
+          api_url="$(curl -s --connect-timeout 2 --max-time 5 "http://${metadata_addr}/backendURL")"
+          auth_token="$(curl -s --connect-timeout 2 --max-time 5 "http://${metadata_addr}/stickyDiskToken")"
+
+          if [ -z "$api_url" ] || [ -z "$installation_model_id" ] || [ -z "$auth_token" ]; then
+            echo "could not read required Blacksmith metadata" >&2
+            exit 1
+          fi
+
+          if [ -n "${BLACKSMITH_HOSTNAME:-}" ]; then
+            runner_host="$BLACKSMITH_HOSTNAME"
+          else
+            runner_host="${BLACKSMITH_HOST_PUBLIC_IP:-}"
+          fi
+          runner_ssh_port="${BLACKSMITH_SSH_PORT:-22}"
+
+          response="$(curl -s -f -L --post302 --post303 -X POST "${api_url}/api/testbox/phone-home" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${auth_token}" \
+            -d "{
+              \"testbox_id\": \"${TESTBOX_ID}\",
+              \"installation_model_id\": ${installation_model_id},
+              \"status\": \"hydrating\",
+              \"ip_address\": \"${runner_host}\",
+              \"ssh_port\": \"${runner_ssh_port}\",
+              \"working_directory\": \"${GITHUB_WORKSPACE}\",
+              \"adopted_run_id\": \"${GITHUB_RUN_ID}\",
+              \"metadata\": {}
+            }" 2>/dev/null || true)"
+
+          echo "$TESTBOX_ID" > "$state/testbox_id"
+          echo "$installation_model_id" > "$state/installation_model_id"
+          echo "$auth_token" > "$state/auth_token"
+          echo "$api_url" > "$state/api_url"
+          echo "$runner_host" > "$state/runner_host"
+          echo "$runner_ssh_port" > "$state/runner_ssh_port"
+          echo "$GITHUB_WORKSPACE" > "$state/working_directory"
+          echo "$GITHUB_RUN_ID" > "$state/adopted_run_id"
+
+          if [ -n "$response" ] && echo "$response" | jq -e . >/dev/null 2>&1; then
+            echo "$response" | jq -r '.ssh_public_key // empty' > "$state/ssh_public_key"
+            idle_timeout="$(echo "$response" | jq -r '.idle_timeout // empty')"
+            echo "${idle_timeout:-10}" > "$state/idle_timeout"
+            echo "phone-home response=json"
+          else
+            printf '%s\n' "$response" > "$state/ssh_public_key"
+            echo "10" > "$state/idle_timeout"
+            echo "phone-home response=raw"
+          fi
+
+          ssh_public_key="$(cat "$state/ssh_public_key" 2>/dev/null || true)"
+          if [ -n "$ssh_public_key" ]; then
+            mkdir -p ~/.ssh
+            printf '%s\n' "$ssh_public_key" >> ~/.ssh/authorized_keys
+            chmod 700 ~/.ssh
+            chmod 600 ~/.ssh/authorized_keys
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Prepare Windows shell
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "runner=$env:RUNNER_NAME"
+          Write-Host "machine=$env:COMPUTERNAME"
+          Write-Host ("os=" + [System.Environment]::OSVersion.VersionString)
+          Write-Host ("powershell=" + $PSVersionTable.PSVersion.ToString())
+          git --version
+
+      - name: Run Testbox
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          state=/tmp/.testbox
+          test -d "$state"
+
+          testbox_id="$(cat "$state/testbox_id")"
+          installation_model_id="$(cat "$state/installation_model_id")"
+          auth_token="$(cat "$state/auth_token")"
+          idle_timeout="$(cat "$state/idle_timeout" 2>/dev/null || true)"
+          idle_timeout="${idle_timeout:-10}"
+          api_url="$(cat "$state/api_url")"
+          runner_host="$(cat "$state/runner_host")"
+          runner_ssh_port="$(cat "$state/runner_ssh_port")"
+          working_directory="$(cat "$state/working_directory")"
+          adopted_run_id="$(cat "$state/adopted_run_id")"
+
+          ready_body="$RUNNER_TEMP/testbox-ready.json"
+          cat > "$ready_body" <<JSON
+          {
+            "testbox_id": "${testbox_id}",
+            "installation_model_id": ${installation_model_id},
+            "status": "ready",
+            "ip_address": "${runner_host}",
+            "ssh_port": "${runner_ssh_port}",
+            "working_directory": "${working_directory}",
+            "adopted_run_id": "${adopted_run_id}",
+            "metadata": {}
+          }
+          JSON
+
+          http_code="$(curl -sS -L --post302 --post303 -o "$RUNNER_TEMP/testbox-ready.response" -w '%{http_code}' \
+            -X POST "${api_url}/api/testbox/phone-home" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${auth_token}" \
+            --data-binary @"$ready_body" || true)"
+          echo "phone_home_ready_http=${http_code}"
+
+          echo "============================================"
+          echo "Testbox ready!"
+          echo "  Testbox ID:         ${testbox_id}"
+          echo "  Runner host:        ${runner_host}"
+          echo "  SSH port:           ${runner_ssh_port}"
+          echo "  Working directory:  ${working_directory}"
+          echo "  Run ID:             ${adopted_run_id}"
+          echo "  SSH:                ssh -p ${runner_ssh_port} runner@${runner_host}"
+          echo "============================================"
+
+          last_activity="$(date +%s)"
+          idle_timeout_seconds=$(( idle_timeout * 60 ))
+
+          while true; do
+            sleep 30
+            now="$(date +%s)"
+
+            if netstat -na 2>/dev/null | grep ":${runner_ssh_port}" | grep -q ESTABLISHED; then
+              last_activity="$now"
+            elif [ -f ~/.testbox-last-activity ]; then
+              file_mtime="$(stat -c %Y ~/.testbox-last-activity 2>/dev/null || stat -f %m ~/.testbox-last-activity)"
+              if [ "$file_mtime" -gt "$last_activity" ]; then
+                last_activity="$file_mtime"
+              fi
+            fi
+
+            idle_seconds=$(( now - last_activity ))
+            if [ "$idle_seconds" -ge "$idle_timeout_seconds" ]; then
+              echo "Idle timeout reached (${idle_timeout} minutes). Shutting down."
+              exit 0
+            fi
+          done
+
+      - name: Testbox action marker
+        if: ${{ false }}
+        uses: useblacksmith/run-testbox@5ca05834db1d3813554d1dd109e5f2087a8d7cbc

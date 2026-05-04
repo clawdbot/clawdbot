@@ -56,11 +56,124 @@ describe("proxy stream wrappers", () => {
         headers: {
           "HTTP-Referer": "https://openclaw.ai",
           "X-OpenRouter-Title": "OpenClaw",
-          "X-OpenRouter-Categories": "cli-agent",
+          "X-OpenRouter-Categories":
+            "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
           "X-Custom": "1",
         },
       },
     ]);
+  });
+
+  it("adds opt-in OpenRouter response caching headers", () => {
+    const calls: Array<{ headers?: Record<string, string> }> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push({ headers: options?.headers });
+      return createAssistantMessageEventStream();
+    };
+
+    const wrapped = createOpenRouterWrapper(baseStreamFn, undefined, {
+      responseCache: true,
+      responseCacheTtlSeconds: 900,
+    });
+
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "openrouter/auto",
+        baseUrl: "https://openrouter.ai/api/v1",
+      } as Model<"openai-completions">,
+      { messages: [] },
+      {},
+    );
+
+    expect(calls[0]?.headers).toMatchObject({
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-OpenRouter-Cache": "true",
+      "X-OpenRouter-Cache-TTL": "900",
+    });
+  });
+
+  it("sends OpenRouter response cache disables for preset opt-outs", () => {
+    const calls: Array<{ headers?: Record<string, string> }> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push({ headers: options?.headers });
+      return createAssistantMessageEventStream();
+    };
+
+    const wrapped = createOpenRouterWrapper(baseStreamFn, undefined, {
+      response_cache: false,
+      response_cache_ttl_seconds: 600,
+    });
+
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "openrouter/@preset/cached-tests",
+      } as Model<"openai-completions">,
+      { messages: [] },
+      {},
+    );
+
+    expect(calls[0]?.headers).toMatchObject({
+      "X-OpenRouter-Cache": "false",
+    });
+    expect(calls[0]?.headers).not.toHaveProperty("X-OpenRouter-Cache-TTL");
+  });
+
+  it("supports OpenRouter response cache refresh and TTL clamping", () => {
+    const calls: Array<{ headers?: Record<string, string> }> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push({ headers: options?.headers });
+      return createAssistantMessageEventStream();
+    };
+
+    const wrapped = createOpenRouterWrapper(baseStreamFn, undefined, {
+      response_cache_clear: "true",
+      response_cache_ttl: 999999,
+    });
+
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "openrouter/auto",
+      } as Model<"openai-completions">,
+      { messages: [] },
+      {},
+    );
+
+    expect(calls[0]?.headers).toMatchObject({
+      "X-OpenRouter-Cache": "true",
+      "X-OpenRouter-Cache-Clear": "true",
+      "X-OpenRouter-Cache-TTL": "86400",
+    });
+  });
+
+  it("does not add OpenRouter response caching headers to custom proxy routes", () => {
+    const calls: Array<{ headers?: Record<string, string> }> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push({ headers: options?.headers });
+      return createAssistantMessageEventStream();
+    };
+
+    const wrapped = createOpenRouterWrapper(baseStreamFn, undefined, {
+      responseCache: true,
+    });
+
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "openrouter/auto",
+        baseUrl: "https://proxy.example.com/v1",
+      } as Model<"openai-completions">,
+      { messages: [] },
+      {},
+    );
+
+    expect(calls[0]?.headers).toBeUndefined();
   });
 
   it("injects cache_control markers for declared OpenRouter Anthropic models on the default route", () => {

@@ -92,6 +92,10 @@ dump_debug_logs() {
     /tmp/openclaw-install.log \
     /tmp/openclaw-onboard.json \
     /tmp/openclaw-channel-add.log \
+    /tmp/openclaw-channels-status.json \
+    /tmp/openclaw-channels-status.err \
+    /tmp/openclaw-status.txt \
+    /tmp/openclaw-status.err \
     /tmp/openclaw-doctor.log \
     /tmp/openclaw-agent.combined \
     /tmp/openclaw-agent.err \
@@ -136,6 +140,11 @@ openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
 echo "Configuring $CHANNEL..."
 openclaw channels add --channel "$CHANNEL" --token "$CHANNEL_TOKEN" >/tmp/openclaw-channel-add.log 2>&1
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-channel-config "$CHANNEL" "$CHANNEL_TOKEN"
+
+echo "Checking status surfaces for $CHANNEL..."
+openclaw channels status --json >/tmp/openclaw-channels-status.json 2>/tmp/openclaw-channels-status.err
+openclaw status >/tmp/openclaw-status.txt 2>/tmp/openclaw-status.err
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-status-surfaces "$CHANNEL" /tmp/openclaw-channels-status.json /tmp/openclaw-status.txt
 
 echo "Running doctor after channel activation..."
 openclaw doctor --repair --non-interactive >/tmp/openclaw-doctor.log 2>&1

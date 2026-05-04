@@ -978,10 +978,11 @@ describe("uninstallPlugin", () => {
         "--no-audit",
         "--no-fund",
         "--prefix",
-        npmRoot,
+        ".",
         "@openclaw/kitchen-sink",
       ],
       expect.objectContaining({
+        cwd: npmRoot,
         timeoutMs: 300_000,
         env: expect.objectContaining({
           NPM_CONFIG_IGNORE_SCRIPTS: "true",

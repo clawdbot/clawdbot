@@ -273,13 +273,13 @@ Feishu/Lark supports streaming replies via interactive cards. When enabled, the 
   channels: {
     feishu: {
       streaming: true, // enable streaming card output (default: true)
-      blockStreaming: true, // enable block-level streaming (default: true)
+      blockStreaming: true, // opt into completed-block streaming
     },
   },
 }
 ```
 
-Set `streaming: false` to send the complete reply in one message.
+Set `streaming: false` to send the complete reply in one message. `blockStreaming` is off by default; enable it only when you want completed assistant blocks flushed before the final reply.
 
 ### Quota optimization
 
@@ -428,7 +428,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.textChunkLimit`                  | Message chunk size                                                               | `2000`           |
 | `channels.feishu.mediaMaxMb`                      | Media size limit                                                                 | `30`             |
 | `channels.feishu.streaming`                       | Streaming card output                                                            | `true`           |
-| `channels.feishu.blockStreaming`                  | Block-level streaming                                                            | `true`           |
+| `channels.feishu.blockStreaming`                  | Completed-block reply streaming                                                  | `false`          |
 | `channels.feishu.typingIndicator`                 | Send typing reactions                                                            | `true`           |
 | `channels.feishu.resolveSenderNames`              | Resolve sender display names                                                     | `true`           |
 

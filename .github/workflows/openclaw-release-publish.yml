@@ -174,9 +174,9 @@ jobs:
             shift
 
             local before_json dispatch_output run_id status conclusion url
-            before_json="$(gh run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
+            before_json="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
-            dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
+            dispatch_output="$(gh workflow run --repo "$GITHUB_REPOSITORY" "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
             printf '%s\n' "$dispatch_output"
             run_id="$(
               printf '%s\n' "$dispatch_output" |
@@ -187,7 +187,7 @@ jobs:
             if [[ -z "$run_id" ]]; then
               for _ in $(seq 1 60); do
                 run_id="$(
-                  BEFORE_IDS="$before_json" gh run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
+                  BEFORE_IDS="$before_json" gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
                     --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
                 )"
                 if [[ -n "$run_id" ]]; then
@@ -207,13 +207,13 @@ jobs:
             cancel_child() {
               if [[ -n "${run_id:-}" ]]; then
                 echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
-                gh run cancel "$run_id" >/dev/null 2>&1 || true
+                gh run cancel --repo "$GITHUB_REPOSITORY" "$run_id" >/dev/null 2>&1 || true
               fi
             }
             trap cancel_child EXIT INT TERM
 
             while true; do
-              status="$(gh run view "$run_id" --json status --jq '.status')"
+              status="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
               fi
@@ -221,14 +221,14 @@ jobs:
             done
             trap - EXIT INT TERM
 
-            conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
-            url="$(gh run view "$run_id" --json url --jq '.url')"
+            conclusion="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json conclusion --jq '.conclusion')"
+            url="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json url --jq '.url')"
             echo "${workflow} finished with ${conclusion}: ${url}"
             {
               echo "- ${workflow}: ${conclusion} (${url})"
             } >> "$GITHUB_STEP_SUMMARY"
             if [[ "$conclusion" != "success" ]]; then
-              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+              gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
               exit 1
             fi
           }

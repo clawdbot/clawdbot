@@ -4,7 +4,7 @@ import path from "node:path";
 import type { Message, Usage } from "@mariozechner/pi-ai";
 import { afterAll, describe, expect, it } from "vitest";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
-import { resolveTrajectoryPointerFilePath } from "./paths.js";
+import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, resolveTrajectoryPointerFilePath } from "./paths.js";
 import type { TrajectoryEvent } from "./types.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-"));
@@ -272,7 +272,7 @@ describe("exportTrajectoryBundle", () => {
     const outputDir = path.join(tmpDir, "bundle");
     writeSimpleSessionFile(sessionFile);
     fs.closeSync(fs.openSync(runtimeFile, "w"));
-    fs.truncateSync(runtimeFile, 50 * 1024 * 1024 + 1);
+    fs.truncateSync(runtimeFile, TRAJECTORY_RUNTIME_FILE_MAX_BYTES + 1);
 
     await expect(
       exportTrajectoryBundle({

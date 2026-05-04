@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import type { CurrentTurnPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
@@ -100,6 +101,10 @@ export function resolvePromptSilentReplyConversationType(params: {
 function normalizePromptRouteChannel(raw?: string | null): string | undefined {
   const normalized = normalizeOptionalString(raw);
   return normalized && normalized !== "none" ? normalized : undefined;
+}
+
+function normalizeToolProgressDetail(value: unknown): "explain" | "raw" | undefined {
+  return value === "explain" || value === "raw" ? value : undefined;
 }
 
 function resolvePersistedPromptProvider(entry?: SessionEntry): string | undefined {
@@ -339,6 +344,24 @@ type RunPreparedReplyParams = {
   workspaceDir: string;
   abortedLastRun: boolean;
 };
+
+function resolveCurrentTurnPromptContext(
+  ctx: TemplateContext,
+): CurrentTurnPromptContext | undefined {
+  const replyBody = normalizeOptionalString(ctx.ReplyToBody);
+  if (!replyBody) {
+    return undefined;
+  }
+  return {
+    reply: {
+      body: replyBody,
+      ...(normalizeOptionalString(ctx.ReplyToSender)
+        ? { senderLabel: normalizeOptionalString(ctx.ReplyToSender) }
+        : {}),
+      ...(ctx.ReplyToIsQuote === true ? { isQuote: true } : {}),
+    },
+  };
+}
 
 export async function runPreparedReply(
   params: RunPreparedReplyParams,
@@ -728,6 +751,7 @@ export async function runPreparedReply(
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
   let { prefixedCommandBody, queuedBody, transcriptCommandBody } = await rebuildPromptBodies();
+  const currentTurnContext = resolveCurrentTurnPromptContext(sessionCtx);
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
@@ -918,6 +942,7 @@ export async function runPreparedReply(
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
+    currentTurnContext,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
@@ -1046,6 +1071,9 @@ export async function runPreparedReply(
     defaultModel,
     agentCfgContextTokens: agentCfg?.contextTokens,
     resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+    toolProgressDetail:
+      normalizeToolProgressDetail(agentCfg?.toolProgressDetail) ??
+      normalizeToolProgressDetail(cfg.agents?.defaults?.toolProgressDetail),
     isNewSession,
     blockStreamingEnabled,
     blockReplyChunking,

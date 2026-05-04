@@ -72,6 +72,12 @@ export type CompactEmbeddedPiSessionParams = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
   abortSignal?: AbortSignal;
+  onCompactionHookMessages?: (payload: {
+    phase: "before" | "after";
+    messages: string[];
+    sessionId: string;
+    sessionKey: string;
+  }) => void | Promise<void>;
   /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
 };

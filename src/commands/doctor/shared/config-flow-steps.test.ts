@@ -101,6 +101,44 @@ describe("doctor config flow steps", () => {
     );
   });
 
+  it("commits migration even when post-migration validation has unrelated issues (#76798)", () => {
+    const migratedConfig = { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } };
+    migrateLegacyConfigMock.mockReturnValueOnce({
+      config: migratedConfig,
+      changes: ["Removed agents.defaults.llm; model idle timeout now follows models.providers."],
+      partiallyValid: true,
+    });
+
+    const result = createLegacyStepResult({
+      exists: true,
+      parsed: {
+        agents: {
+          defaults: { llm: { idleTimeoutSeconds: 120 }, model: { primary: "openai/gpt-5.4" } },
+        },
+        tools: { web: { search: { provider: "brave" } } },
+      },
+      legacyIssues: [{ path: "agents.defaults.llm", message: "deprecated key" }],
+      path: "/tmp/config.json",
+      valid: false,
+      issues: [
+        {
+          path: "tools.web.search.provider",
+          message: "web_search provider is not available: brave",
+        },
+      ],
+      raw: "{}",
+      resolved: {},
+      sourceConfig: {},
+      config: {},
+      runtimeConfig: {},
+      warnings: [],
+    } satisfies DoctorConfigPreflightResult["snapshot"]);
+
+    expect(result.state.candidate).toEqual(migratedConfig);
+    expect(result.state.cfg).toEqual(migratedConfig);
+    expect(result.state.pendingChanges).toBe(true);
+  });
+
   it("removes unknown keys and adds preview hint", () => {
     stripUnknownConfigKeysMock.mockReturnValueOnce({
       config: {},

@@ -252,6 +252,11 @@ plugin manifest:
 {
   "contracts": {
     "tools": ["my_tool", "workflow_tool"]
+  },
+  "toolMetadata": {
+    "workflow_tool": {
+      "optional": true
+    }
   }
 }
 ```
@@ -260,6 +265,9 @@ OpenClaw captures and caches the validated descriptor from the registered tool,
 so plugins do not duplicate `description` or schema data in the manifest. The
 manifest contract only declares ownership and discovery; execution still calls
 the live registered tool implementation.
+Set `toolMetadata.<tool>.optional: true` for tools registered with
+`api.registerTool(..., { optional: true })` so OpenClaw can avoid loading that
+plugin runtime until the tool is explicitly allowlisted.
 
 Users enable optional tools in config:
 

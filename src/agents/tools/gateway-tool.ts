@@ -519,6 +519,7 @@ export function createGatewayTool(opts?: {
       }
       if (action === "update.run") {
         const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
+        const continuationMessage = normalizeOptionalString(params.continuationMessage);
         const updateTimeoutMs = gatewayOpts.timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS;
         const updateGatewayOpts = {
           ...gatewayOpts,
@@ -527,6 +528,7 @@ export function createGatewayTool(opts?: {
         const result = await callGatewayTool("update.run", updateGatewayOpts, {
           sessionKey,
           note,
+          continuationMessage,
           restartDelayMs,
           timeoutMs: updateTimeoutMs,
         });

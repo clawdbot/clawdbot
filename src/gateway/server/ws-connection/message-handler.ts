@@ -173,7 +173,7 @@ function resolvePinnedClientMetadata(params: {
   };
 }
 
-export function attachGatewayWsMessageHandler(params: {
+export type GatewayWsMessageHandlerParams = {
   socket: WebSocket;
   upgradeReq: IncomingMessage;
   connId: string;
@@ -214,7 +214,9 @@ export function attachGatewayWsMessageHandler(params: {
   logGateway: SubsystemLogger;
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
-}) {
+};
+
+export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
   const {
     socket,
     upgradeReq,

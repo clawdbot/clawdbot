@@ -799,6 +799,13 @@ describe("isMessagingToolDuplicate", () => {
       expected: true,
     },
     {
+      input: "v2ex hot topics delivered to telegram",
+      sentTexts: [
+        "1. some article title\n2. another title\nv2ex hot topics delivered to telegram\n3. yet another",
+      ],
+      expected: false,
+    },
+    {
       input: "This is completely different content.",
       sentTexts: ["Hello, this is a test message!"],
       expected: false,

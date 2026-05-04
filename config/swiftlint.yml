@@ -1,0 +1,150 @@
+# SwiftLint configuration adapted from Peekaboo defaults (Swift 6 friendly)
+
+included:
+  - ../apps/macos/Sources
+
+excluded:
+  - ../.build
+  - ../DerivedData
+  - "**/.build"
+  - "**/.swiftpm"
+  - "**/DerivedData"
+  - "**/Generated"
+  - "**/Resources"
+  - "**/Package.swift"
+  - "**/Tests/Resources"
+  - ../node_modules
+  - ../dist
+  - ../coverage
+  - "*.playground"
+  # Generated (protocol-gen-swift.ts)
+  - ../apps/macos/Sources/OpenClawProtocol/GatewayModels.swift
+  # Generated (generate-host-env-security-policy-swift.mjs)
+  - ../apps/macos/Sources/OpenClaw/HostEnvSecurityPolicy.generated.swift
+
+analyzer_rules:
+  - unused_declaration
+  - unused_import
+
+opt_in_rules:
+  - array_init
+  - closure_spacing
+  - contains_over_first_not_nil
+  - empty_count
+  - empty_string
+  - explicit_init
+  - fallthrough
+  - fatal_error_message
+  - first_where
+  - joined_default_parameter
+  - last_where
+  - literal_expression_end_indentation
+  - multiline_arguments
+  - multiline_parameters
+  - operator_usage_whitespace
+  - overridden_super_call
+  - pattern_matching_keywords
+  - private_outlet
+  - prohibited_super_call
+  - redundant_nil_coalescing
+  - sorted_first_last
+  - switch_case_alignment
+  - unneeded_parentheses_in_closure_argument
+  - vertical_parameter_alignment_on_call
+
+disabled_rules:
+  # SwiftFormat handles these
+  - trailing_whitespace
+  - trailing_newline
+  - trailing_comma
+  - vertical_whitespace
+  - indentation_width
+
+  # Style exclusions
+  - explicit_self
+  - identifier_name
+  - file_header
+  - explicit_top_level_acl
+  - explicit_acl
+  - explicit_type_interface
+  - missing_docs
+  - required_deinit
+  - prefer_nimble
+  - quick_discouraged_call
+  - quick_discouraged_focused_test
+  - quick_discouraged_pending_test
+  - anonymous_argument_in_multiline_closure
+  - no_extension_access_modifier
+  - no_grouping_extension
+  - switch_case_on_newline
+  - strict_fileprivate
+  - extension_access_modifier
+  - convenience_type
+  - no_magic_numbers
+  - one_declaration_per_file
+  - vertical_whitespace_between_cases
+  - vertical_whitespace_closing_braces
+  - superfluous_else
+  - number_separator
+  - prefixed_toplevel_constant
+  - opening_brace
+  - trailing_closure
+  - contrasted_opening_brace
+  - sorted_imports
+  - redundant_type_annotation
+  - shorthand_optional_binding
+  - untyped_error_in_catch
+  - file_name
+  - todo
+
+force_cast: warning
+force_try: warning
+
+type_name:
+  min_length:
+    warning: 2
+    error: 1
+  max_length:
+    warning: 60
+    error: 80
+
+function_body_length:
+  warning: 150
+  error: 300
+
+function_parameter_count:
+  warning: 7
+  error: 10
+
+file_length:
+  warning: 1500
+  error: 2500
+  ignore_comment_only_lines: true
+
+type_body_length:
+  warning: 800
+  error: 1200
+
+cyclomatic_complexity:
+  warning: 20
+  error: 120
+
+large_tuple:
+  warning: 4
+  error: 5
+
+nesting:
+  type_level:
+    warning: 4
+    error: 6
+  function_level:
+    warning: 5
+    error: 7
+
+line_length:
+  warning: 120
+  error: 250
+  ignores_comments: true
+  ignores_urls: true
+
+reporter: "xcode"

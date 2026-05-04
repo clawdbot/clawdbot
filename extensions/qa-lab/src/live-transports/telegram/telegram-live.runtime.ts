@@ -47,6 +47,7 @@ type TelegramQaScenarioId =
   | "telegram-tools-compact-command"
   | "telegram-whoami-command"
   | "telegram-context-command"
+  | "telegram-current-session-status-tool"
   | "telegram-mentioned-message-reply"
   | "telegram-mention-gating";
 
@@ -208,6 +209,7 @@ type TelegramMessage = {
 
 type TelegramUpdate = {
   update_id: number;
+  edited_message?: TelegramMessage;
   message?: TelegramMessage;
 };
 
@@ -268,6 +270,17 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
       expectReply: true,
       input: `/context@${sutUsername}`,
       expectedTextIncludes: ["/context list", "Inline shortcut"],
+    }),
+  },
+  {
+    id: "telegram-current-session-status-tool",
+    title: "Telegram current session_status tool call",
+    defaultEnabled: false,
+    timeoutMs: 60_000,
+    buildRun: (sutUsername) => ({
+      expectReply: true,
+      input: `@${sutUsername} Telegram current session_status QA check. Call session_status with sessionKey set to current, then reply with the exact QA marker and resolved session key.`,
+      expectedTextIncludes: ["QA-TELEGRAM-CURRENT-SESSION-OK", ":telegram:group:"],
     }),
   },
   {
@@ -471,7 +484,7 @@ function detectMediaKinds(message: TelegramMessage) {
 }
 
 function normalizeTelegramObservedMessage(update: TelegramUpdate): TelegramObservedMessage | null {
-  const message = update.message;
+  const message = update.message ?? update.edited_message;
   if (!message?.from?.id) {
     return null;
   }
@@ -608,7 +621,7 @@ async function flushTelegramUpdates(token: string) {
       {
         offset,
         timeout: 0,
-        allowed_updates: ["message"],
+        allowed_updates: ["message", "edited_message"],
       },
       15_000,
     );
@@ -653,10 +666,12 @@ async function waitForObservedMessage(params: {
   observedMessages: TelegramObservedMessage[];
   observationScenarioId: string;
   observationScenarioTitle: string;
+  expectedTextIncludes?: string[];
 }) {
   const startedAt = Date.now();
   let offset = params.initialOffset;
   let lastPollingError: unknown;
+  let lastExpectedMismatch: Error | undefined;
   while (Date.now() - startedAt < params.timeoutMs) {
     const remainingMs = Math.max(
       1_000,
@@ -671,7 +686,7 @@ async function waitForObservedMessage(params: {
         {
           offset,
           timeout: timeoutSeconds,
-          allowed_updates: ["message"],
+          allowed_updates: ["message", "edited_message"],
         },
         timeoutSeconds * 1000 + 5_000,
       );
@@ -703,9 +718,22 @@ async function waitForObservedMessage(params: {
       };
       params.observedMessages.push(observedMessage);
       if (matchedScenario) {
+        try {
+          assertTelegramScenarioReply({
+            expectedTextIncludes: params.expectedTextIncludes,
+            message: observedMessage,
+          });
+        } catch (error) {
+          lastExpectedMismatch =
+            error instanceof Error ? error : new Error(formatErrorMessage(error));
+          continue;
+        }
         return { message: observedMessage, nextOffset: offset, observedAtMs: batchObservedAtMs };
       }
     }
+  }
+  if (lastExpectedMismatch) {
+    throw lastExpectedMismatch;
   }
   const timeoutMessage = `timed out after ${params.timeoutMs}ms waiting for Telegram message`;
   if (lastPollingError) {
@@ -1332,6 +1360,9 @@ export async function runTelegramQaLive(params: {
               observedMessages,
               observationScenarioId: scenario.id,
               observationScenarioTitle: scenario.title,
+              expectedTextIncludes: scenarioRun.expectReply
+                ? scenarioRun.expectedTextIncludes
+                : undefined,
               predicate: (message) =>
                 matchesTelegramScenarioReply({
                   allowAnySutReply: scenarioRun.allowAnySutReply,

@@ -1,3 +1,8 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDiscordActionGate,
@@ -9,6 +14,7 @@ import {
 } from "./accounts.js";
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
@@ -243,5 +249,62 @@ describe("Discord duplicate-token account filtering", () => {
 
     expect(isDiscordAccountEnabledForRuntime(activeAccount, cfg)).toBe(true);
     expect(listEnabledDiscordAccounts(cfg).map((account) => account.accountId)).toEqual(["active"]);
+  });
+});
+
+describe("resolveDiscordAccount runtime config selection", () => {
+  it("resolves named account SecretRefs from the active runtime snapshot", () => {
+    const sourceCfg = {
+      channels: {
+        discord: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              name: "Work",
+              token: { source: "env", provider: "default", id: "DISCORD_WORK_TOKEN" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const runtimeCfg = {
+      channels: {
+        discord: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              name: "Work",
+              token: "Bot runtime-work-token",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeCfg, sourceCfg);
+
+    const resolved = resolveDiscordAccount({ cfg: sourceCfg });
+
+    expect(resolved.accountId).toBe("work");
+    expect(resolved.token).toBe("runtime-work-token");
+    expect(resolved.tokenSource).toBe("config");
+    expect(resolved.tokenStatus).toBe("available");
+  });
+
+  it("preserves configured unavailable tokens without falling through to env", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
+    const resolved = resolveDiscordAccount({
+      cfg: {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      accountId: "default",
+    });
+
+    expect(resolved.token).toBe("");
+    expect(resolved.tokenSource).toBe("config");
+    expect(resolved.tokenStatus).toBe("configured_unavailable");
   });
 });

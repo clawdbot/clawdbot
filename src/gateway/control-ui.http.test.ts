@@ -368,7 +368,14 @@ describe("handleControlUiHttpRequest", () => {
       });
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({ available: true });
+      const payload = JSON.parse(String(end.mock.calls[0]?.[0] ?? "")) as {
+        available?: boolean;
+        mediaTicket?: string;
+        mediaTicketExpiresAt?: string;
+      };
+      expect(payload).toMatchObject({ available: true });
+      expect(payload.mediaTicket).toMatch(/^v1\./);
+      expect(Date.parse(payload.mediaTicketExpiresAt ?? "")).not.toBeNaN();
     } finally {
       await fs.rm(filePath, { force: true });
     }
@@ -403,7 +410,94 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
-        expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({ available: true });
+        const payload = JSON.parse(String(end.mock.calls[0]?.[0] ?? "")) as {
+          available?: boolean;
+          mediaTicket?: string;
+          mediaTicketExpiresAt?: string;
+        };
+        expect(payload).toMatchObject({ available: true });
+        expect(payload.mediaTicket).toMatch(/^v1\./);
+        expect(Date.parse(payload.mediaTicketExpiresAt ?? "")).not.toBeNaN();
+      },
+    });
+  });
+
+  it("serves assistant local media with a scoped media ticket after metadata auth", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-ticket-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const meta = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: {
+            authorization: "Bearer test-token",
+          },
+        });
+        const payload = JSON.parse(String(meta.end.mock.calls[0]?.[0] ?? "")) as {
+          mediaTicket?: string;
+        };
+        expect(meta.handled).toBe(true);
+        expect(meta.res.statusCode).toBe(200);
+        expect(payload.mediaTicket).toMatch(/^v1\./);
+
+        const media = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(media.handled).toBe(true);
+        expect(media.res.statusCode).toBe(200);
+      },
+    });
+  });
+
+  it("does not refresh assistant media tickets without operator auth", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-ticket-refresh-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const meta = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: {
+            authorization: "Bearer test-token",
+          },
+        });
+        const payload = JSON.parse(String(meta.end.mock.calls[0]?.[0] ?? "")) as {
+          mediaTicket?: string;
+        };
+
+        const refresh = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(refresh.handled).toBe(true);
+        expect(refresh.res.statusCode).toBe(401);
+        expect(String(refresh.end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+      },
+    });
+  });
+
+  it("rejects assistant local media with an invalid scoped media ticket", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-ticket-invalid-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&mediaTicket=v1.invalid.invalid`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(401);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
       },
     });
   });

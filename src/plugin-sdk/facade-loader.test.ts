@@ -140,7 +140,7 @@ function createCircularPluginFixture(prefix: string): TrustedBundledPluginFixtur
   );
   fs.writeFileSync(
     path.join(pluginRoot, "helper.js"),
-    ['import { marker } from "../facade.mjs";', "export const circularMarker = marker;", ""].join(
+    ['import { marker } from "./facade.mjs";', "export const circularMarker = marker;", ""].join(
       "\n",
     ),
     "utf8",

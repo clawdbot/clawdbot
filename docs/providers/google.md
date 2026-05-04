@@ -343,6 +343,8 @@ Gemini Live API for backend audio bridges such as Voice Call and Google Meet.
 | Activity handling     | `...google.activityHandling`                                        | Google default, `start-of-activity-interrupts`                                        |
 | Turn coverage         | `...google.turnCoverage`                                            | Google default, `only-activity`                                                       |
 | Disable auto VAD      | `...google.automaticActivityDetectionDisabled`                      | `false`                                                                               |
+| Session resumption    | `...google.sessionResumption`                                       | `true`                                                                                |
+| Context compression   | `...google.contextWindowCompression`                                | `true`                                                                                |
 | API key               | `...google.apiKey`                                                  | Falls back to `models.providers.google.apiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` |
 
 Example Voice Call realtime config:

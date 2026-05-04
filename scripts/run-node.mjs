@@ -16,14 +16,22 @@ import {
   writeRuntimePostBuildStamp as writeDistRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mjs";
 import { listStaticExtensionAssetSources } from "./lib/static-extension-assets.mjs";
+import {
+  extensionRestartMetadataFiles,
+  isBuildRelevantRunNodePath,
+  isRestartRelevantRunNodePath,
+  normalizeRunNodePath as normalizePath,
+  runNodeConfigFiles,
+  runNodeSourceRoots,
+  runNodeWatchedPaths,
+} from "./run-node-watch-paths.mjs";
 import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
+
+export { isBuildRelevantRunNodePath, isRestartRelevantRunNodePath, runNodeWatchedPaths };
 
 const buildScript = "scripts/tsdown-build.mjs";
 const compilerArgs = [buildScript, "--no-clean"];
 
-const runNodeSourceRoots = ["src", BUNDLED_PLUGIN_ROOT_DIR];
-const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
-export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
 const runtimePostBuildWatchedPaths = [
   "scripts/copy-bundled-plugin-metadata.mjs",
   "scripts/copy-plugin-sdk-root-alias.mjs",
@@ -40,63 +48,10 @@ const runtimePostBuildWatchedPaths = [
   "src/plugin-sdk/root-alias.cjs",
   BUNDLED_PLUGIN_ROOT_DIR,
 ];
-const ignoredRunNodeRepoPaths = new Set([
-  "src/canvas-host/a2ui/.bundle.hash",
-  "src/canvas-host/a2ui/a2ui.bundle.js",
-]);
 const runtimePostBuildScriptPaths = new Set(
   runtimePostBuildWatchedPaths.filter((entry) => entry.startsWith("scripts/")),
 );
 const runtimePostBuildStaticAssetPaths = new Set(listStaticExtensionAssetSources());
-const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
-const extensionRestartMetadataFiles = new Set(["openclaw.plugin.json", "package.json"]);
-
-const normalizePath = (filePath) => String(filePath ?? "").replaceAll("\\", "/");
-
-const isIgnoredSourcePath = (relativePath) => {
-  const normalizedPath = normalizePath(relativePath);
-  return (
-    normalizedPath.endsWith(".test.ts") ||
-    normalizedPath.endsWith(".test.tsx") ||
-    normalizedPath.endsWith("test-helpers.ts")
-  );
-};
-
-const isBuildRelevantSourcePath = (relativePath) => {
-  const normalizedPath = normalizePath(relativePath);
-  return extensionSourceFilePattern.test(normalizedPath) && !isIgnoredSourcePath(normalizedPath);
-};
-
-const isRestartRelevantExtensionPath = (relativePath) => {
-  const normalizedPath = normalizePath(relativePath);
-  if (extensionRestartMetadataFiles.has(path.posix.basename(normalizedPath))) {
-    return true;
-  }
-  return isBuildRelevantSourcePath(normalizedPath);
-};
-
-const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
-  const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
-  if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
-    return false;
-  }
-  if (runNodeConfigFiles.includes(normalizedPath)) {
-    return true;
-  }
-  if (normalizedPath.startsWith("src/")) {
-    return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
-  }
-  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
-    return isRelevantBundledPluginPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
-  }
-  return false;
-};
-
-export const isBuildRelevantRunNodePath = (repoPath) =>
-  isRelevantRunNodePath(repoPath, isBuildRelevantSourcePath);
-
-export const isRestartRelevantRunNodePath = (repoPath) =>
-  isRelevantRunNodePath(repoPath, isRestartRelevantExtensionPath);
 
 const statMtime = (filePath, fsImpl = fs) => {
   try {

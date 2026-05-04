@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { collectString } from "./cli-options.js";
 import { listLiveTransportQaCliRegistrations } from "./live-transports/cli.js";
+import { registerMantisCli } from "./mantis/cli.js";
 import {
   DEFAULT_QA_LIVE_PROVIDER_MODE,
   formatQaProviderModeHelp,
@@ -225,6 +226,7 @@ export function registerQaLabCli(program: Command) {
   const qa = program
     .command("qa")
     .description("Run private QA automation flows and launch the QA debugger");
+  registerMantisCli(qa);
 
   qa.command("run")
     .description("Run the bundled QA self-check and write a Markdown report")

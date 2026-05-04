@@ -54,6 +54,14 @@ Global tool allow/deny policy (deny wins). Case-insensitive, supports `*` wildca
 }
 ```
 
+`write` and `apply_patch` are separate tool ids. `allow: ["write"]` also enables `apply_patch` for compatible models, but `deny: ["write"]` does not deny `apply_patch`. To block all file mutation, deny `group:fs` or list each mutating tool explicitly:
+
+```json5
+{
+  tools: { deny: ["write", "edit", "apply_patch"] },
+}
+```
+
 ### `tools.byProvider`
 
 Further restrict tools for specific providers or models. Order: base profile → provider profile → allow/deny.

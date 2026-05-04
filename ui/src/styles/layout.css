@@ -196,6 +196,13 @@
   color: var(--muted);
 }
 
+.topnav-shell .dashboard-header__breadcrumb-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .topnav-shell .dashboard-header__breadcrumb-link {
   display: inline-flex;
   align-items: center;
@@ -219,6 +226,21 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.topnav-shell .dashboard-header__breadcrumb-context {
+  max-width: 18ch;
+  overflow: hidden;
+  color: var(--muted);
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .topnav-shell .dashboard-header__breadcrumb-context {
+    max-width: 10ch;
+  }
 }
 
 .topbar-status {

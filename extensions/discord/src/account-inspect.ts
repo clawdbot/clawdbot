@@ -10,8 +10,7 @@ import {
   resolveDiscordAccountConfig,
 } from "./accounts.js";
 import type { DiscordAccountConfig, OpenClawConfig } from "./runtime-api.js";
-
-export type DiscordCredentialStatus = "available" | "configured_unavailable" | "missing";
+import type { DiscordCredentialStatus } from "./token.js";
 
 export type InspectedDiscordAccount = {
   accountId: string;

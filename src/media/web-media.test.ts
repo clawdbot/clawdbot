@@ -163,6 +163,66 @@ describe("loadWebMedia", () => {
     );
   });
 
+  async function withUnavailableImageOptimizer<T>(fn: () => Promise<T>): Promise<T> {
+    vi.resetModules();
+    vi.doMock("./image-ops.js", () => ({
+      convertHeicToJpeg: vi.fn(async (buffer: Buffer) => buffer),
+      hasAlphaChannel: vi.fn(async () => {
+        throw new Error(
+          "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
+        );
+      }),
+      optimizeImageToPng: vi.fn(async () => {
+        throw new Error("should not optimize png");
+      }),
+      resizeToJpeg: vi.fn(async () => {
+        throw new Error(
+          "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
+        );
+      }),
+    }));
+    try {
+      return await fn();
+    } finally {
+      vi.doUnmock("./image-ops.js");
+      vi.resetModules();
+    }
+  }
+
+  it("sends an in-limit original image when optional sharp optimization is unavailable", async () => {
+    await withUnavailableImageOptimizer(async () => {
+      const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
+      const result = await loadWebMediaWithMissingOptimizer(
+        tinyPngFile,
+        createLocalWebMediaOptions(),
+      );
+      expect(result.kind).toBe("image");
+      expect(result.contentType).toBe("image/png");
+      expect(result.fileName).toBe("tiny.png");
+      expect(result.buffer.equals(Buffer.from(TINY_PNG_BASE64, "base64"))).toBe(true);
+    });
+  });
+
+  it("does not bypass the size cap when optional sharp optimization is unavailable", async () => {
+    await withUnavailableImageOptimizer(async () => {
+      const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
+      await expect(
+        loadWebMediaWithMissingOptimizer(tinyPngFile, { maxBytes: 8, localRoots: [fixtureRoot] }),
+      ).rejects.toThrow(/Optional dependency sharp is required/);
+    });
+  });
+
+  it("does not send original HEIC media when optional sharp conversion is unavailable", async () => {
+    await withUnavailableImageOptimizer(async () => {
+      const heicFile = path.join(fixtureRoot, "photo.heic");
+      await fs.writeFile(heicFile, Buffer.from("heic-source"));
+      const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
+      await expect(
+        loadWebMediaWithMissingOptimizer(heicFile, createLocalWebMediaOptions()),
+      ).rejects.toThrow(/Optional dependency sharp is required/);
+    });
+  });
+
   it("resolves relative local media paths against the provided workspace directory", async () => {
     const result = await loadWebMedia("chart.png", {
       maxBytes: 1024 * 1024,

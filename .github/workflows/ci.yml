@@ -1467,8 +1467,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - check_name: check-additional-boundaries
+          - check_name: check-additional-boundaries-a
             group: boundaries
+            boundary_shard: 1/4
+          - check_name: check-additional-boundaries-b
+            group: boundaries
+            boundary_shard: 2/4
+          - check_name: check-additional-boundaries-c
+            group: boundaries
+            boundary_shard: 3/4
+          - check_name: check-additional-boundaries-d
+            group: boundaries
+            boundary_shard: 4/4
           - check_name: check-additional-extension-channels
             group: extension-channels
           - check_name: check-additional-extension-bundled
@@ -1573,6 +1583,7 @@ jobs:
       - name: Run additional check shard
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
+          OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 6
@@ -1758,10 +1769,10 @@ jobs:
           python -m pip install pytest ruff pyyaml
 
       - name: Lint Python skill scripts
-        run: python -m ruff check skills
+        run: python -m ruff check --config skills/pyproject.toml skills
 
       - name: Test skill Python scripts
-        run: python -m pytest -q skills
+        run: python -m pytest -q -c skills/pyproject.toml skills
 
   checks-windows:
     permissions:
@@ -1961,7 +1972,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: apps/macos/.build
-          key: ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'Swabble/Package.swift', 'Swabble/Sources/**') }}
+          key: ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
           restore-keys: |
             ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-
 
@@ -1971,13 +1982,13 @@ jobs:
           set -euo pipefail
           # Exact source-hash cache hits already match these inputs; checkout
           # mtimes are the only reason SwiftPM rebuilds cached products.
-          find apps/macos/Sources apps/macos/Tests apps/shared/OpenClawKit/Sources Swabble/Sources apps/macos/.build/checkouts \
+          find apps/macos/Sources apps/macos/Tests apps/shared/OpenClawKit/Sources apps/swabble/Sources apps/macos/.build/checkouts \
             -type f -exec touch -t 200001010000 {} +
           touch -t 200001010000 \
             apps/macos/Package.swift \
             apps/macos/Package.resolved \
             apps/shared/OpenClawKit/Package.swift \
-            Swabble/Package.swift
+            apps/swabble/Package.swift
 
       - name: Show toolchain
         run: |
@@ -1987,8 +1998,8 @@ jobs:
 
       - name: Swift lint
         run: |
-          swiftlint --config .swiftlint.yml
-          swiftformat --lint apps/macos/Sources --config .swiftformat
+          swiftlint lint --config config/swiftlint.yml
+          swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
 
       - name: Swift build (release)
         run: |

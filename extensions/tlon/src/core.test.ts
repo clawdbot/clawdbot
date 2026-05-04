@@ -101,6 +101,17 @@ describe("tlon core", () => {
     expect(parsed.accounts?.primary?.ship).toBe("~zod");
   });
 
+  it("exposes group invite allowlists in channel config schema", () => {
+    expect(TlonConfigSchema.parse({ groupInviteAllowlist: ["~zod"] }).groupInviteAllowlist).toEqual(
+      ["~zod"],
+    );
+    expect(
+      TlonConfigSchema.parse({
+        accounts: { primary: { groupInviteAllowlist: ["~nec"] } },
+      }).accounts?.primary?.groupInviteAllowlist,
+    ).toEqual(["~nec"]);
+  });
+
   it("configures ship, auth, and discovery settings", async () => {
     const prompter = createTestWizardPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {

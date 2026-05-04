@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
@@ -12,6 +12,8 @@ import { formatErrorMessage } from "../src/infra/errors.ts";
 interface TranslationMap {
   [key: string]: string | TranslationMap;
 }
+
+type TranslationValue = string | { [key: string]: TranslationValue };
 
 type LocaleEntry = {
   exportName: string;
@@ -355,6 +357,68 @@ function compareStringArrays(left: string[], right: string[]) {
     return false;
   }
   return left.every((value, index) => value === right[index]);
+}
+
+export type PlaceholderMismatch = {
+  key: string;
+  locale: string;
+  sourcePlaceholders: string[];
+  translatedPlaceholders: string[];
+};
+
+function extractTranslationPlaceholders(text: string): string[] {
+  return [...new Set([...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? ""))]
+    .filter(Boolean)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function findPlaceholderMismatches(
+  sourceFlat: ReadonlyMap<string, string>,
+  translatedFlat: ReadonlyMap<string, string>,
+  locale: string,
+): PlaceholderMismatch[] {
+  const mismatches: PlaceholderMismatch[] = [];
+  for (const [key, sourceText] of sourceFlat.entries()) {
+    const sourcePlaceholders = extractTranslationPlaceholders(sourceText);
+    const translatedPlaceholders = extractTranslationPlaceholders(translatedFlat.get(key) ?? "");
+    if (!compareStringArrays(sourcePlaceholders, translatedPlaceholders)) {
+      mismatches.push({
+        key,
+        locale,
+        sourcePlaceholders,
+        translatedPlaceholders,
+      });
+    }
+  }
+  return mismatches;
+}
+
+function assertPlaceholderParity(
+  sourceFlat: ReadonlyMap<string, string>,
+  translatedFlat: ReadonlyMap<string, string>,
+  locale: string,
+) {
+  const mismatches = findPlaceholderMismatches(sourceFlat, translatedFlat, locale);
+  if (mismatches.length === 0) {
+    return;
+  }
+
+  const details = mismatches
+    .slice(0, 20)
+    .map(
+      (mismatch) =>
+        `${mismatch.locale}:${mismatch.key} expected {${mismatch.sourcePlaceholders.join("},{")}} got {${mismatch.translatedPlaceholders.join("},{")}}`,
+    )
+    .join("\n");
+  throw new Error(
+    [
+      `control-ui-i18n placeholder mismatch detected for ${locale}.`,
+      details,
+      mismatches.length > 20 ? `...and ${mismatches.length - 20} more` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
 }
 
 function isIdentifier(value: string): boolean {
@@ -953,7 +1017,35 @@ async function formatGeneratedTypeScript(filePath: string, source: string): Prom
       rejectOnFailure: true,
     },
   );
-  return result.stdout;
+  return restoreReplacementCorruptedStringLiterals(source, result.stdout);
+}
+
+function restoreReplacementCorruptedStringLiterals(source: string, formatted: string): string {
+  if (!formatted.includes("\uFFFD") || source.includes("\uFFFD")) {
+    return formatted;
+  }
+
+  const stringLiteralPattern = /"(?:\\.|[^"\\])*"/gu;
+  const sourceLiterals = [...source.matchAll(stringLiteralPattern)];
+  const formattedLiterals = [...formatted.matchAll(stringLiteralPattern)];
+  if (sourceLiterals.length !== formattedLiterals.length) {
+    return formatted;
+  }
+
+  let output = "";
+  let cursor = 0;
+  for (const [index, formattedLiteral] of formattedLiterals.entries()) {
+    const replacement = sourceLiterals[index]?.[0];
+    const literal = formattedLiteral[0];
+    const start = formattedLiteral.index;
+    if (replacement === undefined || start === undefined) {
+      return formatted;
+    }
+    output += formatted.slice(cursor, start);
+    output += literal.includes("\uFFFD") && !replacement.includes("\uFFFD") ? replacement : literal;
+    cursor = start + literal.length;
+  }
+  return `${output}${formatted.slice(cursor)}`;
 }
 
 type PendingPrompt = {
@@ -1020,12 +1112,12 @@ class PiRpcClient {
   private readonly stderrChunks: string[] = [];
   private closed = false;
   private pending: PendingPrompt | null = null;
-  private readonly process;
-  private readonly stdin;
+  private readonly process: ChildProcessWithoutNullStreams;
+  private readonly stdin: ChildProcessWithoutNullStreams["stdin"];
   private requestCount = 0;
-  private sequence = Promise.resolve();
+  private sequence: Promise<unknown> = Promise.resolve();
 
-  private constructor(processHandle: ReturnType<typeof spawn>) {
+  private constructor(processHandle: ChildProcessWithoutNullStreams) {
     this.process = processHandle;
     this.stdin = processHandle.stdin;
   }
@@ -1146,7 +1238,7 @@ class PiRpcClient {
   }
 
   async prompt(message: string, label: string): Promise<string> {
-    this.sequence = this.sequence.then(async () => {
+    const result = this.sequence.then(async () => {
       if (this.closed) {
         throw new Error(`pi process unavailable${this.stderr() ? ` (${this.stderr()})` : ""}`);
       }
@@ -1208,7 +1300,8 @@ class PiRpcClient {
       });
     });
 
-    return (await this.sequence) as string;
+    this.sequence = result.catch(() => undefined);
+    return await result;
   }
 
   async close() {
@@ -1479,6 +1572,8 @@ async function syncLocale(
   // legitimately stay identical to English. Track fallback keys from actual
   // fallback decisions and previous fallback metadata instead.
 
+  assertPlaceholderParity(sourceFlat, nextFlat, entry.locale);
+
   const nextMap: TranslationMap = {};
   for (const [key, value] of sourceFlat.entries()) {
     setNestedValue(nextMap, key, nextFlat.get(key) ?? value);
@@ -1670,7 +1765,14 @@ async function main() {
   }
 }
 
-await main().catch((error) => {
-  console.error(formatErrorMessage(error));
-  process.exit(1);
-});
+function isCliEntrypoint() {
+  const entrypoint = process.argv[1];
+  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
+}
+
+if (isCliEntrypoint()) {
+  await main().catch((error) => {
+    console.error(formatErrorMessage(error));
+    process.exit(1);
+  });
+}

@@ -78,7 +78,12 @@ export type CliPreparedBackend = {
 
 export type CliReusableSession = {
   sessionId?: string;
-  invalidatedReason?: "auth-profile" | "auth-epoch" | "system-prompt" | "mcp";
+  invalidatedReason?:
+    | "auth-profile"
+    | "auth-epoch"
+    | "system-prompt"
+    | "mcp"
+    | "missing-transcript";
 };
 
 export type PreparedCliRunContext = {

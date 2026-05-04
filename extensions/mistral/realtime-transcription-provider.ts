@@ -249,6 +249,7 @@ export function buildMistralRealtimeTranscriptionProvider(): RealtimeTranscripti
     id: "mistral",
     label: "Mistral Realtime Transcription",
     aliases: ["mistral-realtime", "voxtral-realtime"],
+    defaultModel: MISTRAL_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 45,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>

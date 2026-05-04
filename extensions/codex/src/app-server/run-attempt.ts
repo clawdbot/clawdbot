@@ -40,7 +40,11 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
-import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
+import {
+  refreshCodexAppServerAuthTokens,
+  resolveCodexAppServerAuthProfileId,
+  resolveCodexAppServerAuthProfileIdForAgent,
+} from "./auth-bridge.js";
 import {
   createCodexAppServerClientFactoryTestHooks,
   defaultCodexAppServerClientFactory,
@@ -343,11 +347,13 @@ export async function runCodexAppServerAttempt(
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
+  const attemptClientFactory = clientFactory;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
-  const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
+  const sandboxSessionKey =
+    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   const sandbox = await resolveSandboxContext({
     config: params.config,
     sessionKey: sandboxSessionKey,
@@ -376,16 +382,31 @@ export async function runCodexAppServerAttempt(
     agentId: params.agentId,
   });
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-  const runtimeParams = { ...params, sessionKey: sandboxSessionKey };
+  const startupBinding = await readCodexAppServerBinding(params.sessionFile);
+  const startupAuthProfileCandidate =
+    params.runtimePlan?.auth.forwardedAuthProfileId ??
+    params.authProfileId ??
+    startupBinding?.authProfileId;
+  const startupAuthProfileId = params.authProfileStore
+    ? resolveCodexAppServerAuthProfileId({
+        authProfileId: startupAuthProfileCandidate,
+        store: params.authProfileStore,
+        config: params.config,
+      })
+    : resolveCodexAppServerAuthProfileIdForAgent({
+        authProfileId: startupAuthProfileCandidate,
+        agentDir,
+        config: params.config,
+      });
+  const runtimeParams = {
+    ...params,
+    sessionKey: sandboxSessionKey,
+    ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
+  };
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
   let yieldDetected = false;
-  const startupBinding = await readCodexAppServerBinding(params.sessionFile);
-  const startupAuthProfileId =
-    params.runtimePlan?.auth.forwardedAuthProfileId ??
-    params.authProfileId ??
-    startupBinding?.authProfileId;
   const tools = await buildDynamicTools({
     params,
     resolvedWorkspace,
@@ -537,10 +558,11 @@ export async function runCodexAppServerAttempt(
       operation: async () => {
         let attemptedClient: CodexAppServerClient | undefined;
         const startupAttempt = async () => {
-          const startupClient = await clientFactory(
+          const startupClient = await attemptClientFactory(
             appServer.start,
             startupAuthProfileId,
             agentDir,
+            params.config,
           );
           attemptedClient = startupClient;
           startupClientForCleanup = startupClient;
@@ -552,7 +574,7 @@ export async function runCodexAppServerAttempt(
           });
           const startupThread = await startOrResumeThread({
             client: startupClient,
-            params,
+            params: runtimeParams,
             cwd: effectiveWorkspace,
             dynamicTools: toolBridge.specs,
             appServer,
@@ -1451,6 +1473,10 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     sessionKey: input.sandboxSessionKey,
+    runSessionKey:
+      params.sessionKey && params.sessionKey !== input.sandboxSessionKey
+        ? params.sessionKey
+        : undefined,
     sessionId: params.sessionId,
     runId: params.runId,
     agentDir,
@@ -1482,6 +1508,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     disableMessageTool: params.disableMessageTool,
+    forceMessageTool: params.sourceReplyDeliveryMode === "message_tool_only",
     enableHeartbeatTool: params.trigger === "heartbeat",
     forceHeartbeatTool: params.trigger === "heartbeat",
     onYield: (message) => {
@@ -1810,6 +1837,7 @@ export const __testing = {
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   buildCodexNativeHookRelayId,
   applyCodexDynamicToolProfile,
+  buildDynamicTools,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
   ...createCodexAppServerClientFactoryTestHooks((factory) => {

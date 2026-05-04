@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
@@ -76,16 +76,20 @@ export function resolveQaBundledPluginSourceDir(params: { repoRoot: string; plug
     path.join(params.repoRoot, "extensions", params.pluginId),
   ];
   const existingCandidates = candidates.filter((candidate) => existsSync(candidate));
-  if (existingCandidates.length === 0) {
+  const manifestCandidates = findQaBundledPluginDirsByManifestId(params);
+  const allCandidates = [...existingCandidates, ...manifestCandidates].filter(
+    (candidate, index, all) => all.indexOf(candidate) === index,
+  );
+  if (allCandidates.length === 0) {
     return null;
   }
-  const cliMetadataCandidate = existingCandidates.find((candidate) =>
+  const cliMetadataCandidate = allCandidates.find((candidate) =>
     QA_CLI_METADATA_ENTRY_BASENAMES.some((basename) => existsSync(path.join(candidate, basename))),
   );
   if (cliMetadataCandidate) {
     return cliMetadataCandidate;
   }
-  return existingCandidates[0] ?? null;
+  return allCandidates[0] ?? null;
 }
 
 function resolveQaBundledPluginScanRoots(repoRoot: string) {
@@ -94,6 +98,37 @@ function resolveQaBundledPluginScanRoots(repoRoot: string) {
     path.join(repoRoot, "dist-runtime", "extensions"),
     path.join(repoRoot, "extensions"),
   ].filter((candidate, index, all) => existsSync(candidate) && all.indexOf(candidate) === index);
+}
+
+function readQaBundledManifestId(manifestPath: string): string | null {
+  try {
+    const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as { id?: unknown };
+    return typeof parsed.id === "string" ? parsed.id.trim() || null : null;
+  } catch {
+    return null;
+  }
+}
+
+function findQaBundledPluginDirsByManifestId(params: {
+  repoRoot: string;
+  pluginId: string;
+}): string[] {
+  const candidates: string[] = [];
+  for (const sourceRoot of resolveQaBundledPluginScanRoots(params.repoRoot)) {
+    for (const entry of readdirSync(sourceRoot, { withFileTypes: true }).toSorted((left, right) =>
+      left.name.localeCompare(right.name),
+    )) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const candidate = path.join(sourceRoot, entry.name);
+      const manifestId = readQaBundledManifestId(path.join(candidate, "openclaw.plugin.json"));
+      if (manifestId === params.pluginId) {
+        candidates.push(candidate);
+      }
+    }
+  }
+  return candidates;
 }
 
 export async function resolveQaOwnerPluginIdsForProviderIds(params: {

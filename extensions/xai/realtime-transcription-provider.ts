@@ -226,6 +226,7 @@ function createXaiRealtimeTranscriptionSession(
     reconnectDelayMs: XAI_REALTIME_STT_RECONNECT_DELAY_MS,
     maxQueuedBytes: XAI_REALTIME_STT_MAX_QUEUED_BYTES,
     connectTimeoutMessage: "xAI realtime transcription connection timeout",
+    connectClosedBeforeReadyMessage: "xAI realtime transcription connection closed before ready",
     reconnectLimitMessage: "xAI realtime transcription reconnect limit reached",
     sendAudio: (audio, transport) => {
       transport.sendBinary(audio);

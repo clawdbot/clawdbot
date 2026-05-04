@@ -575,6 +575,8 @@ describe("plugin status reports", () => {
     expectInspectPolicy(inspect!, {
       allowPromptInjection: undefined,
       allowConversationAccess: undefined,
+      hookTimeoutMs: undefined,
+      hookTimeouts: undefined,
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
@@ -733,6 +735,8 @@ describe("plugin status reports", () => {
     expectInspectPolicy(inspect!, {
       allowPromptInjection: false,
       allowConversationAccess: true,
+      hookTimeoutMs: undefined,
+      hookTimeouts: undefined,
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,

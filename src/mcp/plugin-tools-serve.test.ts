@@ -87,6 +87,32 @@ describe("plugin tools MCP server", () => {
     expect(connectToolsMcpServerToStdioMock).toHaveBeenCalledOnce();
   });
 
+  it("threads global plugin tool policy into plugin resolution", async () => {
+    getRuntimeConfigMock.mockReturnValueOnce({
+      plugins: { enabled: true },
+      tools: {
+        alsoAllow: ["memory_search"],
+        deny: ["memory_forget"],
+      },
+    } as never);
+    const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
+
+    await servePluginToolsMcp();
+
+    expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolAllowlist: expect.arrayContaining(["memory_search"]),
+        toolDenylist: ["memory_forget"],
+      }),
+    );
+    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolAllowlist: expect.arrayContaining(["memory_search"]),
+        toolDenylist: ["memory_forget"],
+      }),
+    );
+  });
+
   it("lists registered plugin tools and serializes non-array tool content", async () => {
     const execute = vi.fn().mockResolvedValue({
       content: "Stored.",

@@ -983,7 +983,7 @@ function renderAppearanceSection(props: ConfigProps) {
                 </div>
                 <a
                   class="settings-theme-import__external"
-                  href="https://tweakcn.com/themes"
+                  href="https://tweakcn.com/editor/theme"
                   target="_blank"
                   rel="noreferrer noopener"
                 >

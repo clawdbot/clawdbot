@@ -16,6 +16,7 @@ import {
   type EmbeddedRunAttemptResult,
   type HeartbeatToolResponse,
   type MessagingToolSend,
+  type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
@@ -614,6 +615,7 @@ export class CodexAppServerEventProjector {
     if (!kind) {
       return;
     }
+    const meta = itemMeta(item, this.toolProgressDetailMode());
     this.emitAgentEvent({
       stream: "item",
       data: {
@@ -623,7 +625,7 @@ export class CodexAppServerEventProjector {
         title: itemTitle(item),
         status: params.phase === "start" ? "running" : itemStatus(item),
         ...(itemName(item) ? { name: itemName(item) } : {}),
-        ...(itemMeta(item) ? { meta: itemMeta(item) } : {}),
+        ...(meta ? { meta } : {}),
       },
     });
   }
@@ -641,7 +643,7 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.toolResultSummaryItemIds.add(itemId);
-    const meta = itemMeta(item);
+    const meta = itemMeta(item, this.toolProgressDetailMode());
     this.emitToolResultMessage({
       itemId,
       text: formatToolSummary(toolName, meta),
@@ -666,7 +668,7 @@ export class CodexAppServerEventProjector {
     }
     this.emitToolResultMessage({
       itemId,
-      text: formatToolOutput(toolName, itemMeta(item), output),
+      text: formatToolOutput(toolName, itemMeta(item, this.toolProgressDetailMode()), output),
       finalOutput: true,
     });
   }
@@ -700,6 +702,10 @@ export class CodexAppServerEventProjector {
       : this.params.verboseLevel === "full";
   }
 
+  private toolProgressDetailMode(): ToolProgressDetailMode {
+    return this.params.toolProgressDetail === "raw" ? "raw" : "explain";
+  }
+
   private recordToolMeta(item: CodexThreadItem | undefined): void {
     if (!item) {
       return;
@@ -708,9 +714,10 @@ export class CodexAppServerEventProjector {
     if (!toolName) {
       return;
     }
+    const meta = itemMeta(item, this.toolProgressDetailMode());
     this.toolMetas.set(item.id, {
       toolName,
-      ...(itemMeta(item) ? { meta: itemMeta(item) } : {}),
+      ...(meta ? { meta } : {}),
     });
   }
 
@@ -1047,19 +1054,26 @@ function itemName(item: CodexThreadItem): string | undefined {
   return undefined;
 }
 
-function itemMeta(item: CodexThreadItem): string | undefined {
+function itemMeta(
+  item: CodexThreadItem,
+  detailMode: ToolProgressDetailMode = "explain",
+): string | undefined {
   if (item.type === "commandExecution" && typeof item.command === "string") {
-    return inferToolMetaFromArgs("exec", {
-      command: item.command,
-      cwd: typeof item.cwd === "string" ? item.cwd : undefined,
-    });
+    return inferToolMetaFromArgs(
+      "exec",
+      {
+        command: item.command,
+        cwd: typeof item.cwd === "string" ? item.cwd : undefined,
+      },
+      { detailMode },
+    );
   }
   if (item.type === "webSearch" && typeof item.query === "string") {
     return item.query;
   }
   const toolName = itemName(item);
   if ((item.type === "dynamicToolCall" || item.type === "mcpToolCall") && toolName) {
-    return inferToolMetaFromArgs(toolName, item.arguments);
+    return inferToolMetaFromArgs(toolName, item.arguments, { detailMode });
   }
   return undefined;
 }

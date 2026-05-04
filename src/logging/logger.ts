@@ -11,6 +11,7 @@ import {
   isValidDiagnosticTraceId,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   POSIX_OPENCLAW_TMP_DIR,
@@ -672,6 +673,7 @@ export function resetLogger() {
 }
 
 export const __test__ = {
+  resolveActiveLogFile,
   shouldSkipMutatingLoggingConfigRead,
 };
 
@@ -692,10 +694,11 @@ function rollingPathForDate(dir: string, date: Date): string {
 }
 
 function resolveActiveLogFile(file: string): string {
-  if (!isRollingPath(file)) {
-    return file;
+  const expandedFile = expandHomePrefix(file);
+  if (!isRollingPath(expandedFile)) {
+    return expandedFile;
   }
-  return rollingPathForDate(path.dirname(file), new Date());
+  return rollingPathForDate(path.dirname(expandedFile), new Date());
 }
 
 function isRollingPath(file: string): boolean {

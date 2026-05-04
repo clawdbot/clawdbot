@@ -708,12 +708,14 @@ describe("gateway tool", () => {
     await tool.execute("call3", {
       action: "update.run",
       note: "test update",
+      continuationMessage: "Report the update result after restart.",
     });
 
     expect(callGatewayTool).toHaveBeenCalledWith(
       "update.run",
       expect.any(Object),
       expect.objectContaining({
+        continuationMessage: "Report the update result after restart.",
         note: "test update",
         sessionKey,
       }),

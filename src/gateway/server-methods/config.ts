@@ -22,7 +22,7 @@ import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
-import { diffConfigPaths } from "../config-reload.js";
+import { diffConfigPaths } from "../config-diff.js";
 import {
   formatControlPlaneActor,
   resolveControlPlaneActor,

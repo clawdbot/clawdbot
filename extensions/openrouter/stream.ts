@@ -7,6 +7,7 @@ import {
   stripTrailingAssistantPrefillMessages,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { isOpenRouterDeepSeekV4ModelId } from "./models.js";
 import {
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
@@ -25,22 +26,6 @@ function isOpenRouterAnthropicModelId(modelId: unknown): boolean {
     normalized?.startsWith("anthropic/") === true ||
     normalized?.startsWith("openrouter/anthropic/") === true
   );
-}
-
-function normalizeOpenRouterModelId(modelId: unknown): string | undefined {
-  const normalized = readString(modelId)?.toLowerCase();
-  return normalized?.startsWith("openrouter/")
-    ? normalized.slice("openrouter/".length)
-    : normalized;
-}
-
-function isOpenRouterDeepSeekV4ModelId(modelId: unknown): boolean {
-  const normalized = normalizeOpenRouterModelId(modelId);
-  if (!normalized?.startsWith("deepseek/")) {
-    return false;
-  }
-  const deepSeekModelId = normalized.slice("deepseek/".length).split(":", 1)[0];
-  return deepSeekModelId === "deepseek-v4-flash" || deepSeekModelId === "deepseek-v4-pro";
 }
 
 function isVerifiedOpenRouterRoute(model: Parameters<StreamFn>[0]): boolean {

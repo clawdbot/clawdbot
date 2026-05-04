@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
 import { resolveOpenClawPackageRootSync } from "../../../infra/openclaw-root.js";
 import { resolveConfigDir, resolveUserPath } from "../../../utils.js";
+import { removeStalePluginRuntimeSymlinks } from "./plugin-runtime-symlinks.js";
 
 const LEGACY_DIRECT_CHILD_NAMES = new Set(["plugin-runtime-deps", "bundled-plugin-runtime-deps"]);
 
@@ -122,9 +123,22 @@ export async function cleanupLegacyPluginDependencyState(params: {
   const env = params.env ?? process.env;
   const changes: string[] = [];
   const warnings: string[] = [];
-  for (const target of await collectLegacyPluginDependencyTargets(env, {
-    packageRoot: params.packageRoot,
-  })) {
+  const packageRoot =
+    params.packageRoot ??
+    resolveOpenClawPackageRootSync({
+      argv1: process.argv[1],
+      moduleUrl: import.meta.url,
+      cwd: process.cwd(),
+    });
+  const targets = await collectLegacyPluginDependencyTargets(env, {
+    packageRoot,
+  });
+  const staleSymlinks = await removeStalePluginRuntimeSymlinks(packageRoot, {
+    staleRoots: targets,
+  });
+  changes.push(...staleSymlinks.changes);
+  warnings.push(...staleSymlinks.warnings);
+  for (const target of targets) {
     if (!(await pathExists(target))) {
       continue;
     }

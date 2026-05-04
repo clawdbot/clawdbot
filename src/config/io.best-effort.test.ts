@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   readBestEffortConfig,
@@ -7,6 +8,26 @@ import {
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
 describe("readBestEffortConfig", () => {
+  it("does not restore suspicious direct edits from .bak during ordinary reads", async () => {
+    await withTempHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
+        update: { channel: "beta" },
+        gateway: { mode: "local" },
+      });
+      await fs.copyFile(configPath, `${configPath}.bak`);
+      const directEditRaw = `${JSON.stringify({ update: { channel: "beta" } }, null, 2)}\n`;
+      await fs.writeFile(configPath, directEditRaw, "utf-8");
+
+      const snapshot = await readConfigFileSnapshot();
+
+      expect(snapshot.sourceConfig).toEqual({ update: { channel: "beta" } });
+      expect(await fs.readFile(configPath, "utf-8")).toBe(directEditRaw);
+      const entries = await fs.readdir(`${home}/.openclaw`);
+      expect(entries.some((entry) => entry.startsWith("openclaw.json.clobbered."))).toBe(false);
+    });
+  });
+
   it("reuses valid snapshots while preserving load-time defaults", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {

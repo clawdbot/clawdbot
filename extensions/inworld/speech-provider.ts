@@ -197,6 +197,7 @@ export function buildInworldSpeechProvider(): SpeechProviderPlugin {
     },
     synthesizeTelephony: async (req) => {
       const config = readInworldProviderConfig(req.providerConfig);
+      const overrides = readInworldOverrides(req.providerOverrides);
       const apiKey = config.apiKey || process.env.INWORLD_API_KEY;
       if (!apiKey) {
         throw new Error("Inworld API key missing");
@@ -207,11 +208,11 @@ export function buildInworldSpeechProvider(): SpeechProviderPlugin {
         text: req.text,
         apiKey,
         baseUrl: config.baseUrl,
-        voiceId: config.voiceId,
-        modelId: config.modelId,
+        voiceId: overrides.voiceId ?? config.voiceId,
+        modelId: overrides.modelId ?? config.modelId,
         audioEncoding: "PCM",
         sampleRateHertz: sampleRate,
-        temperature: config.temperature,
+        temperature: overrides.temperature ?? config.temperature,
         timeoutMs: req.timeoutMs,
       });
 

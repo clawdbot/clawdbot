@@ -13,4 +13,19 @@ describe("googlechat config schema", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("accepts the documented group config shape", () => {
+    const result = GoogleChatConfigSchema.safeParse({
+      groups: {
+        "spaces/AAAA": {
+          enabled: true,
+          requireMention: true,
+          users: ["users/1234567890"],
+          systemPrompt: "Short answers only.",
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
 });

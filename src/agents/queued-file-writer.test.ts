@@ -80,4 +80,16 @@ describe("getQueuedFileWriter", () => {
 
     expect(fs.readFileSync(filePath, "utf8")).toBe("12345\n");
   });
+
+  it("drops writes that would exceed the pending queue cap", async () => {
+    const tmpDir = makeTempDir();
+    const filePath = path.join(tmpDir, "trace.jsonl");
+    const writer = getQueuedFileWriter(new Map(), filePath, { maxQueuedBytes: 6 });
+
+    expect(writer.write("12345\n")).toBe("queued");
+    expect(writer.write("after\n")).toBe("dropped");
+    await writer.flush();
+
+    expect(fs.readFileSync(filePath, "utf8")).toBe("12345\n");
+  });
 });

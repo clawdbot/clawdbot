@@ -13,6 +13,7 @@ import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-com
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
+  isReservedNonPluginCommandRoot,
   shouldRegisterPrimaryCommandOnly,
   shouldSkipPluginCommandRegistration,
 } from "./command-registration-policy.js";
@@ -22,6 +23,8 @@ import {
   consumeGatewayRunOptionToken,
 } from "./gateway-run-argv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
+import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
+import { getSubCliEntries } from "./program/subcli-descriptors.js";
 import {
   resolveMissingPluginCommandMessage as resolveMissingPluginCommandMessageFromPolicy,
   rewriteUpdateFlagArgv,
@@ -263,6 +266,52 @@ function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.
   });
 }
 
+function isKnownBuiltInCommandRoot(primary: string): boolean {
+  return (
+    getCoreCliCommandNames().includes(primary) ||
+    getSubCliEntries().some((entry) => entry.name === primary)
+  );
+}
+
+async function isPluginCliRoot(params: {
+  primary: string;
+  config: OpenClawConfig;
+}): Promise<boolean | null> {
+  try {
+    const { resolvePluginCliRootOwnerIds } = await import("../plugins/cli-registry-loader.js");
+    const ownerIds = await resolvePluginCliRootOwnerIds({
+      cfg: params.config,
+      env: process.env,
+      primaryCommand: params.primary,
+    });
+    return ownerIds === null ? null : ownerIds.length > 0;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveUnownedCliPrimary(params: {
+  argv: string[];
+  config: OpenClawConfig;
+}): Promise<string | null> {
+  const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(params.argv));
+  const { primary } = invocation;
+  if (
+    invocation.hasHelpOrVersion ||
+    !primary ||
+    primary === "help" ||
+    isReservedNonPluginCommandRoot(primary) ||
+    isKnownBuiltInCommandRoot(primary)
+  ) {
+    return null;
+  }
+  const pluginRoot = await isPluginCliRoot({ primary, config: params.config });
+  if (pluginRoot !== false) {
+    return null;
+  }
+  return primary;
+}
+
 async function bootstrapCliProxyCaptureAndDispatcher(
   startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
   options: { ensureDispatcher?: boolean } = {},
@@ -329,8 +378,17 @@ export async function runCli(argv: string[] = process.argv) {
 
   // Activate operator-managed proxy routing for network-capable commands.
   // Local Gateway/control-plane commands keep direct loopback access while
-  // runtime, provider, plugin, update, and unknown plugin commands route egress.
+  // runtime, provider, plugin, update, and manifest/metadata-owned plugin commands route egress.
   let proxyHandle: ProxyHandle | null = null;
+  let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
+  const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
+    if (!bestEffortConfigPromise) {
+      bestEffortConfigPromise = import("../config/io.js").then(({ readBestEffortConfig }) =>
+        readBestEffortConfig(),
+      );
+    }
+    return await bestEffortConfigPromise;
+  };
   const stopStartedProxy = async () => {
     const handle = proxyHandle;
     proxyHandle = null;
@@ -345,11 +403,14 @@ export async function runCli(argv: string[] = process.argv) {
     handle?.kill("SIGTERM");
   };
   if (shouldStartProxyForCli(normalizedArgv)) {
-    const [{ readBestEffortConfig }, { startProxy }] = await Promise.all([
-      import("../config/io.js"),
-      import("../infra/net/proxy/proxy-lifecycle.js"),
-    ]);
-    const config = await readBestEffortConfig();
+    const config = await readBestEffortCliConfig();
+    const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
+    if (unownedPrimary) {
+      throw new Error(
+        `Unknown command: openclaw ${unownedPrimary}. No built-in command or plugin CLI metadata owns "${unownedPrimary}".`,
+      );
+    }
+    const { startProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     proxyHandle = await startProxy(config?.proxy ?? undefined);
   }
 

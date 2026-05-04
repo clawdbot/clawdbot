@@ -332,6 +332,120 @@ describe("web-provider-runtime-shared", () => {
     );
   });
 
+  it("falls back to a scoped provider load when the active runtime registry has no web providers", () => {
+    const activeRegistry = { source: "active" };
+    const fallbackRegistry = { source: "fallback" };
+    const mapRegistryProviders = vi.fn(({ registry }) =>
+      registry === fallbackRegistry ? ["brave"] : [],
+    );
+    mocks.getLoadedRuntimePluginRegistry.mockReturnValue(activeRegistry as never);
+    mocks.loadOpenClawPlugins.mockReturnValue(fallbackRegistry as never);
+
+    const result = resolvePluginWebProviders(
+      {
+        config: {},
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => undefined,
+        mapRegistryProviders,
+      },
+    );
+
+    expect(result).toEqual(["brave"]);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mapRegistryProviders).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not fall back when the active runtime registry returns empty under an explicit empty scope", () => {
+    const activeRegistry = { source: "active" };
+    const mapRegistryProviders = vi.fn(() => []);
+    mocks.getLoadedRuntimePluginRegistry.mockReturnValue(activeRegistry as never);
+
+    const result = resolvePluginWebProviders(
+      {
+        config: {},
+        onlyPluginIds: [],
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => [],
+        mapRegistryProviders,
+      },
+    );
+
+    expect(result).toEqual([]);
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
+
+  it("falls back when the direct runtime registry has no web providers", () => {
+    const activeRegistry = { source: "active" };
+    const fallbackRegistry = { source: "fallback" };
+    const mapRegistryProviders = vi.fn(({ registry }) =>
+      registry === fallbackRegistry ? ["brave"] : [],
+    );
+    mocks.getLoadedRuntimePluginRegistry.mockImplementation((args: unknown) => {
+      const requiredPluginIds = (args as { requiredPluginIds?: readonly string[] })
+        ?.requiredPluginIds;
+      if (requiredPluginIds === undefined) {
+        return activeRegistry as never;
+      }
+      return undefined;
+    });
+    mocks.loadOpenClawPlugins.mockReturnValue(fallbackRegistry as never);
+
+    const result = resolveRuntimeWebProviders(
+      {
+        config: {},
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => undefined,
+        mapRegistryProviders,
+      },
+    );
+
+    expect(result).toEqual(["brave"]);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back when direct runtime registry returns empty under an explicit empty scope", () => {
+    const activeRegistry = { source: "active" };
+    const mapRegistryProviders = vi.fn(() => []);
+    mocks.getLoadedRuntimePluginRegistry.mockReturnValue(activeRegistry as never);
+
+    const result = resolveRuntimeWebProviders(
+      {
+        config: {},
+        onlyPluginIds: [],
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => [],
+        mapRegistryProviders,
+      },
+    );
+
+    expect(result).toEqual([]);
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
+
   it("keeps explicit setup web provider cache opt-outs", () => {
     const loadedRegistry = { source: "setup" };
     const mapRegistryProviders = vi.fn(() => ["provider"]);

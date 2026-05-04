@@ -2,6 +2,6 @@ export {
   filterMessagingToolDuplicates,
   filterMessagingToolMediaDuplicates,
   resolveMessagingToolPayloadDedupe,
-  shouldSuppressMessagingToolReplies,
+  shouldDedupeMessagingToolRepliesForRoute,
   type MessagingToolPayloadDedupeDecision,
 } from "./reply-payloads-dedupe.js";

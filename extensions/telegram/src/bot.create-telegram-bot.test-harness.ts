@@ -266,7 +266,9 @@ const grammySpies = vi.hoisted(() => ({
   onSpy: vi.fn(),
   stopSpy: vi.fn(),
   commandSpy: vi.fn(),
-  botCtorSpy: vi.fn((_: string, __?: { client?: { fetch?: typeof fetch } }) => undefined),
+  botCtorSpy: vi.fn(
+    (_: string, __?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => undefined,
+  ),
   answerCallbackQuerySpy: vi.fn(async () => undefined) as AnyAsyncMock,
   sendChatActionSpy: vi.fn(),
   editMessageTextSpy: vi.fn(async () => ({ message_id: 88 })) as AnyAsyncMock,
@@ -290,7 +292,7 @@ export const onSpy: AnyMock = grammySpies.onSpy;
 export const stopSpy: AnyMock = grammySpies.stopSpy;
 export const commandSpy: AnyMock = grammySpies.commandSpy;
 export const botCtorSpy: MockFn<
-  (token: string, options?: { client?: { fetch?: typeof fetch } }) => void
+  (token: string, options?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => void
 > = grammySpies.botCtorSpy;
 export const answerCallbackQuerySpy: AnyAsyncMock = grammySpies.answerCallbackQuerySpy;
 export const sendChatActionSpy: AnyMock = grammySpies.sendChatActionSpy;
@@ -341,7 +343,7 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
     catch = vi.fn();
     constructor(
       public token: string,
-      public options?: { client?: { fetch?: typeof fetch } },
+      public options?: { client?: { fetch?: typeof fetch }; botInfo?: unknown },
     ) {
       (grammySpies.botCtorSpy as unknown as (token: string, options?: unknown) => void)(
         token,

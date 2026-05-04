@@ -34,12 +34,13 @@ type CodexLoginOptions = {
 
 function createPrompter() {
   const spin = { update: vi.fn(), stop: vi.fn() };
+  const text = vi.fn(async () => "http://localhost:1455/auth/callback?code=test");
   const prompter: Pick<WizardPrompter, "note" | "progress" | "text"> = {
     note: vi.fn(async () => {}),
     progress: vi.fn(() => spin),
-    text: vi.fn(async () => "http://localhost:1455/auth/callback?code=test"),
+    text,
   };
-  return { prompter: prompter as unknown as WizardPrompter, spin };
+  return { prompter: prompter as unknown as WizardPrompter, spin, text };
 }
 
 function createRuntime(): RuntimeEnv {
@@ -222,7 +223,7 @@ describe("loginOpenAICodexOAuth", () => {
 
   it("waits briefly before prompting for manual input after the local browser flow starts", async () => {
     vi.useFakeTimers();
-    const { prompter } = createPrompter();
+    const { prompter, spin, text } = createPrompter();
     const runtime = createRuntime();
     mocks.loginOpenAICodex.mockImplementation(async (opts: CodexLoginOptions) => {
       await startCodexAuth(opts);
@@ -252,6 +253,54 @@ describe("loginOpenAICodexOAuth", () => {
       message: "Paste the authorization code (or full redirect URL):",
       validate: expect.any(Function),
     });
+    expect(spin.stop).toHaveBeenCalledWith("Manual OAuth entry required");
+    expect(spin.stop.mock.invocationCallOrder[0]).toBeLessThan(
+      text.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "OpenAI Codex OAuth callback did not arrive within 15000ms; switching to manual entry (callback_timeout).",
+    );
+    vi.useRealTimers();
+  });
+
+  it("reuses one local manual prompt when the oauth helper repeats fallback calls", async () => {
+    vi.useFakeTimers();
+    const { prompter, spin, text } = createPrompter();
+    const runtime = createRuntime();
+    mocks.loginOpenAICodex.mockImplementation(async (opts: CodexLoginOptions) => {
+      await startCodexAuth(opts);
+      const firstManualPromise = opts.onManualCodeInput?.();
+      const secondManualPromise = opts.onManualCodeInput?.();
+      await vi.advanceTimersByTimeAsync(16_000);
+      const [firstManualCode, secondManualCode] = await Promise.all([
+        firstManualPromise,
+        secondManualPromise,
+      ]);
+      expect(secondManualCode).toBe(firstManualCode);
+      return createCodexCredentials({ manualCode: firstManualCode });
+    });
+
+    await expect(
+      loginOpenAICodexOAuth({
+        prompter,
+        runtime,
+        isRemote: false,
+        openUrl: async () => {},
+      }),
+    ).resolves.toMatchObject({
+      access: "access-token",
+      refresh: "refresh-token",
+    });
+
+    expect(text).toHaveBeenCalledOnce();
+    expect(spin.stop).toHaveBeenCalledWith("Manual OAuth entry required");
+    expect(
+      spin.update.mock.calls.filter(
+        ([message]) =>
+          message === "Browser callback did not finish. Paste the redirect URL to continue…",
+      ),
+    ).toHaveLength(1);
+    expect(runtime.log).toHaveBeenCalledTimes(2);
     expect(runtime.log).toHaveBeenCalledWith(
       "OpenAI Codex OAuth callback did not arrive within 15000ms; switching to manual entry (callback_timeout).",
     );
@@ -326,7 +375,7 @@ describe("loginOpenAICodexOAuth", () => {
 
   it("prompts for manual input immediately when the local callback flow never starts", async () => {
     vi.useFakeTimers();
-    const { prompter } = createPrompter();
+    const { prompter, spin, text } = createPrompter();
     const runtime = createRuntime();
     mocks.loginOpenAICodex.mockImplementation(
       async (opts: { onManualCodeInput?: () => Promise<string> }) => {
@@ -352,6 +401,49 @@ describe("loginOpenAICodexOAuth", () => {
       message: "Paste the authorization code (or full redirect URL):",
       validate: expect.any(Function),
     });
+    expect(spin.stop).toHaveBeenCalledWith("Manual OAuth entry required");
+    expect(spin.stop.mock.invocationCallOrder[0]).toBeLessThan(
+      text.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it("reuses one immediate manual prompt when the local callback flow never starts", async () => {
+    vi.useFakeTimers();
+    const { prompter, spin, text } = createPrompter();
+    const runtime = createRuntime();
+    mocks.loginOpenAICodex.mockImplementation(async (opts: CodexLoginOptions) => {
+      expect(opts.onManualCodeInput).toBeTypeOf("function");
+      const [firstManualCode, secondManualCode] = await Promise.all([
+        opts.onManualCodeInput?.(),
+        opts.onManualCodeInput?.(),
+      ]);
+      expect(secondManualCode).toBe(firstManualCode);
+      return createCodexCredentials({ manualCode: firstManualCode });
+    });
+
+    await expect(
+      loginOpenAICodexOAuth({
+        prompter,
+        runtime,
+        isRemote: false,
+        openUrl: async () => {},
+      }),
+    ).resolves.toMatchObject({
+      access: "access-token",
+      refresh: "refresh-token",
+    });
+
+    expect(text).toHaveBeenCalledOnce();
+    expect(spin.stop).toHaveBeenCalledWith("Manual OAuth entry required");
+    expect(
+      spin.update.mock.calls.filter(
+        ([message]) =>
+          message === "Local OAuth callback was unavailable. Paste the redirect URL to continue…",
+      ),
+    ).toHaveLength(1);
+    expect(runtime.log).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
     vi.useRealTimers();
   });

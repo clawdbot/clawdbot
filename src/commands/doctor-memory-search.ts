@@ -336,6 +336,9 @@ export async function noteMemorySearchHealth(
   // separate embedding provider is needed. Skip the provider check entirely.
   const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
   if (!backendConfig) {
+    if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+      return;
+    }
     note("No active memory plugin is registered for the current config.", "Memory search");
     return;
   }

@@ -315,6 +315,25 @@ describe("tui command handlers", () => {
     );
   });
 
+  it("sends /side without hijacking the active main run", async () => {
+    const { handleCommand, sendChat, addUser, noteLocalRunId, noteLocalBtwRunId, state } =
+      createHarness({
+        activeChatRunId: "run-main",
+      });
+
+    await handleCommand("/side what changed?");
+
+    expect(addUser).not.toHaveBeenCalled();
+    expect(noteLocalRunId).not.toHaveBeenCalled();
+    expect(noteLocalBtwRunId).toHaveBeenCalledTimes(1);
+    expect(state.activeChatRunId).toBe("run-main");
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "/side what changed?",
+      }),
+    );
+  });
+
   it("creates unique session for /new and resets shared session for /reset", async () => {
     const loadHistory = vi.fn().mockResolvedValue(undefined);
     const setSessionMock = vi.fn().mockResolvedValue(undefined) as SetSessionMock;

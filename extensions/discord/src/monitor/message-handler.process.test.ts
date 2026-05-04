@@ -1,4 +1,4 @@
-import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
+import { DEFAULT_EMOJIS, DEFAULT_TIMING } from "openclaw/plugin-sdk/channel-feedback";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
@@ -66,6 +66,17 @@ vi.mock("../send.js", () => ({
   },
 }));
 
+const discordTargetMocks = vi.hoisted(() => ({
+  resolveDiscordTargetChannelId: vi.fn(async (target: string, _opts?: unknown) => ({
+    channelId: target === "user:u1" ? "dm-u1" : target,
+  })),
+}));
+
+vi.mock("../send.shared.js", () => ({
+  resolveDiscordTargetChannelId: (target: string, opts: unknown) =>
+    discordTargetMocks.resolveDiscordTargetChannelId(target, opts),
+}));
+
 vi.mock("../send.messages.js", () => ({
   editMessageDiscord: (channelId: string, messageId: string, payload: unknown, opts?: unknown) =>
     deliveryMocks.editMessageDiscord(channelId, messageId, payload, opts),
@@ -87,7 +98,12 @@ type DispatchInboundParams = {
   replyOptions?: {
     onReasoningStream?: () => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
-    onToolStart?: (payload: { name?: string }) => Promise<void> | void;
+    onToolStart?: (payload: {
+      name?: string;
+      phase?: string;
+      args?: Record<string, unknown>;
+      detailMode?: "explain" | "raw";
+    }) => Promise<void> | void;
     onItemEvent?: (payload: {
       progressText?: string;
       summary?: string;
@@ -111,6 +127,7 @@ type DispatchInboundParams = {
       summary?: string;
       title?: string;
     }) => Promise<void> | void;
+    onReplyStart?: () => Promise<void> | void;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     disableBlockStreaming?: boolean;
     suppressDefaultToolProgressMessages?: boolean;
@@ -175,6 +192,7 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   },
   createReplyDispatcherWithTyping: (opts: {
     deliver: (payload: unknown, info: { kind: string }) => Promise<void> | void;
+    onReplyStart?: () => Promise<void> | void;
   }) => ({
     dispatcher: {
       sendToolResult: vi.fn(() => true),
@@ -190,7 +208,9 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
       getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
       markComplete: vi.fn(),
     },
-    replyOptions: {},
+    replyOptions: {
+      onReplyStart: opts.onReplyStart,
+    },
     markDispatchIdle: vi.fn(),
     markRunComplete: vi.fn(),
   }),
@@ -311,6 +331,7 @@ beforeEach(() => {
   vi.useRealTimers();
   sendMocks.reactMessageDiscord.mockClear();
   sendMocks.removeReactionDiscord.mockClear();
+  discordTargetMocks.resolveDiscordTargetChannelId.mockClear();
   editMessageDiscord.mockClear();
   deliverDiscordReply.mockClear();
   createDiscordDraftStream.mockClear();
@@ -585,7 +606,7 @@ describe("processDiscordMessage ack reactions", () => {
   it("debounces intermediate phase reactions and jumps to done for short runs", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReasoningStream?.();
-      await params?.replyOptions?.onToolStart?.({ name: "exec" });
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       return createNoQueuedDispatchResult();
     });
 
@@ -598,6 +619,76 @@ describe("processDiscordMessage ack reactions", () => {
     expect(emojis).toContain(DEFAULT_EMOJIS.done);
     expect(emojis).not.toContain(DEFAULT_EMOJIS.thinking);
     expect(emojis).not.toContain(DEFAULT_EMOJIS.coding);
+  });
+
+  it("can bind status reactions to an explicitly tracked reaction target", async () => {
+    vi.useFakeTimers();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "message",
+        phase: "start",
+        args: {
+          action: "react",
+          channelId: "c1",
+          messageId: "m1",
+          emoji: "📈",
+          trackToolCalls: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      cfg: { messages: { ackReaction: "👀" } },
+    });
+
+    await runProcessDiscordMessage(ctx);
+    await vi.runAllTimersAsync();
+
+    const calls = sendMocks.reactMessageDiscord.mock.calls as unknown as Array<
+      [string, string, string]
+    >;
+    expect(calls).toContainEqual(expect.arrayContaining(["c1", "m1", "📈"]));
+    expect(calls).toContainEqual(expect.arrayContaining(["c1", "m1", "✉️"]));
+    expect(calls).toContainEqual(expect.arrayContaining(["c1", "m1", DEFAULT_EMOJIS.done]));
+  });
+
+  it("resolves tracked reaction to targets like the Discord reaction action", async () => {
+    vi.useFakeTimers();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "message",
+        phase: "start",
+        args: {
+          action: "react",
+          to: "user:u1",
+          messageId: "m1",
+          emoji: "📈",
+          trackToolCalls: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      cfg: { messages: { ackReaction: "👀" } },
+    });
+
+    await runProcessDiscordMessage(ctx);
+    await vi.runAllTimersAsync();
+
+    expect(discordTargetMocks.resolveDiscordTargetChannelId).toHaveBeenCalledWith(
+      "user:u1",
+      expect.objectContaining({ accountId: "default" }),
+    );
+    const calls = sendMocks.reactMessageDiscord.mock.calls as unknown as Array<
+      [string, string, string]
+    >;
+    expect(calls).toContainEqual(expect.arrayContaining(["dm-u1", "m1", "📈"]));
+    expect(calls).toContainEqual(expect.arrayContaining(["dm-u1", "m1", "✉️"]));
+    expect(calls).toContainEqual(expect.arrayContaining(["dm-u1", "m1", DEFAULT_EMOJIS.done]));
   });
 
   it("shows stall emojis for long no-progress runs", async () => {
@@ -931,6 +1022,43 @@ describe("processDiscordMessage session routing", () => {
     expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
   });
 
+  it("honors explicit status reactions for always-on guild replies", async () => {
+    vi.useFakeTimers();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.();
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      return createNoQueuedDispatchResult();
+    });
+    const ctx = await createBaseContext({
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      ackReactionScope: "all",
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          ackReactionScope: "all",
+          statusReactions: {
+            enabled: true,
+            timing: { debounceMs: 0 },
+          },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    const runPromise = runProcessDiscordMessage(ctx);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.runAllTimersAsync();
+    await runPromise;
+
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    const emojis = getReactionEmojis();
+    expect(emojis).toContain("👀");
+    expect(emojis).toContain(DEFAULT_EMOJIS.thinking);
+    expect(emojis).toContain(DEFAULT_EMOJIS.done);
+  });
+
   it("uses PluralKit original ids for inbound dedupe while preserving the Discord message id", async () => {
     const ctx = await createBaseContext({
       canonicalMessageId: "orig-123",
@@ -1114,7 +1242,9 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
   }
 
-  async function createBlockModeContext() {
+  async function createBlockModeContext(
+    discordConfig: Record<string, unknown> = { streamMode: "block" },
+  ) {
     return await createAutomaticSourceDeliveryContext({
       cfg: {
         messages: { ackReaction: "👀" },
@@ -1125,7 +1255,7 @@ describe("processDiscordMessage draft streaming", () => {
           },
         },
       },
-      discordConfig: { streamMode: "block" },
+      discordConfig,
     });
   }
 
@@ -1297,6 +1427,225 @@ describe("processDiscordMessage draft streaming", () => {
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates).toEqual(["Hello", "HelloWorld"]);
+  });
+
+  it("keeps canonical block mode on the Discord draft preview path", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({ text: "HelloWorld" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createBlockModeContext({ streaming: { mode: "block" } });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith("Hello");
+    expect(dispatchInboundMessage.mock.calls[0]?.[0]?.replyOptions?.disableBlockStreaming).toBe(
+      true,
+    );
+  });
+
+  it("keeps progress label visible when Discord tool progress lines are disabled", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReplyStart?.();
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+            toolProgress: false,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledTimes(1);
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling");
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage.mock.calls[0]?.[0]?.replyOptions).toMatchObject({
+      suppressDefaultToolProgressMessages: true,
+    });
+  });
+
+  it("does not start Discord progress drafts for text-only accepted turns", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async () => createNoQueuedDispatchResult());
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).not.toHaveBeenCalled();
+    expect(draftStream.flush).not.toHaveBeenCalled();
+  });
+
+  it("keeps Discord progress drafts instead of delivering text-only interim blocks after work expands", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendBlockReply({ text: "on it" });
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
+      await params?.dispatcher.sendFinalReply({ text: "done" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 1 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• exec done");
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
+    expect(editMessageDiscord).toHaveBeenCalledWith(
+      "c1",
+      "preview-1",
+      { content: "done" },
+      expect.objectContaining({ rest: expect.anything() }),
+    );
+  });
+
+  it("uses raw tool-progress detail in Discord progress drafts", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        args: { command: "pnpm test -- --watch=false" },
+        detailMode: "raw",
+      });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "done" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Shelling\n🛠️ Exec: run tests, `pnpm test -- --watch=false`\n• done",
+    );
+  });
+
+  it("can hide raw command progress text in Discord progress drafts by config", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        args: { command: "pnpm test -- --watch=false" },
+        detailMode: "raw",
+      });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "done" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+            commandText: "status",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• done");
+  });
+
+  it("keeps Discord progress lines across assistant boundaries", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "first", phase: "start" });
+      await params?.replyOptions?.onAssistantMessageStart?.();
+      await params?.replyOptions?.onToolStart?.({ name: "second", phase: "start" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🧩 First\n🧩 Second");
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+  });
+
+  it("suppresses standalone Discord tool progress when partial preview lines are disabled", async () => {
+    createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async () => createNoQueuedDispatchResult());
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "partial",
+          preview: {
+            toolProgress: false,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(
+      dispatchInboundMessage.mock.calls[0]?.[0]?.replyOptions?.suppressDefaultToolProgressMessages,
+    ).toBe(true);
   });
 
   it("strips reply tags from preview partials", async () => {

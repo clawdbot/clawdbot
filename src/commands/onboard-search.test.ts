@@ -338,7 +338,7 @@ describe("setupSearch", () => {
       expect(result.plugins?.entries?.[entry.pluginId]?.enabled).toBe(true);
       if (entry.textMessage) {
         expect(prompter.text).toHaveBeenCalledWith(
-          expect.objectContaining({ message: entry.textMessage }),
+          expect.objectContaining({ message: entry.textMessage, sensitive: true }),
         );
       }
     }

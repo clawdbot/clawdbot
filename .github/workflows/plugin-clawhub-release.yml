@@ -32,7 +32,7 @@ env:
   CLAWHUB_REGISTRY: "https://clawhub.ai"
   CLAWHUB_REPOSITORY: "openclaw/clawhub"
   # Pinned to a reviewed ClawHub commit so release behavior stays reproducible.
-  CLAWHUB_REF: "48e66714ac2352d52b193a90ae911cd92463c20a"
+  CLAWHUB_REF: "199e6a0cdf32471702e0503e9899e8d24f06a527"
 
 jobs:
   preview_plugins_clawhub:
@@ -178,7 +178,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          install-deps: "false"
+          install-deps: "true"
 
       - name: Checkout ClawHub CLI source
         uses: actions/checkout@v6
@@ -239,7 +239,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          install-deps: "false"
+          install-deps: "true"
 
       - name: Checkout ClawHub CLI source
         uses: actions/checkout@v6

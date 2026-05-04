@@ -1597,10 +1597,8 @@ describe("config cli", () => {
       fs.writeFileSync(
         pathname,
         JSON.stringify({
-          channels: {
-            discord: {
-              typo: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-            },
+          gateway: {
+            typo: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
           },
         }),
         "utf8",
@@ -1618,7 +1616,7 @@ describe("config cli", () => {
       expect(mockError).toHaveBeenCalledWith(
         expect.stringContaining("Dry run failed: config schema validation failed."),
       );
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("channels.discord"));
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("gateway"));
       expect(mockError).toHaveBeenCalledWith(expect.stringContaining('"typo"'));
     });
 
@@ -2208,6 +2206,52 @@ describe("config cli", () => {
       expect(written.logging).toEqual(resolved.logging);
       expect(mockWriteConfigFile.mock.calls[0]?.[1]).toEqual({
         unsetPaths: [["tools", "alsoAllow"]],
+      });
+    });
+
+    it("removes only the specified array element", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          list: [{ id: "agent-a" }, { id: "agent-b" }, { id: "agent-c" }],
+        },
+      };
+      const runtimeMerged: OpenClawConfig = {
+        ...withRuntimeDefaults(resolved),
+      };
+      setSnapshot(resolved, runtimeMerged);
+
+      await runConfigCommand(["config", "unset", "agents.list[1]"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.agents?.list).toEqual([{ id: "agent-a" }, { id: "agent-c" }]);
+      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toBeUndefined();
+    });
+
+    it("preserves write-level unset handling for numeric object keys", async () => {
+      const resolved: OpenClawConfig = {
+        channels: {
+          discord: {
+            guilds: {
+              "123": { channels: ["general"] },
+              "456": { channels: ["alerts"] },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "unset", "channels.discord.guilds.123"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0] as {
+        channels?: { discord?: { guilds?: Record<string, unknown> } };
+      };
+      expect(written.channels?.discord?.guilds).toEqual({
+        "456": { channels: ["alerts"] },
+      });
+      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toEqual({
+        unsetPaths: [["channels", "discord", "guilds", "123"]],
       });
     });
   });

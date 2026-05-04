@@ -800,7 +800,7 @@ export function resolveModelAuthMode(
 
   if (
     normalizeProviderId(resolved) === "codex" &&
-    cliCredentials.readCodexCliCredentialsCached({ ttlMs: 5_000 })
+    cliCredentials.readCodexCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
   ) {
     return "oauth";
   }

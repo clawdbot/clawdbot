@@ -139,7 +139,7 @@ export function buildProviderStreamFamilyHooks(
             ctx.modelId === "auto" || isProxyReasoningUnsupported(ctx.modelId)
               ? undefined
               : ctx.thinkingLevel;
-          return createOpenRouterWrapper(ctx.streamFn, thinkingLevel);
+          return createOpenRouterWrapper(ctx.streamFn, thinkingLevel, ctx.extraParams);
         },
       };
     case "tool-stream-default-on":

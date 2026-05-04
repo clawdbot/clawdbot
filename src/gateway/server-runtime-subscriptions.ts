@@ -1,4 +1,4 @@
-import { onAgentEvent } from "../infra/agent-events.js";
+import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -21,8 +21,6 @@ export function startGatewayEventSubscriptions(params: {
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   agentRunSeq: Map<string, number>;
   chatRunState: ChatRunState;
-  resolveSessionKeyForRun: (runId: string) => string | undefined;
-  clearAgentRunContext: (runId: string) => void;
   toolEventRecipients: ToolEventRecipientRegistry;
   sessionEventSubscribers: SessionEventSubscriberRegistry;
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
@@ -32,15 +30,18 @@ export function startGatewayEventSubscriptions(params: {
     ReturnType<typeof import("./server-chat.js").createAgentEventHandler>
   > | null = null;
   const getAgentEventHandler = () => {
-    agentEventHandlerPromise ??= import("./server-chat.js").then(({ createAgentEventHandler }) =>
+    agentEventHandlerPromise ??= Promise.all([
+      import("./server-chat.js"),
+      import("./server-session-key.js"),
+    ]).then(([{ createAgentEventHandler }, { resolveSessionKeyForRun }]) =>
       createAgentEventHandler({
         broadcast: params.broadcast,
         broadcastToConnIds: params.broadcastToConnIds,
         nodeSendToSession: params.nodeSendToSession,
         agentRunSeq: params.agentRunSeq,
         chatRunState: params.chatRunState,
-        resolveSessionKeyForRun: params.resolveSessionKeyForRun,
-        clearAgentRunContext: params.clearAgentRunContext,
+        resolveSessionKeyForRun,
+        clearAgentRunContext,
         toolEventRecipients: params.toolEventRecipients,
         sessionEventSubscribers: params.sessionEventSubscribers,
         isChatSendRunActive: (runId) => {

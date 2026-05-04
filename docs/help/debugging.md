@@ -143,12 +143,19 @@ npx speedscope .artifacts/gateway-watch-profiles/*.cpuprofile
 ```
 
 Use `--benchmark-dir <path>` when you want profiles somewhere else.
+Use `--benchmark-no-force` when you want the benchmarked child to skip the
+default `--force` port cleanup and fail fast if the Gateway port is already in
+use.
 
 The tmux wrapper carries common non-secret runtime selectors such as
 `OPENCLAW_PROFILE`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`,
 `OPENCLAW_GATEWAY_PORT`, and `OPENCLAW_SKIP_CHANNELS` into the pane. Put
 provider credentials in your normal profile/config, or use raw foreground mode
 for one-off ephemeral secrets.
+If the watched Gateway exits during startup, the watcher runs
+`openclaw doctor --fix --non-interactive` once and restarts the Gateway child.
+Use `OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0` when you want the original startup
+failure without the dev-only repair pass.
 The managed tmux pane also defaults to colored Gateway logs for readability;
 set `FORCE_COLOR=0` when starting `pnpm gateway:watch` to disable ANSI output.
 

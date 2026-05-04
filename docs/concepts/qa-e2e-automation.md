@@ -21,30 +21,34 @@ Current pieces:
   drive a real channel inside a child QA gateway.
 - `qa/`: repo-backed seed assets for the kickoff task and baseline QA
   scenarios.
+- [Mantis](/concepts/mantis): before and after live verification for bugs that
+  need real transports, browser screenshots, VM state, and PR evidence.
 
 ## Command surface
 
 Every QA flow runs under `pnpm openclaw qa <subcommand>`. Many have `pnpm qa:*`
 script aliases; both forms are supported.
 
-| Command                                             | Purpose                                                                                                                                                                |
-| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `qa run`                                            | Bundled QA self-check; writes a Markdown report.                                                                                                                       |
-| `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                 |
-| `qa coverage`                                       | Print the markdown scenario-coverage inventory (`--json` for machine output).                                                                                          |
-| `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report.                                                                                         |
-| `qa character-eval`                                 | Run the character QA scenario across multiple live models with a judged report. See [Reporting](#reporting).                                                           |
-| `qa manual`                                         | Run a one-off prompt against the selected provider/model lane.                                                                                                         |
-| `qa ui`                                             | Start the QA debugger UI and local QA bus (alias: `pnpm qa:lab:ui`).                                                                                                   |
-| `qa docker-build-image`                             | Build the prebaked QA Docker image.                                                                                                                                    |
-| `qa docker-scaffold`                                | Write a docker-compose scaffold for the QA dashboard + gateway lane.                                                                                                   |
-| `qa up`                                             | Build the QA site, start the Docker-backed stack, print the URL (alias: `pnpm qa:lab:up`; `:fast` variant adds `--use-prebuilt-image --bind-ui-dist --skip-ui-build`). |
-| `qa aimock`                                         | Start only the AIMock provider server.                                                                                                                                 |
-| `qa mock-openai`                                    | Start only the scenario-aware `mock-openai` provider server.                                                                                                           |
-| `qa credentials doctor` / `add` / `list` / `remove` | Manage the shared Convex credential pool.                                                                                                                              |
-| `qa matrix`                                         | Live transport lane against a disposable Tuwunel homeserver. See [Matrix QA](/concepts/qa-matrix).                                                                     |
-| `qa telegram`                                       | Live transport lane against a real private Telegram group.                                                                                                             |
-| `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                      |
+| Command                                             | Purpose                                                                                                                                                                                      |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `qa run`                                            | Bundled QA self-check; writes a Markdown report.                                                                                                                                             |
+| `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                                       |
+| `qa coverage`                                       | Print the markdown scenario-coverage inventory (`--json` for machine output).                                                                                                                |
+| `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report.                                                                                                               |
+| `qa character-eval`                                 | Run the character QA scenario across multiple live models with a judged report. See [Reporting](#reporting).                                                                                 |
+| `qa manual`                                         | Run a one-off prompt against the selected provider/model lane.                                                                                                                               |
+| `qa ui`                                             | Start the QA debugger UI and local QA bus (alias: `pnpm qa:lab:ui`).                                                                                                                         |
+| `qa docker-build-image`                             | Build the prebaked QA Docker image.                                                                                                                                                          |
+| `qa docker-scaffold`                                | Write a docker-compose scaffold for the QA dashboard + gateway lane.                                                                                                                         |
+| `qa up`                                             | Build the QA site, start the Docker-backed stack, print the URL (alias: `pnpm qa:lab:up`; `:fast` variant adds `--use-prebuilt-image --bind-ui-dist --skip-ui-build`).                       |
+| `qa aimock`                                         | Start only the AIMock provider server.                                                                                                                                                       |
+| `qa mock-openai`                                    | Start only the scenario-aware `mock-openai` provider server.                                                                                                                                 |
+| `qa credentials doctor` / `add` / `list` / `remove` | Manage the shared Convex credential pool.                                                                                                                                                    |
+| `qa matrix`                                         | Live transport lane against a disposable Tuwunel homeserver. See [Matrix QA](/concepts/qa-matrix).                                                                                           |
+| `qa telegram`                                       | Live transport lane against a real private Telegram group.                                                                                                                                   |
+| `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                                            |
+| `qa slack`                                          | Live transport lane against a real private Slack channel.                                                                                                                                    |
+| `qa mantis`                                         | Before and after verification runner for live transport bugs, with Discord status-reactions evidence, Crabbox desktop/browser smoke, and Slack-in-VNC smoke. See [Mantis](/concepts/mantis). |
 
 ## Operator flow
 
@@ -107,14 +111,32 @@ pnpm openclaw qa matrix --profile fast --fail-fast
 
 The full CLI reference, profile/scenario catalog, env vars, and artifact layout for this lane live in [Matrix QA](/concepts/qa-matrix). At a glance: it provisions a disposable Tuwunel homeserver in Docker, registers temporary driver/SUT/observer users, runs the real Matrix plugin inside a child QA gateway scoped to that transport (no `qa-channel`), then writes a Markdown report, JSON summary, observed-events artifact, and combined output log under `.artifacts/qa-e2e/matrix-<timestamp>/`.
 
-For transport-real Telegram and Discord smoke lanes:
+For transport-real Telegram, Discord, and Slack smoke lanes:
 
 ```bash
 pnpm openclaw qa telegram
 pnpm openclaw qa discord
+pnpm openclaw qa slack
 ```
 
-Both target a pre-existing real channel with two bots (driver + SUT). Required env vars, scenario lists, output artifacts, and the Convex credential pool are documented in [Telegram and Discord QA reference](#telegram-and-discord-qa-reference) below.
+They target a pre-existing real channel with two bots (driver + SUT). Required env vars, scenario lists, output artifacts, and the Convex credential pool are documented in [Telegram, Discord, and Slack QA reference](#telegram-discord-and-slack-qa-reference) below.
+
+For a full Slack desktop VM run with VNC rescue, run:
+
+```bash
+pnpm openclaw qa mantis slack-desktop-smoke \
+  --gateway-setup \
+  --scenario slack-canary \
+  --keep-lease
+```
+
+That command leases a Crabbox desktop/browser machine, runs the Slack live lane
+inside the VM, opens Slack Web in the VNC browser, captures the desktop, and
+copies `slack-qa/` plus `slack-desktop-smoke.png` back to the Mantis artifact
+directory. Reuse `--lease-id <cbx_...>` after logging in to Slack Web manually
+through VNC. With `--gateway-setup`, Mantis leaves a persistent OpenClaw Slack
+gateway running inside the VM on port `38973`; without it, the command runs the
+normal bot-to-bot Slack QA lane and exits after artifact capture.
 
 Before using pooled live credentials, run:
 
@@ -133,6 +155,7 @@ Live transport lanes share one contract instead of each inventing their own scen
 | Matrix   | x      | x              | x          | x               | x               | x              | x                | x                | x                    |              |                             |
 | Telegram | x      | x              | x          |                 |                 |                |                  |                  |                      | x            |                             |
 | Discord  | x      | x              | x          |                 |                 |                |                  |                  |                      |              | x                           |
+| Slack    | x      | x              | x          |                 |                 |                |                  |                  |                      |              |                             |
 
 This keeps `qa-channel` as the broad product-behavior suite while Matrix,
 Telegram, and future live transports share one explicit transport-contract
@@ -159,27 +182,27 @@ guest: env-based provider keys, the QA live provider config path, and
 `CODEX_HOME` when present. Keep `--output-dir` under the repo root so the guest
 can write back through the mounted workspace.
 
-## Telegram and Discord QA reference
+## Telegram, Discord, and Slack QA reference
 
-Matrix has a [dedicated page](/concepts/qa-matrix) because of its scenario count and Docker-backed homeserver provisioning. Telegram and Discord are smaller — a handful of scenarios each, no profile system, against pre-existing real channels — so their reference lives here.
+Matrix has a [dedicated page](/concepts/qa-matrix) because of its scenario count and Docker-backed homeserver provisioning. Telegram, Discord, and Slack are smaller — a handful of scenarios each, no profile system, against pre-existing real channels — so their reference lives here.
 
 ### Shared CLI flags
 
-Both lanes register through `extensions/qa-lab/src/live-transports/shared/live-transport-cli.ts` and accept the same flags:
+These lanes register through `extensions/qa-lab/src/live-transports/shared/live-transport-cli.ts` and accept the same flags:
 
-| Flag                                  | Default                                                   | Description                                                                                                           |
-| ------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `--scenario <id>`                     | —                                                         | Run only this scenario. Repeatable.                                                                                   |
-| `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/{telegram,discord}-<timestamp>` | Where reports/summary/observed messages and the output log are written. Relative paths resolve against `--repo-root`. |
-| `--repo-root <path>`                  | `process.cwd()`                                           | Repository root when invoking from a neutral cwd.                                                                     |
-| `--sut-account <id>`                  | `sut`                                                     | Temporary account id inside the QA gateway config.                                                                    |
-| `--provider-mode <mode>`              | `live-frontier`                                           | `mock-openai` or `live-frontier` (legacy `live-openai` still works).                                                  |
-| `--model <ref>` / `--alt-model <ref>` | provider default                                          | Primary/alternate model refs.                                                                                         |
-| `--fast`                              | off                                                       | Provider fast mode where supported.                                                                                   |
-| `--credential-source <env\|convex>`   | `env`                                                     | See [Convex credential pool](#convex-credential-pool).                                                                |
-| `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                        | Role used when `--credential-source convex`.                                                                          |
+| Flag                                  | Default                                                         | Description                                                                                                           |
+| ------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `--scenario <id>`                     | —                                                               | Run only this scenario. Repeatable.                                                                                   |
+| `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/{telegram,discord,slack}-<timestamp>` | Where reports/summary/observed messages and the output log are written. Relative paths resolve against `--repo-root`. |
+| `--repo-root <path>`                  | `process.cwd()`                                                 | Repository root when invoking from a neutral cwd.                                                                     |
+| `--sut-account <id>`                  | `sut`                                                           | Temporary account id inside the QA gateway config.                                                                    |
+| `--provider-mode <mode>`              | `live-frontier`                                                 | `mock-openai` or `live-frontier` (legacy `live-openai` still works).                                                  |
+| `--model <ref>` / `--alt-model <ref>` | provider default                                                | Primary/alternate model refs.                                                                                         |
+| `--fast`                              | off                                                             | Provider fast mode where supported.                                                                                   |
+| `--credential-source <env\|convex>`   | `env`                                                           | See [Convex credential pool](#convex-credential-pool).                                                                |
+| `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                              | Role used when `--credential-source convex`.                                                                          |
 
-Both exit non-zero on any failed scenario. `--allow-failures` writes artifacts without setting a failing exit code.
+Each lane exits non-zero on any failed scenario. `--allow-failures` writes artifacts without setting a failing exit code.
 
 ### Telegram QA
 
@@ -222,7 +245,7 @@ Output artifacts:
 pnpm openclaw qa discord
 ```
 
-Targets one real private Discord guild channel with two bots: a driver bot controlled by the harness and a SUT bot started by the child OpenClaw gateway through the bundled Discord plugin. Verifies channel mention handling and that the SUT bot has registered the native `/help` command with Discord.
+Targets one real private Discord guild channel with two bots: a driver bot controlled by the harness and a SUT bot started by the child OpenClaw gateway through the bundled Discord plugin. Verifies channel mention handling, that the SUT bot has registered the native `/help` command with Discord, and opt-in Mantis evidence scenarios.
 
 Required env when `--credential-source env`:
 
@@ -241,16 +264,59 @@ Scenarios (`extensions/qa-lab/src/live-transports/discord/discord-live.runtime.t
 - `discord-canary`
 - `discord-mention-gating`
 - `discord-native-help-command-registration`
+- `discord-status-reactions-tool-only` — opt-in Mantis scenario. Runs by itself because it switches the SUT to always-on, tool-only guild replies with `messages.statusReactions.enabled=true`, then captures a REST reaction timeline plus an HTML/PNG visual artifact.
+
+Run the Mantis status-reaction scenario explicitly:
+
+```bash
+pnpm openclaw qa discord \
+  --scenario discord-status-reactions-tool-only \
+  --provider-mode live-frontier \
+  --model openai/gpt-5.4 \
+  --alt-model openai/gpt-5.4 \
+  --fast
+```
 
 Output artifacts:
 
 - `discord-qa-report.md`
 - `discord-qa-summary.json`
 - `discord-qa-observed-messages.json` — bodies redacted unless `OPENCLAW_QA_DISCORD_CAPTURE_CONTENT=1`.
+- `discord-qa-reaction-timelines.json` and `discord-status-reactions-tool-only-timeline.png` when the status-reaction scenario runs.
+
+### Slack QA
+
+```bash
+pnpm openclaw qa slack
+```
+
+Targets one real private Slack channel with two distinct bots: a driver bot controlled by the harness and a SUT bot started by the child OpenClaw gateway through the bundled Slack plugin.
+
+Required env when `--credential-source env`:
+
+- `OPENCLAW_QA_SLACK_CHANNEL_ID`
+- `OPENCLAW_QA_SLACK_DRIVER_BOT_TOKEN`
+- `OPENCLAW_QA_SLACK_SUT_BOT_TOKEN`
+- `OPENCLAW_QA_SLACK_SUT_APP_TOKEN`
+
+Optional:
+
+- `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1` keeps message bodies in observed-message artifacts.
+
+Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts:39`):
+
+- `slack-canary`
+- `slack-mention-gating`
+
+Output artifacts:
+
+- `slack-qa-report.md`
+- `slack-qa-summary.json`
+- `slack-qa-observed-messages.json` — bodies redacted unless `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1`.
 
 ### Convex credential pool
 
-Both Telegram and Discord lanes can lease credentials from a shared Convex pool instead of reading the env vars above. Pass `--credential-source convex` (or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`); QA Lab acquires an exclusive lease, heartbeats it for the duration of the run, and releases it on shutdown. Pool kinds are `"telegram"` and `"discord"`.
+Telegram, Discord, and Slack lanes can lease credentials from a shared Convex pool instead of reading the env vars above. Pass `--credential-source convex` (or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`); QA Lab acquires an exclusive lease, heartbeats it for the duration of the run, and releases it on shutdown. Pool kinds are `"telegram"`, `"discord"`, and `"slack"`.
 
 Payload shapes the broker validates on `admin/add`:
 

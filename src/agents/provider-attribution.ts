@@ -123,6 +123,8 @@ function readCompatBoolean(
 
 const OPENCLAW_ATTRIBUTION_PRODUCT = "OpenClaw";
 const OPENCLAW_ATTRIBUTION_ORIGINATOR = "openclaw";
+const OPENROUTER_ATTRIBUTION_CATEGORIES =
+  "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent";
 
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const OPENAI_RESPONSES_APIS = new Set([
@@ -473,7 +475,7 @@ function buildOpenRouterAttributionPolicy(
     headers: {
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": identity.product,
-      "X-OpenRouter-Categories": "cli-agent",
+      "X-OpenRouter-Categories": OPENROUTER_ATTRIBUTION_CATEGORIES,
     },
   };
 }

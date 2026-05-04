@@ -269,7 +269,7 @@ export function buildInboundUserContextPrefix(
   const replyToBody = sanitizePromptBody(ctx.ReplyToBody);
   if (replyToBody) {
     blocks.push(
-      formatUntrustedJsonBlock("Replied message (untrusted, for context):", {
+      formatUntrustedJsonBlock("Reply target of current user message (untrusted, for context):", {
         sender_label: normalizePromptMetadataString(ctx.ReplyToSender),
         is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
         body: replyToBody,

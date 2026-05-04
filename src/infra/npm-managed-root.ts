@@ -9,8 +9,18 @@ type ManagedNpmRootManifest = {
   [key: string]: unknown;
 };
 
+export type ManagedNpmRootInstalledDependency = {
+  version?: string;
+  integrity?: string;
+  resolved?: string;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function readDependencyRecord(value: unknown): Record<string, string> {
@@ -42,7 +52,7 @@ export function resolveManagedNpmRootDependencySpec(params: {
   parsedSpec: ParsedRegistryNpmSpec;
   resolution: NpmSpecResolution;
 }): string {
-  return params.parsedSpec.selector ?? params.resolution.version ?? "latest";
+  return params.resolution.version ?? params.parsedSpec.selector ?? "latest";
 }
 
 export async function upsertManagedNpmRootDependency(params: {
@@ -63,6 +73,26 @@ export async function upsertManagedNpmRootDependency(params: {
     },
   };
   await fs.writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+}
+
+export async function readManagedNpmRootInstalledDependency(params: {
+  npmRoot: string;
+  packageName: string;
+}): Promise<ManagedNpmRootInstalledDependency | null> {
+  const lockPath = path.join(params.npmRoot, "package-lock.json");
+  const parsed = JSON.parse(await fs.readFile(lockPath, "utf8")) as unknown;
+  if (!isRecord(parsed) || !isRecord(parsed.packages)) {
+    return null;
+  }
+  const entry = parsed.packages[`node_modules/${params.packageName}`];
+  if (!isRecord(entry)) {
+    return null;
+  }
+  return {
+    version: readOptionalString(entry.version),
+    integrity: readOptionalString(entry.integrity),
+    resolved: readOptionalString(entry.resolved),
+  };
 }
 
 export async function removeManagedNpmRootDependency(params: {

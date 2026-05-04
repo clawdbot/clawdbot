@@ -48,6 +48,10 @@ const {
   runQaProviderServerCommand,
   runQaSuiteCommand,
   runQaTelegramCommand,
+  runMantisBeforeAfterCommand,
+  runMantisDesktopBrowserSmokeCommand,
+  runMantisDiscordSmokeCommand,
+  runMantisSlackDesktopSmokeCommand,
 } = vi.hoisted(() => ({
   runQaCredentialsAddCommand: vi.fn(),
   runQaCredentialsListCommand: vi.fn(),
@@ -56,6 +60,10 @@ const {
   runQaProviderServerCommand: vi.fn(),
   runQaSuiteCommand: vi.fn(),
   runQaTelegramCommand: vi.fn(),
+  runMantisBeforeAfterCommand: vi.fn(),
+  runMantisDesktopBrowserSmokeCommand: vi.fn(),
+  runMantisDiscordSmokeCommand: vi.fn(),
+  runMantisSlackDesktopSmokeCommand: vi.fn(),
 }));
 
 const { listQaRunnerCliContributions } = vi.hoisted(() => ({
@@ -70,6 +78,13 @@ vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
 
 vi.mock("./live-transports/telegram/cli.runtime.js", () => ({
   runQaTelegramCommand,
+}));
+
+vi.mock("./mantis/cli.runtime.js", () => ({
+  runMantisBeforeAfterCommand,
+  runMantisDesktopBrowserSmokeCommand,
+  runMantisDiscordSmokeCommand,
+  runMantisSlackDesktopSmokeCommand,
 }));
 
 vi.mock("./cli.runtime.js", () => ({
@@ -95,6 +110,10 @@ describe("qa cli registration", () => {
     runQaProviderServerCommand.mockReset();
     runQaSuiteCommand.mockReset();
     runQaTelegramCommand.mockReset();
+    runMantisBeforeAfterCommand.mockReset();
+    runMantisDesktopBrowserSmokeCommand.mockReset();
+    runMantisDiscordSmokeCommand.mockReset();
+    runMantisSlackDesktopSmokeCommand.mockReset();
     listQaRunnerCliContributions
       .mockReset()
       .mockReturnValue([createAvailableQaRunnerContribution()]);
@@ -109,8 +128,227 @@ describe("qa cli registration", () => {
     const qa = program.commands.find((command) => command.name() === "qa");
     expect(qa).toBeDefined();
     expect(qa?.commands.map((command) => command.name())).toEqual(
-      expect.arrayContaining([TEST_QA_RUNNER.commandName, "telegram", "credentials", "coverage"]),
+      expect.arrayContaining([
+        TEST_QA_RUNNER.commandName,
+        "telegram",
+        "mantis",
+        "credentials",
+        "coverage",
+      ]),
     );
+  });
+
+  it("routes mantis discord-smoke flags into the mantis runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "discord-smoke",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output-dir",
+      ".artifacts/qa-e2e/mantis/discord-smoke",
+      "--guild-id",
+      "123456789012345678",
+      "--channel-id",
+      "223456789012345678",
+      "--token-file",
+      "/tmp/mantis-token",
+      "--message",
+      "hello from mantis",
+      "--skip-post",
+    ]);
+
+    expect(runMantisDiscordSmokeCommand).toHaveBeenCalledWith({
+      repoRoot: "/tmp/openclaw-repo",
+      outputDir: ".artifacts/qa-e2e/mantis/discord-smoke",
+      guildId: "123456789012345678",
+      channelId: "223456789012345678",
+      tokenEnv: undefined,
+      tokenFile: "/tmp/mantis-token",
+      tokenFileEnv: undefined,
+      message: "hello from mantis",
+      skipPost: true,
+    });
+  });
+
+  it("routes mantis before/after flags into the mantis runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "run",
+      "--transport",
+      "discord",
+      "--scenario",
+      "discord-status-reactions-tool-only",
+      "--baseline",
+      "origin/main",
+      "--candidate",
+      "HEAD",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output-dir",
+      ".artifacts/qa-e2e/mantis/local-discord-status-reactions",
+      "--credential-source",
+      "convex",
+      "--credential-role",
+      "maintainer",
+      "--skip-install",
+      "--skip-build",
+    ]);
+
+    expect(runMantisBeforeAfterCommand).toHaveBeenCalledWith({
+      baseline: "origin/main",
+      candidate: "HEAD",
+      credentialRole: "maintainer",
+      credentialSource: "convex",
+      fastMode: true,
+      outputDir: ".artifacts/qa-e2e/mantis/local-discord-status-reactions",
+      providerMode: "live-frontier",
+      repoRoot: "/tmp/openclaw-repo",
+      scenario: "discord-status-reactions-tool-only",
+      skipBuild: true,
+      skipInstall: true,
+      transport: "discord",
+    });
+  });
+
+  it("routes mantis desktop browser smoke flags into the mantis runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "desktop-browser-smoke",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output-dir",
+      ".artifacts/qa-e2e/mantis/desktop-browser",
+      "--browser-url",
+      "https://openclaw.ai/docs",
+      "--html-file",
+      "qa-artifacts/timeline.html",
+      "--crabbox-bin",
+      "/tmp/crabbox",
+      "--provider",
+      "hetzner",
+      "--class",
+      "beast",
+      "--lease-id",
+      "cbx_123abc",
+      "--idle-timeout",
+      "30m",
+      "--ttl",
+      "90m",
+      "--keep-lease",
+    ]);
+
+    expect(runMantisDesktopBrowserSmokeCommand).toHaveBeenCalledWith({
+      browserUrl: "https://openclaw.ai/docs",
+      crabboxBin: "/tmp/crabbox",
+      htmlFile: "qa-artifacts/timeline.html",
+      idleTimeout: "30m",
+      keepLease: true,
+      leaseId: "cbx_123abc",
+      machineClass: "beast",
+      outputDir: ".artifacts/qa-e2e/mantis/desktop-browser",
+      provider: "hetzner",
+      repoRoot: "/tmp/openclaw-repo",
+      ttl: "90m",
+    });
+  });
+
+  it("does not shadow mantis desktop browser runtime env defaults", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "desktop-browser-smoke",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+    ]);
+
+    expect(runMantisDesktopBrowserSmokeCommand).toHaveBeenCalledWith({
+      browserUrl: undefined,
+      crabboxBin: undefined,
+      htmlFile: undefined,
+      idleTimeout: undefined,
+      keepLease: undefined,
+      leaseId: undefined,
+      machineClass: undefined,
+      outputDir: undefined,
+      provider: undefined,
+      repoRoot: "/tmp/openclaw-repo",
+      ttl: undefined,
+    });
+  });
+
+  it("routes mantis Slack desktop smoke flags into the mantis runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "slack-desktop-smoke",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output-dir",
+      ".artifacts/qa-e2e/mantis/slack-desktop",
+      "--crabbox-bin",
+      "/tmp/crabbox",
+      "--provider",
+      "hetzner",
+      "--machine-class",
+      "beast",
+      "--lease-id",
+      "cbx_123abc",
+      "--idle-timeout",
+      "45m",
+      "--ttl",
+      "120m",
+      "--slack-url",
+      "https://app.slack.com/client/T123/C123",
+      "--provider-mode",
+      "live-frontier",
+      "--model",
+      "openai/gpt-5.4",
+      "--alt-model",
+      "openai/gpt-5.4",
+      "--scenario",
+      "slack-canary",
+      "--credential-source",
+      "env",
+      "--credential-role",
+      "maintainer",
+      "--fast",
+      "--keep-lease",
+    ]);
+
+    expect(runMantisSlackDesktopSmokeCommand).toHaveBeenCalledWith({
+      alternateModel: "openai/gpt-5.4",
+      crabboxBin: "/tmp/crabbox",
+      credentialRole: "maintainer",
+      credentialSource: "env",
+      fastMode: true,
+      gatewaySetup: undefined,
+      idleTimeout: "45m",
+      keepLease: true,
+      leaseId: "cbx_123abc",
+      machineClass: "beast",
+      outputDir: ".artifacts/qa-e2e/mantis/slack-desktop",
+      primaryModel: "openai/gpt-5.4",
+      provider: "hetzner",
+      providerMode: "live-frontier",
+      repoRoot: "/tmp/openclaw-repo",
+      scenarioIds: ["slack-canary"],
+      slackChannelId: undefined,
+      slackUrl: "https://app.slack.com/client/T123/C123",
+      ttl: "120m",
+    });
   });
 
   it("routes coverage report flags into the qa runtime command", async () => {

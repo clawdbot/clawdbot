@@ -4,6 +4,7 @@ import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
 } from "../../gateway/mcp-http.loopback-runtime.js";
+import { isClaudeCliProvider } from "../../plugin-sdk/anthropic-cli.js";
 import type {
   CliBackendAuthEpochMode,
   CliBackendPreparedExecution,
@@ -29,6 +30,7 @@ import {
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
+import { claudeCliSessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   resolveBootstrapMaxChars,
@@ -51,7 +53,7 @@ import {
   loadCliSessionHistoryMessages,
   loadCliSessionReseedMessages,
 } from "./session-history.js";
-import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
+import type { CliReusableSession, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const prepareDeps = {
   makeBootstrapWarn: makeBootstrapWarnImpl,
@@ -62,6 +64,9 @@ const prepareDeps = {
   resolveOpenClawReferencePaths: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawReferencePaths(params),
+  // Surfaced as a dep so tests can stub the on-disk Claude CLI transcript probe
+  // without touching ~/.claude/projects.
+  claudeCliSessionTranscriptHasContent,
 };
 
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
@@ -256,19 +261,36 @@ export async function prepareCliRunContext(
     ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),
     ...(preparedBackendCleanup ? { cleanup: preparedBackendCleanup } : {}),
   };
-  const reusableCliSession = params.cliSessionBinding
-    ? resolveCliSessionReuse({
-        binding: params.cliSessionBinding,
-        authProfileId: effectiveAuthProfileId,
-        authEpoch,
-        authEpochVersion: CLI_AUTH_EPOCH_VERSION,
-        extraSystemPromptHash,
-        mcpConfigHash: preparedBackendFinal.mcpConfigHash,
-        mcpResumeHash: preparedBackendFinal.mcpResumeHash,
-      })
-    : params.cliSessionId
-      ? { sessionId: params.cliSessionId }
-      : {};
+  // Pre-flight: if a saved Claude CLI sessionId points at a transcript that no
+  // longer exists on disk (e.g. update.run aborted mid-swap, Claude CLI was
+  // reinstalled, or the projects tree was manually pruned), `claude --resume`
+  // hangs or fails outside the cli-runner session_expired path. The persisted
+  // binding then never gets refreshed, causing every subsequent turn to retry
+  // the same dead sessionId. Drop the binding here so this turn starts fresh
+  // and the post-run flow writes the new sessionId back via setCliSessionBinding.
+  const candidateClaudeCliSessionId =
+    params.cliSessionBinding?.sessionId?.trim() || params.cliSessionId?.trim() || undefined;
+  const claudeCliTranscriptMissing =
+    candidateClaudeCliSessionId !== undefined &&
+    isClaudeCliProvider(params.provider) &&
+    !(await prepareDeps.claudeCliSessionTranscriptHasContent({
+      sessionId: candidateClaudeCliSessionId,
+    }));
+  const reusableCliSession: CliReusableSession = claudeCliTranscriptMissing
+    ? { invalidatedReason: "missing-transcript" }
+    : params.cliSessionBinding
+      ? resolveCliSessionReuse({
+          binding: params.cliSessionBinding,
+          authProfileId: effectiveAuthProfileId,
+          authEpoch,
+          authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+          extraSystemPromptHash,
+          mcpConfigHash: preparedBackendFinal.mcpConfigHash,
+          mcpResumeHash: preparedBackendFinal.mcpResumeHash,
+        })
+      : params.cliSessionId
+        ? { sessionId: params.cliSessionId }
+        : {};
   if (reusableCliSession.invalidatedReason) {
     cliBackendLog.info(
       `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,

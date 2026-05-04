@@ -31,6 +31,7 @@ describe("runtime smoke", () => {
       });
       expect(store).toBeDefined();
       expect(typeof store.register).toBe("function");
+      expect(typeof store.registerIfAbsent).toBe("function");
       expect(typeof store.lookup).toBe("function");
       expect(typeof store.consume).toBe("function");
     });

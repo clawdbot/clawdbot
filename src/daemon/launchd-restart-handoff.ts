@@ -135,6 +135,8 @@ if launchctl kickstart -k "$service_target"; then
 else
   status=$?
   if launchctl bootstrap "$domain" "$plist_path"; then
+    status=0
+  else
     launchctl kickstart -k "$service_target"
     status=$?
   fi
@@ -168,12 +170,7 @@ ${verifyLaunchdReload}
 status=0
 launchctl enable "$service_target"
 if launchctl bootstrap "$domain" "$plist_path"; then
-  if launchctl start "$label"; then
-    status=0
-  else
-    launchctl kickstart -k "$service_target"
-    status=$?
-  fi
+  status=0
 else
   status=$?
   launchctl kickstart -k "$service_target"

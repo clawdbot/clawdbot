@@ -6,8 +6,16 @@ import type { HookRunner } from "../plugins/hooks.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
 import type { EmbeddedRunReplayState } from "./pi-embedded-runner/replay-state.js";
-import type { BlockReplyChunking, ToolResultFormat } from "./pi-embedded-subscribe.shared-types.js";
-export type { BlockReplyChunking, ToolResultFormat } from "./pi-embedded-subscribe.shared-types.js";
+import type {
+  BlockReplyChunking,
+  ToolProgressDetailMode,
+  ToolResultFormat,
+} from "./pi-embedded-subscribe.shared-types.js";
+export type {
+  BlockReplyChunking,
+  ToolProgressDetailMode,
+  ToolResultFormat,
+} from "./pi-embedded-subscribe.shared-types.js";
 
 export type SubscribeEmbeddedPiSessionParams = {
   session: AgentSession;
@@ -18,6 +26,7 @@ export type SubscribeEmbeddedPiSessionParams = {
   reasoningMode?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
+  toolProgressDetail?: ToolProgressDetailMode;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;

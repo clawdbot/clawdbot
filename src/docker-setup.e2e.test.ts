@@ -281,7 +281,11 @@ describe("scripts/docker/setup.sh", () => {
 
   it("forces BuildKit for local and sandbox docker builds", async () => {
     const activeSandbox = requireSandbox(sandbox);
-    await writeFile(join(activeSandbox.rootDir, "Dockerfile.sandbox"), "FROM scratch\n");
+    await mkdir(join(activeSandbox.rootDir, "scripts", "docker", "sandbox"), { recursive: true });
+    await writeFile(
+      join(activeSandbox.rootDir, "scripts", "docker", "sandbox", "Dockerfile"),
+      "FROM scratch\n",
+    );
     await resetDockerLog(activeSandbox);
 
     const result = runDockerSetup(activeSandbox, {

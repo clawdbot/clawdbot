@@ -26,6 +26,11 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     new Set(["jimp"]),
   ],
   [
+    "extensions/memory-lancedb",
+    // LanceDB imports apache-arrow at runtime through its peer dependency.
+    new Set(["apache-arrow"]),
+  ],
+  [
     "extensions/tlon",
     // The Tlon plugin manifest exposes the bundled skill from this package path.
     new Set(["@tloncorp/tlon-skill"]),

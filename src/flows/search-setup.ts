@@ -536,6 +536,7 @@ export async function runSearchSetupFlow(
         ? `${credentialLabel} (leave blank to use env var)`
         : credentialLabel,
     placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
+    sensitive: true,
   });
 
   const key = normalizeOptionalString(keyInput) ?? "";

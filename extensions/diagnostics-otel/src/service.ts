@@ -31,6 +31,8 @@ import {
 const DEFAULT_SERVICE_NAME = "openclaw";
 const DROPPED_OTEL_ATTRIBUTE_KEYS = new Set([
   "openclaw.callId",
+  "openclaw.chatId",
+  "openclaw.messageId",
   "openclaw.parentSpanId",
   "openclaw.runId",
   "openclaw.sessionId",
@@ -1262,8 +1264,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: Extract<DiagnosticEventPayload, { type: "webhook.processed" }>,
       ) => {
         const attrs = {
-          "openclaw.channel": evt.channel ?? "unknown",
-          "openclaw.webhook": evt.updateType ?? "unknown",
+          "openclaw.channel": lowCardinalityAttr(evt.channel),
+          "openclaw.webhook": lowCardinalityAttr(evt.updateType),
         };
         if (typeof evt.durationMs === "number") {
           webhookDurationHistogram.record(evt.durationMs, attrs);
@@ -1272,9 +1274,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           return;
         }
         const spanAttrs: Record<string, string | number> = { ...attrs };
-        if (evt.chatId !== undefined) {
-          spanAttrs["openclaw.chatId"] = String(evt.chatId);
-        }
         const span = spanWithDuration("openclaw.webhook.processed", spanAttrs, evt.durationMs);
         span.end();
       };
@@ -1283,8 +1282,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: Extract<DiagnosticEventPayload, { type: "webhook.error" }>,
       ) => {
         const attrs = {
-          "openclaw.channel": evt.channel ?? "unknown",
-          "openclaw.webhook": evt.updateType ?? "unknown",
+          "openclaw.channel": lowCardinalityAttr(evt.channel),
+          "openclaw.webhook": lowCardinalityAttr(evt.updateType),
         };
         webhookErrorCounter.add(1, attrs);
         if (!tracesEnabled) {
@@ -1295,9 +1294,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           ...attrs,
           "openclaw.error": redactedError,
         };
-        if (evt.chatId !== undefined) {
-          spanAttrs["openclaw.chatId"] = String(evt.chatId);
-        }
         const span = tracer.startSpan("openclaw.webhook.error", {
           attributes: spanAttrs,
         });
@@ -1309,8 +1305,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: Extract<DiagnosticEventPayload, { type: "message.queued" }>,
       ) => {
         const attrs = {
-          "openclaw.channel": evt.channel ?? "unknown",
-          "openclaw.source": evt.source ?? "unknown",
+          "openclaw.channel": lowCardinalityAttr(evt.channel),
+          "openclaw.source": lowCardinalityAttr(evt.source),
         };
         messageQueuedCounter.add(1, attrs);
         if (typeof evt.queueDepth === "number") {
@@ -1322,7 +1318,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: Extract<DiagnosticEventPayload, { type: "message.processed" }>,
       ) => {
         const attrs = {
-          "openclaw.channel": evt.channel ?? "unknown",
+          "openclaw.channel": lowCardinalityAttr(evt.channel),
           "openclaw.outcome": evt.outcome ?? "unknown",
         };
         messageProcessedCounter.add(1, attrs);
@@ -1333,14 +1329,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           return;
         }
         const spanAttrs: Record<string, string | number> = { ...attrs };
-        if (evt.chatId !== undefined) {
-          spanAttrs["openclaw.chatId"] = String(evt.chatId);
-        }
-        if (evt.messageId !== undefined) {
-          spanAttrs["openclaw.messageId"] = String(evt.messageId);
-        }
         if (evt.reason) {
-          spanAttrs["openclaw.reason"] = redactSensitiveText(evt.reason);
+          spanAttrs["openclaw.reason"] = lowCardinalityAttr(evt.reason, "unknown");
         }
         const span = spanWithDuration("openclaw.message.processed", spanAttrs, evt.durationMs);
         if (evt.outcome === "error" && evt.error) {
@@ -1352,8 +1342,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const messageDeliveryAttrs = (
         evt: MessageDeliveryDiagnosticEvent,
       ): Record<string, string> => ({
-        "openclaw.channel": evt.channel,
-        "openclaw.delivery.kind": evt.deliveryKind,
+        "openclaw.channel": lowCardinalityAttr(evt.channel),
+        "openclaw.delivery.kind": lowCardinalityAttr(evt.deliveryKind, "other"),
       });
 
       const recordMessageDeliveryStarted = (

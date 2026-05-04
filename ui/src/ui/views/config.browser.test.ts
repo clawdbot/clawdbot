@@ -901,6 +901,9 @@ describe("config view", () => {
 
     expect(importButton?.disabled).toBe(true);
     expect(container.querySelector(".settings-theme-import__input")).not.toBeNull();
+    expect(
+      container.querySelector<HTMLAnchorElement>(".settings-theme-import__external")?.href,
+    ).toBe("https://tweakcn.com/editor/theme");
     expect(normalizedText(container)).toContain("Share links, editor URLs, registry URLs");
   });
 

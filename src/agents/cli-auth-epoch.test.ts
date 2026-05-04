@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   resetCliAuthEpochTestDeps,
@@ -357,5 +357,29 @@ describe("resolveCliAuthEpoch", () => {
     expect(third).toBe(second);
     expect(fourth).toBeDefined();
     expect(fourth).not.toBe(third);
+  });
+
+  it("uses non-prompting Codex CLI credential reads for epoch fingerprints", async () => {
+    const readCodexCliCredentialsCached = vi.fn(() => ({
+      type: "oauth" as const,
+      provider: "openai-codex" as const,
+      access: "local-access",
+      refresh: "local-refresh",
+      expires: 1,
+    }));
+    setCliAuthEpochTestDeps({
+      readCodexCliCredentialsCached,
+      loadAuthProfileStoreForRuntime: () => ({
+        version: 1,
+        profiles: {},
+      }),
+    });
+
+    await resolveCliAuthEpoch({ provider: "codex-cli" });
+
+    expect(readCodexCliCredentialsCached).toHaveBeenCalledWith({
+      ttlMs: 5000,
+      allowKeychainPrompt: false,
+    });
   });
 });

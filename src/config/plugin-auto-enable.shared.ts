@@ -235,6 +235,21 @@ function resolvePluginIdForConfiguredWebFetchProvider(
   )?.id;
 }
 
+function resolvePluginIdForConfiguredWebSearchProvider(
+  providerId: string | undefined,
+  registry: PluginManifestRegistry,
+): string | undefined {
+  const normalizedProviderId = normalizeOptionalLowercaseString(providerId);
+  if (!normalizedProviderId) {
+    return undefined;
+  }
+  return registry.plugins.find((plugin) =>
+    (plugin.contracts?.webSearchProviders ?? []).some(
+      (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedProviderId,
+    ),
+  )?.id;
+}
+
 function normalizeManifestChannelId(channelId: string): string {
   return normalizeChatChannelId(channelId) ?? channelId;
 }
@@ -265,7 +280,7 @@ function collectPluginIdsForConfiguredChannel(
   }
 
   if (claims.length === 0) {
-    return [builtInId ?? normalizedChannelId];
+    return builtInId ? [builtInId] : [];
   }
 
   const claimIds = new Set(claims.map((claim) => claim.plugin.id));
@@ -307,6 +322,13 @@ function hasConfiguredWebSearchPluginEntry(cfg: OpenClawConfig): boolean {
     Object.values(entries).some(
       (entry) => isRecord(entry) && isRecord(entry.config) && isRecord(entry.config.webSearch),
     )
+  );
+}
+
+function hasConfiguredWebSearchProviderSelection(cfg: OpenClawConfig): boolean {
+  const provider = cfg.tools?.web?.search?.provider;
+  return (
+    cfg.tools?.web?.search?.enabled !== false && typeof provider === "string" && !!provider.trim()
   );
 }
 
@@ -494,6 +516,9 @@ function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.Pr
   if (hasConfiguredProviderModelOrHarness(cfg, env)) {
     return true;
   }
+  if (hasConfiguredWebSearchProviderSelection(cfg)) {
+    return true;
+  }
   const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
   if (!configuredChannels || typeof configuredChannels !== "object") {
     return false;
@@ -526,7 +551,11 @@ export function configMayNeedPluginAutoEnable(
   if (hasConfiguredProviderModelOrHarness(cfg, env)) {
     return true;
   }
-  if (hasConfiguredWebSearchPluginEntry(cfg) || hasConfiguredWebFetchPluginEntry(cfg)) {
+  if (
+    hasConfiguredWebSearchProviderSelection(cfg) ||
+    hasConfiguredWebSearchPluginEntry(cfg) ||
+    hasConfiguredWebFetchPluginEntry(cfg)
+  ) {
     return true;
   }
   if (!hasSetupAutoEnableRelevantConfig(cfg)) {
@@ -553,6 +582,8 @@ export function resolvePluginAutoEnableCandidateReason(
       return `${candidate.modelRef} model configured`;
     case "agent-harness-runtime-configured":
       return `${candidate.runtime} agent runtime configured`;
+    case "web-search-provider-selected":
+      return `${candidate.providerId} web search provider selected`;
     case "web-fetch-provider-selected":
       return `${candidate.providerId} web fetch provider selected`;
     case "plugin-web-search-configured":
@@ -612,6 +643,23 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
         runtime,
       });
     }
+  }
+
+  const webSearchConfig = params.config.tools?.web?.search;
+  const webSearchProvider =
+    webSearchConfig?.enabled !== false && typeof webSearchConfig?.provider === "string"
+      ? webSearchConfig.provider
+      : undefined;
+  const webSearchPluginId = resolvePluginIdForConfiguredWebSearchProvider(
+    webSearchProvider,
+    params.registry,
+  );
+  if (webSearchPluginId) {
+    changes.push({
+      pluginId: webSearchPluginId,
+      kind: "web-search-provider-selected",
+      providerId: normalizeOptionalLowercaseString(webSearchProvider) ?? "",
+    });
   }
 
   const webFetchProvider =

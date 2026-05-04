@@ -748,39 +748,57 @@ function renderSessionsCard(
     return parts;
   };
 
-  // Helper to get session value (filtered by days if selected)
-  const getSessionValue = (s: UsageSessionEntry): number => {
+  const selectedDaySet = new Set(selectedDays);
+
+  const getSessionMetricValue = (s: UsageSessionEntry, metric: "tokens" | "cost"): number => {
     const usage = s.usage;
     if (!usage) {
       return 0;
     }
 
-    // If days are selected and session has daily breakdown, compute filtered total
-    if (selectedDays.length > 0 && usage.dailyBreakdown && usage.dailyBreakdown.length > 0) {
-      const filteredDays = usage.dailyBreakdown.filter((d) => selectedDays.includes(d.date));
-      return isTokenMode
-        ? filteredDays.reduce((sum, d) => sum + d.tokens, 0)
-        : filteredDays.reduce((sum, d) => sum + d.cost, 0);
+    if (selectedDaySet.size > 0 && usage.dailyBreakdown && usage.dailyBreakdown.length > 0) {
+      return usage.dailyBreakdown.reduce((sum, day) => {
+        if (!selectedDaySet.has(day.date)) {
+          return sum;
+        }
+        return sum + (metric === "tokens" ? day.tokens : day.cost);
+      }, 0);
     }
 
-    // Otherwise use total
-    return isTokenMode ? (usage.totalTokens ?? 0) : (usage.totalCost ?? 0);
+    return metric === "tokens" ? (usage.totalTokens ?? 0) : (usage.totalCost ?? 0);
+  };
+
+  const getSessionValue = (s: UsageSessionEntry): number => {
+    return getSessionMetricValue(s, isTokenMode ? "tokens" : "cost");
+  };
+
+  const getSessionSortValue = (s: UsageSessionEntry): number => {
+    switch (sessionSort) {
+      case "recent":
+        return s.updatedAt ?? 0;
+      case "messages":
+        return s.usage?.messageCounts?.total ?? 0;
+      case "errors":
+        return s.usage?.messageCounts?.errors ?? 0;
+      case "cost":
+        return getSessionMetricValue(s, "cost");
+      case "tokens":
+        return getSessionMetricValue(s, "tokens");
+    }
+    const exhaustiveSort: never = sessionSort;
+    return exhaustiveSort;
   };
 
   const sortedSessions = [...sessions].toSorted((a, b) => {
-    switch (sessionSort) {
-      case "recent":
-        return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-      case "messages":
-        return (b.usage?.messageCounts?.total ?? 0) - (a.usage?.messageCounts?.total ?? 0);
-      case "errors":
-        return (b.usage?.messageCounts?.errors ?? 0) - (a.usage?.messageCounts?.errors ?? 0);
-      case "cost":
-        return getSessionValue(b) - getSessionValue(a);
-      case "tokens":
-      default:
-        return getSessionValue(b) - getSessionValue(a);
+    const valueDiff = getSessionSortValue(b) - getSessionSortValue(a);
+    if (valueDiff !== 0) {
+      return valueDiff;
     }
+    const recentDiff = (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+    if (recentDiff !== 0) {
+      return recentDiff;
+    }
+    return formatSessionListLabel(a).localeCompare(formatSessionListLabel(b));
   });
   const sortedWithDir = sessionSortDir === "asc" ? sortedSessions.toReversed() : sortedSessions;
 

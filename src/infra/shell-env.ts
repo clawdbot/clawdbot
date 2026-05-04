@@ -13,7 +13,10 @@ let lastAppliedKeys: string[] = [];
 let cachedShellPath: string | null | undefined;
 let cachedEtcShells: Set<string> | null | undefined;
 let nextExecCacheId = 1;
-const loginShellEnvProbeCache = new Map<string, Array<[string, string]>>();
+const loginShellEnvProbeCache = new Map<
+  string,
+  { ok: true; entries: Array<[string, string]> } | { ok: false; error: string }
+>();
 const execCacheIds = new WeakMap<object, number>();
 
 function resolveShellExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -181,16 +184,18 @@ function probeLoginShellEnv(params: {
   });
   const cached = loginShellEnvProbeCache.get(cacheKey);
   if (cached) {
-    return { ok: true, shellEnv: new Map(cached) };
+    return cached.ok ? { ok: true, shellEnv: new Map(cached.entries) } : cached;
   }
 
   try {
     const stdout = execLoginShellEnvZero({ shell, env: execEnv, exec, timeoutMs });
     const shellEnv = parseShellEnv(stdout);
-    loginShellEnvProbeCache.set(cacheKey, [...shellEnv.entries()]);
+    loginShellEnvProbeCache.set(cacheKey, { ok: true, entries: [...shellEnv.entries()] });
     return { ok: true, shellEnv };
   } catch (err) {
-    return { ok: false, error: formatErrorMessage(err) };
+    const result = { ok: false as const, error: formatErrorMessage(err) };
+    loginShellEnvProbeCache.set(cacheKey, result);
+    return result;
   }
 }
 

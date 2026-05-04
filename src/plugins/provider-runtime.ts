@@ -195,6 +195,7 @@ export function resolveProviderSystemPromptContribution(params: {
     config: params.context.config ?? params.config,
     providerId: params.context.provider ?? params.provider,
     modelId: params.context.modelId,
+    trigger: params.context.trigger,
   });
   const providerOverlay =
     plugin?.resolvePromptOverlay?.({

@@ -270,6 +270,34 @@ describe("shell env fallback", () => {
     expect(exec).toHaveBeenCalledTimes(1);
   });
 
+  it("caches login-shell env probe failures for repeated fallback reads", () => {
+    resetShellPathCacheForTests();
+    const env: NodeJS.ProcessEnv = {};
+    const logger = { warn: vi.fn() };
+    const exec = vi.fn(() => {
+      throw new Error("shell unavailable");
+    });
+
+    for (let i = 0; i < 2; i += 1) {
+      expect(
+        loadShellEnvFallback({
+          enabled: true,
+          env,
+          expectedKeys: ["OPENAI_API_KEY"],
+          exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+          logger,
+        }),
+      ).toMatchObject({
+        ok: false,
+        applied: [],
+        error: "shell unavailable",
+      });
+    }
+
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledTimes(2);
+  });
+
   it("tracks last applied keys across success, skip, and failure paths", () => {
     const successEnv: NodeJS.ProcessEnv = {};
     const successExec = vi.fn(() =>

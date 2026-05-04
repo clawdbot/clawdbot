@@ -8,6 +8,11 @@
   "contracts": {
     "tools": ["llm-task"]
   },
+  "toolMetadata": {
+    "llm-task": {
+      "optional": true
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

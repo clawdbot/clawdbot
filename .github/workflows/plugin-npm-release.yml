@@ -13,6 +13,7 @@ on:
       - "scripts/plugin-npm-publish.sh"
       - "scripts/plugin-npm-release-check.ts"
       - "scripts/plugin-npm-release-plan.ts"
+      - "scripts/verify-plugin-npm-published-runtime.mjs"
   workflow_dispatch:
     inputs:
       publish_scope:
@@ -224,3 +225,9 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: bash scripts/plugin-npm-publish.sh --publish "${{ matrix.plugin.packageDir }}"
+
+      - name: Verify published runtime
+        env:
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+        run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"

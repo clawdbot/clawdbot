@@ -564,6 +564,14 @@ details.usage-filter-select summary::-webkit-details-marker,
   color: var(--text);
 }
 
+.callout.warning.usage-cache-warning {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  background: var(--warn-subtle);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: none;
+}
+
 .usage-empty-state {
   display: grid;
   gap: 12px;

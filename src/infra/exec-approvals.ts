@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
+import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
@@ -121,6 +122,7 @@ export type ExecApprovalRequestPayload = {
   security?: string | null;
   ask?: string | null;
   warningText?: string | null;
+  commandAnalysis?: CommandExplanationSummary | null;
   allowedDecisions?: readonly ExecApprovalDecision[];
   agentId?: string | null;
   resolvedPath?: string | null;

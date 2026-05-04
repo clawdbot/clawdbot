@@ -8,6 +8,7 @@ export type GatewayServiceInstallArgs = {
   programArguments: string[];
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
   description?: string;
 };
 

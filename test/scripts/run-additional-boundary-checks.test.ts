@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   BOUNDARY_CHECKS,
   formatCommand,
+  parseShardSpec,
   resolveConcurrency,
   runChecks,
+  selectChecksForShard,
 } from "../../scripts/run-additional-boundary-checks.mjs";
 
 function createOutputBuffer() {
@@ -40,6 +42,21 @@ describe("run-additional-boundary-checks", () => {
     );
   });
 
+  it("parses and applies CI shard specs", () => {
+    expect(parseShardSpec("2/4")).toEqual({ count: 4, index: 1, label: "2/4" });
+    expect(selectChecksForShard(BOUNDARY_CHECKS, "1/4")).toEqual(
+      BOUNDARY_CHECKS.filter((_check, index) => index % 4 === 0),
+    );
+    const shardedLabels = [1, 2, 3, 4].flatMap((index) =>
+      selectChecksForShard(BOUNDARY_CHECKS, `${index}/4`).map((check) => check.label),
+    );
+    expect(shardedLabels.toSorted()).toEqual(
+      BOUNDARY_CHECKS.map((check) => check.label).toSorted(),
+    );
+    expect(new Set(shardedLabels).size).toBe(BOUNDARY_CHECKS.length);
+    expect(() => parseShardSpec("5/4")).toThrow("Invalid shard spec");
+  });
+
   it("buffers grouped output and reports aggregate failures", async () => {
     const buffer = createOutputBuffer();
     const failures = await runChecks(
@@ -62,9 +79,10 @@ describe("run-additional-boundary-checks", () => {
     expect(failures).toBe(1);
     expect(text).toContain("::group::passes");
     expect(text).toContain("ok-out");
-    expect(text).toContain("[ok] passes");
+    expect(text).toContain("[ok] passes in ");
     expect(text).toContain("::group::fails");
     expect(text).toContain("bad-out");
     expect(text).toContain("::error title=fails failed::fails failed (exit 7)");
+    expect(text).toContain("Additional boundary check timings:");
   });
 });

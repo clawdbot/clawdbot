@@ -5,6 +5,7 @@ import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 export function migrateLegacyConfig(raw: unknown): {
   config: OpenClawConfig | null;
   changes: string[];
+  partiallyValid?: boolean;
 } {
   const { next, changes } = applyLegacyDoctorMigrations(raw);
   if (!next) {
@@ -12,8 +13,8 @@ export function migrateLegacyConfig(raw: unknown): {
   }
   const validated = validateConfigObjectWithPlugins(next);
   if (!validated.ok) {
-    changes.push("Migration applied, but config still invalid; fix remaining issues manually.");
-    return { config: null, changes };
+    changes.push("Migration applied; other validation issues remain — run doctor to review.");
+    return { config: next as OpenClawConfig, changes, partiallyValid: true };
   }
   return { config: validated.config, changes };
 }

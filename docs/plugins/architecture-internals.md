@@ -35,6 +35,11 @@ The safety gates happen **before** runtime execution. Candidates are blocked
 when the entry escapes the plugin root, the path is world-writable, or path
 ownership looks suspicious for non-bundled plugins.
 
+Blocked candidates remain tied to their plugin id for diagnostics. If config
+still references that id, validation reports the plugin as present but blocked
+and points back to the path-safety warning instead of treating the config entry
+as stale.
+
 ### Manifest-first behavior
 
 The manifest is the control-plane source of truth. OpenClaw uses it to:

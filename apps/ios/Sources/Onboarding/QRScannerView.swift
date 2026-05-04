@@ -65,20 +65,11 @@ struct QRScannerView: UIViewControllerRepresentable {
                       let payload = barcode.payloadStringValue
                 else { continue }
 
-                // Try setup code format first (base64url JSON from /pair qr).
-                if let link = GatewayConnectDeepLink.fromSetupCode(payload) {
+                if let link = GatewayConnectDeepLink.fromSetupInput(payload) {
                     self.handled = true
-                    self.parent.onGatewayLink(link)
-                    return
-                }
-
-                // Fall back to deep link URL format (openclaw://gateway?...).
-                if let url = URL(string: payload),
-                   let route = DeepLinkParser.parse(url),
-                   case let .gateway(link) = route
-                {
-                    self.handled = true
-                    self.parent.onGatewayLink(link)
+                    Task { @MainActor in
+                        self.parent.onGatewayLink(link)
+                    }
                     return
                 }
             }

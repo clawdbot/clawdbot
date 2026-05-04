@@ -116,9 +116,3 @@ export function getHistoryLimitFromSessionKey(
 
   return undefined;
 }
-
-/**
- * @deprecated Use getHistoryLimitFromSessionKey instead.
- * Alias for backward compatibility.
- */
-export const getDmHistoryLimitFromSessionKey = getHistoryLimitFromSessionKey;

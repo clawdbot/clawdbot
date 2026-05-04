@@ -267,6 +267,43 @@ describe("qa mock openai server", () => {
     expect(body).toContain("qa-progress-target.txt");
   });
 
+  it("plans deterministic tool-progress reads for exact-marker prompts", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Tool progress QA check: use the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. After that read completes, reply with only this exact marker and no other text: `TOOL_PROGRESS_MARKER_OK`.";
+
+    const toolPlan = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [makeUserInput(prompt)],
+      }),
+    });
+
+    expect(toolPlan.status).toBe(200);
+    const toolPlanBody = await toolPlan.text();
+    expect(toolPlanBody).toContain('"name":"read"');
+    expect(toolPlanBody).toContain("QA_KICKOFF_TASK.md");
+
+    const final = await expectResponsesJson<{
+      output: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_1",
+          output: JSON.stringify({ text: "kickoff task" }),
+        },
+      ],
+    });
+    expect(final.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_MARKER_OK");
+  });
+
   it("requires deterministic tool-progress error prompts to observe a failed tool", async () => {
     const server = await startMockServer();
     const prompt =
@@ -1210,7 +1247,7 @@ describe("qa mock openai server", () => {
       }),
     });
     expect(activeMemorySearch.status).toBe(200);
-    expect(await activeMemorySearch.text()).toContain('"name":"memory_recall"');
+    expect(await activeMemorySearch.text()).toContain('"name":"memory_search"');
 
     const activeMemoryStreamSummary = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",

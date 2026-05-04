@@ -78,7 +78,7 @@ function isGatewayServerTestFile(file: string): boolean {
 }
 
 describe("scripts/lib/ci-node-test-plan.mjs", () => {
-  it("combines the small core unit shards to reduce CI runner fanout", () => {
+  it("splits the slow core unit shards while keeping paired source/security coverage", () => {
     const coreUnitShards = createNodeTestShards()
       .filter((shard) => shard.shardName.startsWith("core-unit-"))
       .map((shard) => ({
@@ -89,12 +89,9 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
 
     expect(coreUnitShards).toEqual([
       {
-        configs: [
-          "test/vitest/vitest.unit-fast.config.ts",
-          "test/vitest/vitest.unit-support.config.ts",
-        ],
+        configs: ["test/vitest/vitest.unit-fast.config.ts"],
         requiresDist: false,
-        shardName: "core-unit-fast-support",
+        shardName: "core-unit-fast",
       },
       {
         configs: [
@@ -108,6 +105,11 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         configs: ["test/vitest/vitest.unit-ui.config.ts"],
         requiresDist: false,
         shardName: "core-unit-ui",
+      },
+      {
+        configs: ["test/vitest/vitest.unit-support.config.ts"],
+        requiresDist: false,
+        shardName: "core-unit-support",
       },
     ]);
   });
@@ -159,13 +161,20 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.infra.config.ts",
           "test/vitest/vitest.hooks.config.ts",
           "test/vitest/vitest.secrets.config.ts",
+        ],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-infra-state",
+      },
+      {
+        configs: [
           "test/vitest/vitest.logging.config.ts",
           "test/vitest/vitest.process.config.ts",
           "test/vitest/vitest.runtime-config.config.ts",
         ],
         requiresDist: false,
         runner: "blacksmith-4vcpu-ubuntu-2404",
-        shardName: "core-runtime-infra",
+        shardName: "core-runtime-infra-process",
       },
       {
         configs: [
@@ -216,7 +225,9 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       "agentic-control-plane-agent-chat",
       "agentic-control-plane-auth-node",
       "agentic-control-plane-http-models",
+      "agentic-control-plane-http-plugin-ws",
       "agentic-control-plane-runtime",
+      "agentic-control-plane-startup-runtime",
     ]);
     expect(controlPlaneShards).toEqual(
       controlPlaneShards.map((shard) => ({

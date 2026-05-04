@@ -572,6 +572,30 @@ describe("TelegramPollingSession", () => {
     expect(createTelegramTransport).toHaveBeenCalledTimes(1);
   });
 
+  it("starts polling when webhook cleanup times out during startup", async () => {
+    const abort = new AbortController();
+    const cleanupError = new Error("Telegram deleteWebhook timed out after 15000ms");
+    const bot = makeBot();
+    bot.api.deleteWebhook.mockRejectedValueOnce(cleanupError);
+    createTelegramBotMock.mockReturnValueOnce(bot);
+    runMock.mockReturnValueOnce({
+      task: async () => {
+        abort.abort();
+      },
+      stop: vi.fn(async () => undefined),
+      isRunning: () => false,
+    });
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+    });
+
+    await session.runUntilAbort();
+
+    expect(bot.api.deleteWebhook).toHaveBeenCalledTimes(1);
+    expect(runMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not trigger stall restart shortly after a getUpdates error", async () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);

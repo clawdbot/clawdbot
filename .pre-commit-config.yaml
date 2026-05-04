@@ -25,7 +25,7 @@ repos:
     rev: v0.11.0
     hooks:
       - id: shellcheck
-        args: [--severity=error] # Only fail on errors, not warnings/info
+        args: [--rcfile=config/shellcheckrc, --severity=error] # Only fail on errors, not warnings/info
         # Exclude vendor and scripts with embedded code or known issues
         exclude: "^(vendor/|scripts/e2e/)"
 
@@ -40,8 +40,15 @@ repos:
     rev: v1.22.0
     hooks:
       - id: zizmor
-        args: [--persona=regular, --min-severity=medium, --min-confidence=medium]
-        exclude: "^(vendor/|Swabble/)"
+        args:
+          [
+            --config,
+            .github/zizmor.yml,
+            --persona=regular,
+            --min-severity=medium,
+            --min-confidence=medium,
+          ]
+        exclude: "^(vendor/|apps/swabble/)"
 
   # Python checks for skills scripts
   - repo: https://github.com/astral-sh/ruff-pre-commit
@@ -49,13 +56,13 @@ repos:
     hooks:
       - id: ruff
         files: "^skills/.*\\.py$"
-        args: [--config, pyproject.toml]
+        args: [--config, skills/pyproject.toml]
 
   - repo: local
     hooks:
       - id: skills-python-tests
         name: skills python tests
-        entry: pytest -q skills
+        entry: pytest -q -c skills/pyproject.toml skills
         language: python
         additional_dependencies: [pytest>=8, <9]
         pass_filenames: false
@@ -90,7 +97,7 @@ repos:
       # swiftlint (same as CI)
       - id: swiftlint
         name: swiftlint
-        entry: swiftlint --config .swiftlint.yml
+        entry: swiftlint lint --config config/swiftlint.yml
         language: system
         pass_filenames: false
         types: [swift]
@@ -98,7 +105,7 @@ repos:
       # swiftformat --lint (same as CI)
       - id: swiftformat
         name: swiftformat
-        entry: swiftformat --lint apps/macos/Sources --config .swiftformat
+        entry: swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
         language: system
         pass_filenames: false
         types: [swift]

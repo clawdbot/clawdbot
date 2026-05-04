@@ -26,6 +26,7 @@ For OpenClaw core issues, submit through a private [GitHub Security Advisory](ht
 Maintainers may close, hide, delete, or otherwise take down public issues and PRs that disclose vulnerabilities or active security issues. We will redirect those reports through the private disclosure process so the issue can be triaged and fixed without giving attackers a public playbook.
 
 For full reporting instructions see our [Trust page](https://trust.openclaw.ai).
+For maintainer response workflow, see the [incident response plan](docs/security/incident-response.md).
 
 OpenClaw does not currently run a paid bug bounty program. Please still disclose responsibly so we can fix real issues quickly. The best way to help the project right now is to send high-signal reports and, when practical, focused PRs.
 

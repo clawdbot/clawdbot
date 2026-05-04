@@ -2,6 +2,7 @@ import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { withBundledPluginVitestCompat } from "./bundled-compat.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
   isActivatedManifestOwner,
@@ -106,7 +107,7 @@ function resolveEffectiveRegistryPluginActivation(params: {
     origin: params.plugin.origin,
     config: params.normalizedConfig,
     rootConfig: params.rootConfig,
-    enabledByDefault: params.plugin.enabledByDefault,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin),
   });
 }
 
@@ -114,7 +115,7 @@ function toManifestOwnerRecord(plugin: PluginRegistryRecord) {
   return {
     id: plugin.pluginId,
     origin: plugin.origin,
-    enabledByDefault: plugin.enabledByDefault,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
   };
 }
 

@@ -43,7 +43,9 @@ export type { ProviderPlugin } from "../plugins/types.js";
 export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 export {
   GPT5_BEHAVIOR_CONTRACT,
+  GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY,
   GPT5_FRIENDLY_PROMPT_OVERLAY,
+  GPT5_HEARTBEAT_PROMPT_OVERLAY,
   isGpt5ModelId,
   normalizeGpt5PromptOverlayMode,
   renderGpt5PromptOverlay,

@@ -137,6 +137,12 @@ function normalizeErrorMessage(error: unknown): string {
   return String(error);
 }
 
+function isDevicePairingApprovalDenied(error: unknown): boolean {
+  return normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error)).includes(
+    "device pairing approval denied",
+  );
+}
+
 function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): boolean {
   const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
   if (!readConnectPairingRequiredMessage(message)) {
@@ -197,6 +203,14 @@ async function approvePairingWithFallback(
       scopes ? { scopes } : undefined,
     );
   } catch (error) {
+    if (isDevicePairingApprovalDenied(error) && !scopes?.includes(ADMIN_SCOPE)) {
+      return await callGatewayCli(
+        "device.pair.approve",
+        opts,
+        { requestId },
+        { scopes: [ADMIN_SCOPE] },
+      );
+    }
     if (!shouldUseLocalPairingFallback(opts, error)) {
       throw error;
     }

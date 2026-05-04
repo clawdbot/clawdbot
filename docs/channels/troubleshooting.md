@@ -60,11 +60,12 @@ Full troubleshooting: [Telegram troubleshooting](/channels/telegram#troubleshoot
 
 ### Discord failure signatures
 
-| Symptom                         | Fastest check                       | Fix                                                       |
-| ------------------------------- | ----------------------------------- | --------------------------------------------------------- |
-| Bot online but no guild replies | `openclaw channels status --probe`  | Allow guild/channel and verify message content intent.    |
-| Group messages ignored          | Check logs for mention gating drops | Mention bot or set guild/channel `requireMention: false`. |
-| DM replies missing              | `openclaw pairing list discord`     | Approve DM pairing or adjust DM policy.                   |
+| Symptom                                   | Fastest check                                                          | Fix                                                                                                                                                                     |
+| ----------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bot online but no guild replies           | `openclaw channels status --probe`                                     | Allow guild/channel and verify message content intent.                                                                                                                  |
+| Group messages ignored                    | Check logs for mention gating drops                                    | Mention bot or set guild/channel `requireMention: false`.                                                                                                               |
+| Typing/token usage but no Discord message | Session log shows assistant text with `didSendViaMessagingTool: false` | The model answered privately instead of calling the message tool. Use a tool-call-reliable model, or set `messages.groupChat.visibleReplies: "automatic"` to auto-post. |
+| DM replies missing                        | `openclaw pairing list discord`                                        | Approve DM pairing or adjust DM policy.                                                                                                                                 |
 
 Full troubleshooting: [Discord troubleshooting](/channels/discord#troubleshooting)
 

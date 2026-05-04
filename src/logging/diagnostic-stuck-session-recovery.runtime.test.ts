@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -127,6 +130,57 @@ describe("stuck session recovery", () => {
     expect(mocks.waitForEmbeddedPiRunEnd).toHaveBeenCalledWith("session-1", 15_000);
     expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+  });
+
+  it("logs stopped cron context when aborting an active embedded run", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-recovery-context-"));
+    try {
+      process.env.OPENCLAW_STATE_DIR = tempDir;
+      fs.mkdirSync(path.join(tempDir, "cron"), { recursive: true });
+      fs.writeFileSync(
+        path.join(tempDir, "cron", "jobs.json"),
+        JSON.stringify({
+          jobs: [{ id: "job-123", name: "Twitter Mention Moderation Agent" }],
+        }),
+      );
+      fs.mkdirSync(path.join(tempDir, "agents", "clawblocker", "sessions"), {
+        recursive: true,
+      });
+      fs.writeFileSync(
+        path.join(tempDir, "agents", "clawblocker", "sessions", "run-456.jsonl"),
+        JSON.stringify({
+          message: { role: "assistant", content: "There are 40 cached mentions." },
+        }) + "\n",
+      );
+      mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("run-456");
+      mocks.abortEmbeddedPiRun.mockReturnValue(true);
+      mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
+
+      await recoverStuckDiagnosticSession({
+        sessionId: "run-456",
+        sessionKey: "agent:clawblocker:cron:job-123:run:run-456",
+        ageMs: 629_000,
+        allowActiveAbort: true,
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+
+    expect(mocks.diag.warn).toHaveBeenCalledWith(
+      expect.stringContaining("action=abort_embedded_run"),
+    );
+    expect(mocks.diag.warn).toHaveBeenCalledWith(
+      expect.stringContaining('stopped="Twitter Mention Moderation Agent"'),
+    );
+    expect(mocks.diag.warn).toHaveBeenCalledWith(
+      expect.stringContaining('lastAssistant="There are 40 cached mentions."'),
+    );
   });
 
   it("force-clears and releases the session lane when abort cleanup does not drain", async () => {

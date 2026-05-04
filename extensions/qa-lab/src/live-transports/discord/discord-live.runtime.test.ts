@@ -6,29 +6,8 @@ import {
 } from "../shared/live-transport-scenarios.js";
 import { __testing } from "./discord-live.runtime.js";
 
-const fetchWithSsrFGuardMock = vi.hoisted(() =>
-  vi.fn(async (params: { url: string; init?: RequestInit; signal?: AbortSignal }) => ({
-    response: await fetch(params.url, {
-      ...params.init,
-      signal: params.signal,
-    }),
-    release: async () => {},
-  })),
-);
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
-    "openclaw/plugin-sdk/ssrf-runtime",
-  );
-  return {
-    ...actual,
-    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-  };
-});
-
 describe("discord live qa runtime", () => {
   afterEach(() => {
-    fetchWithSsrFGuardMock.mockClear();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -162,6 +141,47 @@ describe("discord live qa runtime", () => {
     });
   });
 
+  it("injects tool-only Discord status reaction config for the Mantis scenario", () => {
+    const next = __testing.buildDiscordQaConfig(
+      {},
+      {
+        guildId: "123456789012345678",
+        channelId: "223456789012345678",
+        driverBotId: "423456789012345678",
+        sutAccountId: "sut",
+        sutBotToken: "sut-token",
+      },
+      { statusReactionsToolOnly: true },
+    );
+
+    expect(next.messages).toMatchObject({
+      ackReaction: "👀",
+      ackReactionScope: "all",
+      groupChat: { visibleReplies: "message_tool" },
+      statusReactions: {
+        enabled: true,
+        timing: { debounceMs: 0 },
+      },
+    });
+    expect(next.channels?.discord).toMatchObject({
+      accounts: {
+        sut: {
+          allowBots: true,
+          guilds: {
+            "123456789012345678": {
+              requireMention: false,
+              channels: {
+                "223456789012345678": {
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("normalizes observed Discord messages", () => {
     expect(
       __testing.normalizeDiscordObservedMessage({
@@ -227,6 +247,80 @@ describe("discord live qa runtime", () => {
       "discord-mention-gating",
       "discord-native-help-command-registration",
     ]);
+    expect(
+      __testing.findScenario(["discord-status-reactions-tool-only"]).map((scenario) => scenario.id),
+    ).toEqual(["discord-status-reactions-tool-only"]);
+  });
+
+  it("collects the status reaction sequence across timeline snapshots", () => {
+    expect(
+      __testing.collectSeenReactionSequence(
+        [
+          {
+            elapsedMs: 0,
+            observedAt: "2026-05-03T12:00:00.000Z",
+            reactions: [{ emoji: "👀", count: 1, me: true }],
+          },
+          {
+            elapsedMs: 250,
+            observedAt: "2026-05-03T12:00:00.250Z",
+            reactions: [
+              { emoji: "👀", count: 1, me: true },
+              { emoji: "🤔", count: 1, me: true },
+            ],
+          },
+          {
+            elapsedMs: 500,
+            observedAt: "2026-05-03T12:00:00.500Z",
+            reactions: [{ emoji: "👍", count: 1, me: true }],
+          },
+        ],
+        ["👀", "🤔", "👍"],
+      ),
+    ).toEqual(["👀", "🤔", "👍"]);
+  });
+
+  it("normalizes reaction snapshots from Discord messages", () => {
+    expect(
+      __testing.normalizeDiscordReactionSnapshot({
+        startedAtMs: new Date("2026-05-03T12:00:00.000Z").getTime(),
+        observedAt: new Date("2026-05-03T12:00:01.000Z"),
+        message: {
+          id: "523456789012345678",
+          channel_id: "223456789012345678",
+          reactions: [
+            { count: 1, emoji: { name: "🤔" }, me: true },
+            { count: 2, emoji: { name: "👀" }, me: false },
+          ],
+        },
+      }),
+    ).toEqual({
+      elapsedMs: 1000,
+      observedAt: "2026-05-03T12:00:01.000Z",
+      reactions: [
+        { emoji: "👀", count: 2, me: false },
+        { emoji: "🤔", count: 1, me: true },
+      ],
+    });
+  });
+
+  it("renders a human-readable status reaction timeline artifact", () => {
+    const html = __testing.renderDiscordStatusReactionHtml({
+      scenarioTitle: "Discord status reactions",
+      expectedSequence: ["👀", "🤔", "👍"],
+      seenSequence: ["👀", "🤔"],
+      snapshots: [
+        {
+          elapsedMs: 0,
+          observedAt: "2026-05-03T12:00:00.000Z",
+          reactions: [{ emoji: "👀", count: 1, me: true }],
+        },
+      ],
+    });
+
+    expect(html).toContain("Discord status reactions");
+    expect(html).toContain("Expected: 👀 → 🤔 → 👍");
+    expect(html).toContain("Seen: 👀 → 🤔");
   });
 
   it("waits for the Discord account to become connected, not just running", async () => {
@@ -387,7 +481,7 @@ describe("discord live qa runtime", () => {
     }
   });
 
-  it("adds an abort deadline to Discord API requests", async () => {
+  it("uses the Discord API helper timeout for identity probes", async () => {
     const controller = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
     let signal: AbortSignal | undefined;
@@ -404,20 +498,43 @@ describe("discord live qa runtime", () => {
       }),
     );
 
-    await expect(
-      __testing.callDiscordApi({
-        token: "token",
-        path: "/users/@me",
-        timeoutMs: 25,
-      }),
-    ).resolves.toEqual({
+    await expect(__testing.getCurrentDiscordUser("token")).resolves.toEqual({
       id: "423456789012345678",
     });
-    expect(timeoutSpy).toHaveBeenCalledWith(25);
+    expect(timeoutSpy).toHaveBeenCalledWith(15_000);
     expect(signal).toBe(controller.signal);
     expect(signal?.aborted).toBe(false);
     controller.abort();
     expect(signal?.aborted).toBe(true);
+  });
+
+  it("retries Discord REST requests after a 429 rate limit", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ message: "You are being rate limited.", retry_after: 0 }), {
+            status: 429,
+            headers: {
+              "content-type": "application/json",
+            },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: "423456789012345678" }), {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+            },
+          }),
+        ),
+    );
+
+    await expect(__testing.getCurrentDiscordUser("token")).resolves.toEqual({
+      id: "423456789012345678",
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it("redacts observed message content by default in artifacts", () => {

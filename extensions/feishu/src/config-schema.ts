@@ -68,6 +68,7 @@ const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 // Streaming card mode: when enabled, card replies use Feishu's Card Kit streaming API
 // for incremental text display with a "Thinking..." placeholder
 const StreamingModeSchema = z.boolean().optional();
+const BlockStreamingSchema = z.boolean().optional();
 
 const BlockStreamingCoalesceSchema = z
   .object({
@@ -188,6 +189,7 @@ const FeishuSharedConfigShape = {
   dms: z.record(z.string(), DmConfigSchema).optional(),
   textChunkLimit: z.number().int().positive().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
+  blockStreaming: BlockStreamingSchema,
   blockStreamingCoalesce: BlockStreamingCoalesceSchema,
   mediaMaxMb: z.number().positive().optional(),
   httpTimeoutMs: z.number().int().positive().max(300_000).optional(),

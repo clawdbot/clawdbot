@@ -41,16 +41,23 @@ function createDeps(overrides: Partial<CodexCommandDeps> = {}): Partial<CodexCom
     codexControlRequest: vi.fn(),
     listCodexAppServerModels: vi.fn(),
     readCodexStatusProbes: vi.fn(),
-    requestOptions: vi.fn((_pluginConfig: unknown, limit: number) => ({
-      limit,
-      timeoutMs: 1000,
-      startOptions: {
-        transport: "stdio",
-        command: "codex",
-        args: ["app-server", "--listen", "stdio://"],
-        headers: {},
-      } satisfies CodexAppServerStartOptions,
-    })),
+    requestOptions: vi.fn(
+      (
+        _pluginConfig: unknown,
+        limit: number,
+        config?: Parameters<NonNullable<CodexCommandDeps["requestOptions"]>>[2],
+      ) => ({
+        limit,
+        timeoutMs: 1000,
+        startOptions: {
+          transport: "stdio",
+          command: "codex",
+          args: ["app-server", "--listen", "stdio://"],
+          headers: {},
+        } satisfies CodexAppServerStartOptions,
+        config,
+      }),
+    ),
     safeCodexControlRequest: vi.fn(),
     ...overrides,
   };
@@ -132,6 +139,7 @@ describe("codex command", () => {
   });
 
   it("shows model ids from Codex app-server", async () => {
+    const config = { auth: { order: { "openai-codex": ["openai-codex:work"] } } };
     const deps = createDeps({
       listCodexAppServerModels: vi.fn(async () => ({
         models: [
@@ -145,9 +153,13 @@ describe("codex command", () => {
       })),
     });
 
-    await expect(handleCodexCommand(createContext("models"), { deps })).resolves.toEqual({
+    await expect(
+      handleCodexCommand(createContext("models", undefined, { config }), { deps }),
+    ).resolves.toEqual({
       text: "Codex models:\n- gpt-5.4",
     });
+    expect(deps.requestOptions).toHaveBeenCalledWith(undefined, 100, config);
+    expect(deps.listCodexAppServerModels).toHaveBeenCalledWith(expect.objectContaining({ config }));
   });
 
   it("shows when Codex app-server model output is truncated", async () => {
@@ -172,6 +184,7 @@ describe("codex command", () => {
   });
 
   it("reports status unavailable when every Codex probe fails", async () => {
+    const config = { auth: { order: { "openai-codex": ["openai-codex:work"] } } };
     const offline = { ok: false as const, error: "offline" };
     const deps = createDeps({
       readCodexStatusProbes: vi.fn(async () => ({
@@ -183,7 +196,9 @@ describe("codex command", () => {
       })),
     });
 
-    await expect(handleCodexCommand(createContext("status"), { deps })).resolves.toEqual({
+    await expect(
+      handleCodexCommand(createContext("status", undefined, { config }), { deps }),
+    ).resolves.toEqual({
       text: [
         "Codex app-server: unavailable",
         "Models: offline",
@@ -193,6 +208,7 @@ describe("codex command", () => {
         "Skills: offline",
       ].join("\n"),
     });
+    expect(deps.readCodexStatusProbes).toHaveBeenCalledWith(undefined, config);
   });
 
   it("formats generated account/read responses", async () => {
@@ -1374,7 +1390,13 @@ describe("codex command", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-123", cwd: "/repo" }),
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-123",
+        cwd: "/repo",
+        authProfileId: "openai-codex:work",
+        modelProvider: "openai",
+      }),
     );
     const startCodexConversationThread = vi.fn(async () => ({
       kind: "codex-app-server-session" as const,
@@ -1416,11 +1438,13 @@ describe("codex command", () => {
     });
     expect(startCodexConversationThread).toHaveBeenCalledWith({
       pluginConfig: undefined,
+      config: {},
       sessionFile,
       workspaceDir: "/repo",
       threadId: "thread-123",
       model: "gpt-5.4",
       modelProvider: "openai",
+      authProfileId: "openai-codex:work",
     });
     expect(requestConversationBinding).toHaveBeenCalledWith({
       summary: "Codex app-server thread thread-123 in /repo",

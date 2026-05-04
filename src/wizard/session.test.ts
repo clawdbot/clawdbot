@@ -109,4 +109,27 @@ describe("WizardSession", () => {
     expect(done.done).toBe(true);
     expect(done.status).toBe("done");
   });
+
+  test("forwards sensitive flag to the emitted text step", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.text({ message: "API key", sensitive: true });
+      await prompter.text({ message: "Username" });
+    });
+
+    const sensitiveStep = (await session.next()).step;
+    expect(sensitiveStep?.type).toBe("text");
+    expect(sensitiveStep?.sensitive).toBe(true);
+    if (!sensitiveStep) {
+      throw new Error("expected sensitive step");
+    }
+    await session.answer(sensitiveStep.id, "fake-key-aa11");
+
+    const plainStep = (await session.next()).step;
+    expect(plainStep?.type).toBe("text");
+    expect(plainStep?.sensitive).toBeUndefined();
+    if (!plainStep) {
+      throw new Error("expected plain step");
+    }
+    await session.answer(plainStep.id, "alice");
+  });
 });

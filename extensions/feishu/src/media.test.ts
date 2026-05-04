@@ -361,7 +361,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       contentType: "audio/mpeg",
     });
 
-    await sendMediaFeishu({
+    const result = await sendMediaFeishu({
       cfg: emptyConfig,
       to: "user:ou_target",
       mediaUrl: "https://example.com/reply.mp3",
@@ -382,6 +382,7 @@ describe("sendMediaFeishu msg_type routing", () => {
         data: expect.objectContaining({ msg_type: "file" }),
       }),
     );
+    expect(result).toEqual(expect.objectContaining({ voiceIntentDegradedToFile: true }));
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("audioAsVoice transcode failed"),
       expect.any(Error),

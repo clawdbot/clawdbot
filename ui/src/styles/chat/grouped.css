@@ -217,9 +217,7 @@ img.chat-avatar {
   border-radius: var(--radius-lg);
   padding: 10px 14px;
   box-shadow: none;
-  transition:
-    background var(--duration-fast) ease-out,
-    border-color var(--duration-fast) ease-out;
+  transition: border-color var(--duration-fast) ease-out;
   width: auto;
   max-width: 100%;
   box-sizing: border-box;
@@ -347,7 +345,7 @@ img.chat-avatar {
 }
 
 .chat-bubble:hover {
-  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
 }
 
 .chat-bubble--tool-shell:hover {
@@ -366,7 +364,7 @@ img.chat-avatar {
 }
 
 .chat-group.user .chat-bubble:hover {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
 }
 
 /* Streaming animation */

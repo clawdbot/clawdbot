@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { getUsageCacheRefreshTitle } from "../usage-cache-status.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "../usage-helpers.ts";
 import {
   buildAggregatesFromSessions,
@@ -299,6 +300,7 @@ export function renderUsage(props: UsageProps) {
 
   const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates);
   const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;
+  const cacheStatusTitle = getUsageCacheRefreshTitle(data.cacheStatus);
   const hasMissingCost =
     (displayTotals?.missingCostEntries ?? 0) > 0 ||
     (displayTotals
@@ -422,8 +424,10 @@ export function renderUsage(props: UsageProps) {
         <div class="usage-header-row">
           <div class="usage-header-title">
             <div class="card-title usage-section-title">${t("usage.filters.title")}</div>
-            ${data.loading
-              ? html`<span class="usage-refresh-indicator">${t("usage.loading.badge")}</span>`
+            ${data.loading || cacheStatusTitle
+              ? html`<span class="usage-refresh-indicator" title=${cacheStatusTitle ?? ""}>
+                  ${t("usage.loading.badge")}
+                </span>`
               : nothing}
             ${isEmpty
               ? html`<span class="usage-query-hint">${t("usage.empty.hint")}</span>`
@@ -707,6 +711,13 @@ export function renderUsage(props: UsageProps) {
 
         ${data.error
           ? html`<div class="callout danger usage-callout">${data.error}</div>`
+          : nothing}
+        ${cacheStatusTitle
+          ? html`
+              <div class="callout warning usage-callout usage-cache-warning">
+                ${t("usage.cacheStatus.warning")} ${cacheStatusTitle}
+              </div>
+            `
           : nothing}
         ${data.sessionsLimitReached
           ? html`

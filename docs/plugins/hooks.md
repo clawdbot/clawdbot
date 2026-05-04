@@ -61,6 +61,32 @@ keep registration order.
   timeout. Omit it to use the default observation/decision timeout that the
   hook runner applies generically.
 
+Operators can also set hook budgets without patching plugin code:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "my-plugin": {
+        "hooks": {
+          "timeoutMs": 30000,
+          "timeouts": {
+            "before_prompt_build": 90000,
+            "agent_end": 60000
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`hooks.timeouts.<hookName>` overrides `hooks.timeoutMs`, which overrides the
+plugin-authored `api.on(..., { timeoutMs })` value. Each configured value must
+be a positive integer no greater than 600000 milliseconds. Prefer per-hook
+overrides for known slow hooks so one plugin does not get a longer budget
+everywhere.
+
 Each hook receives `event.context.pluginConfig`, the resolved config for the
 plugin that registered that handler. Use it for hook decisions that need
 current plugin options; OpenClaw injects it per handler without mutating the

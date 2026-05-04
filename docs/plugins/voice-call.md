@@ -250,6 +250,9 @@ Current runtime behaviour:
     Defaults: API key from `realtime.providers.google.apiKey`,
     `GEMINI_API_KEY`, or `GOOGLE_GENERATIVE_AI_API_KEY`; model
     `gemini-2.5-flash-native-audio-preview-12-2025`; voice `Kore`.
+    `sessionResumption` and `contextWindowCompression` default on for longer,
+    reconnectable calls. Use `silenceDurationMs`, `startSensitivity`, and
+    `endSensitivity` to tune faster turn-taking on telephony audio.
 
     ```json5
     {
@@ -270,6 +273,8 @@ Current runtime behaviour:
                     apiKey: "${GEMINI_API_KEY}",
                     model: "gemini-2.5-flash-native-audio-preview-12-2025",
                     voice: "Kore",
+                    silenceDurationMs: 500,
+                    startSensitivity: "high",
                   },
                 },
               },

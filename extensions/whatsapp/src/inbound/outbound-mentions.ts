@@ -175,13 +175,15 @@ function buildMentionTargetMaps(participants: readonly WhatsAppOutboundMentionPa
 function shouldSkipMentionAt(
   text: string,
   index: number,
+  end: number,
   codeRanges: readonly TextRange[],
 ): boolean {
   if (isInRange(index, codeRanges)) {
     return true;
   }
   const previous = index > 0 ? text[index - 1] : "";
-  return Boolean(previous && /[\w@]/.test(previous));
+  const next = text[end] ?? "";
+  return Boolean((previous && /[\w@]/.test(previous)) || (next && /[\w@]/.test(next)));
 }
 
 export function resolveWhatsAppOutboundMentions(params: {
@@ -209,10 +211,10 @@ export function resolveWhatsAppOutboundMentions(params: {
 
   for (const match of params.text.matchAll(OUTBOUND_MENTION_RE)) {
     const start = match.index;
-    if (shouldSkipMentionAt(params.text, start, codeRanges)) {
+    const token = match[0];
+    if (shouldSkipMentionAt(params.text, start, start + token.length, codeRanges)) {
       continue;
     }
-    const token = match[0];
     const digits = match[1].replace(/\D/g, "");
     const target = token.startsWith("@+")
       ? (byPhone.get(digits) ?? byLid.get(digits))

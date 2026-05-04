@@ -494,6 +494,26 @@ describe("POST /tools/invoke", () => {
     );
   });
 
+  it("uses tools.alsoAllow for optional plugin discovery without loading every plugin tool", async () => {
+    cfg = {
+      ...cfg,
+      agents: { list: [{ id: "main", default: true }] },
+      tools: { alsoAllow: ["plugin_doctor"] },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "plugin_doctor",
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result).toMatchObject({ ok: true, permissionFlow: true });
+    expect(lastCreateOpenClawToolsContext?.pluginToolAllowlist).toEqual(
+      expect.arrayContaining(["plugin_doctor"]),
+    );
+    expect(lastCreateOpenClawToolsContext?.pluginToolAllowlist).not.toContain("*");
+  });
+
   it("blocks tool execution when before_tool_call rejects the invoke", async () => {
     setMainAllowedTools({ allow: ["tools_invoke_test"] });
     hookMocks.runBeforeToolCallHook.mockResolvedValueOnce({

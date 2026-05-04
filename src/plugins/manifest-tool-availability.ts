@@ -215,6 +215,10 @@ function toolMetadataPasses(params: {
   env: NodeJS.ProcessEnv;
   hasAuthForProvider?: (providerId: string) => boolean;
 }): boolean {
+  const authSignals = listToolAuthSignals(params.metadata);
+  if (!params.metadata.configSignals?.length && authSignals.length === 0) {
+    return true;
+  }
   if (
     params.metadata.configSignals?.some((signal) =>
       manifestConfigSignalPasses({
@@ -226,7 +230,7 @@ function toolMetadataPasses(params: {
   ) {
     return true;
   }
-  for (const signal of listToolAuthSignals(params.metadata)) {
+  for (const signal of authSignals) {
     if (
       !manifestProviderBaseUrlGuardPasses({
         config: params.config,

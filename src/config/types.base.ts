@@ -10,6 +10,7 @@ export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 export type ContextVisibilityMode = "all" | "allowlist" | "allowlist_quote";
 export type TextChunkMode = "length" | "newline";
 export type StreamingMode = "off" | "partial" | "block" | "progress";
+export type ChannelStreamingCommandTextMode = "raw" | "status";
 
 export type OutboundRetryConfig = {
   /** Max retry attempts for outbound requests (default: 3). */
@@ -34,6 +35,21 @@ export type BlockStreamingChunkConfig = {
   breakPreference?: "paragraph" | "newline" | "sentence";
 };
 
+export type ChannelStreamingProgressConfig = {
+  /** Initial progress title. "auto" picks from labels; false hides the title. Default: "auto". */
+  label?: string | false;
+  /** Candidate labels for label="auto". Defaults to OpenClaw's built-in progress labels. */
+  labels?: string[];
+  /** Maximum number of progress lines to keep below the label. Default: 8. */
+  maxLines?: number;
+  /** Progress draft renderer. "text" is the portable fallback; "rich" lets supported channels use structured UI. */
+  render?: "text" | "rich";
+  /** Include compact tool/task progress in the draft. Default: true. */
+  toolProgress?: boolean;
+  /** Command/exec progress detail in the draft. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
+  commandText?: ChannelStreamingCommandTextMode;
+};
+
 export type ChannelStreamingPreviewConfig = {
   /** Chunking thresholds for preview-draft updates while streaming. */
   chunk?: BlockStreamingChunkConfig;
@@ -43,6 +59,8 @@ export type ChannelStreamingPreviewConfig = {
    * Default: true.
    */
   toolProgress?: boolean;
+  /** Command/exec progress detail in the preview. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
+  commandText?: ChannelStreamingCommandTextMode;
 };
 
 export type ChannelStreamingBlockConfig = {
@@ -69,6 +87,7 @@ export type ChannelStreamingConfig = {
    */
   nativeTransport?: boolean;
   preview?: ChannelStreamingPreviewConfig;
+  progress?: ChannelStreamingProgressConfig;
   block?: ChannelStreamingBlockConfig;
 };
 
@@ -76,12 +95,12 @@ export type ChannelDeliveryStreamingConfig = Pick<ChannelStreamingConfig, "chunk
 
 export type ChannelPreviewStreamingConfig = Pick<
   ChannelStreamingConfig,
-  "mode" | "chunkMode" | "preview" | "block"
+  "mode" | "chunkMode" | "preview" | "progress" | "block"
 >;
 
 export type SlackChannelStreamingConfig = Pick<
   ChannelStreamingConfig,
-  "mode" | "chunkMode" | "preview" | "block" | "nativeTransport"
+  "mode" | "chunkMode" | "preview" | "progress" | "block" | "nativeTransport"
 >;
 
 export type MarkdownTableMode = "off" | "bullets" | "code" | "block";

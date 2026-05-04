@@ -1106,4 +1106,40 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       }),
     );
   });
+
+  it("sends an empty-response fallback when a plugin command returns undefined", async () => {
+    pluginRuntimeMocks.executePluginCommand.mockResolvedValue(undefined as never);
+
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "codex",
+      cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
+      useAccessGroups: false,
+      pluginCommandSpecs: [
+        {
+          name: "codex",
+          description: "Codex",
+          acceptsArgs: true,
+        },
+      ] as TelegramPluginCommandSpecs,
+    });
+    pluginRuntimeMocks.matchPluginCommand.mockReturnValue({
+      command: {
+        name: "codex",
+        description: "Codex",
+        handler: vi.fn(),
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "Codex",
+        requireAuth: true,
+      },
+      args: "status",
+    });
+
+    await handler(createTelegramPrivateCommandContext({ match: "status" }));
+
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{ text: "No response generated. Please try again." }],
+      }),
+    );
+  });
 });

@@ -162,7 +162,7 @@ jobs:
           bad_paths="$(
             git diff --name-only | while IFS= read -r path; do
               case "$path" in
-                apps/*|extensions/*|packages/*|scripts/*|src/*|Swabble/*|test/*|ui/*) ;;
+                apps/*|extensions/*|packages/*|scripts/*|src/*|test/*|ui/*) ;;
                 *) printf '%s\n' "$path" ;;
               esac
             done
@@ -240,7 +240,7 @@ jobs:
 
           git config user.name "openclaw-test-performance-agent[bot]"
           git config user.email "openclaw-test-performance-agent[bot]@users.noreply.github.com"
-          git add apps extensions packages scripts src Swabble test ui
+          git add apps extensions packages scripts src test ui
           git commit --no-verify -m "test: optimize slow tests"
 
           for attempt in 1 2 3 4 5; do

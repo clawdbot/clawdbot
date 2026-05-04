@@ -729,6 +729,121 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
+  it("prefers session model over defaults when models differ (#76482)", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: {
+            modelProvider: "anthropic",
+            model: "claude-sonnet-4-6",
+            thinkingLevels: [
+              { id: "off", label: "off" },
+              { id: "minimal", label: "minimal" },
+              { id: "low", label: "low" },
+              { id: "medium", label: "medium" },
+              { id: "high", label: "high" },
+            ],
+            thinkingOptions: ["off", "minimal", "low", "medium", "high"],
+            thinkingDefault: "off",
+          },
+          sessions: [
+            row("agent:main:main", {
+              modelProvider: "deepseek",
+              model: "deepseek-v4-pro",
+              thinkingLevels: [
+                { id: "off", label: "off" },
+                { id: "minimal", label: "minimal" },
+                { id: "low", label: "low" },
+                { id: "medium", label: "medium" },
+                { id: "high", label: "high" },
+                { id: "xhigh", label: "xhigh" },
+                { id: "max", label: "max" },
+              ],
+            }),
+          ],
+        };
+      }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "deepseek-v4-pro", provider: "deepseek", reasoning: true }],
+        };
+      }
+      if (method === "sessions.patch") {
+        return { ok: true, ...((payload ?? {}) as object) };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const status = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "think",
+      "",
+    );
+    const setMax = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "think",
+      "max",
+    );
+
+    expect(status.content).toBe(
+      "Current thinking level: off.\nOptions: off, minimal, low, medium, high, xhigh, max.",
+    );
+    expect(setMax.content).toBe("Thinking level set to **max**.");
+  });
+
+  it("does not use extended defaults for session with different model when thinkingLevels is empty (#76482)", async () => {
+    // Regression: when session model differs from defaults and session has no thinkingLevels,
+    // we should NOT blindly use defaults (which could have extra levels like xhigh/max
+    // from a different model). The client-side fallback uses the base thinking levels.
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: {
+            modelProvider: "deepseek",
+            model: "deepseek-v4-pro",
+            thinkingLevels: [
+              { id: "off", label: "off" },
+              { id: "minimal", label: "minimal" },
+              { id: "low", label: "low" },
+              { id: "medium", label: "medium" },
+              { id: "high", label: "high" },
+              { id: "xhigh", label: "xhigh" },
+              { id: "max", label: "max" },
+            ],
+            thinkingOptions: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+            thinkingDefault: "high",
+          },
+          sessions: [
+            row("agent:main:main", {
+              modelProvider: "anthropic",
+              model: "claude-sonnet-4-6",
+              // thinkingLevels intentionally absent — lightweight row
+            }),
+          ],
+        };
+      }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "claude-sonnet-4-6", provider: "anthropic", reasoning: true }],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const status = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "think",
+      "",
+    );
+
+    // Should NOT show DeepSeek defaults (xhigh, max) for an Anthropic session
+    expect(status.content).not.toContain("xhigh");
+    expect(status.content).not.toContain("max");
+  });
+
   it("reports the current verbose level for bare /verbose", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {

@@ -957,6 +957,7 @@ type HeartbeatPromptResolution = {
   hasRelayableExecCompletion: boolean;
   hasCronEvents: boolean;
   hasDueCommitments: boolean;
+  usesHeartbeatResponseTool: boolean;
 };
 
 function resolveDueHeartbeatTasks(
@@ -1047,7 +1048,7 @@ function resolveHeartbeatRunPrompt(params: {
   const hasCronEvents = cronEvents.length > 0;
   const commitmentPrompt = buildCommitmentHeartbeatPrompt({
     commitments: params.preflight.dueCommitments,
-    useHeartbeatResponseTool: params.useHeartbeatResponseTool,
+    useHeartbeatResponseTool: false,
   });
   const hasDueCommitments = Boolean(commitmentPrompt);
 
@@ -1077,6 +1078,7 @@ ${completionInstruction}`;
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
         hasDueCommitments: false,
+        usesHeartbeatResponseTool: params.useHeartbeatResponseTool,
       };
     }
     if (commitmentPrompt) {
@@ -1086,6 +1088,7 @@ ${completionInstruction}`;
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
         hasDueCommitments,
+        usesHeartbeatResponseTool: false,
       };
     }
     return {
@@ -1094,20 +1097,22 @@ ${completionInstruction}`;
       hasRelayableExecCompletion: false,
       hasCronEvents: false,
       hasDueCommitments: false,
+      usesHeartbeatResponseTool: false,
     };
   }
 
+  const baseUsesHeartbeatResponseTool = params.useHeartbeatResponseTool && !commitmentPrompt;
   const basePrompt = hasExecCompletion
     ? buildExecEventPrompt(execEvents, {
         deliverToUser: params.canRelayToUser,
-        useHeartbeatResponseTool: params.useHeartbeatResponseTool,
+        useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
       })
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, {
           deliverToUser: params.canRelayToUser,
-          useHeartbeatResponseTool: params.useHeartbeatResponseTool,
+          useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
         })
-      : params.useHeartbeatResponseTool
+      : baseUsesHeartbeatResponseTool
         ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
         : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
   const prompt = commitmentPrompt
@@ -1120,6 +1125,7 @@ ${completionInstruction}`;
     hasRelayableExecCompletion,
     hasCronEvents,
     hasDueCommitments,
+    usesHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
   };
 }
 
@@ -1318,6 +1324,7 @@ export async function runHeartbeatOnce(opts: {
     hasRelayableExecCompletion,
     hasCronEvents,
     hasDueCommitments,
+    usesHeartbeatResponseTool,
   } = resolveHeartbeatRunPrompt({
     cfg,
     heartbeat,
@@ -1577,6 +1584,10 @@ export async function runHeartbeatOnce(opts: {
       isHeartbeat: true,
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
       suppressToolErrorWarnings,
+      ...(usesHeartbeatResponseTool ? { enableHeartbeatTool: true, forceHeartbeatTool: true } : {}),
+      ...(usesHeartbeatResponseTool
+        ? { sourceReplyDeliveryMode: "message_tool_only" as const }
+        : {}),
       ...(hasDueCommitments ? { disableTools: true, skillFilter: [] } : {}),
       // Heartbeat timeout is a per-run override so user turns keep the global default.
       timeoutOverrideSeconds,

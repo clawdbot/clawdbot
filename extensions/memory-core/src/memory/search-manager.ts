@@ -325,7 +325,14 @@ async function getBuiltinMemorySearchManager(params: {
 }
 
 class BorrowedMemoryManager implements MemorySearchManager {
-  constructor(private readonly inner: MemorySearchManager) {}
+  readonly probeVectorStoreAvailability?: () => Promise<boolean>;
+
+  constructor(private readonly inner: MemorySearchManager) {
+    if (inner.probeVectorStoreAvailability) {
+      const probeVectorStoreAvailability = inner.probeVectorStoreAvailability.bind(inner);
+      this.probeVectorStoreAvailability = async () => await probeVectorStoreAvailability();
+    }
+  }
 
   async search(
     query: string,
@@ -515,6 +522,19 @@ class FallbackMemoryManager implements MemorySearchManager {
       return this.deps.primary.getCachedEmbeddingAvailability?.() ?? null;
     }
     return this.fallback?.getCachedEmbeddingAvailability?.() ?? null;
+  }
+
+  async probeVectorStoreAvailability() {
+    this.ensureOpen();
+    if (!this.primaryFailed) {
+      return await (this.deps.primary.probeVectorStoreAvailability?.() ??
+        this.deps.primary.probeVectorAvailability());
+    }
+    const fallback = await this.ensureFallback();
+    return (
+      (await (fallback?.probeVectorStoreAvailability?.() ?? fallback?.probeVectorAvailability())) ??
+      false
+    );
   }
 
   async probeVectorAvailability() {

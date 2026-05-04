@@ -243,11 +243,28 @@ describe("createMattermostDraftStream", () => {
 });
 
 describe("buildMattermostToolStatusText", () => {
-  it("renders a status with the tool name", () => {
-    expect(buildMattermostToolStatusText({ name: "read" })).toBe("Running `read`…");
+  it("renders a status with the shared tool label", () => {
+    expect(buildMattermostToolStatusText({ name: "read" })).toBe("📖 Read");
   });
 
-  it("falls back to a generic running tool status", () => {
-    expect(buildMattermostToolStatusText({ name: "exec" })).toBe("Running `exec`…");
+  it("honors raw exec detail mode", () => {
+    expect(
+      buildMattermostToolStatusText({
+        name: "exec",
+        args: { command: "pnpm test -- --watch=false" },
+        detailMode: "raw",
+      }),
+    ).toBe("🛠️ Exec: run tests, `pnpm test -- --watch=false`");
+  });
+
+  it("can hide raw exec detail from status text", () => {
+    expect(
+      buildMattermostToolStatusText({
+        name: "exec",
+        args: { command: "pnpm test -- --watch=false" },
+        detailMode: "raw",
+        config: { streaming: { preview: { commandText: "status" } } },
+      }),
+    ).toBe("🛠️ Exec");
   });
 });

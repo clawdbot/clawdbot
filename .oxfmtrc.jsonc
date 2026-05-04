@@ -10,7 +10,6 @@
   "useTabs": false,
   "ignorePatterns": [
     "apps/",
-    "assets/",
     "CLAUDE.md",
     "docker-compose.yml",
     "dist/",
@@ -23,7 +22,6 @@
     "src/canvas-host/a2ui/a2ui.bundle.js",
     "test/fixtures/agents/prompt-snapshots/codex-model-catalog/*.instructions.md",
     "test/fixtures/agents/prompt-snapshots/happy-path/*.md",
-    "Swabble/",
     "vendor/",
   ],
 }

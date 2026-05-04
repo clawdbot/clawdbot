@@ -796,7 +796,7 @@ setups: SSH + your reverse proxy ports).
 
 ### mDNS/Bonjour discovery
 
-The Gateway broadcasts its presence via mDNS (`_openclaw-gw._tcp` on port 5353) for local device discovery. In full mode, this includes TXT records that may expose operational details:
+When the bundled `bonjour` plugin is enabled, the Gateway broadcasts its presence via mDNS (`_openclaw-gw._tcp` on port 5353) for local device discovery. In full mode, this includes TXT records that may expose operational details:
 
 - `cliPath`: full filesystem path to the CLI binary (reveals username and install location)
 - `sshPort`: advertises SSH availability on the host
@@ -806,7 +806,9 @@ The Gateway broadcasts its presence via mDNS (`_openclaw-gw._tcp` on port 5353) 
 
 **Recommendations:**
 
-1. **Minimal mode** (default, recommended for exposed gateways): omit sensitive fields from mDNS broadcasts:
+1. **Keep Bonjour disabled unless LAN discovery is needed.** Bonjour auto-starts on macOS hosts and is opt-in elsewhere; direct Gateway URLs, Tailnet, SSH, or wide-area DNS-SD avoid local multicast.
+
+2. **Minimal mode** (default when Bonjour is enabled, recommended for exposed gateways): omit sensitive fields from mDNS broadcasts:
 
    ```json5
    {
@@ -816,7 +818,7 @@ The Gateway broadcasts its presence via mDNS (`_openclaw-gw._tcp` on port 5353) 
    }
    ```
 
-2. **Disable entirely** if you don't need local device discovery:
+3. **Disable mDNS mode** if you want to keep the plugin enabled but suppress local device discovery:
 
    ```json5
    {
@@ -826,7 +828,7 @@ The Gateway broadcasts its presence via mDNS (`_openclaw-gw._tcp` on port 5353) 
    }
    ```
 
-3. **Full mode** (opt-in): include `cliPath` + `sshPort` in TXT records:
+4. **Full mode** (opt-in): include `cliPath` + `sshPort` in TXT records:
 
    ```json5
    {
@@ -836,9 +838,9 @@ The Gateway broadcasts its presence via mDNS (`_openclaw-gw._tcp` on port 5353) 
    }
    ```
 
-4. **Environment variable** (alternative): set `OPENCLAW_DISABLE_BONJOUR=1` to disable mDNS without config changes.
+5. **Environment variable** (alternative): set `OPENCLAW_DISABLE_BONJOUR=1` to disable mDNS without config changes.
 
-In minimal mode, the Gateway still broadcasts enough for device discovery (`role`, `gatewayPort`, `transport`) but omits `cliPath` and `sshPort`. Apps that need CLI path information can fetch it via the authenticated WebSocket connection instead.
+When Bonjour is enabled in minimal mode, the Gateway broadcasts enough for device discovery (`role`, `gatewayPort`, `transport`) but omits `cliPath` and `sshPort`. Apps that need CLI path information can fetch it via the authenticated WebSocket connection instead.
 
 ### Lock down the Gateway WebSocket (local auth)
 

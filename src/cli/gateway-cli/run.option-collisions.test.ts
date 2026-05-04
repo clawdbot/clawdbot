@@ -31,15 +31,6 @@ const readBestEffortConfig = vi.fn(async () => configState.cfg);
 const readConfigFileSnapshotWithPluginMetadata = vi.fn(async () => ({
   snapshot: configState.snapshot,
 }));
-const recoverConfigFromLastKnownGood = vi.fn<(params?: unknown) => Promise<boolean>>(
-  async (_params?: unknown) => false,
-);
-const recoverConfigFromJsonRootSuffix = vi.fn<(snapshot?: unknown) => Promise<boolean>>(
-  async (_snapshot?: unknown) => false,
-);
-const writeRestartSentinel = vi.fn<(payload?: unknown) => Promise<string>>(
-  async (_payload?: unknown) => "/tmp/restart-sentinel.json",
-);
 const writeDiagnosticStabilityBundleForFailureSync = vi.fn((_reason: string, _error: unknown) => ({
   status: "written" as const,
   message: "wrote stability bundle: /tmp/openclaw-stability.json",
@@ -59,8 +50,6 @@ vi.mock("../../config/config.js", () => ({
   readBestEffortConfig: () => readBestEffortConfig(),
   readConfigFileSnapshot: async () => configState.snapshot,
   readConfigFileSnapshotWithPluginMetadata: () => readConfigFileSnapshotWithPluginMetadata(),
-  recoverConfigFromLastKnownGood: (params: unknown) => recoverConfigFromLastKnownGood(params),
-  recoverConfigFromJsonRootSuffix: (snapshot: unknown) => recoverConfigFromJsonRootSuffix(snapshot),
 }));
 
 vi.mock("../../config/paths.js", () => ({
@@ -118,10 +107,6 @@ vi.mock("../../infra/gateway-lock.js", () => ({
 vi.mock("../../infra/ports.js", () => ({
   formatPortDiagnostics: () => [],
   inspectPortUsage: async () => ({ status: "free" }),
-}));
-
-vi.mock("../../infra/restart-sentinel.js", () => ({
-  writeRestartSentinel: (payload: unknown) => writeRestartSentinel(payload),
 }));
 
 vi.mock("../../infra/supervisor-markers.js", async (importOriginal) => {
@@ -195,12 +180,6 @@ describe("gateway run option collisions", () => {
     readConfigFileSnapshotWithPluginMetadata.mockClear();
     controlUiState.root = "/tmp/openclaw-control-ui";
     gatewayLogMessages.length = 0;
-    recoverConfigFromLastKnownGood.mockReset();
-    recoverConfigFromLastKnownGood.mockResolvedValue(false);
-    recoverConfigFromJsonRootSuffix.mockReset();
-    recoverConfigFromJsonRootSuffix.mockResolvedValue(false);
-    writeRestartSentinel.mockReset();
-    writeRestartSentinel.mockResolvedValue("/tmp/restart-sentinel.json");
     writeDiagnosticStabilityBundleForFailureSync.mockClear();
     startGatewayServer.mockClear();
     setGatewayWsLogStyle.mockClear();
@@ -380,7 +359,7 @@ describe("gateway run option collisions", () => {
     expect(readBestEffortConfig).not.toHaveBeenCalled();
   });
 
-  it("restores last-known-good config before startup when the effective config is invalid", async () => {
+  it("blocks invalid startup config without automatic recovery", async () => {
     configState.cfg = {};
     configState.snapshot = {
       exists: true,
@@ -391,105 +370,41 @@ describe("gateway run option collisions", () => {
       issues: [{ path: "<root>", message: "JSON5 parse failed" }],
       legacyIssues: [],
     };
-    recoverConfigFromLastKnownGood.mockImplementationOnce(async () => {
-      configState.snapshot = {
-        exists: true,
-        valid: true,
-        path: "/tmp/openclaw-test-missing-config.json",
-        config: {
-          gateway: {
-            mode: "local",
-            port: 19170,
-            auth: { mode: "none" },
-          },
-        },
-        parsed: {
-          gateway: {
-            mode: "local",
-            port: 19170,
-            auth: { mode: "none" },
-          },
-        },
-        issues: [],
-        legacyIssues: [],
-      };
-      return true;
-    });
+
+    await expect(runGatewayCli(["gateway", "run"])).rejects.toThrow("__exit__:78");
+
+    expect(runtimeErrors).toContain(
+      "Gateway start blocked: existing config is missing gateway.mode. Treat this as suspicious or clobbered config. Re-run `openclaw onboard --mode local` or `openclaw setup`, set gateway.mode=local manually, or pass --allow-unconfigured.",
+    );
+    expect(runtimeErrors).toContain(
+      `Config write audit: ${path.join("/tmp", "logs", "config-audit.jsonl")}`,
+    );
+    expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledOnce();
+    expect(startGatewayServer).not.toHaveBeenCalled();
+  });
+
+  it("passes invalid startup snapshot through when explicitly allowed", async () => {
+    configState.cfg = {};
+    configState.snapshot = {
+      exists: true,
+      valid: false,
+      path: "/tmp/openclaw-test-missing-config.json",
+      config: {},
+      parsed: null,
+      issues: [{ path: "<root>", message: "JSON5 parse failed" }],
+      legacyIssues: [],
+    };
 
     await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
 
-    expect(recoverConfigFromLastKnownGood).toHaveBeenCalledWith({
-      snapshot: expect.objectContaining({
-        exists: true,
-        valid: false,
-      }),
-      reason: "gateway-run-invalid-config",
-    });
-    expect(writeRestartSentinel).toHaveBeenCalledWith({
-      kind: "config-auto-recovery",
-      status: "ok",
-      ts: expect.any(Number),
-      message:
-        "Gateway recovered automatically after a failed config change and restored the last known good configuration.",
-      stats: {
-        mode: "config-auto-recovery",
-        reason: "gateway-run-invalid-config",
-        after: { restoredFrom: "last-known-good" },
-      },
-    });
-    expect(gatewayLogMessages).toContain(
-      "gateway: restored invalid effective config from last-known-good backup: /tmp/openclaw-test-missing-config.json; Rejected validation details: <root>: JSON5 parse failed.",
-    );
-    expect(startGatewayServer).toHaveBeenCalledWith(
-      19170,
-      expect.objectContaining({
-        bind: "loopback",
-        auth: undefined,
-      }),
-    );
-  });
-
-  it("keeps startup recovery non-fatal when writing the recovery notice fails", async () => {
-    configState.cfg = {};
-    configState.snapshot = {
-      exists: true,
-      valid: false,
-      path: "/tmp/openclaw-test-missing-config.json",
-      config: {},
-      parsed: null,
-      issues: [{ path: "<root>", message: "JSON5 parse failed" }],
-      legacyIssues: [],
-    };
-    recoverConfigFromLastKnownGood.mockImplementationOnce(async () => {
-      configState.snapshot = {
-        exists: true,
-        valid: true,
-        path: "/tmp/openclaw-test-missing-config.json",
-        config: {
-          gateway: {
-            mode: "local",
-          },
-        },
-        parsed: {
-          gateway: {
-            mode: "local",
-          },
-        },
-        issues: [],
-        legacyIssues: [],
-      };
-      return true;
-    });
-    writeRestartSentinel.mockRejectedValueOnce(new Error("disk full"));
-
-    await runGatewayCli(["gateway", "run"]);
-
     expect(startGatewayServer).toHaveBeenCalledWith(
       18789,
-      expect.objectContaining({ bind: "loopback" }),
-    );
-    expect(gatewayLogMessages).toContain(
-      "gateway: failed to persist config auto-recovery notice: disk full",
+      expect.objectContaining({
+        bind: "loopback",
+        startupConfigSnapshotRead: expect.objectContaining({
+          snapshot: expect.objectContaining({ valid: false }),
+        }),
+      }),
     );
   });
 

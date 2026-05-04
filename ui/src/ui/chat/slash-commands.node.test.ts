@@ -79,6 +79,10 @@ describe("parseSlashCommand", () => {
       command: { key: "export-session" },
       args: "",
     });
+    expect(parseSlashCommand("/side what changed?")).toMatchObject({
+      command: { key: "btw", name: "btw", aliases: expect.arrayContaining(["side"]) },
+      args: "what changed?",
+    });
   });
 
   it("keeps canonical long-form slash names as the primary menu command", () => {

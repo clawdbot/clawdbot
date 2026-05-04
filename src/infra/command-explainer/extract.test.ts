@@ -602,11 +602,16 @@ describe("command explainer tree-sitter runtime", () => {
     expect(envSplitString.risks).toContainEqual(
       expect.objectContaining({ kind: "command-carrier", command: "env", flag: "-S" }),
     );
+    const envCombinedSplitString = await explainShellCommand("env -iS 'sh -c \"id\"'");
+    expect(envCombinedSplitString.risks).toContainEqual(
+      expect.objectContaining({ kind: "command-carrier", command: "env", flag: "-S" }),
+    );
 
     for (const command of [
       'env python -c "print(1)"',
       'sudo python -c "print(1)"',
       'command python -c "print(1)"',
+      'exec python -c "print(1)"',
     ]) {
       const explanation = await explainShellCommand(command);
       expect(explanation.risks).toContainEqual(
@@ -643,6 +648,14 @@ describe("command explainer tree-sitter runtime", () => {
     expect(commandShell.risks).toContainEqual(
       expect.objectContaining({ kind: "shell-wrapper-through-carrier", command: "command" }),
     );
+
+    const execShell = await explainShellCommand("exec bash -lc 'id && whoami'");
+    expect(execShell.risks).toContainEqual(
+      expect.objectContaining({ kind: "shell-wrapper-through-carrier", command: "exec" }),
+    );
+
+    const execEval = await explainShellCommand("exec eval 'echo hi'");
+    expect(execEval.risks).toContainEqual(expect.objectContaining({ kind: "eval" }));
 
     const sudoCombinedFlags = await explainShellCommand('sudo bash -euxc "id && whoami"');
     expect(sudoCombinedFlags.risks).toContainEqual(

@@ -14,6 +14,7 @@ type DoctorConfigResult = {
   shouldWriteConfig?: boolean;
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
+  skipPluginValidationOnWrite?: boolean;
 };
 
 type DoctorHealthFlowContext = {
@@ -333,8 +334,9 @@ async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> 
 }
 
 async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairSandboxImages, noteSandboxScopeWarnings } =
+  const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles, noteSandboxScopeWarnings } =
     await import("../commands/doctor-sandbox.js");
+  await maybeRepairSandboxRegistryFiles(ctx.prompter);
   ctx.cfg = await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
   noteSandboxScopeWarnings(ctx.cfg);
 }
@@ -565,6 +567,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       afterWrite: { mode: "auto" },
       writeOptions: {
         allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true,
+        skipPluginValidation: ctx.configResult.skipPluginValidationOnWrite === true,
       },
     });
     logConfigUpdated(ctx.runtime);

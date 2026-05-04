@@ -1,0 +1,244 @@
+import { splitShellArgs } from "../../utils/shell-argv.js";
+import {
+  COMMAND_CARRIER_EXECUTABLES,
+  isEnvAssignmentToken,
+  parseEnvInvocationPrelude,
+  resolveCarrierCommandArgv,
+  SOURCE_EXECUTABLES,
+} from "../command-carriers.js";
+import { unwrapKnownDispatchWrapperInvocation } from "../dispatch-wrapper-resolution.js";
+import type { ExecCommandSegment } from "../exec-approvals-analysis.js";
+import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
+import {
+  extractShellWrapperInlineCommand,
+  isShellWrapperExecutable,
+} from "../shell-wrapper-resolution.js";
+import { detectInterpreterInlineEvalArgv, type InterpreterInlineEvalHit } from "./inline-eval.js";
+
+export { COMMAND_CARRIER_EXECUTABLES, resolveCarrierCommandArgv, SOURCE_EXECUTABLES };
+
+export type CommandCarrierHit = {
+  command: string;
+  flag?: string;
+};
+
+export type CarriedShellBuiltinHit = { kind: "eval" } | { kind: "source"; command: string };
+
+function commandArgvKey(argv: readonly string[]): string {
+  return argv.join("\0");
+}
+
+function isCommandCarrierExecutable(executable: string, options?: { includeExec?: boolean }) {
+  return (
+    COMMAND_CARRIER_EXECUTABLES.has(executable) ||
+    Boolean(options?.includeExec && executable === "exec")
+  );
+}
+
+export function buildCommandPayloadCandidates(
+  argv: string[],
+  seenArgv = new Set<string>(),
+): string[] {
+  const key = commandArgvKey(argv);
+  if (seenArgv.has(key)) {
+    return argv.length > 0 ? [argv.join(" ")] : [];
+  }
+  seenArgv.add(key);
+  const assignmentStrippedArgv = stripLeadingEnvAssignments(argv);
+  const carriedArgv = resolveCarrierCommandArgv(assignmentStrippedArgv, 0, {
+    includeExec: true,
+  });
+  const executableArgv = carriedArgv ?? assignmentStrippedArgv;
+  const carriedCandidates = carriedArgv ? buildCommandPayloadCandidates(carriedArgv, seenArgv) : [];
+  const shellWrapperPayload = extractShellWrapperInlineCommand(executableArgv);
+  const shellWrapperCandidates = shellWrapperPayload
+    ? (() => {
+        const innerArgv = splitShellArgs(shellWrapperPayload);
+        return innerArgv
+          ? buildCommandPayloadCandidates(innerArgv, seenArgv)
+          : [shellWrapperPayload];
+      })()
+    : [];
+  return uniqueCommandPayloadCandidates([
+    ...(executableArgv.length > 0 ? [executableArgv.join(" ")] : []),
+    ...carriedCandidates,
+    ...shellWrapperCandidates,
+  ]);
+}
+
+function stripLeadingEnvAssignments(argv: string[]): string[] {
+  let index = 0;
+  while (index < argv.length && isEnvAssignmentToken(argv[index] ?? "")) {
+    index += 1;
+  }
+  return index > 0 ? argv.slice(index) : argv;
+}
+
+function uniqueCommandPayloadCandidates(candidates: string[]): string[] {
+  return [...new Set(candidates.filter((candidate) => candidate.trim().length > 0))];
+}
+
+function detectCarrierInlineEvalArgvInternal(
+  argv: string[],
+  seenArgv: Set<string>,
+): InterpreterInlineEvalHit | null {
+  const executableArgv = stripLeadingEnvAssignments(argv);
+  const key = commandArgvKey(executableArgv);
+  if (seenArgv.has(key)) {
+    return null;
+  }
+  seenArgv.add(key);
+
+  const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(executableArgv);
+  if (dispatchUnwrap.kind === "unwrapped") {
+    return detectInlineEvalArgvInternal(dispatchUnwrap.argv, seenArgv);
+  }
+
+  const executable = normalizeExecutableToken(executableArgv[0] ?? "");
+  if (!isCommandCarrierExecutable(executable, { includeExec: true })) {
+    return null;
+  }
+  const carriedArgv = resolveCarrierCommandArgv(executableArgv, 0, { includeExec: true });
+  if (!carriedArgv) {
+    return null;
+  }
+  return (
+    detectInterpreterInlineEvalArgv(carriedArgv) ??
+    detectCarrierInlineEvalArgvInternal(carriedArgv, seenArgv)
+  );
+}
+
+export function detectCarrierInlineEvalArgv(argv: string[]): InterpreterInlineEvalHit | null {
+  return detectCarrierInlineEvalArgvInternal(argv, new Set());
+}
+
+function detectInlineEvalArgvInternal(
+  argv: string[] | undefined | null,
+  seenArgv: Set<string>,
+): InterpreterInlineEvalHit | null {
+  if (!Array.isArray(argv)) {
+    return null;
+  }
+  return (
+    detectInterpreterInlineEvalArgv(argv) ?? detectCarrierInlineEvalArgvInternal(argv, seenArgv)
+  );
+}
+
+export function detectInlineEvalArgv(
+  argv: string[] | undefined | null,
+): InterpreterInlineEvalHit | null {
+  return detectInlineEvalArgvInternal(argv, new Set());
+}
+
+export function detectInlineEvalInSegments(
+  segments: readonly ExecCommandSegment[],
+): InterpreterInlineEvalHit | null {
+  for (const segment of segments) {
+    const effective = segment.resolution?.effectiveArgv ?? segment.argv;
+    const hit = detectInlineEvalArgv(effective) ?? detectInlineEvalArgv(segment.argv);
+    if (hit) {
+      return hit;
+    }
+  }
+  return null;
+}
+
+export function detectCommandCarrierArgv(argv: string[]): CommandCarrierHit[] {
+  const executable = argv[0];
+  if (!executable) {
+    return [];
+  }
+  const normalizedExecutable = normalizeExecutableToken(executable);
+  const hits: CommandCarrierHit[] = [];
+  if (normalizedExecutable === "find") {
+    const flag = argv.find((arg) => ["-exec", "-execdir", "-ok", "-okdir"].includes(arg));
+    if (flag) {
+      hits.push({ command: executable, flag });
+    }
+  }
+  if (normalizedExecutable === "xargs") {
+    hits.push({ command: normalizedExecutable });
+  }
+  const splitStringFlag = detectEnvSplitStringFlag(argv);
+  if (splitStringFlag) {
+    hits.push({ command: normalizedExecutable, flag: splitStringFlag });
+  }
+  return hits;
+}
+
+export function detectEnvSplitStringFlag(argv: string[]): string | null {
+  if (normalizeExecutableToken(argv[0] ?? "") !== "env") {
+    return null;
+  }
+  const parsed = parseEnvInvocationPrelude(argv);
+  if (!parsed?.splitArgv) {
+    return null;
+  }
+  for (const arg of argv.slice(1, parsed.commandIndex)) {
+    const token = arg.trim();
+    if (token === "-S" || token === "-s") {
+      return token;
+    }
+    if (token === "--split-string") {
+      return "--split-string";
+    }
+    if (token.startsWith("--split-string=") || (token.startsWith("-S") && token.length > 2)) {
+      return token.startsWith("--") ? "--split-string" : "-S";
+    }
+    if (token.startsWith("-") && !token.startsWith("--")) {
+      for (const option of token.slice(1)) {
+        if (option === "S") {
+          return "-S";
+        }
+        if (option === "s") {
+          return "-s";
+        }
+      }
+    }
+  }
+  return null;
+}
+
+export function detectShellWrapperThroughCarrierArgv(
+  argv: string[],
+  shellCommandFlag: (argv: string[], startIndex: number) => unknown,
+): string | null {
+  const executable = normalizeExecutableToken(argv[0] ?? "");
+  if (!isCommandCarrierExecutable(executable, { includeExec: true })) {
+    return null;
+  }
+  const carriedArgv = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
+  if (!carriedArgv) {
+    return null;
+  }
+  if (isShellWrapperExecutable(carriedArgv[0] ?? "") && shellCommandFlag(carriedArgv, 1)) {
+    return executable;
+  }
+  return detectShellWrapperThroughCarrierArgv(carriedArgv, shellCommandFlag) ? executable : null;
+}
+
+export function detectCarriedShellBuiltinArgv(argv: string[]): CarriedShellBuiltinHit | null {
+  const executable = normalizeExecutableToken(argv[0] ?? "");
+  if (!isCommandCarrierExecutable(executable, { includeExec: true })) {
+    return null;
+  }
+  const carriedArgv = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
+  if (!carriedArgv) {
+    return null;
+  }
+  const nestedCarrierHit = detectCarriedShellBuiltinArgv(carriedArgv);
+  if (nestedCarrierHit) {
+    return nestedCarrierHit;
+  }
+  const carriedCommand = carriedArgv[0];
+  const normalizedCarriedCommand = carriedCommand
+    ? normalizeExecutableToken(carriedCommand)
+    : undefined;
+  if (normalizedCarriedCommand === "eval") {
+    return { kind: "eval" };
+  }
+  if (normalizedCarriedCommand && SOURCE_EXECUTABLES.has(normalizedCarriedCommand)) {
+    return { kind: "source", command: normalizedCarriedCommand };
+  }
+  return null;
+}

@@ -95,6 +95,10 @@ type CreateLaneTextDelivererParams = {
   log: (message: string) => void;
   markDelivered: () => void;
   now?: () => number;
+  // Force fresh final when a visible non-preview message has been delivered
+  // since the active preview was created, even if the preview is younger
+  // than the long-lived threshold (#76529).
+  getLastVisibleNonPreviewDeliveryAtMs?: () => number | undefined;
 };
 
 type DeliverLaneTextParams = {
@@ -204,10 +208,25 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     params.retainPreviewOnCleanupByLane[laneName] = true;
   };
   const isMessagePreviewLane = (lane: DraftLaneState) => lane.stream != null;
-  const shouldUseFreshFinalForLane = (lane: DraftLaneState) =>
-    isMessagePreviewLane(lane) && isLongLivedPreview(lane.stream?.visibleSinceMs?.(), readNow());
+  const wasVisiblyOverwrittenSince = (visibleSinceMs: number | undefined): boolean => {
+    if (typeof visibleSinceMs !== "number") {
+      return false;
+    }
+    const lastNonPreviewAt = params.getLastVisibleNonPreviewDeliveryAtMs?.();
+    return typeof lastNonPreviewAt === "number" && lastNonPreviewAt > visibleSinceMs;
+  };
+  const shouldUseFreshFinalForLane = (lane: DraftLaneState) => {
+    if (!isMessagePreviewLane(lane)) {
+      return false;
+    }
+    const visibleSinceMs = lane.stream?.visibleSinceMs?.();
+    return (
+      isLongLivedPreview(visibleSinceMs, readNow()) || wasVisiblyOverwrittenSince(visibleSinceMs)
+    );
+  };
   const shouldUseFreshFinalForPreview = (lane: DraftLaneState, visibleSinceMs?: number) =>
-    isMessagePreviewLane(lane) && isLongLivedPreview(visibleSinceMs, readNow());
+    isMessagePreviewLane(lane) &&
+    (isLongLivedPreview(visibleSinceMs, readNow()) || wasVisiblyOverwrittenSince(visibleSinceMs));
   const clearActivePreviewAfterFreshFinal = async (lane: DraftLaneState, laneName: LaneName) => {
     try {
       await lane.stream?.clear();

@@ -16,6 +16,10 @@ import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
+import {
+  RealtimeMulawSpeechStartDetector,
+  RealtimeTwilioAudioPacer,
+} from "./realtime-audio-pacer.js";
 
 export type ToolHandlerContext = {
   partialUserTranscript?: string;
@@ -29,6 +33,7 @@ export type ToolHandlerFn = (
 const STREAM_TOKEN_TTL_MS = 30_000;
 const DEFAULT_HOST = "localhost:8443";
 const MAX_REALTIME_MESSAGE_BYTES = 256 * 1024;
+const MAX_REALTIME_WS_BUFFERED_BYTES = 1024 * 1024;
 
 function normalizePath(pathname: string): string {
   const trimmed = pathname.trim();
@@ -179,7 +184,8 @@ export class RealtimeCallHandler {
               ? (msg.media as Record<string, unknown>)
               : undefined;
           if (msg.event === "media" && typeof mediaData?.payload === "string") {
-            bridge.sendAudio(Buffer.from(mediaData.payload, "base64"));
+            const audio = Buffer.from(mediaData.payload, "base64");
+            bridge.sendAudio(audio);
             if (typeof mediaData.timestamp === "number") {
               bridge.setMediaTimestamp(mediaData.timestamp);
             } else if (typeof mediaData.timestamp === "string") {
@@ -278,7 +284,32 @@ export class RealtimeCallHandler {
       this.endCallInManager(callSid, callId, reason);
     };
 
-    const bridge = createRealtimeVoiceBridgeSession({
+    const sendJson = (message: unknown): boolean => {
+      if (ws.readyState !== WebSocket.OPEN) {
+        return false;
+      }
+      if (ws.bufferedAmount > MAX_REALTIME_WS_BUFFERED_BYTES) {
+        ws.close(1013, "Backpressure: send buffer exceeded");
+        return false;
+      }
+      ws.send(JSON.stringify(message));
+      if (ws.bufferedAmount > MAX_REALTIME_WS_BUFFERED_BYTES) {
+        ws.close(1013, "Backpressure: send buffer exceeded");
+        return false;
+      }
+      return true;
+    };
+    const audioPacer = new RealtimeTwilioAudioPacer({
+      streamSid,
+      sendJson,
+      onBackpressure: () => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close(1013, "Backpressure: paced audio queue exceeded");
+        }
+      },
+    });
+    const speechDetector = new RealtimeMulawSpeechStartDetector();
+    const session = createRealtimeVoiceBridgeSession({
       provider: this.realtimeProvider,
       providerConfig: this.providerConfig,
       instructions: this.config.instructions,
@@ -288,19 +319,13 @@ export class RealtimeCallHandler {
       audioSink: {
         isOpen: () => ws.readyState === WebSocket.OPEN,
         sendAudio: (muLaw) => {
-          ws.send(
-            JSON.stringify({
-              event: "media",
-              streamSid,
-              media: { payload: muLaw.toString("base64") },
-            }),
-          );
+          audioPacer.sendAudio(muLaw);
         },
         clearAudio: () => {
-          ws.send(JSON.stringify({ event: "clear", streamSid }));
+          audioPacer.clearAudio();
         },
         sendMark: (markName) => {
-          ws.send(JSON.stringify({ event: "mark", streamSid, mark: { name: markName } }));
+          audioPacer.sendMark(markName);
         },
       },
       onTranscript: (role, text, isFinal) => {
@@ -350,6 +375,7 @@ export class RealtimeCallHandler {
         this.activeBridgesByCallId.delete(callSid);
         this.partialUserTranscriptsByCallId.delete(callId);
         if (reason !== "error") {
+          emitCallEnd("completed");
           return;
         }
         emitCallEnd("error");
@@ -367,24 +393,32 @@ export class RealtimeCallHandler {
           });
       },
     });
-    this.activeBridgesByCallId.set(callId, bridge);
-    this.activeBridgesByCallId.set(callSid, bridge);
-    const closeBridge = bridge.close.bind(bridge);
-    bridge.close = () => {
+    this.activeBridgesByCallId.set(callId, session);
+    this.activeBridgesByCallId.set(callSid, session);
+    const sendAudioToSession = session.sendAudio.bind(session);
+    session.sendAudio = (audio) => {
+      if (speechDetector.accept(audio)) {
+        audioPacer.clearAudio();
+      }
+      sendAudioToSession(audio);
+    };
+    const closeSession = session.close.bind(session);
+    session.close = () => {
       this.activeBridgesByCallId.delete(callId);
       this.activeBridgesByCallId.delete(callSid);
       this.partialUserTranscriptsByCallId.delete(callId);
-      closeBridge();
+      audioPacer.close();
+      closeSession();
     };
 
-    bridge.connect().catch((error: Error) => {
+    session.connect().catch((error: Error) => {
       console.error("[voice-call] Failed to connect realtime bridge:", error);
-      bridge.close();
+      session.close();
       emitCallEnd("error");
       ws.close(1011, "Failed to connect");
     });
 
-    return bridge;
+    return session;
   }
 
   private registerCallInManager(
