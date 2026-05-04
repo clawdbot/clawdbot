@@ -300,6 +300,79 @@ operator, installed plugin code, or a modified OpenClaw runtime. Sensitive
 local tools should still require an explicit plugin or operator opt-in and
 fail closed when active-model metadata is missing or unsuitable.
 
+### Runtime delegated auth
+
+Trusted tool factories can receive a runtime-only `ctx.auth` resolver when the
+inbound channel supports delegated user authentication. OpenClaw does not
+serialize the bearer token into prompts, transcripts, or generic tool metadata.
+
+Delegated auth is default-deny per plugin. Operators must explicitly allow each
+plugin, provider, audience, scope, and chat type that may receive delegated user
+tokens:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "downstream-tools": {
+        auth: {
+          delegatedAccess: {
+            enabled: true,
+            providers: ["msteams"],
+            audiences: ["api://downstream-tools"],
+            scopes: ["downstream.access"],
+            chatTypes: ["direct"],
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Plugins without this opt-in do not receive `ctx.auth`, even when their tools
+are otherwise enabled. Provider ids come from the active channel runtime;
+Microsoft Teams exposes `msteams`.
+
+The resolver is valid only while the owning tool executes. OpenClaw validates
+the plugin request against the configured policy and validates returned JWT
+audience and scope claims before releasing the token. For Microsoft Entra app
+IDs, a configured `api://<uuid>` audience is equivalent to a returned bare
+`<uuid>` audience.
+
+```typescript
+api.registerTool((ctx) => ({
+  name: "call_user_api",
+  description: "Call a downstream API as the signed-in user",
+  parameters: { type: "object", properties: {}, additionalProperties: false },
+  async execute() {
+    const auth = await ctx.auth?.getDelegatedAccessToken({
+      provider: "msteams",
+      audience: "api://downstream-tools",
+      scopes: ["downstream.access"],
+    });
+    if (!auth?.ok) {
+      return {
+        content: [{ type: "text", text: `auth_required:${auth?.reason ?? "not_configured"}` }],
+      };
+    }
+    const response = await fetch("https://downstream.example.com/action", {
+      headers: { Authorization: `Bearer ${auth.token}` },
+    });
+    return { content: [{ type: "text", text: await response.text() }] };
+  },
+}));
+```
+
+Treat a failed delegated-auth result as an auth-required state and return a
+normal tool result. Channel plugins own interactive sign-in; tool plugins must
+not send consent cards or handle channel-specific sign-in invokes.
+
+The downstream service must validate issuer, audience, and scopes before using
+the token. If it needs Microsoft Graph, perform Microsoft Entra on-behalf-of
+exchange in that service using a token whose audience is the downstream
+service.
+
 The manifest declares ownership and discovery; execution still calls the live
 registered tool implementation. Keep `toolMetadata.<tool>.optional: true`
 aligned with `api.registerTool(..., { optional: true })` so OpenClaw can avoid
