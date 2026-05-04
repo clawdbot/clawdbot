@@ -42,9 +42,6 @@ describe("acquireFileLock", () => {
       JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
       "utf8",
     );
-    setTimeout(() => {
-      void fs.rm(lockPath, { force: true });
-    }, 50);
 
     await expect(acquireFileLock(filePath, options)).rejects.toSatisfy((error) => {
       expect(error).toMatchObject({

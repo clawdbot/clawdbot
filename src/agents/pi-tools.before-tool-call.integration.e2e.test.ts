@@ -1,11 +1,17 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { addTestHook, createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { patchPluginSessionExtension } from "../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginHookRegistration } from "../plugins/types.js";
 
 type ToolDefinitionAdapterModule = typeof import("./pi-tool-definition-adapter.js");
@@ -450,5 +456,85 @@ describe("before_tool_call hook integration for client tools", () => {
       { value: "first", marker: "first_tool" },
       { value: "second", marker: "second_tool" },
     ]);
+  });
+
+  it("lets trusted policies read session extensions for client tools when config is provided", async () => {
+    resetGlobalHookRunner();
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-client-tool-policy-"));
+    const storePath = path.join(stateDir, "sessions.json");
+    const config = { session: { store: storePath } };
+    const seen: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.sessionExtensions = [
+      {
+        pluginId: "policy-plugin",
+        pluginName: "Policy Plugin",
+        source: "test",
+        extension: {
+          namespace: "policy",
+          description: "policy state",
+        },
+      },
+    ];
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "policy-plugin",
+        pluginName: "Policy Plugin",
+        source: "test",
+        policy: {
+          id: "client-tool-session-extension-policy",
+          description: "client tool session extension policy",
+          evaluate(_event, ctx) {
+            seen.push(ctx.getSessionExtension?.("policy"));
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    try {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:client"] = {
+          sessionId: "session-client",
+          updatedAt: Date.now(),
+        } as SessionEntry;
+      });
+      await expect(
+        patchPluginSessionExtension({
+          cfg: config as never,
+          sessionKey: "agent:main:client",
+          pluginId: "policy-plugin",
+          namespace: "policy",
+          value: { gate: "client" },
+        }),
+      ).resolves.toMatchObject({ ok: true });
+
+      const [tool] = toClientToolDefinitions(
+        [
+          {
+            type: "function",
+            function: {
+              name: "client_tool",
+              description: "Client tool",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        undefined,
+        {
+          agentId: "main",
+          sessionKey: "agent:main:client",
+          sessionId: "session-client",
+          config: config as never,
+        },
+      );
+      const extensionContext = {} as Parameters<typeof tool.execute>[4];
+      await tool.execute("client-call-policy", {}, undefined, undefined, extensionContext);
+
+      expect(seen).toEqual([{ gate: "client" }]);
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 });

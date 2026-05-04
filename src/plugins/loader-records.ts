@@ -11,6 +11,7 @@ export function createPluginRecord(params: {
   name?: string;
   description?: string;
   version?: string;
+  packageName?: string;
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
@@ -32,6 +33,7 @@ export function createPluginRecord(params: {
     name: params.name ?? params.id,
     description: params.description,
     version: params.version,
+    packageName: params.packageName,
     format: params.format ?? "openclaw",
     bundleFormat: params.bundleFormat,
     bundleCapabilities: params.bundleCapabilities,

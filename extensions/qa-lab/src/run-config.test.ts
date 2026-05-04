@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { defaultQaRuntimeModelForMode } = vi.hoisted(() => ({
@@ -131,8 +132,9 @@ describe("qa run config", () => {
   });
 
   it("anchors generated run output dirs under the provided repo root", () => {
-    const outputDir = createQaRunOutputDir("/tmp/openclaw-repo");
-    expect(outputDir.startsWith("/tmp/openclaw-repo/.artifacts/qa-e2e/lab-")).toBe(true);
+    const repoRoot = path.resolve("/tmp/openclaw-repo");
+    const outputDir = createQaRunOutputDir(repoRoot);
+    expect(outputDir.startsWith(path.join(repoRoot, ".artifacts", "qa-e2e", "lab-"))).toBe(true);
   });
 
   it("prefers the Codex OAuth default when the runtime resolver says it is available", () => {

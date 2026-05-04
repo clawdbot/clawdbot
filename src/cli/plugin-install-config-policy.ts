@@ -11,7 +11,7 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { parseNpmPrefixSpec, resolveFileNpmSpecToLocalPath } from "./plugins-command-helpers.js";
 
-type PluginInstallInvalidConfigPolicy = "deny" | "allow-bundled-recovery";
+type PluginInstallInvalidConfigPolicy = "deny" | "allow-plugin-recovery";
 
 export type PluginInstallRequestContext = {
   rawSpec: string;
@@ -264,5 +264,5 @@ export function resolvePluginInstallInvalidConfigPolicy(
   if (!request) {
     return "deny";
   }
-  return request.allowInvalidConfigRecovery === true ? "allow-bundled-recovery" : "deny";
+  return request.allowInvalidConfigRecovery === true ? "allow-plugin-recovery" : "deny";
 }

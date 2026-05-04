@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "./internal/discord.js";
 import type { VoiceMessageMetadata } from "./voice-message.js";
@@ -75,7 +76,8 @@ describe("ensureOggOpus", () => {
     const result = await ensureOggOpus("/tmp/input.ogg");
 
     expect(result.cleanup).toBe(true);
-    expect(result.path).toMatch(/^\/tmp\/voice-.*\.ogg$/);
+    expect(path.dirname(result.path)).toBe(path.normalize("/tmp"));
+    expect(path.basename(result.path)).toMatch(/^voice-.*\.ogg$/);
     expect(runFfmpegMock).toHaveBeenCalledWith(
       expect.arrayContaining(["-t", "1200", "-ar", "48000", "/tmp/input.ogg", result.path]),
     );

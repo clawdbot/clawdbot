@@ -771,11 +771,7 @@ describe("installPluginFromArchive", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(
-      warnings.some((warning) =>
-        warning.includes("allowed because it is an official OpenClaw package"),
-      ),
-    ).toBe(true);
+    expect(warnings).toEqual([]);
   });
 
   it("installs flat-root plugin archives from ClawHub-style downloads", async () => {
@@ -1990,11 +1986,7 @@ describe("installPluginFromArchive", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(
-      warnings.some((warning) =>
-        warning.includes("allowed because it is an official OpenClaw package"),
-      ),
-    ).toBe(true);
+    expect(warnings).toEqual([]);
   });
 
   it("does not flag the real qa-matrix plugin as dangerous install code", async () => {

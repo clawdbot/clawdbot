@@ -1,1 +1,3 @@
 Maintenance update for the current OpenClaw development release.
+
+- Gateway pairing now supports scanning QR codes from Settings and accepts full copied setup-code messages while keeping non-loopback `ws://` setup links blocked.

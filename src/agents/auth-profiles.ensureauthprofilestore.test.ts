@@ -573,6 +573,94 @@ describe("ensureAuthProfileStore", () => {
     }
   });
 
+  it("rewrites invalidated per-agent Codex order to the main agent's healthy relogin profile", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-codex-relogin-"));
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const mainDir = path.join(root, "main-agent");
+      const agentDir = path.join(root, "agent-x");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(agentDir, { recursive: true });
+
+      process.env.OPENCLAW_AGENT_DIR = mainDir;
+      process.env.PI_CODING_AGENT_DIR = mainDir;
+
+      const now = Date.now();
+      const healthyProfileId = "openai-codex:bunsthedev@gmail.com";
+      const staleProfileId = "openai-codex:val@viewdue.ai";
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [healthyProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "healthy-access",
+              refresh: "healthy-refresh",
+              expires: now + 60 * 60 * 1000,
+              email: "bunsthedev@gmail.com",
+            },
+          },
+          order: {
+            "openai-codex": [healthyProfileId],
+          },
+          lastGood: {
+            "openai-codex": healthyProfileId,
+          },
+        },
+        mainDir,
+      );
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [staleProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "stale-access",
+              refresh: "stale-refresh",
+              expires: now + 30 * 60 * 1000,
+              email: "val@viewdue.ai",
+            },
+          },
+          order: {
+            "openai-codex": [staleProfileId],
+          },
+          lastGood: {
+            "openai-codex": staleProfileId,
+          },
+          usageStats: {
+            [staleProfileId]: {
+              cooldownUntil: now + 60_000,
+              cooldownReason: "auth",
+              failureCounts: { auth: 1 },
+              errorCount: 1,
+              lastFailureAt: now - 1_000,
+            },
+          },
+        },
+        agentDir,
+      );
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
+
+      expect(store.profiles[healthyProfileId]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "healthy-access",
+      });
+      expect(store.profiles[staleProfileId]).toBeUndefined();
+      expect(store.order?.["openai-codex"]).toEqual([healthyProfileId]);
+      expect(store.lastGood?.["openai-codex"]).toBe(healthyProfileId);
+      expect(store.usageStats?.[staleProfileId]).toBeUndefined();
+    } finally {
+      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     {
       name: "mode/apiKey aliases map to type/key",

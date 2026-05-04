@@ -456,6 +456,7 @@ function resolvePackageRuntimeEntrySource(params: {
   entryPath: string;
   runtimeEntryPath?: string;
   runtimeEntryLabel?: string;
+  pluginIdHint?: string;
   origin: PluginOrigin;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
@@ -523,6 +524,7 @@ function resolvePackageRuntimeEntrySource(params: {
     ) {
       params.diagnostics.push({
         level: "warn",
+        ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
         message: missingCompiledRuntimeEntryMessage({
           label: "installed plugin package",
           entry: safeEntry.relativePath,
@@ -530,6 +532,7 @@ function resolvePackageRuntimeEntrySource(params: {
         }),
         source: params.sourceLabel,
       });
+      return null;
     }
   }
 
@@ -571,6 +574,7 @@ export function resolvePackageSetupSource(params: {
     entryPath: setupEntryPath,
     runtimeEntryPath: normalizeOptionalString(packageManifest?.runtimeSetupEntry),
     runtimeEntryLabel: "runtime setup entry",
+    pluginIdHint: packageManifest?.plugin?.id ?? packageManifest?.channel?.id,
     origin: params.origin,
     sourceLabel: params.sourceLabel,
     diagnostics: params.diagnostics,
@@ -584,6 +588,7 @@ export function resolvePackageRuntimeExtensionSources(params: {
   manifest: PackageManifest | null;
   extensions: readonly string[];
   origin: PluginOrigin;
+  pluginIdHint?: string;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
@@ -610,6 +615,7 @@ export function resolvePackageRuntimeExtensionSources(params: {
       entryPath,
       runtimeEntryPath: runtimeResolution.runtimeExtensions[index],
       runtimeEntryLabel: "runtime extension entry",
+      pluginIdHint: params.pluginIdHint,
       origin: params.origin,
       sourceLabel: params.sourceLabel,
       diagnostics: params.diagnostics,

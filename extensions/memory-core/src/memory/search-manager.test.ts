@@ -35,6 +35,10 @@ function createManagerStatus(params: {
   };
 }
 
+function nativePath(candidate: string): string {
+  return path.resolve(candidate);
+}
+
 function createManagerMock(params: {
   backend: "qmd" | "builtin";
   provider: string;
@@ -339,7 +343,7 @@ describe("getMemorySearchManager caching", () => {
     expect(checkQmdBinaryAvailability).toHaveBeenCalledWith({
       command: "qmd",
       env: process.env,
-      cwd: "/tmp/workspace",
+      cwd: nativePath("/tmp/workspace"),
     });
   });
 
@@ -430,12 +434,12 @@ describe("getMemorySearchManager caching", () => {
     expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(1, {
       command: "qmd",
       env: process.env,
-      cwd: "/tmp/workspace-a",
+      cwd: nativePath("/tmp/workspace-a"),
     });
     expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(2, {
       command: "qmd",
       env: process.env,
-      cwd: "/tmp/workspace-b",
+      cwd: nativePath("/tmp/workspace-b"),
     });
   });
 
@@ -582,12 +586,12 @@ describe("getMemorySearchManager caching", () => {
     expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(1, {
       command: "qmd",
       env: process.env,
-      cwd: "/tmp/workspace-a",
+      cwd: nativePath("/tmp/workspace-a"),
     });
     expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(2, {
       command: "qmd",
       env: process.env,
-      cwd: "/tmp/workspace-b",
+      cwd: nativePath("/tmp/workspace-b"),
     });
   });
 
@@ -637,12 +641,12 @@ describe("getMemorySearchManager caching", () => {
     expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(1, {
       command: "qmd",
       env: process.env,
-      cwd: "/tmp/workspace",
+      cwd: nativePath("/tmp/workspace"),
     });
     expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(2, {
       command: "qmd-alt",
       env: process.env,
-      cwd: "/tmp/workspace",
+      cwd: nativePath("/tmp/workspace"),
     });
   });
 
@@ -850,12 +854,12 @@ describe("getMemorySearchManager caching", () => {
     expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(1, {
       command: "qmd",
       env: process.env,
-      cwd: "/tmp/workspace-a",
+      cwd: nativePath("/tmp/workspace-a"),
     });
     expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(2, {
       command: "qmd",
       env: process.env,
-      cwd: "/tmp/workspace-b",
+      cwd: nativePath("/tmp/workspace-b"),
     });
 
     const fullAgain = await getMemorySearchManager({ cfg: firstCfg, agentId });

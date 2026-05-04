@@ -29,6 +29,7 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
+const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -394,7 +395,9 @@ describe("appendNarrativeEntry", () => {
     });
 
     const stat = await fs.stat(dreamsPath);
-    expect(stat.mode & 0o777).toBe(0o600);
+    if (EXPECTS_POSIX_PRIVATE_FILE_MODE) {
+      expect(stat.mode & 0o777).toBe(0o600);
+    }
   });
 
   it("dedupes only exact diary duplicates while keeping distinct timestamps", async () => {

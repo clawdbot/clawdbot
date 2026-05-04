@@ -7,11 +7,21 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as tar from "tar";
 
-function normalizeStringList(value) {
+function readPackageStringList(packageLabel, fieldName, value) {
   if (!Array.isArray(value)) {
-    return [];
+    return { entries: [], errors: [] };
   }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  const entries = [];
+  const errors = [];
+  for (const [index, entry] of value.entries()) {
+    const normalized = typeof entry === "string" ? entry.trim() : "";
+    if (!normalized) {
+      errors.push(`${packageLabel} package.json ${fieldName}[${index}] must be a non-empty string`);
+      continue;
+    }
+    entries.push(normalized);
+  }
+  return { entries, errors };
 }
 
 function normalizePackagePath(value) {
@@ -61,9 +71,23 @@ export function collectPluginNpmPublishedRuntimeErrors(params) {
   const packageJson = params.packageJson ?? {};
   const packageFiles = new Set([...params.files].map(normalizePackagePath));
   const packageLabel = formatPackageLabel(packageJson, params.spec);
-  const extensions = normalizeStringList(packageJson.openclaw?.extensions);
-  const runtimeExtensions = normalizeStringList(packageJson.openclaw?.runtimeExtensions);
   const errors = [];
+  const extensionsResult = readPackageStringList(
+    packageLabel,
+    "openclaw.extensions",
+    packageJson.openclaw?.extensions,
+  );
+  const runtimeExtensionsResult = readPackageStringList(
+    packageLabel,
+    "openclaw.runtimeExtensions",
+    packageJson.openclaw?.runtimeExtensions,
+  );
+  errors.push(...extensionsResult.errors, ...runtimeExtensionsResult.errors);
+  if (errors.length > 0) {
+    return errors;
+  }
+  const extensions = extensionsResult.entries;
+  const runtimeExtensions = runtimeExtensionsResult.entries;
 
   if (extensions.length === 0) {
     return errors;
@@ -124,8 +148,8 @@ function sleep(ms) {
 }
 
 async function packPublishedPackage(spec, destinationDir) {
-  const attempts = Number.parseInt(process.env.OPENCLAW_PLUGIN_NPM_VERIFY_ATTEMPTS ?? "6", 10);
-  const delayMs = Number.parseInt(process.env.OPENCLAW_PLUGIN_NPM_VERIFY_DELAY_MS ?? "5000", 10);
+  const attempts = Number.parseInt(process.env.OPENCLAW_PLUGIN_NPM_VERIFY_ATTEMPTS ?? "90", 10);
+  const delayMs = Number.parseInt(process.env.OPENCLAW_PLUGIN_NPM_VERIFY_DELAY_MS ?? "10000", 10);
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -133,6 +157,9 @@ async function packPublishedPackage(spec, destinationDir) {
     } catch (error) {
       lastError = error;
       if (attempt < attempts) {
+        console.error(
+          `npm pack ${spec} not visible yet (attempt ${attempt}/${attempts}); retrying in ${delayMs}ms...`,
+        );
         await sleep(delayMs);
       }
     }

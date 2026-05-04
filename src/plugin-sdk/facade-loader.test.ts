@@ -56,11 +56,15 @@ function createTrustedBundledPluginsRoot(kind: "dist" | "dist-runtime" = "dist")
   return rootDir;
 }
 
-function writeFixturePackageJson(pluginRoot: string, pluginId: string): void {
+function writeFixturePackageJson(
+  pluginRoot: string,
+  pluginId: string,
+  type: "commonjs" | "module" = "module",
+): void {
   writeJsonFile(path.join(pluginRoot, "package.json"), {
     name: `@openclaw/${pluginId}`,
     version: "0.0.0",
-    type: "module",
+    type,
   });
 }
 
@@ -108,7 +112,7 @@ function createThrowingPluginFixture(prefix: string): TrustedBundledPluginFixtur
   const pluginRoot = path.join(bundledPluginsDir, pluginId);
   fs.mkdirSync(pluginRoot, { recursive: true });
   trustedBundledPluginFixtureRoots.push(pluginRoot);
-  writeFixturePackageJson(pluginRoot, pluginId);
+  writeFixturePackageJson(pluginRoot, pluginId, "commonjs");
   fs.writeFileSync(
     path.join(pluginRoot, "api.js"),
     'throw new Error("plugin load failure");\n',

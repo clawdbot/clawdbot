@@ -282,6 +282,84 @@ describe("memory tools", () => {
     expect(getMemorySearchManagerMockCalls()).toBe(0);
   });
 
+  it("includes memory results in corpus=all even when wiki scores are numerically higher (#77337)", async () => {
+    // Wiki uses integer point scores (up to ~100+); memory uses cosine similarity (0-1).
+    // Raw-score sort would starve memory hits when maxResults <= number of wiki hits.
+    setMemorySearchImpl(async () => [
+      {
+        path: "memory/note-a.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.9,
+        snippet: "Memory result A",
+        source: "memory" as const,
+      },
+    ]);
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [
+        {
+          corpus: "wiki",
+          path: "w1.md",
+          title: "W1",
+          kind: "entity",
+          score: 50,
+          snippet: "wiki 1",
+        },
+        {
+          corpus: "wiki",
+          path: "w2.md",
+          title: "W2",
+          kind: "entity",
+          score: 40,
+          snippet: "wiki 2",
+        },
+        {
+          corpus: "wiki",
+          path: "w3.md",
+          title: "W3",
+          kind: "entity",
+          score: 30,
+          snippet: "wiki 3",
+        },
+        {
+          corpus: "wiki",
+          path: "w4.md",
+          title: "W4",
+          kind: "entity",
+          score: 20,
+          snippet: "wiki 4",
+        },
+        {
+          corpus: "wiki",
+          path: "w5.md",
+          title: "W5",
+          kind: "entity",
+          score: 10,
+          snippet: "wiki 5",
+        },
+      ],
+      get: async () => null,
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_all_starvation", {
+      query: "note",
+      corpus: "all",
+      maxResults: 5,
+    });
+    const details = result.details as { results: Array<{ corpus: string; path: string }> };
+    const corpora = details.results.map((r) => r.corpus);
+
+    // Memory results must appear despite lower numeric scores, and the spare
+    // memory quota should be backfilled by the remaining wiki result.
+    expect(corpora).toContain("memory");
+    expect(corpora).toContain("wiki");
+    expect(details.results).toHaveLength(5);
+    expect(
+      details.results.filter((entry) => entry.corpus === "wiki").map((entry) => entry.path),
+    ).toEqual(["w1.md", "w2.md", "w3.md", "w4.md"]);
+  });
+
   it("merges memory and wiki corpus search results for corpus=all", async () => {
     registerMemoryCorpusSupplement("memory-wiki", {
       search: async () => [

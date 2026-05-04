@@ -27,16 +27,16 @@ function createNonInteractiveMigrationPrompter(runtime: RuntimeEnv): WizardPromp
     async note(message, title) {
       runtime.log(title ? `${title}\n${message}` : message);
     },
-    select(params) {
+    async select(params) {
       return unavailable(params.message);
     },
-    multiselect(params) {
+    async multiselect(params) {
       return unavailable(params.message);
     },
-    text(params) {
+    async text(params) {
       return unavailable(params.message);
     },
-    confirm(params) {
+    async confirm(params) {
       return unavailable(params.message);
     },
     progress(label) {

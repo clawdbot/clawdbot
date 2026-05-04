@@ -152,4 +152,17 @@ if [[ "${mode}" == "--dry-run" ]]; then
   exit 0
 fi
 
-CLAWHUB_WORKDIR="${clawhub_workdir}" "${publish_cmd[@]}"
+publish_log="${pack_dir}/publish.log"
+for attempt in $(seq 1 "${OPENCLAW_CLAWHUB_PUBLISH_ATTEMPTS:-8}"); do
+  if CLAWHUB_WORKDIR="${clawhub_workdir}" "${publish_cmd[@]}" > >(tee "${publish_log}") 2>&1; then
+    exit 0
+  fi
+  if ! grep -Eqi "rate limit|too many requests|\\b429\\b" "${publish_log}"; then
+    exit 1
+  fi
+  echo "ClawHub publish hit a rate limit; retrying (${attempt}/${OPENCLAW_CLAWHUB_PUBLISH_ATTEMPTS:-8})." >&2
+  sleep "${OPENCLAW_CLAWHUB_PUBLISH_RETRY_DELAY_SECONDS:-60}"
+done
+
+echo "ClawHub publish failed after ${OPENCLAW_CLAWHUB_PUBLISH_ATTEMPTS:-8} attempts." >&2
+exit 1

@@ -47,6 +47,56 @@ describe("buildChatItems", () => {
     expect(groups.map((group) => group.senderLabel)).toEqual(["Iris", "Joaquin De Rojas"]);
   });
 
+  it("collapses consecutive duplicate text messages into one rendered item with a count", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }], timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }], timestamp: 2 },
+        { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }], timestamp: 3 },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(1);
+    expect(groups[0].messages[0]).toMatchObject({ duplicateCount: 3 });
+  });
+
+  it("does not collapse duplicate text messages separated by another message", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "same" }], timestamp: 1 },
+        { role: "user", content: [{ type: "text", text: "break" }], timestamp: 2 },
+        { role: "assistant", content: [{ type: "text", text: "same" }], timestamp: 3 },
+      ],
+    });
+
+    expect(groups).toHaveLength(3);
+    expect(groups[0].messages[0].duplicateCount).toBeUndefined();
+    expect(groups[2].messages[0].duplicateCount).toBeUndefined();
+  });
+
+  it("does not collapse messages that carry canvas previews", () => {
+    const canvasBlock = createAssistantCanvasBlock({ suffix: "duplicate_guard" });
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "preview" }, canvasBlock],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "preview" }, canvasBlock],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(2);
+    expect(groups[0].messages[0].duplicateCount).toBeUndefined();
+  });
+
   it("attaches lifted canvas previews to the nearest assistant turn", () => {
     const groups = messageGroups({
       messages: [
@@ -221,4 +271,20 @@ function isCanvasBlock(block: unknown): boolean {
     (block as { type?: unknown; preview?: { kind?: unknown } }).type === "canvas" &&
     (block as { preview?: { kind?: unknown } }).preview?.kind === "canvas"
   );
+}
+
+function createAssistantCanvasBlock(params: { suffix: string }) {
+  const viewId = `cv_inline_${params.suffix}`;
+  return {
+    type: "canvas",
+    preview: {
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      viewId,
+      title: "Inline demo",
+      url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+      preferredHeight: 360,
+    },
+  };
 }

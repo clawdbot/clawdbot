@@ -22,6 +22,7 @@ import {
   resolveEmbeddedAgentStreamFn,
   resolveUnknownToolGuardThreshold,
   shouldCreateBundleMcpRuntimeForAttempt,
+  shouldBuildCoreCodingToolsForAllowlist,
   resolveAttemptToolPolicyMessageProvider,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -80,6 +81,15 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     expect(
       applyEmbeddedAttemptToolsAllow(tools, [" cron ", "READ"]).map((tool) => tool.name),
     ).toEqual(["cron", "read"]);
+  });
+
+  it("keeps plugin-only allowlists on the shared tool policy path", () => {
+    const tools = [{ name: "memory_search" }, { name: "plugin_extra" }];
+
+    expect(shouldBuildCoreCodingToolsForAllowlist(["memory_search"])).toBe(false);
+    expect(
+      applyEmbeddedAttemptToolsAllow(tools, ["memory_search"]).map((tool) => tool.name),
+    ).toEqual(["memory_search"]);
   });
 });
 

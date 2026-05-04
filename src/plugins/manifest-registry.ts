@@ -713,6 +713,22 @@ function isIntentionalInstalledBundledDuplicate(params: {
   );
 }
 
+function isSameGlobalPackageDuplicate(left: PluginCandidate, right: PluginCandidate): boolean {
+  if (left.origin !== "global" || right.origin !== "global") {
+    return false;
+  }
+  const leftPackageName = normalizeOptionalString(left.packageName);
+  const rightPackageName = normalizeOptionalString(right.packageName);
+  if (!leftPackageName || leftPackageName !== rightPackageName) {
+    return false;
+  }
+  const leftPackageVersion = normalizeOptionalString(left.packageVersion);
+  const rightPackageVersion = normalizeOptionalString(right.packageVersion);
+  return Boolean(
+    leftPackageVersion && rightPackageVersion && leftPackageVersion === rightPackageVersion,
+  );
+}
+
 export function loadPluginManifestRegistry(
   params: {
     config?: OpenClawConfig;
@@ -904,6 +920,9 @@ export function loadPluginManifestRegistry(
           installRecords: getInstallRecords(),
         })
       ) {
+        continue;
+      }
+      if (isSameGlobalPackageDuplicate(candidate, existing.candidate)) {
         continue;
       }
       diagnostics.push({

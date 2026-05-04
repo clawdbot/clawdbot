@@ -1377,6 +1377,11 @@ export function renderConfig(props: ConfigProps) {
     hasChanges &&
     (formMode === "raw" ? true : canSaveForm);
   const canUpdate = props.connected && !props.applying && !props.updating;
+  const renderActionButtonContent = (busy: boolean, label: string, busyLabel: string) =>
+    busy
+      ? html`<span class="config-action-spinner" aria-hidden="true">${icons.loader}</span
+          >${busyLabel}`
+      : label;
 
   const showAppearanceOnRoot =
     includeVirtualSections &&
@@ -1449,14 +1454,29 @@ export function renderConfig(props: ConfigProps) {
               <button class="btn btn--sm" ?disabled=${!hasChanges} @click=${props.onReset}>
                 Clear
               </button>
-              <button class="btn btn--sm primary" ?disabled=${!canSave} @click=${props.onSave}>
-                ${props.saving ? "Saving…" : "Save"}
+              <button
+                class="btn btn--sm primary"
+                ?disabled=${!canSave}
+                aria-busy=${props.saving ? "true" : "false"}
+                @click=${props.onSave}
+              >
+                ${renderActionButtonContent(props.saving, "Save", "Saving…")}
               </button>
-              <button class="btn btn--sm" ?disabled=${!canApply} @click=${props.onApply}>
-                ${props.applying ? "Applying…" : "Apply"}
+              <button
+                class="btn btn--sm"
+                ?disabled=${!canApply}
+                aria-busy=${props.applying ? "true" : "false"}
+                @click=${props.onApply}
+              >
+                ${renderActionButtonContent(props.applying, "Apply", "Applying…")}
               </button>
-              <button class="btn btn--sm" ?disabled=${!canUpdate} @click=${props.onUpdate}>
-                ${props.updating ? "Updating…" : "Update"}
+              <button
+                class="btn btn--sm"
+                ?disabled=${!canUpdate}
+                aria-busy=${props.updating ? "true" : "false"}
+                @click=${props.onUpdate}
+              >
+                ${renderActionButtonContent(props.updating, "Update", "Updating…")}
               </button>
             </div>
           </div>

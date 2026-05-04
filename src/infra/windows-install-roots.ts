@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
-const DEFAULT_SYSTEM_ROOT = "C:\\Windows";
+export const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 const DEFAULT_PROGRAM_FILES = "C:\\Program Files";
 const DEFAULT_PROGRAM_FILES_X86 = "C:\\Program Files (x86)";
 const WINDOWS_NT_CURRENT_VERSION_KEY = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
@@ -98,7 +98,7 @@ function getWindowsRegExeCandidates(env: Record<string, string | undefined>): re
   for (const root of [
     normalizeWindowsInstallRoot(getEnvValueCaseInsensitive(env, "SystemRoot")),
     normalizeWindowsInstallRoot(getEnvValueCaseInsensitive(env, "WINDIR")),
-    DEFAULT_SYSTEM_ROOT,
+    DEFAULT_WINDOWS_SYSTEM_ROOT,
   ]) {
     if (!root) {
       continue;
@@ -206,7 +206,7 @@ function buildWindowsInstallRoots(
       registryRoots.systemRoot ??
       normalizeWindowsInstallRoot(getEnvValueCaseInsensitive(env, "SystemRoot")) ??
       normalizeWindowsInstallRoot(getEnvValueCaseInsensitive(env, "WINDIR")) ??
-      DEFAULT_SYSTEM_ROOT,
+      DEFAULT_WINDOWS_SYSTEM_ROOT,
     programFiles:
       registryRoots.programFiles ??
       normalizeWindowsInstallRoot(getEnvValueCaseInsensitive(env, "ProgramFiles")) ??

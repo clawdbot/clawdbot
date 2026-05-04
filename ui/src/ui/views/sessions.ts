@@ -45,6 +45,7 @@ export type SessionsProps = {
     showArchived: boolean;
   }) => void;
   onToggleFiltersCollapsed: () => void;
+  onClearFilters: () => void;
   onSearchChange: (query: string) => void;
   onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
   onPageChange: (page: number) => void;
@@ -225,6 +226,22 @@ function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
   return rows.slice(start, start + pageSize);
 }
 
+function hasPositiveNumberFilter(value: string): boolean {
+  const parsed = Number(value.trim());
+  return Number.isFinite(parsed) && parsed > 0;
+}
+
+function hasActiveFilters(props: SessionsProps): boolean {
+  return (
+    normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
+    hasPositiveNumberFilter(props.activeMinutes) ||
+    hasPositiveNumberFilter(props.limit) ||
+    !props.includeGlobal ||
+    !props.includeUnknown ||
+    !props.showArchived
+  );
+}
+
 function formatCheckpointReason(reason: SessionCompactionCheckpoint["reason"]): string {
   switch (reason) {
     case "manual":
@@ -304,6 +321,8 @@ export function renderSessions(props: SessionsProps) {
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
   const page = Math.min(props.page, totalPages - 1);
   const paginated = paginateRows(sorted, page, props.pageSize);
+  const emptyBecauseFiltered =
+    rawRows.length === 0 ? hasActiveFilters(props) : filtered.length === 0;
   const activeTooltip = t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() });
   const limitTooltip = t("sessionsView.limitTooltip");
   const globalTooltip = t("sessionsView.globalTooltip");
@@ -537,11 +556,17 @@ export function renderSessions(props: SessionsProps) {
               ${paginated.length === 0
                 ? html`
                     <tr>
-                      <td
-                        colspan="11"
-                        style="text-align: center; padding: 48px 16px; color: var(--muted)"
-                      >
-                        ${t("sessionsView.noSessions")}
+                      <td colspan="11" class="data-table-empty-cell">
+                        ${emptyBecauseFiltered
+                          ? html`
+                              <div class="data-table-empty-state" role="status" aria-live="polite">
+                                <div>${t("sessionsView.noSessionsMatchFilters")}</div>
+                                <button class="btn btn--sm" @click=${props.onClearFilters}>
+                                  ${t("sessionsView.showAll")}
+                                </button>
+                              </div>
+                            `
+                          : t("sessionsView.noSessions")}
                       </td>
                     </tr>
                   `

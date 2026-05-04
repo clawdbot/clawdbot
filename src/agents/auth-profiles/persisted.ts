@@ -18,10 +18,12 @@ import {
 } from "./state.js";
 import type {
   AuthProfileCredential,
+  AuthProfileFailureReason,
   AuthProfileSecretsStore,
   AuthProfileStore,
   OAuthCredential,
   OAuthCredentials,
+  ProfileUsageStats,
 } from "./types.js";
 
 export type LegacyAuthStore = Record<string, AuthProfileCredential>;
@@ -213,6 +215,107 @@ function isNewerUsableOAuthCredential(
   );
 }
 
+const AUTH_INVALIDATION_REASONS = new Set<AuthProfileFailureReason>([
+  "auth",
+  "auth_permanent",
+  "session_expired",
+]);
+
+function hasAuthInvalidationSignal(stats: ProfileUsageStats | undefined): boolean {
+  if (!stats) {
+    return false;
+  }
+  if (
+    (stats.cooldownReason && AUTH_INVALIDATION_REASONS.has(stats.cooldownReason)) ||
+    (stats.disabledReason && AUTH_INVALIDATION_REASONS.has(stats.disabledReason))
+  ) {
+    return true;
+  }
+  return Object.entries(stats.failureCounts ?? {}).some(
+    ([reason, count]) =>
+      AUTH_INVALIDATION_REASONS.has(reason as AuthProfileFailureReason) &&
+      typeof count === "number" &&
+      count > 0,
+  );
+}
+
+function isProfileReferencedByAuthState(store: AuthProfileStore, profileId: string): boolean {
+  if (Object.values(store.order ?? {}).some((profileIds) => profileIds.includes(profileId))) {
+    return true;
+  }
+  return Object.values(store.lastGood ?? {}).some((value) => value === profileId);
+}
+
+function resolveProviderAuthStateValue<T>(
+  values: Record<string, T> | undefined,
+  providerKey: string,
+): T | undefined {
+  if (!values) {
+    return undefined;
+  }
+  for (const [key, value] of Object.entries(values)) {
+    if (normalizeProviderId(key) === providerKey) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function findMainStoreOAuthReplacementForInvalidatedProfile(params: {
+  base: AuthProfileStore;
+  override: AuthProfileStore;
+  profileId: string;
+  credential: OAuthCredential;
+}): string | undefined {
+  const providerKey = normalizeProviderId(params.credential.provider);
+  if (
+    providerKey !== "openai-codex" ||
+    !isProfileReferencedByAuthState(params.override, params.profileId) ||
+    !hasAuthInvalidationSignal(params.override.usageStats?.[params.profileId])
+  ) {
+    return undefined;
+  }
+
+  const candidates = Object.entries(params.base.profiles)
+    .flatMap(([profileId, credential]): Array<[string, OAuthCredential]> => {
+      if (
+        profileId === params.profileId ||
+        credential.type !== "oauth" ||
+        normalizeProviderId(credential.provider) !== providerKey ||
+        !hasUsableOAuthCredential(credential)
+      ) {
+        return [];
+      }
+      return [[profileId, credential]];
+    })
+    .toSorted(([leftId, leftCredential], [rightId, rightCredential]) => {
+      const leftExpires = Number.isFinite(leftCredential.expires) ? leftCredential.expires : 0;
+      const rightExpires = Number.isFinite(rightCredential.expires) ? rightCredential.expires : 0;
+      if (rightExpires !== leftExpires) {
+        return rightExpires - leftExpires;
+      }
+      return leftId.localeCompare(rightId);
+    });
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  const candidateIds = new Set(candidates.map(([profileId]) => profileId));
+  const orderedProfileId = resolveProviderAuthStateValue(params.base.order, providerKey)?.find(
+    (profileId) => candidateIds.has(profileId),
+  );
+  if (orderedProfileId) {
+    return orderedProfileId;
+  }
+
+  const lastGoodProfileId = resolveProviderAuthStateValue(params.base.lastGood, providerKey);
+  if (lastGoodProfileId && candidateIds.has(lastGoodProfileId)) {
+    return lastGoodProfileId;
+  }
+
+  return candidates.length === 1 ? candidates[0]?.[0] : undefined;
+}
+
 function findMainStoreOAuthReplacement(params: {
   base: AuthProfileStore;
   legacyProfileId: string;
@@ -343,14 +446,21 @@ function reconcileMainStoreOAuthProfileDrift(params: {
 }): AuthProfileStore {
   const replacements = new Map<string, string>();
   for (const [profileId, credential] of Object.entries(params.override.profiles)) {
-    if (credential.type !== "oauth" || !isLegacyDefaultOAuthProfile(profileId, credential)) {
+    if (credential.type !== "oauth") {
       continue;
     }
-    const replacementProfileId = findMainStoreOAuthReplacement({
-      base: params.base,
-      legacyProfileId: profileId,
-      legacyCredential: credential,
-    });
+    const replacementProfileId = isLegacyDefaultOAuthProfile(profileId, credential)
+      ? findMainStoreOAuthReplacement({
+          base: params.base,
+          legacyProfileId: profileId,
+          legacyCredential: credential,
+        })
+      : findMainStoreOAuthReplacementForInvalidatedProfile({
+          base: params.base,
+          override: params.override,
+          profileId,
+          credential,
+        });
     if (replacementProfileId) {
       replacements.set(profileId, replacementProfileId);
     }

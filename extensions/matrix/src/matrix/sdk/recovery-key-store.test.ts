@@ -11,6 +11,8 @@ function createTempRecoveryKeyPath(): string {
   return path.join(dir, "recovery-key.json");
 }
 
+const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
+
 function createGeneratedRecoveryKey(params: {
   keyId: string;
   name: string;
@@ -133,7 +135,9 @@ describe("MatrixRecoveryKeyStore", () => {
     expect(saved.privateKeyBase64).toBe(Buffer.from([9, 8, 7]).toString("base64"));
 
     const mode = fs.statSync(recoveryKeyPath).mode & 0o777;
-    expect(mode).toBe(0o600);
+    if (EXPECTS_POSIX_PRIVATE_FILE_MODE) {
+      expect(mode).toBe(0o600);
+    }
   });
 
   it("creates and persists a recovery key when secret storage is missing", async () => {

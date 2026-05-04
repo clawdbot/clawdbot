@@ -84,9 +84,7 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "STATE_DIRECTORY",
   "SYNOLOGY_CHAT_INCOMING_URL",
   "SYNOLOGY_NAS_HOST",
-  "SYSTEMROOT",
   "UV_PYTHON",
-  "WINDIR",
 ]);
 
 // Block endpoint redirection for any service without overfitting per-provider names.

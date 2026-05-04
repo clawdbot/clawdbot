@@ -99,6 +99,7 @@ import {
 } from "./memory-state.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type {
   PluginCliBackendRegistration,
   PluginCliRegistration,
@@ -125,6 +126,7 @@ import type {
 } from "./registry-types.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
   findUndeclaredPluginToolNames,
@@ -271,9 +273,17 @@ export function resolvePluginPath(input: string, rootDir: string | undefined): s
   return rootDir ? path.resolve(rootDir, trimmed) : resolveUserPath(input);
 }
 
-function isOfficialNpmCodexPluginRecord(record: Pick<PluginRecord, "id" | "rootDir" | "source">) {
+function isOfficialCodexPluginRecord(
+  record: Pick<PluginRecord, "id" | "origin" | "packageName" | "rootDir" | "source">,
+) {
   if (record.id !== "codex") {
     return false;
+  }
+  if (record.origin !== "global") {
+    return false;
+  }
+  if (record.packageName === "@openclaw/codex") {
+    return true;
   }
   const sourcePath = path
     .normalize(record.rootDir ?? record.source)
@@ -283,9 +293,9 @@ function isOfficialNpmCodexPluginRecord(record: Pick<PluginRecord, "id" | "rootD
 }
 
 function canClaimReservedCommandOwnership(
-  record: Pick<PluginRecord, "id" | "origin" | "rootDir" | "source">,
+  record: Pick<PluginRecord, "id" | "origin" | "packageName" | "rootDir" | "source">,
 ) {
-  return record.origin === "bundled" || isOfficialNpmCodexPluginRecord(record);
+  return record.origin === "bundled" || isOfficialCodexPluginRecord(record);
 }
 
 const ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY = Symbol.for("openclaw.activePluginHookRegistrations");
@@ -295,6 +305,9 @@ const activePluginHookRegistrations = resolveGlobalSingleton<
 
 type HookRegistration = { event: string; handler: Parameters<typeof registerInternalHook>[1] };
 type HookRollbackEntry = { name: string; previousRegistrations: HookRegistration[] };
+type PluginSideEffectGuard = {
+  active: boolean;
+};
 
 type PluginRegistrationCapabilities = {
   /** Broad registry writes that discovery and live activation both need. */
@@ -330,6 +343,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const coreGatewayMethods = new Set(coreGatewayMethodNames);
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
   const pluginsWithChannelRegistrationConflict = new Set<string>();
+  const pluginSideEffectGuards = new Map<string, Set<PluginSideEffectGuard>>();
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
@@ -344,6 +358,25 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       throw new Error(message);
     }
     return value;
+  };
+
+  const createPluginSideEffectGuard = (pluginId: string): PluginSideEffectGuard => {
+    const guard = { active: true };
+    const guards = pluginSideEffectGuards.get(pluginId) ?? new Set<PluginSideEffectGuard>();
+    guards.add(guard);
+    pluginSideEffectGuards.set(pluginId, guards);
+    return guard;
+  };
+
+  const deactivatePluginSideEffectGuards = (pluginId: string): void => {
+    const guards = pluginSideEffectGuards.get(pluginId);
+    if (!guards) {
+      return;
+    }
+    for (const guard of guards) {
+      guard.active = false;
+    }
+    pluginSideEffectGuards.delete(pluginId);
   };
 
   const registerCodexAppServerExtensionFactory = (
@@ -1593,6 +1626,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const namespace = normalizeHostHookString(extension.namespace);
     const description = normalizeHostHookString(extension.description);
     const project = extension.project;
+    let normalizedSessionEntrySlotKey: string | undefined;
     let invalidMessage: string | undefined;
     if (!namespace || !description) {
       invalidMessage = "session extension registration requires namespace and description";
@@ -1602,6 +1636,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       invalidMessage = "session extension projector must be synchronous";
     } else if (extension.cleanup !== undefined && typeof extension.cleanup !== "function") {
       invalidMessage = "session extension cleanup must be a function";
+    } else if (extension.sessionEntrySlotKey !== undefined) {
+      const slotKey = normalizeSessionEntrySlotKey(extension.sessionEntrySlotKey);
+      if (!slotKey.ok) {
+        invalidMessage = slotKey.error;
+      } else {
+        normalizedSessionEntrySlotKey = slotKey.key;
+      }
     }
     if (invalidMessage) {
       pushDiagnostic({
@@ -1624,6 +1665,28 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    if (normalizedSessionEntrySlotKey) {
+      const existingSlot = (registry.sessionExtensions ?? []).find((entry) => {
+        const existingSlotKey = entry.extension.sessionEntrySlotKey;
+        if (existingSlotKey === undefined) {
+          return false;
+        }
+        const normalizedExistingSlotKey = normalizeSessionEntrySlotKey(existingSlotKey);
+        return (
+          normalizedExistingSlotKey.ok &&
+          normalizedExistingSlotKey.key === normalizedSessionEntrySlotKey
+        );
+      });
+      if (existingSlot) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `sessionEntrySlotKey already registered: ${normalizedSessionEntrySlotKey}`,
+        });
+        return;
+      }
+    }
     (registry.sessionExtensions ??= []).push({
       pluginId: record.id,
       pluginName: record.name,
@@ -1631,6 +1694,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         ...extension,
         namespace,
         description,
+        ...(normalizedSessionEntrySlotKey
+          ? { sessionEntrySlotKey: normalizedSessionEntrySlotKey }
+          : {}),
       },
       source: record.source,
       rootDir: record.rootDir,
@@ -2161,6 +2227,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const registrationMode = params.registrationMode ?? "full";
     const registrationCapabilities = resolvePluginRegistrationCapabilities(registrationMode);
     pluginRuntimeRecordById.set(record.id, record);
+    const sideEffectGuard = createPluginSideEffectGuard(record.id);
+    const isLoadedRecordInRegistry = () =>
+      registry.plugins.some((plugin) => plugin.id === record.id && plugin.status === "loaded");
+    const isActivatingLoadedRecord = () =>
+      registryParams.activateGlobalSideEffects !== false &&
+      record.enabled &&
+      record.status === "loaded" &&
+      !registry.plugins.some((plugin) => plugin.id === record.id);
+    const shouldCommitWorkflowSideEffect = () =>
+      sideEffectGuard.active &&
+      !isPluginRegistryRetired(registry) &&
+      (isLoadedRecordInRegistry() || isActivatingLoadedRecord());
     return buildPluginApi({
       id: record.id,
       name: record.name,
@@ -2370,14 +2448,25 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerRuntimeLifecycle: (lifecycle) => registerRuntimeLifecycle(record, lifecycle),
               registerAgentEventSubscription: (subscription) =>
                 registerAgentEventSubscription(record, subscription),
-              setRunContext: (patch) => setPluginRunContext({ pluginId: record.id, patch }),
+              setRunContext: (patch) =>
+                registryParams.activateGlobalSideEffects !== false &&
+                shouldCommitWorkflowSideEffect()
+                  ? setPluginRunContext({ pluginId: record.id, patch })
+                  : false,
               getRunContext: (get) => getPluginRunContext({ pluginId: record.id, get }),
-              clearRunContext: (params) =>
+              clearRunContext: (params) => {
+                if (
+                  registryParams.activateGlobalSideEffects === false ||
+                  !shouldCommitWorkflowSideEffect()
+                ) {
+                  return;
+                }
                 clearPluginRunContext({
                   pluginId: record.id,
                   runId: params.runId,
                   namespace: params.namespace,
-                }),
+                });
+              },
               registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {
@@ -2540,6 +2629,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const rollbackPluginGlobalSideEffects = (pluginId: string) => {
+    deactivatePluginSideEffectGuards(pluginId);
     if (registryParams.activateGlobalSideEffects === false) {
       return;
     }

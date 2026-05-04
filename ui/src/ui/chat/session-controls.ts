@@ -9,7 +9,11 @@ import {
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
 import { loadSessions } from "../controllers/sessions.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
-import { parseAgentSessionKey } from "../session-key.ts";
+import {
+  buildAgentMainSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
   listThinkingLevelLabels,
@@ -25,15 +29,29 @@ export function renderChatSessionSelect(
   onSwitchSession: ChatSessionSwitchHandler = () => undefined,
 ) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
+  const agentOptions = resolveChatAgentFilterOptions(state);
+  const hasAgentSelect = agentOptions.length > 1;
+  const agentSelect = renderChatAgentSelect(state, onSwitchSession, agentOptions);
   const modelSelect = renderChatModelSelect(state);
   const thinkingSelect = renderChatThinkingSelect(state);
   const selectedSessionLabel =
     sessionGroups.flatMap((group) => group.options).find((entry) => entry.key === state.sessionKey)
       ?.label ?? state.sessionKey;
+  const flashSession = state.sessionSwitchFlashKey === state.sessionKey;
+  const rowClass = [
+    "chat-controls__session-row",
+    hasAgentSelect ? "" : "chat-controls__session-row--single-agent",
+    flashSession ? "chat-controls__session-row--flash" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return html`
-    <div class="chat-controls__session-row">
-      <label class="field chat-controls__session">
+    <div class=${rowClass}>
+      ${agentSelect}
+      <label class="field chat-controls__session chat-controls__session-picker">
         <select
+          data-chat-session-select="true"
+          aria-label="Chat session"
           .value=${state.sessionKey}
           title=${selectedSessionLabel}
           ?disabled=${!state.connected || sessionGroups.length === 0}
@@ -68,6 +86,48 @@ export function renderChatSessionSelect(
       </label>
       ${modelSelect} ${thinkingSelect}
     </div>
+    <div class="chat-controls__session-notice" role="status" aria-live="polite">
+      ${state.sessionSwitchNotice?.text ?? ""}
+    </div>
+  `;
+}
+
+function renderChatAgentSelect(
+  state: AppViewState,
+  onSwitchSession: ChatSessionSwitchHandler,
+  options = resolveChatAgentFilterOptions(state),
+) {
+  if (options.length <= 1) {
+    return "";
+  }
+  const activeAgentId = resolveChatAgentFilterId(state, state.sessionKey);
+  const selectedLabel = options.find((entry) => entry.id === activeAgentId)?.label ?? activeAgentId;
+  return html`
+    <label class="field chat-controls__session chat-controls__agent">
+      <select
+        data-chat-agent-filter="true"
+        aria-label="Filter sessions by agent"
+        title=${selectedLabel}
+        .value=${activeAgentId}
+        ?disabled=${!state.connected}
+        @change=${(e: Event) => {
+          const nextAgentId = normalizeAgentId((e.target as HTMLSelectElement).value);
+          if (nextAgentId === activeAgentId) {
+            return;
+          }
+          onSwitchSession(state, resolvePreferredSessionForAgent(state, nextAgentId));
+        }}
+      >
+        ${repeat(
+          options,
+          (entry) => entry.id,
+          (entry) =>
+            html`<option value=${entry.id} ?selected=${entry.id === activeAgentId}>
+              ${entry.label}
+            </option>`,
+        )}
+      </select>
+    </label>
   `;
 }
 
@@ -151,17 +211,13 @@ function buildThinkingOptions(
   const options: ChatThinkingSelectOption[] = [];
 
   const addOption = (value: string, label?: string) => {
-    pushUniqueTrimmedSelectOption(
-      options,
-      seen,
-      value,
-      (trimmed) =>
-        label ??
-        trimmed
-          .split(/[-_]/g)
-          .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
-          .join(" "),
-    );
+    const resolvedLabel =
+      label ??
+      value
+        .split(/[-_]/g)
+        .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+        .join(" ");
+    pushUniqueTrimmedSelectOption(options, seen, value, () => resolvedLabel);
   };
 
   for (const level of levels) {
@@ -241,17 +297,19 @@ export function renderChatThinkingSelect(state: AppViewState) {
     currentOverride === ""
       ? defaultLabel
       : (options.find((entry) => entry.value === currentOverride)?.label ?? currentOverride);
+  const onChange = async (e: Event) => {
+    const next = (e.target as HTMLSelectElement).value.trim();
+    await switchChatThinkingLevel(state, next);
+  };
   return html`
     <label class="field chat-controls__session chat-controls__thinking-select">
       <select
+        class="chat-controls__thinking-select-full"
         data-chat-thinking-select="true"
         aria-label="Chat thinking level"
         title=${selectedLabel}
         ?disabled=${disabled}
-        @change=${async (e: Event) => {
-          const next = (e.target as HTMLSelectElement).value.trim();
-          await switchChatThinkingLevel(state, next);
-        }}
+        @change=${onChange}
       >
         <option value="" ?selected=${currentOverride === ""}>${defaultLabel}</option>
         ${repeat(
@@ -480,6 +538,72 @@ export type SessionOptionGroup = {
   options: SessionOptionEntry[];
 };
 
+type ChatAgentFilterOption = {
+  id: string;
+  label: string;
+};
+
+function resolveChatAgentFilterId(state: AppViewState, sessionKey: string): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  return normalizeAgentId(parsed?.agentId ?? state.agentsList?.defaultId ?? "main");
+}
+
+function isSessionKeyTiedToAgent(key: string, agentId: string, defaultAgentId: string): boolean {
+  const parsed = parseAgentSessionKey(key);
+  if (parsed) {
+    return normalizeAgentId(parsed.agentId) === agentId;
+  }
+  return agentId === defaultAgentId;
+}
+
+function isAgentMainSessionKey(key: string): boolean {
+  return parseAgentSessionKey(key)?.rest === "main";
+}
+
+function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): string {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
+  const currentParsed = parseAgentSessionKey(state.sessionKey);
+  if (normalizeAgentId(currentParsed?.agentId ?? defaultAgentId) === normalizedAgentId) {
+    return state.sessionKey;
+  }
+  const rows = state.sessionsResult?.sessions ?? [];
+  const row = rows
+    .filter((entry) => isSessionKeyTiedToAgent(entry.key, normalizedAgentId, defaultAgentId))
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
+  return row?.key ?? buildAgentMainSessionKey({ agentId: normalizedAgentId });
+}
+
+function resolveChatAgentFilterOptions(state: AppViewState): ChatAgentFilterOption[] {
+  const seen = new Set<string>();
+  const options: ChatAgentFilterOption[] = [];
+  const add = (agentId: string) => {
+    const normalized = normalizeAgentId(agentId);
+    if (seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    options.push({
+      id: normalized,
+      label: resolveAgentGroupLabel(state, normalized),
+    });
+  };
+
+  add(resolveChatAgentFilterId(state, state.sessionKey));
+  add(state.agentsList?.defaultId ?? "main");
+  for (const agent of state.agentsList?.agents ?? []) {
+    add(agent.id);
+  }
+  for (const row of state.sessionsResult?.sessions ?? []) {
+    const parsed = parseAgentSessionKey(row.key);
+    if (parsed) {
+      add(parsed.agentId);
+    }
+  }
+
+  return options;
+}
+
 export function resolveSessionOptionGroups(
   state: AppViewState,
   sessionKey: string,
@@ -487,6 +611,8 @@ export function resolveSessionOptionGroups(
 ): SessionOptionGroup[] {
   const rows = sessions?.sessions ?? [];
   const hideCron = state.sessionsHideCron ?? true;
+  const activeAgentId = resolveChatAgentFilterId(state, sessionKey);
+  const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
   const byKey = new Map<string, SessionsListResult["sessions"][number]>();
   for (const row of rows) {
     byKey.set(row.key, row);
@@ -532,6 +658,12 @@ export function resolveSessionOptionGroups(
   };
 
   for (const row of rows) {
+    if (
+      !isSessionKeyTiedToAgent(row.key, activeAgentId, defaultAgentId) &&
+      row.key !== sessionKey
+    ) {
+      continue;
+    }
     if (row.key !== sessionKey && (row.kind === "global" || row.kind === "unknown")) {
       continue;
     }
@@ -541,6 +673,8 @@ export function resolveSessionOptionGroups(
     addOption(row.key);
   }
   if (byKey.has(sessionKey)) {
+    addOption(sessionKey);
+  } else if (isAgentMainSessionKey(sessionKey)) {
     addOption(sessionKey);
   }
 

@@ -29,6 +29,12 @@ describe("compareSemverStrings", () => {
     expect(compareSemverStrings("1.0.0", "1.0.0.beta.1")).toBe(1);
   });
 
+  it("treats OpenClaw stable correction releases as newer than their base release", () => {
+    expect(compareSemverStrings("2026.5.3", "2026.5.3-1")).toBe(-1);
+    expect(compareSemverStrings("2026.5.3-1", "2026.5.3")).toBe(1);
+    expect(compareSemverStrings("2026.5.3-2", "2026.5.3-1")).toBe(1);
+  });
+
   it("returns null for invalid inputs", () => {
     expect(compareSemverStrings("1.0", "1.0.0")).toBeNull();
     expect(compareSemverStrings("latest", "1.0.0")).toBeNull();

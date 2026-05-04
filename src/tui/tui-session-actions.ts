@@ -377,6 +377,7 @@ export function createSessionActions(context: SessionActionContext) {
     updateAgentFromSessionKey(nextKey);
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
+    state.pendingChatRunId = null;
     setActivityStatus("idle");
     state.currentSessionId = null;
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
@@ -391,7 +392,8 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const abortActive = async () => {
-    if (!state.activeChatRunId) {
+    const runId = state.activeChatRunId ?? state.pendingChatRunId ?? null;
+    if (!runId) {
       chatLog.addSystem("no active run");
       tui.requestRender();
       return;
@@ -399,8 +401,9 @@ export function createSessionActions(context: SessionActionContext) {
     try {
       await client.abortChat({
         sessionKey: state.currentSessionKey,
-        runId: state.activeChatRunId,
+        runId,
       });
+      state.pendingChatRunId = null;
       setActivityStatus("aborted");
     } catch (err) {
       chatLog.addSystem(`abort failed: ${String(err)}`);

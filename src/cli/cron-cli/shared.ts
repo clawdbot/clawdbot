@@ -380,4 +380,5 @@ export function printCronShow(
   runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
   runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
   runtime.log(`status: ${formatStatus(job)}`);
+  runtime.log(`diagnostic: ${job.state.lastDiagnosticSummary ?? "-"}`);
 }

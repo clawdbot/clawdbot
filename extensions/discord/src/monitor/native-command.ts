@@ -16,6 +16,7 @@ import {
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   resolveDiscordAccountAllowFrom,
   resolveDiscordAccountDmPolicy,
@@ -84,6 +85,36 @@ import type { ThreadBindingManager } from "./thread-bindings.js";
 
 const log = createSubsystemLogger("discord/native-command");
 export { __testing } from "./native-command.runtime.js";
+
+function resolveDiscordCommandOwnerAllowFrom(cfg: OpenClawConfig): string[] | undefined {
+  const raw = cfg.commands?.ownerAllowFrom;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const entries: string[] = [];
+  for (const entry of raw) {
+    const trimmed = normalizeOptionalString(String(entry ?? "")) ?? "";
+    if (!trimmed) {
+      continue;
+    }
+    const separatorIndex = trimmed.indexOf(":");
+    if (separatorIndex > 0) {
+      const prefix = trimmed.slice(0, separatorIndex).toLowerCase();
+      if (prefix === "discord") {
+        const remainder = normalizeOptionalString(trimmed.slice(separatorIndex + 1)) ?? "";
+        if (remainder) {
+          entries.push(remainder);
+        }
+        continue;
+      }
+      if (prefix !== "user" && prefix !== "pk") {
+        continue;
+      }
+    }
+    entries.push(trimmed);
+  }
+  return entries.length > 0 ? entries : undefined;
+}
 
 export function createDiscordNativeCommand(params: {
   command: NativeCommandSpec;
@@ -270,8 +301,19 @@ async function dispatchDiscordCommandInteraction(params: {
       cfg,
       accountId,
     }) ?? [];
-  const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
-    allowFrom: configuredDmAllowFrom,
+  const commandOwnerAllowFrom = resolveDiscordCommandOwnerAllowFrom(cfg);
+  const { ownerAllowList: discordOwnerAllowList, ownerAllowed: discordOwnerOk } =
+    resolveDiscordOwnerAccess({
+      allowFrom: configuredDmAllowFrom,
+      sender: {
+        id: sender.id,
+        name: sender.name,
+        tag: sender.tag,
+      },
+      allowNameMatching,
+    });
+  const { ownerAllowed: commandOwnerOk } = resolveDiscordOwnerAccess({
+    allowFrom: commandOwnerAllowFrom,
     sender: {
       id: sender.id,
       name: sender.name,
@@ -279,6 +321,10 @@ async function dispatchDiscordCommandInteraction(params: {
     },
     allowNameMatching,
   });
+  const commandOwnerAllowAll = commandOwnerAllowFrom?.includes("*") === true;
+  const senderIsCommandOwner = commandOwnerOk || commandOwnerAllowAll;
+  const ownerAllowListConfigured = discordOwnerAllowList != null;
+  const ownerOk = discordOwnerOk;
   const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
     cfg,
     accountId,
@@ -447,7 +493,7 @@ async function dispatchDiscordCommandInteraction(params: {
       memberRoleIds,
       sender,
       allowNameMatching,
-      ownerAllowListConfigured: ownerAllowList != null,
+      ownerAllowListConfigured,
       ownerAllowed: ownerOk,
     });
     if (!commandAuthorized && !(await canBypassConfiguredAcpGuildGuards())) {
@@ -527,6 +573,7 @@ async function dispatchDiscordCommandInteraction(params: {
       channel: "discord",
       channelId,
       isAuthorizedSender: commandAuthorized,
+      senderIsOwner: senderIsCommandOwner,
       sessionKey: effectiveRoute.sessionKey,
       commandBody: prompt,
       config: cfg,
@@ -611,7 +658,7 @@ async function dispatchDiscordCommandInteraction(params: {
     commandTargetSessionKey,
     channel: "discord",
     senderId: sender.id,
-    senderIsOwner: ownerOk,
+    senderIsOwner: senderIsCommandOwner,
     isAuthorizedSender: commandAuthorized,
     isGroup: isGuild || isGroupDm,
     defaultGroupActivation: () =>

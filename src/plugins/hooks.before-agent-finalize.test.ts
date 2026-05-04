@@ -60,6 +60,127 @@ describe("before_agent_finalize hook runner", () => {
     });
   });
 
+  it("skips empty retry instructions when merging revise decisions", async () => {
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "needs a retry but forgot the instruction",
+            retry: { instruction: "   ", idempotencyKey: "empty-retry" },
+          }),
+        },
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "rerun the focused tests",
+            retry: {
+              instruction: " rerun the focused tests ",
+              idempotencyKey: "valid-retry",
+              maxAttempts: 1,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX)).resolves.toEqual({
+      action: "revise",
+      reason: "needs a retry but forgot the instruction\n\nrerun the focused tests",
+      retry: {
+        instruction: "rerun the focused tests",
+        idempotencyKey: "valid-retry",
+        maxAttempts: 1,
+      },
+    });
+  });
+
+  it("skips malformed retry instructions when merging revise decisions", async () => {
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "malformed retry payload should not crash",
+            retry: { instruction: 123, idempotencyKey: "bad-retry" } as never,
+          }),
+        },
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "valid retry still applies",
+            retry: {
+              instruction: " rerun the focused tests ",
+              idempotencyKey: "valid-retry",
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX)).resolves.toEqual({
+      action: "revise",
+      reason: "malformed retry payload should not crash\n\nvalid retry still applies",
+      retry: {
+        instruction: "rerun the focused tests",
+        idempotencyKey: "valid-retry",
+      },
+    });
+  });
+
+  it("preserves multiple valid retry candidates for budget evaluation", async () => {
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "retry generated artifacts",
+            retry: {
+              instruction: "regenerate artifacts",
+              idempotencyKey: "artifacts",
+              maxAttempts: 1,
+            },
+          }),
+        },
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "retry focused tests",
+            retry: {
+              instruction: "rerun focused tests",
+              idempotencyKey: "tests",
+              maxAttempts: 1,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const result = await runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX);
+
+    expect(result).toEqual({
+      action: "revise",
+      reason: "retry generated artifacts\n\nretry focused tests",
+      retry: {
+        instruction: "regenerate artifacts",
+        idempotencyKey: "artifacts",
+        maxAttempts: 1,
+      },
+    });
+    expect(Object.getOwnPropertyDescriptor(result, "retryCandidates")?.enumerable).toBe(false);
+    expect(
+      (Object.getOwnPropertyDescriptor(result, "retryCandidates")?.value as unknown[])?.map(
+        (retry) => (retry as { idempotencyKey?: string }).idempotencyKey,
+      ),
+    ).toEqual(["artifacts", "tests"]);
+  });
+
   it("lets finalize override earlier revise decisions", async () => {
     const runner = createHookRunner(
       createMockPluginRegistry([

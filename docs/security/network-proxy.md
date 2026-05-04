@@ -139,7 +139,7 @@ Validate the proxy from the same host, container, or service account that runs O
 openclaw proxy validate --proxy-url http://127.0.0.1:3128
 ```
 
-By default, when no custom destinations are provided, the command checks that `https://example.com/` succeeds and starts a temporary loopback canary that the proxy must not reach. The default denied check passes when the proxy returns a non-2xx denial response or blocks the canary with a transport failure; it fails if a successful response reaches the canary. If no proxy is enabled and configured, validation reports a config problem; use `--proxy-url` for a one-off preflight before changing config. Use `--allowed-url` and `--denied-url` to test deployment-specific expectations. Custom denied destinations are fail-closed: any HTTP response means the destination was reachable through the proxy, and any transport error is reported as inconclusive because OpenClaw cannot prove the proxy blocked a reachable origin. On validation failure, the command exits with code 1.
+By default, when no custom destinations are provided, the command checks that `https://example.com/` succeeds and starts a temporary loopback canary that the proxy must not reach. The default denied check passes when the proxy returns a non-2xx denial response or blocks the canary with a transport failure; it fails if a successful response reaches the canary. If no proxy is enabled and configured, validation reports a config problem; use `--proxy-url` for a one-off preflight before changing config. Use `--allowed-url` and `--denied-url` to test deployment-specific expectations. Add `--apns-reachable` to also verify direct APNs HTTP/2 delivery can open a CONNECT tunnel through the proxy and receive a sandbox APNs response; the probe uses an intentionally invalid provider token, so `403 InvalidProviderToken` is expected and counts as reachable. Custom denied destinations are fail-closed: any HTTP response means the destination was reachable through the proxy, and any transport error is reported as inconclusive because OpenClaw cannot prove the proxy blocked a reachable origin. On validation failure, the command exits with code 1.
 
 Use `--json` for automation. The JSON output contains the overall result, the effective proxy config source, any config errors, and each destination check. Proxy URL credentials are redacted in text and JSON output:
 
@@ -158,6 +158,12 @@ Use `--json` for automation. The JSON output contains the overall result, the ef
       "url": "https://example.com/",
       "ok": true,
       "status": 200
+    },
+    {
+      "kind": "apns",
+      "url": "https://api.sandbox.push.apple.com",
+      "ok": true,
+      "status": 403
     }
   ]
 }

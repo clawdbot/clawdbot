@@ -483,6 +483,7 @@ export const dispatchTelegramMessage = async ({
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
   let previewToolProgressSuppressed = false;
   let previewToolProgressLines: string[] = [];
+  let answerLaneHasAssistantContent = false;
   const renderProgressDraft = async (options?: { flush?: boolean }) => {
     if (!answerLane.stream || streamMode !== "progress") {
       return;
@@ -605,13 +606,14 @@ export const dispatchTelegramMessage = async ({
           messageId: previewMessageId,
           textSnapshot: answerLane.lastPartialText,
           visibleSinceMs: answerLane.stream?.visibleSinceMs?.(),
-          deleteIfUnused: false,
+          deleteIfUnused: !answerLaneHasAssistantContent,
         });
       }
       answerLane.stream?.forceNewMessage();
       didForceNewMessage = true;
     }
     resetDraftLaneState(answerLane);
+    answerLaneHasAssistantContent = false;
     if (didForceNewMessage) {
       activePreviewLifecycleByLane.answer = "transient";
       retainPreviewOnCleanupByLane.answer = false;
@@ -630,6 +632,7 @@ export const dispatchTelegramMessage = async ({
       if (streamMode === "progress") {
         return;
       }
+      answerLaneHasAssistantContent = true;
       previewToolProgressSuppressed = true;
       previewToolProgressLines = [];
     }

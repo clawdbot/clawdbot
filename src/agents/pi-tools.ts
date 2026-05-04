@@ -832,6 +832,7 @@ export function createOpenClawCodingTools(options?: {
   const withHooks = normalized.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
+      ...(options?.config ? { config: options.config } : {}),
       sessionKey: options?.sessionKey,
       sessionId: options?.sessionId,
       runId: options?.runId,

@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { saveJsonFile } from "../infra/json-file.js";
 import { resolveDefaultPluginNpmDir } from "../plugins/install-paths.js";
 import type { InstalledPluginIndexRecordStoreOptions } from "../plugins/installed-plugin-index-records.js";
-import { readPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
 import { note } from "../terminal/note.js";
@@ -81,7 +80,6 @@ function readPluginManifestId(packageDir: string): string | undefined {
 function listStaleManagedNpmBundledPlugins(
   params: PluginRegistryDoctorRepairParams,
 ): StaleManagedNpmBundledPlugin[] {
-  const persistedInstallRecords = readPersistedInstalledPluginIndexInstallRecordsSync(params) ?? {};
   const currentBundled = loadInstalledPluginIndex({
     ...params,
     installRecords: {},
@@ -107,10 +105,6 @@ function listStaleManagedNpmBundledPlugins(
     const packageDir = path.join(npmRoot, "node_modules", packageName);
     const pluginId = readPluginManifestId(packageDir);
     if (!pluginId || pluginId !== bundled.pluginId) {
-      continue;
-    }
-    const persistedRecord = persistedInstallRecords[pluginId];
-    if (persistedRecord?.source === "npm") {
       continue;
     }
     stale.push({
@@ -195,7 +189,7 @@ function removeManagedNpmPackageLockDependency(params: {
   }
 }
 
-function maybeRepairStaleManagedNpmBundledPlugins(
+export function maybeRepairStaleManagedNpmBundledPlugins(
   params: PluginRegistryDoctorRepairParams,
 ): boolean {
   const stale = listStaleManagedNpmBundledPlugins(params);

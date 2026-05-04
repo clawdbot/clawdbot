@@ -133,6 +133,31 @@ function renderAssistantMessages(
   );
 }
 
+function renderAssistantMessageEntries(
+  container: HTMLElement,
+  entries: MessageGroup["messages"],
+  opts: Partial<RenderMessageGroupOptions> = {},
+) {
+  const group: MessageGroup = {
+    kind: "group",
+    key: "assistant-group",
+    role: "assistant",
+    messages: entries,
+    timestamp: Date.now(),
+    isStreaming: false,
+  };
+  render(
+    renderMessageGroup(group, {
+      showReasoning: true,
+      showToolCalls: true,
+      assistantName: "OpenClaw",
+      assistantAvatar: null,
+      ...opts,
+    }),
+    container,
+  );
+}
+
 function renderGroupedMessage(
   container: HTMLElement,
   message: unknown,
@@ -366,6 +391,25 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
+  it("renders a compact count for collapsed duplicate messages", () => {
+    const container = document.createElement("div");
+    renderAssistantMessageEntries(container, [
+      {
+        key: "assistant-heartbeat",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "HEARTBEAT_OK" }],
+          timestamp: 1,
+        },
+        duplicateCount: 4,
+      },
+    ]);
+
+    const badge = container.querySelector(".chat-duplicate-count");
+    expect(badge?.textContent?.trim()).toBe("×4");
+    expect(badge?.getAttribute("aria-label")).toBe("4 consecutive identical messages collapsed");
+  });
+
   it("does not render the stale assistant read-aloud footer action", () => {
     const container = document.createElement("div");
     renderAssistantMessage(container, {

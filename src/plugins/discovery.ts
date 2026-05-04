@@ -487,6 +487,26 @@ function deriveIdHint(params: {
   return `${normalizedPackageId}/${base}`;
 }
 
+function derivePackagePluginIdHint(params: {
+  manifestId?: string;
+  packageName?: string;
+}): string | undefined {
+  const rawManifestId = params.manifestId?.trim();
+  if (rawManifestId) {
+    return rawManifestId;
+  }
+  const rawPackageName = params.packageName?.trim();
+  if (!rawPackageName) {
+    return undefined;
+  }
+  const unscoped = rawPackageName.includes("/")
+    ? (rawPackageName.split("/").pop() ?? rawPackageName)
+    : rawPackageName;
+  return unscoped.endsWith("-provider") && unscoped.length > "-provider".length
+    ? unscoped.slice(0, -"-provider".length)
+    : unscoped;
+}
+
 function resolveIdHintManifestId(
   rootDir: string,
   rejectHardlinks: boolean,
@@ -706,6 +726,7 @@ function discoverInDirectory(params: {
         manifest,
         extensions,
         origin: params.origin,
+        pluginIdHint: derivePackagePluginIdHint({ manifestId, packageName: manifest?.name }),
         sourceLabel: fullPath,
         diagnostics: params.diagnostics,
         rejectHardlinks,
@@ -911,6 +932,7 @@ function discoverFromPath(params: {
         manifest,
         extensions,
         origin: params.origin,
+        pluginIdHint: derivePackagePluginIdHint({ manifestId, packageName: manifest?.name }),
         sourceLabel: resolved,
         diagnostics: params.diagnostics,
         rejectHardlinks,

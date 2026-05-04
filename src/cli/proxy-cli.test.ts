@@ -26,6 +26,8 @@ describe("proxy cli", () => {
       "--proxy-url",
       "--allowed-url",
       "--denied-url",
+      "--apns-reachable",
+      "--apns-authority",
       "--timeout-ms",
     ]);
   });

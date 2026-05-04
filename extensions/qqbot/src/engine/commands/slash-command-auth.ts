@@ -13,15 +13,53 @@
 
 import { createQQBotSenderMatcher, normalizeQQBotAllowFrom } from "../access/index.js";
 
+type SlashCommandAuthEntry = string | number;
+
+function isSlashCommandAuthEntry(value: unknown): value is SlashCommandAuthEntry {
+  return typeof value === "string" || typeof value === "number";
+}
+
+function readSlashCommandAuthList(value: unknown): SlashCommandAuthEntry[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value.filter(isSlashCommandAuthEntry);
+}
+
+/**
+ * Resolve the command-specific QQBot allowlist from the root OpenClaw config.
+ *
+ * `commands.allowFrom.qqbot` takes precedence over the global
+ * `commands.allowFrom["*"]`, matching the framework command authorization
+ * contract used by registered plugin commands.
+ */
+export function resolveQQBotCommandsAllowFrom(cfg: unknown): SlashCommandAuthEntry[] | undefined {
+  if (!cfg || typeof cfg !== "object") {
+    return undefined;
+  }
+  const commands = (cfg as { commands?: unknown }).commands;
+  if (!commands || typeof commands !== "object") {
+    return undefined;
+  }
+  const allowFrom = (commands as { allowFrom?: unknown }).allowFrom;
+  if (!allowFrom || typeof allowFrom !== "object" || Array.isArray(allowFrom)) {
+    return undefined;
+  }
+  const byProvider = allowFrom as Record<string, unknown>;
+  return readSlashCommandAuthList(byProvider.qqbot) ?? readSlashCommandAuthList(byProvider["*"]);
+}
+
 /**
  * Determine whether `senderId` is authorized to execute `requireAuth`
  * slash commands for the given account configuration.
  *
  * Authorization rules:
+ * - `commands.allowFrom.qqbot` / `commands.allowFrom["*"]` configured →
+ *   use that command-specific list instead of channel allowFrom
  * - `allowFrom` not configured / empty / only `["*"]` → **false**
  *   (wildcard means "open to everyone", not explicit authorization)
  * - `allowFrom` contains at least one concrete entry AND sender
- *   matches → **true**
+ *   matches a concrete entry → **true**
  * - Group messages use `groupAllowFrom` when present, falling back
  *   to `allowFrom`.
  */
@@ -30,19 +68,21 @@ export function resolveSlashCommandAuth(params: {
   isGroup: boolean;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
+  commandsAllowFrom?: Array<string | number>;
 }): boolean {
   const rawList =
-    params.isGroup && params.groupAllowFrom && params.groupAllowFrom.length > 0
+    params.commandsAllowFrom ??
+    (params.isGroup && params.groupAllowFrom && params.groupAllowFrom.length > 0
       ? params.groupAllowFrom
-      : params.allowFrom;
+      : params.allowFrom);
 
   const normalized = normalizeQQBotAllowFrom(rawList);
 
-  // Require at least one explicit (non-wildcard) entry.
-  const hasExplicitEntry = normalized.some((entry) => entry !== "*");
-  if (!hasExplicitEntry) {
+  // Require and match only explicit (non-wildcard) entries.
+  const explicitEntries = normalized.filter((entry) => entry !== "*");
+  if (explicitEntries.length === 0) {
     return false;
   }
 
-  return createQQBotSenderMatcher(params.senderId)(normalized);
+  return createQQBotSenderMatcher(params.senderId)(explicitEntries);
 }

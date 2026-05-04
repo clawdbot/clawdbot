@@ -188,6 +188,8 @@ export const zh_CN: TranslationMap = {
     verbose: "详细",
     reasoning: "推理",
     noSessions: "未找到会话。",
+    noSessionsMatchFilters: "没有会话符合你的筛选条件。",
+    showAll: "显示全部",
     inherit: "继承",
     defaultOption: "默认（{value}）",
     offExplicit: "关闭（显式）",
@@ -918,6 +920,7 @@ export const zh_CN: TranslationMap = {
     updating: "正在更新…",
     updateNow: "立即更新",
     dismissUpdateBanner: "关闭更新横幅",
+    switchedSession: "已切换到 {session}",
   },
   languages: {
     en: "英语",

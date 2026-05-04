@@ -41,7 +41,7 @@ function createService(overrides: Partial<GatewayService> = {}): GatewayService 
 describe("resolveGatewayService", () => {
   it.each([
     { platform: "darwin" as const, label: "LaunchAgent", loadedText: "loaded" },
-    { platform: "linux" as const, label: "systemd", loadedText: "enabled" },
+    { platform: "linux" as const, label: "systemd user", loadedText: "enabled" },
     { platform: "win32" as const, label: "Scheduled Task", loadedText: "registered" },
   ])("returns the registered adapter for $platform", ({ platform, label, loadedText }) => {
     setPlatform(platform);

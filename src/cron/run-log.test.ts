@@ -311,6 +311,46 @@ describe("cron run log", () => {
     });
   });
 
+  it("reads and searches run diagnostics", async () => {
+    await withRunLogDir("openclaw-cron-log-diagnostics-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+
+      await appendCronRunLog(logPath, {
+        ts: 1,
+        jobId: "job-1",
+        action: "finished",
+        status: "error",
+        diagnostics: {
+          summary: "exec stderr tail",
+          entries: [
+            {
+              ts: 1,
+              source: "exec",
+              severity: "error",
+              message: "exec stderr tail",
+              exitCode: 2,
+            },
+          ],
+        },
+      });
+
+      const entries = await readCronRunLogEntries(logPath, { limit: 10, jobId: "job-1" });
+      expect(entries[0]?.diagnostics).toMatchObject({
+        summary: "exec stderr tail",
+        entries: [{ source: "exec", severity: "error", message: "exec stderr tail", exitCode: 2 }],
+      });
+      expect(
+        (
+          await readCronRunLogEntriesPage(logPath, {
+            limit: 10,
+            jobId: "job-1",
+            query: "stderr tail",
+          })
+        ).entries,
+      ).toHaveLength(1);
+    });
+  });
+
   it("reads telemetry fields", async () => {
     await withRunLogDir("openclaw-cron-log-telemetry-", async (dir) => {
       const logPath = path.join(dir, "runs", "job-1.jsonl");

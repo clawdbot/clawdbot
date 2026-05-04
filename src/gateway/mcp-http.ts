@@ -132,6 +132,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
             toolSchema: scopedTools.toolSchema,
             hookContext: {
               agentId: scopedTools.agentId,
+              config: cfg,
               sessionKey: requestContext.sessionKey,
             },
             signal: requestAbort.signal,

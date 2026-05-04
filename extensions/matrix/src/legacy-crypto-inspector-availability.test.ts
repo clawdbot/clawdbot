@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const availabilityState = vi.hoisted(() => ({
@@ -37,10 +38,11 @@ describe("isMatrixLegacyCryptoInspectorAvailable", () => {
   });
 
   it("detects the source inspector module directly", () => {
-    availabilityState.currentFilePath =
-      "/virtual/extensions/matrix/src/legacy-crypto-inspector-availability.js";
+    availabilityState.currentFilePath = path.resolve(
+      "/virtual/extensions/matrix/src/legacy-crypto-inspector-availability.js",
+    );
     availabilityState.existingPaths.add(
-      "/virtual/extensions/matrix/src/matrix/legacy-crypto-inspector.ts",
+      path.resolve("/virtual/extensions/matrix/src/matrix/legacy-crypto-inspector.ts"),
     );
 
     expect(isMatrixLegacyCryptoInspectorAvailable()).toBe(true);

@@ -95,7 +95,9 @@ async function postJson<T>(
     );
 
     const onAbort = () => {
-      request.destroy(abortError());
+      const error = abortError();
+      request.destroy(error);
+      reject(error);
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     request.on("error", (error) => {

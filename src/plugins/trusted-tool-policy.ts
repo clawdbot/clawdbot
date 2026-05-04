@@ -1,20 +1,68 @@
+import { getRuntimeConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
 } from "./hook-types.js";
+import { getPluginSessionExtensionStateSync } from "./host-hook-state.js";
+import type { PluginJsonValue } from "./host-hooks.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
 export async function runTrustedToolPolicies(
   event: PluginHookBeforeToolCallEvent,
   ctx: PluginHookToolContext,
+  options?: { config?: OpenClawConfig },
 ): Promise<PluginHookBeforeToolCallResult | undefined> {
   const policies = getActivePluginRegistry()?.trustedToolPolicies ?? [];
   let adjustedParams = event.params;
   let hasAdjustedParams = false;
   let approval: PluginHookBeforeToolCallResult["requireApproval"];
+  const sessionExtensionStateCache = new Map<string, Record<string, PluginJsonValue> | undefined>();
+  let resolvedSessionConfig: OpenClawConfig | undefined = options?.config;
+  let didResolveSessionConfig = Boolean(options?.config);
+  const resolveSessionConfig = (): OpenClawConfig | undefined => {
+    if (!didResolveSessionConfig) {
+      didResolveSessionConfig = true;
+      try {
+        resolvedSessionConfig = getRuntimeConfig();
+      } catch {
+        resolvedSessionConfig = undefined;
+      }
+    }
+    return resolvedSessionConfig;
+  };
   for (const registration of policies) {
-    const decision = await registration.policy.evaluate({ ...event, params: adjustedParams }, ctx);
+    const policyCtx: PluginHookToolContext = {
+      ...ctx,
+      // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
+      getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) => {
+        const normalizedNamespace = namespace.trim();
+        const cacheKey = registration.pluginId;
+        if (!sessionExtensionStateCache.has(cacheKey)) {
+          const config = ctx.sessionKey ? resolveSessionConfig() : undefined;
+          sessionExtensionStateCache.set(
+            cacheKey,
+            config
+              ? getPluginSessionExtensionStateSync({
+                  cfg: config,
+                  pluginId: registration.pluginId,
+                  sessionKey: ctx.sessionKey,
+                })
+              : undefined,
+          );
+        }
+        const pluginState = sessionExtensionStateCache.get(cacheKey);
+        if (!normalizedNamespace || !pluginState) {
+          return undefined;
+        }
+        return pluginState[normalizedNamespace] as T | undefined;
+      },
+    };
+    const decision = await registration.policy.evaluate(
+      { ...event, params: adjustedParams },
+      policyCtx,
+    );
     if (!decision) {
       continue;
     }

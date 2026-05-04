@@ -708,11 +708,7 @@ describe("installPluginFromNpmSpec", () => {
         return;
       }
       expect(result.pluginId).toBe(pluginId);
-      expect(
-        warnings.some((warning) =>
-          warning.includes("allowed because it is an official OpenClaw package"),
-        ),
-      ).toBe(true);
+      expect(warnings.some((warning) => warning.includes("installation blocked"))).toBe(false);
       expectNpmInstallIntoRoot({
         calls: runCommandWithTimeoutMock.mock.calls,
         npmRoot,

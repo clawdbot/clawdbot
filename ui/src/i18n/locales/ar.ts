@@ -189,6 +189,8 @@ export const ar: TranslationMap = {
     verbose: "مطوّل",
     reasoning: "الاستدلال",
     noSessions: "لم يتم العثور على جلسات.",
+    noSessionsMatchFilters: "لا توجد جلسات تطابق عوامل التصفية لديك.",
+    showAll: "عرض الكل",
     inherit: "وراثة",
     defaultOption: "الافتراضي ({value})",
     offExplicit: "إيقاف (صريح)",
@@ -925,6 +927,7 @@ export const ar: TranslationMap = {
     updating: "جارٍ التحديث…",
     updateNow: "التحديث الآن",
     dismissUpdateBanner: "إغلاق لافتة التحديث",
+    switchedSession: "تم التبديل إلى {session}",
   },
   languages: {
     en: "English (الإنجليزية)",

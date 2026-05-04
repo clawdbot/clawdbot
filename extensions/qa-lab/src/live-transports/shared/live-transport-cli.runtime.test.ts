@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveLiveTransportQaRunOptions } from "./live-transport-cli.runtime.js";
 
@@ -11,7 +12,7 @@ describe("resolveLiveTransportQaRunOptions", () => {
         alternateModel: "",
       }),
     ).toMatchObject({
-      repoRoot: "/tmp/openclaw-repo",
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
       providerMode: "live-frontier",
       primaryModel: undefined,
       alternateModel: undefined,

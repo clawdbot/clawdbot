@@ -91,6 +91,9 @@ export function createWebSearchTool(options?: {
           lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
           runtimeWebSearch: options?.runtimeWebSearch,
         });
+      if (isWebSearchDisabled(config)) {
+        throw new Error("web_search is disabled.");
+      }
       const result = await runWebSearch({
         config,
         sandboxed: options?.sandboxed,

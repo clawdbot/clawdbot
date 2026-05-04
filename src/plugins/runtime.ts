@@ -5,6 +5,7 @@ import {
   dispatchPluginAgentEventSubscriptions,
 } from "./host-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
   PLUGIN_REGISTRY_STATE,
@@ -64,16 +65,23 @@ function registryHasPluginHostCleanupWork(registry: PluginRegistry | null): bool
 
 async function cleanupPreviousPluginHostRegistry(params: {
   previousRegistry: PluginRegistry;
-  nextRegistry: PluginRegistry;
 }): Promise<void> {
   const [{ getRuntimeConfig }, { cleanupReplacedPluginHostRegistry }] = await Promise.all([
     import("../config/config.js"),
     import("./host-hook-cleanup.js"),
   ]);
+  const nextRegistry = asPluginRegistry(state.activeRegistry);
+  if (!nextRegistry || nextRegistry === params.previousRegistry) {
+    return;
+  }
+  // Async cleanup must not clear state for a registry that has been restored
+  // active, but later swaps should not strand cleanup for the retiring registry.
+  const shouldCleanup = () => state.activeRegistry !== params.previousRegistry;
   await cleanupReplacedPluginHostRegistry({
     cfg: getRuntimeConfig(),
     previousRegistry: params.previousRegistry,
-    nextRegistry: params.nextRegistry,
+    nextRegistry,
+    shouldCleanup,
   });
 }
 
@@ -129,6 +137,10 @@ export function setActivePluginRegistry(
   workspaceDir?: string,
 ) {
   const previousRegistry = asPluginRegistry(state.activeRegistry);
+  if (previousRegistry && previousRegistry !== registry) {
+    markPluginRegistryRetired(previousRegistry);
+  }
+  markPluginRegistryActive(registry);
   state.activeRegistry = registry;
   state.activeVersion += 1;
   syncTrackedSurface(state.httpRoute, registry, true);
@@ -146,7 +158,6 @@ export function setActivePluginRegistry(
   }
   void cleanupPreviousPluginHostRegistry({
     previousRegistry,
-    nextRegistry: registry,
   }).catch((error) => {
     log.warn(`plugin host registry cleanup failed: ${String(error)}`);
   });

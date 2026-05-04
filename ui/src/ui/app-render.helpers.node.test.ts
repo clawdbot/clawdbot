@@ -547,6 +547,10 @@ describe("resolveSessionOptionGroups", () => {
     ).toContain("subagent:4f2146de-887b-4176-9abe-91140082959b");
   });
 
+  it("keeps the active agent main session visible when no row exists yet", () => {
+    expect(labelsForSessionOptions({ sessionKey: "agent:main:main" })).toEqual(["main"]);
+  });
+
   it("disambiguates duplicate grouped labels with scoped suffixes", () => {
     const labels = labelsForSessionOptions({
       sessionKey: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
@@ -571,7 +575,7 @@ describe("resolveSessionOptionGroups", () => {
     expect(labels).not.toContain("Subagent: cron-config-check");
   });
 
-  it("uses agent group labels to keep duplicate main sessions unique", () => {
+  it("filters the chat session options to the active agent", () => {
     const labels = labelsForSessionOptions({
       sessionKey: "agent:alpha:main",
       agentsList: {
@@ -593,10 +597,53 @@ describe("resolveSessionOptionGroups", () => {
       ],
     });
 
-    expect(labels.filter((label) => label === "Deep Chat (alpha) / main")).toHaveLength(1);
-    expect(labels).toContain("Deep Chat (alpha) / main · named-main");
-    expect(labels).toContain("Coding (beta) / main");
-    expect(labels).not.toContain("main");
+    expect(labels).toContain("main");
+    expect(labels).toContain("Deep Chat (alpha) / main");
+    expect(labels).not.toContain("Coding (beta) / main");
+  });
+
+  it("shows sessions for the selected agent after switching agent scope", () => {
+    const labels = labelsForSessionOptions({
+      sessionKey: "agent:beta:main",
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "agent:alpha:main",
+        scope: "all",
+        agents: [
+          { id: "alpha", name: "Deep Chat" },
+          { id: "beta", name: "Coding" },
+        ],
+      },
+      sessions: [
+        row({ key: "agent:alpha:main" }),
+        row({ key: "agent:beta:main" }),
+        row({ key: "agent:beta:dashboard:recent", label: "Bug triage" }),
+      ],
+    });
+
+    expect(labels).toEqual(["main", "Bug triage"]);
+  });
+
+  it("keeps bare legacy sessions scoped to the default agent only", () => {
+    const labels = labelsForSessionOptions({
+      sessionKey: "agent:beta:main",
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "agent:alpha:main",
+        scope: "all",
+        agents: [
+          { id: "alpha", name: "Deep Chat" },
+          { id: "beta", name: "Coding" },
+        ],
+      },
+      sessions: [
+        row({ key: "main", label: "Legacy main" }),
+        row({ key: "agent:alpha:main", label: "Alpha main" }),
+        row({ key: "agent:beta:main", label: "Beta main" }),
+      ],
+    });
+
+    expect(labels).toEqual(["Beta main"]);
   });
 });
 
@@ -773,7 +820,18 @@ describe("switchChatSession", () => {
       sessionsShowArchived: false,
       chatSideResultTerminalRuns: new Set(["btw-run-1"]),
       chatStreamStartedAt: 1,
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [
+          row({ key: "main" }),
+          row({ key: "agent:main:test-b", label: "Review Session" }),
+        ],
+      },
       settings,
+      announceSessionSwitch: vi.fn(),
       applySettings(next: typeof settings) {
         state.settings = next;
       },
@@ -814,6 +872,10 @@ describe("switchChatSession", () => {
       includeUnknown: true,
       showArchived: false,
     });
+    expect(
+      (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })
+        .announceSessionSwitch,
+    ).toHaveBeenCalledWith("agent:main:test-b", "Review Session");
   });
 
   it("restores queued messages when switching back to their session", async () => {
@@ -839,6 +901,7 @@ describe("switchChatSession", () => {
       chatSideResultTerminalRuns: new Set<string>(),
       chatStreamStartedAt: 1,
       settings,
+      announceSessionSwitch: vi.fn(),
       applySettings(next: typeof settings) {
         state.settings = next;
       },
@@ -884,6 +947,7 @@ describe("switchChatSession", () => {
       chatSideResultTerminalRuns: new Set<string>(),
       chatStreamStartedAt: null,
       settings,
+      announceSessionSwitch: vi.fn(),
       applySettings(next: typeof settings) {
         state.settings = next;
       },
@@ -902,6 +966,10 @@ describe("switchChatSession", () => {
     switchChatSession(state, "main");
     await Promise.resolve();
 
+    expect(
+      (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })
+        .announceSessionSwitch,
+    ).not.toHaveBeenCalled();
     expect(refreshSlashCommandsMock).toHaveBeenCalledWith({
       client: state.client,
       agentId: undefined,

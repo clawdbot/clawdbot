@@ -85,6 +85,7 @@ export interface QQBotFrameworkCommand {
   name: string;
   description: string;
   usage?: string;
+  c2cOnly?: boolean;
   handler: (ctx: SlashCommandContext) => SlashCommandResult | Promise<SlashCommandResult>;
 }
 
@@ -99,8 +100,8 @@ function lc(s: string): string {
  * Slash command registry.
  *
  * Maintains two maps:
- * - `commands` — pre-dispatch commands (requireAuth: false)
- * - `frameworkCommands` — auth-gated commands (requireAuth: true)
+ * - `commands` — QQBot message-flow commands
+ * - `frameworkCommands` — auth-gated commands that are safe on the framework surface
  */
 export class SlashCommandRegistry {
   private readonly commands = new Map<string, SlashCommand>();
@@ -112,19 +113,21 @@ export class SlashCommandRegistry {
     // Always register in the pre-dispatch map so QQ message-flow slash
     // commands can match and execute directly (with requireAuth gating).
     this.commands.set(key, cmd);
-    // Auth-gated commands are additionally exposed to the framework command
-    // surface (api.registerCommand) for CLI / control-plane invocation.
+    // Auth-gated commands are exposed to the framework command surface.
+    // Private-chat-only metadata is preserved so the bridge can enforce the
+    // same routing restriction before dispatching handlers.
     if (cmd.requireAuth) {
       this.frameworkCommands.set(key, cmd);
     }
   }
 
-  /** Return all auth-gated commands for framework registration. */
+  /** Return all commands that may be registered on the framework surface. */
   getFrameworkCommands(): QQBotFrameworkCommand[] {
     return Array.from(this.frameworkCommands.values()).map((cmd) => ({
       name: cmd.name,
       description: cmd.description,
       usage: cmd.usage,
+      c2cOnly: cmd.c2cOnly,
       handler: cmd.handler,
     }));
   }

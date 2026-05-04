@@ -4,12 +4,17 @@ import { runDoctorRepairSequence } from "./repair-sequencing.js";
 
 const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
+  maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
   maybeRepairStalePluginConfig: vi.fn(),
   repairMissingConfiguredPluginInstalls: vi.fn(),
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: mocks.applyPluginAutoEnable,
+}));
+
+vi.mock("../doctor-plugin-registry.js", () => ({
+  maybeRepairStaleManagedNpmBundledPlugins: mocks.maybeRepairStaleManagedNpmBundledPlugins,
 }));
 
 vi.mock("./shared/missing-configured-plugin-install.js", () => ({
@@ -145,6 +150,7 @@ describe("doctor repair sequencing", () => {
       config: params.config,
       changes: [],
     }));
+    mocks.maybeRepairStaleManagedNpmBundledPlugins.mockReturnValue(false);
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
       warnings: [],
@@ -226,6 +232,54 @@ describe("doctor repair sequencing", () => {
     );
     expect(result.warningNotes.join("\n")).not.toContain("\u001B");
     expect(result.warningNotes.join("\n")).not.toContain("\r");
+  });
+
+  it("removes managed npm bundled-plugin shadows before missing plugin install repair", async () => {
+    const events: string[] = [];
+    mocks.maybeRepairStaleManagedNpmBundledPlugins.mockImplementation(() => {
+      events.push("cleanup");
+      return true;
+    });
+    mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async () => {
+      events.push("missing-installs");
+      return { changes: [], warnings: [] };
+    });
+
+    await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          plugins: {
+            entries: {
+              "google-meet": { enabled: true },
+            },
+          },
+        } as OpenClawConfig,
+        candidate: {
+          plugins: {
+            entries: {
+              "google-meet": { enabled: true },
+            },
+          },
+        } as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(events).toEqual(["cleanup", "missing-installs"]);
+    expect(mocks.maybeRepairStaleManagedNpmBundledPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              "google-meet": { enabled: true },
+            }),
+          }),
+        }),
+        prompter: { shouldRepair: true },
+      }),
+    );
   });
 
   it("emits Discord warnings when unsafe numeric ids block repair", async () => {

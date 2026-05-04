@@ -317,6 +317,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   let currentSessionId: string | null = null;
   let activeChatRunId: string | null = null;
   let pendingOptimisticUserMessage = false;
+  let pendingChatRunId: string | null = null;
   let historyLoaded = false;
   let isConnected = false;
   let wasDisconnected = false;
@@ -394,6 +395,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     },
     set pendingOptimisticUserMessage(value) {
       pendingOptimisticUserMessage = value;
+    },
+    get pendingChatRunId() {
+      return pendingChatRunId;
+    },
+    set pendingChatRunId(value) {
+      pendingChatRunId = value ?? null;
     },
     get historyLoaded() {
       return historyLoaded;

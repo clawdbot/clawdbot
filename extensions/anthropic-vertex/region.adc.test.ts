@@ -1,3 +1,5 @@
+import { platform } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { existsSyncMock, readFileSyncMock } = vi.hoisted(() => ({
@@ -48,12 +50,17 @@ describe("anthropic-vertex ADC reads", () => {
   });
 
   it("respects HOME when probing the default ADC path from a copied env snapshot", () => {
+    const homeDir = "/tmp/vertex-home";
+    const defaultAdcPath =
+      platform() === "win32"
+        ? path.join(homeDir, "AppData", "Roaming", "gcloud", "application_default_credentials.json")
+        : path.join(homeDir, ".config", "gcloud", "application_default_credentials.json");
     const env = {
-      HOME: "/tmp/vertex-home",
+      HOME: homeDir,
     } as NodeJS.ProcessEnv;
 
     readFileSyncMock.mockImplementation((pathname, options) =>
-      String(pathname) === "/tmp/vertex-home/.config/gcloud/application_default_credentials.json"
+      String(pathname) === defaultAdcPath
         ? '{"project_id":"vertex-project"}'
         : String(pathname) === "/tmp/vertex-adc.json"
           ? '{"project_id":"vertex-project"}'
@@ -65,9 +72,6 @@ describe("anthropic-vertex ADC reads", () => {
     expect(resolveAnthropicVertexProjectId(env)).toBe("vertex-project");
     expect(hasAnthropicVertexAvailableAuth(env)).toBe(true);
     expect(existsSyncMock).not.toHaveBeenCalled();
-    expect(readFileSyncMock).toHaveBeenCalledWith(
-      "/tmp/vertex-home/.config/gcloud/application_default_credentials.json",
-      "utf8",
-    );
+    expect(readFileSyncMock).toHaveBeenCalledWith(defaultAdcPath, "utf8");
   });
 });

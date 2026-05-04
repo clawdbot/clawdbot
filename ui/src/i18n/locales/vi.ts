@@ -190,6 +190,8 @@ export const vi: TranslationMap = {
     verbose: "Chi tiết",
     reasoning: "Suy luận",
     noSessions: "Không tìm thấy phiên nào.",
+    noSessionsMatchFilters: "Không có phiên nào khớp với bộ lọc của bạn.",
+    showAll: "Hiển thị tất cả",
     inherit: "kế thừa",
     defaultOption: "Mặc định ({value})",
     offExplicit: "tắt (rõ ràng)",
@@ -930,6 +932,7 @@ export const vi: TranslationMap = {
     updating: "Đang cập nhật…",
     updateNow: "Cập nhật ngay",
     dismissUpdateBanner: "Bỏ qua banner cập nhật",
+    switchedSession: "Đã chuyển sang {session}",
   },
   languages: {
     en: "English (Tiếng Anh)",

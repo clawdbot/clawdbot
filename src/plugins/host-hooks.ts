@@ -39,6 +39,23 @@ export type PluginSessionExtensionRegistration = {
   description: string;
   project?: (ctx: PluginSessionExtensionProjectionContext) => PluginJsonValue | undefined;
   cleanup?: (ctx: { reason: PluginHostCleanupReason; sessionKey?: string }) => void | Promise<void>;
+  /**
+   * When set, after every successful `patchSessionExtension` the projected
+   * value is mirrored to `SessionEntry[<slotKey>]` so non-plugin readers
+   * can consume the typed slot without reaching into
+   * `pluginExtensions[pluginId][namespace]`.
+   *
+   * The slot is a read-only mirror: writes always go through
+   * `patchSessionExtension`; the host overwrites the slot value on every
+   * subsequent patch.
+   */
+  sessionEntrySlotKey?: string;
+  /**
+   * Optional JSON-compatible schema describing the projected slot value.
+   * Purely informational at this layer; clients may use it to validate the
+   * mirrored slot against a contract.
+   */
+  sessionEntrySlotSchema?: PluginJsonValue;
 };
 
 export type PluginSessionExtensionProjection = {

@@ -190,6 +190,8 @@ export const id: TranslationMap = {
     verbose: "Verbose",
     reasoning: "Penalaran",
     noSessions: "Tidak ada sesi yang ditemukan.",
+    noSessionsMatchFilters: "Tidak ada sesi yang cocok dengan filter Anda.",
+    showAll: "Tampilkan semua",
     inherit: "warisi",
     defaultOption: "Default ({value})",
     offExplicit: "nonaktif (eksplisit)",
@@ -933,6 +935,7 @@ export const id: TranslationMap = {
     updating: "Memperbarui…",
     updateNow: "Perbarui sekarang",
     dismissUpdateBanner: "Tutup banner pembaruan",
+    switchedSession: "Beralih ke {session}",
   },
   languages: {
     en: "Inggris",

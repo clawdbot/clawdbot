@@ -88,6 +88,32 @@ export type CronRunTelemetry = {
   usage?: CronUsageSummary;
 };
 
+export type CronRunDiagnosticSeverity = "info" | "warn" | "error";
+
+export type CronRunDiagnosticSource =
+  | "cron-preflight"
+  | "cron-setup"
+  | "model-preflight"
+  | "agent-run"
+  | "tool"
+  | "exec"
+  | "delivery";
+
+export type CronRunDiagnostic = {
+  ts: number;
+  source: CronRunDiagnosticSource;
+  severity: CronRunDiagnosticSeverity;
+  message: string;
+  toolName?: string;
+  exitCode?: number | null;
+  truncated?: boolean;
+};
+
+export type CronRunDiagnostics = {
+  summary?: string;
+  entries: CronRunDiagnostic[];
+};
+
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
@@ -96,6 +122,7 @@ export type CronRunOutcome = {
   summary?: string;
   sessionId?: string;
   sessionKey?: string;
+  diagnostics?: CronRunDiagnostics;
 };
 
 export type CronAgentExecutionStarted = {
@@ -157,6 +184,8 @@ export type CronJobState = {
   /** @deprecated Use lastRunStatus. */
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
+  lastDiagnostics?: CronRunDiagnostics;
+  lastDiagnosticSummary?: string;
   /** Classified reason for the last error (when available). */
   lastErrorReason?: FailoverReason;
   lastDurationMs?: number;

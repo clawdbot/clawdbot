@@ -1,3 +1,4 @@
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type { BundledPluginSource } from "../plugins/bundled-sources.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
 import { shortenHomePath } from "../utils.js";
@@ -8,6 +9,14 @@ type BundledLookup = (params: {
 }) => BundledPluginSource | undefined;
 
 type OfficialExternalPluginLookup = (pluginId: string) =>
+  | {
+      pluginId: string;
+      npmSpec?: string;
+      expectedIntegrity?: string;
+    }
+  | undefined;
+
+type OfficialExternalPackageLookup = (packageName: string) =>
   | {
       pluginId: string;
       npmSpec?: string;
@@ -89,6 +98,36 @@ export function resolveOfficialExternalInstallPlanBeforeNpm(params: {
     pluginId: entry.pluginId,
     npmSpec,
     ...(entry.expectedIntegrity ? { expectedIntegrity: entry.expectedIntegrity } : {}),
+  };
+}
+
+export function resolveOfficialExternalNpmPackageTrust(params: {
+  npmSpec: string;
+  findOfficialExternalPackage: OfficialExternalPackageLookup;
+}): {
+  pluginId: string;
+  expectedIntegrity?: string;
+  trustedSourceLinkedOfficialInstall: true;
+} | null {
+  const parsed = parseRegistryNpmSpec(params.npmSpec);
+  if (!parsed) {
+    return null;
+  }
+  const entry = params.findOfficialExternalPackage(parsed.name);
+  if (!entry?.pluginId) {
+    return null;
+  }
+  const catalogSpec = entry.npmSpec?.trim();
+  const catalogPackageName = catalogSpec ? parseRegistryNpmSpec(catalogSpec)?.name : undefined;
+  if (catalogPackageName && catalogPackageName !== parsed.name) {
+    return null;
+  }
+  return {
+    pluginId: entry.pluginId,
+    ...(entry.expectedIntegrity && catalogSpec === params.npmSpec.trim()
+      ? { expectedIntegrity: entry.expectedIntegrity }
+      : {}),
+    trustedSourceLinkedOfficialInstall: true,
   };
 }
 

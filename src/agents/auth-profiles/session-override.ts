@@ -136,12 +136,21 @@ export async function resolveSessionAuthProfileOverride(params: {
     typeof sessionEntry.authProfileOverrideCompactionCount === "number"
       ? sessionEntry.authProfileOverrideCompactionCount
       : compactionCount;
+  const replacementForUnusableCurrent =
+    current && isProfileInCooldown(store, current)
+      ? order.find((profileId) => profileId !== current && !isProfileInCooldown(store, profileId))
+      : undefined;
+  if (replacementForUnusableCurrent) {
+    current = undefined;
+  }
   if (source === "user" && current && !isNewSession) {
     return current;
   }
 
   let next = current;
-  if (isNewSession) {
+  if (replacementForUnusableCurrent) {
+    next = replacementForUnusableCurrent;
+  } else if (isNewSession) {
     next = current ? pickNextAvailable(current) : pickFirstAvailable();
   } else if (current && compactionCount > storedCompaction) {
     next = pickNextAvailable(current);

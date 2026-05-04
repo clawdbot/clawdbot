@@ -173,6 +173,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
     state.pendingOptimisticUserMessage = false;
+    state.pendingChatRunId = null;
     reconnectPendingRunId = null;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
@@ -367,6 +368,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         noteLocalRunId?.(evt.runId);
         state.pendingOptimisticUserMessage = false;
       }
+    }
+    if (state.pendingChatRunId === evt.runId) {
+      state.pendingChatRunId = null;
     }
     if (evt.state === "delta") {
       // Arm watchdog and mark streaming on every delta, even when the visible

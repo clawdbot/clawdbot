@@ -69,4 +69,22 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
       "@openclaw/acpx@2026.5.3 package.json openclaw.runtimeExtensions length (1) must match openclaw.extensions length (2)",
     ]);
   });
+
+  it("flags blank runtimeExtensions entries instead of falling back to inferred outputs", () => {
+    expect(
+      collectPluginNpmPublishedRuntimeErrors({
+        packageJson: {
+          name: "@openclaw/whatsapp",
+          version: "2026.5.3",
+          openclaw: {
+            extensions: ["./src/index.ts"],
+            runtimeExtensions: [" "],
+          },
+        },
+        files: ["package.json", "src/index.ts", "dist/index.js"],
+      }),
+    ).toEqual([
+      "@openclaw/whatsapp@2026.5.3 package.json openclaw.runtimeExtensions[0] must be a non-empty string",
+    ]);
+  });
 });

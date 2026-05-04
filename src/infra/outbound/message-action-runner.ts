@@ -172,8 +172,13 @@ export function getToolResult(
 }
 
 function resolveGatewayActionOptions(gateway?: MessageActionRunnerGateway) {
+  const url =
+    gateway?.mode === GATEWAY_CLIENT_MODES.BACKEND ||
+    gateway?.clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
+      ? undefined
+      : gateway?.url;
   return {
-    url: gateway?.url,
+    url,
     token: gateway?.token,
     timeoutMs:
       typeof gateway?.timeoutMs === "number" && Number.isFinite(gateway.timeoutMs)

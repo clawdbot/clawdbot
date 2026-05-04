@@ -4,6 +4,7 @@ import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectClawHubPublishablePluginPackages,
+  collectClawHubOpenClawOwnerErrors,
   collectClawHubVersionGateErrors,
   collectPluginClawHubReleasePathsFromGitRange,
   collectPluginClawHubReleasePlan,
@@ -359,6 +360,50 @@ describe("collectPluginClawHubReleasePlan", () => {
     });
 
     expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(["@openclaw/demo-plugin"]);
+  });
+});
+
+describe("collectClawHubOpenClawOwnerErrors", () => {
+  it("requires OpenClaw-scoped release candidates to already belong to the OpenClaw publisher", async () => {
+    const errors = await collectClawHubOpenClawOwnerErrors({
+      plugins: [
+        { packageName: "@openclaw/demo-plugin" },
+        { packageName: "@openclaw/missing-plugin" },
+        { packageName: "@other/safe-plugin" },
+      ],
+      registryBaseUrl: "https://clawhub.ai",
+      fetchImpl: async (url) => {
+        const pathname = new URL(String(url)).pathname;
+        if (pathname.includes("%40openclaw%2Fmissing-plugin")) {
+          return new Response("not found", { status: 404 });
+        }
+        return new Response(
+          JSON.stringify({
+            owner: { handle: "steipete" },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      },
+    });
+
+    expect(errors).toEqual([
+      "@openclaw/demo-plugin: ClawHub package owner must be @openclaw; got @steipete.",
+      "@openclaw/missing-plugin: ClawHub package row must already exist under @openclaw before OpenClaw release publish.",
+    ]);
+  });
+
+  it("passes when OpenClaw-scoped release candidates belong to the OpenClaw publisher", async () => {
+    const errors = await collectClawHubOpenClawOwnerErrors({
+      plugins: [{ packageName: "@openclaw/demo-plugin" }],
+      registryBaseUrl: "https://clawhub.ai",
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ owner: { handle: "openclaw" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+
+    expect(errors).toEqual([]);
   });
 });
 

@@ -44,6 +44,21 @@ async function expectVertexAdcEnvApiKey(params: {
   }
 }
 
+function testModelDefinition(id: string): Model<Api> {
+  return {
+    id,
+    name: id,
+    provider: "test",
+    api: "responses",
+    baseUrl: "https://example.test/v1",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  };
+}
+
 vi.mock("../plugins/setup-registry.js", async () => {
   const { readFileSync } = await import("node:fs");
   return {
@@ -625,6 +640,51 @@ describe("getApiKeyForModel", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("reuses runtime auth availability for provider auth checks", () => {
+    const store = { version: 1 as const, profiles: {} };
+    const localNoKeyConfig = {
+      models: {
+        providers: {
+          vllm: {
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [testModelDefinition("meta-llama/Meta-Llama-3-8B-Instruct")],
+          },
+          remote: {
+            api: "openai-completions",
+            baseUrl: "https://remote.example.com/v1",
+            models: [testModelDefinition("remote-model")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      hasAuthForModelProvider({
+        provider: "amazon-bedrock",
+        cfg: {} as OpenClawConfig,
+        env: {},
+        store,
+      }),
+    ).toBe(true);
+    expect(
+      hasAuthForModelProvider({
+        provider: "vllm",
+        cfg: localNoKeyConfig,
+        env: {},
+        store,
+      }),
+    ).toBe(true);
+    expect(
+      hasAuthForModelProvider({
+        provider: "remote",
+        cfg: localNoKeyConfig,
+        env: {},
+        store,
+      }),
+    ).toBe(false);
   });
 
   it("hasAvailableAuthForProvider('google') accepts GOOGLE_API_KEY fallback", async () => {

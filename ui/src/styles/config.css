@@ -242,6 +242,26 @@
   flex: 0 0 auto;
 }
 
+.config-action-spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+}
+
+.config-action-spinner svg {
+  width: 14px;
+  height: 14px;
+  animation: spin 0.7s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .config-action-spinner svg {
+    animation: none;
+  }
+}
+
 .config-changes-badge {
   padding: 4px 10px;
   border-radius: var(--radius-full);

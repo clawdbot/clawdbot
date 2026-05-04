@@ -172,6 +172,7 @@ describe("memory index", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    await Promise.all(Array.from(managersForCleanup).map((manager) => manager.close()));
     await closeAllMemorySearchManagers();
     clearRegistry();
     managersForCleanup.clear();

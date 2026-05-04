@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/document-extract-plugin",
-  "version": "2026.5.3",
+  "version": "2026.5.4",
   "private": true,
   "description": "OpenClaw local document extraction plugin",
   "type": "module",

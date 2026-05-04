@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runExec } from "../process/exec.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -117,12 +118,10 @@ function buildTrustedPrincipals(env?: NodeJS.ProcessEnv): Set<string> {
 }
 
 function resolveWindowsSystemCommand(command: string, env?: NodeJS.ProcessEnv): string {
-  const root =
-    env?.SystemRoot?.trim() ||
-    env?.SYSTEMROOT?.trim() ||
-    env?.windir?.trim() ||
-    env?.WINDIR?.trim();
-  return root ? path.win32.join(root, "System32", command) : command;
+  // Never fall back to a bare helper name here; Windows command search can
+  // consult the current directory and PATH before the real System32 helper.
+  const root = getWindowsInstallRoots(env ?? process.env).systemRoot;
+  return path.win32.join(root, "System32", command);
 }
 
 function classifyPrincipal(
@@ -375,9 +374,20 @@ export function formatIcaclsResetCommand(
   targetPath: string,
   opts: IcaclsResetCommandOptions,
 ): string {
+  const command = resolveWindowsSystemCommand("icacls.exe", opts.env);
   const user = resolveWindowsUserPrincipal(opts.env, opts.userInfo) ?? "%USERNAME%";
   const grant = opts.isDir ? "(OI)(CI)F" : "F";
-  return `icacls "${targetPath}" /inheritance:r /grant:r "${user}:${grant}" /grant:r "*S-1-5-18:${grant}"`;
+  // Quoted executable paths need shell-specific handling in PowerShell; keep
+  // the resolved System32 helper as the command token and quote only arguments.
+  return [
+    command,
+    `"${targetPath}"`,
+    "/inheritance:r",
+    "/grant:r",
+    `"${user}:${grant}"`,
+    "/grant:r",
+    `"*S-1-5-18:${grant}"`,
+  ].join(" ");
 }
 
 export function createIcaclsResetCommand(
@@ -398,7 +408,7 @@ export function createIcaclsResetCommand(
     `*S-1-5-18:${grant}`,
   ];
   return {
-    command: "icacls",
+    command: resolveWindowsSystemCommand("icacls.exe", opts.env),
     args,
     display: formatIcaclsResetCommand(targetPath, opts),
   };

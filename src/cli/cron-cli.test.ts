@@ -497,8 +497,10 @@ describe("cron cli", () => {
               nextOffset: 200,
             };
           }
+          const targetJob = createCronJob("target-job", "Target Job");
+          targetJob.state.lastDiagnosticSummary = "exec stderr tail";
           return {
-            jobs: [createCronJob("target-job", "Target Job")],
+            jobs: [targetJob],
             hasMore: false,
             nextOffset: null,
             deliveryPreviews: {
@@ -527,6 +529,7 @@ describe("cron cli", () => {
     expect(defaultRuntime.log).toHaveBeenCalledWith(
       "delivery: announce -> telegram:-100 (resolved from last, main session)",
     );
+    expect(defaultRuntime.log).toHaveBeenCalledWith("diagnostic: exec stderr tail");
   });
 
   it("sends agent id on cron add", async () => {

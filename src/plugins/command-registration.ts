@@ -148,6 +148,19 @@ export function validatePluginCommandDefinition(
         : "Command requiredScopes contains unknown operator scope";
     }
   }
+  if (command.channels !== undefined) {
+    if (!Array.isArray(command.channels)) {
+      return "Command channels must be an array of channel ids";
+    }
+    for (const [index, channel] of (command.channels as readonly unknown[]).entries()) {
+      if (typeof channel !== "string") {
+        return `Command channel ${index + 1} must be a string`;
+      }
+      if (!channel.trim()) {
+        return `Command channel ${index + 1} cannot be empty`;
+      }
+    }
+  }
   const nameError = validateCommandName(command.name.trim(), opts);
   if (nameError) {
     return nameError;
@@ -200,6 +213,19 @@ export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinitio
   return [...keys];
 }
 
+export function pluginCommandSupportsChannel(
+  command: OpenClawPluginCommandDefinition,
+  channel?: string,
+): boolean {
+  if (!command.channels || command.channels.length === 0 || !channel) {
+    return true;
+  }
+  const normalizedChannel = normalizeLowercaseStringOrEmpty(channel);
+  return command.channels.some(
+    (entry) => normalizeLowercaseStringOrEmpty(entry) === normalizedChannel,
+  );
+}
+
 export function registerPluginCommand(
   pluginId: string,
   command: OpenClawPluginCommandDefinition,
@@ -228,6 +254,9 @@ export function registerPluginCommand(
     ...command,
     name,
     description,
+    ...(command.channels
+      ? { channels: command.channels.map((channel) => normalizeLowercaseStringOrEmpty(channel)) }
+      : {}),
     ...(command.agentPromptGuidance
       ? { agentPromptGuidance: command.agentPromptGuidance.map((line) => line.trim()) }
       : {}),

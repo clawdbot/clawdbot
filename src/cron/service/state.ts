@@ -6,6 +6,7 @@ import type {
   CronJob,
   CronJobCreate,
   CronJobPatch,
+  CronRunDiagnostics,
   CronMessageChannel,
   CronAgentExecutionStarted,
   CronRunOutcome,
@@ -24,6 +25,7 @@ export type CronEvent = {
   status?: CronRunStatus;
   error?: string;
   summary?: string;
+  diagnostics?: CronRunDiagnostics;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;

@@ -13,7 +13,7 @@ import {
   buildDeliveryTarget,
   accountToCreds,
 } from "../messaging/sender.js";
-import { resolveSlashCommandAuth } from "./slash-command-auth.js";
+import { resolveQQBotCommandsAllowFrom, resolveSlashCommandAuth } from "./slash-command-auth.js";
 import { matchSlashCommand } from "./slash-commands-impl.js";
 import type { SlashCommandContext, QueueSnapshot } from "./slash-commands.js";
 
@@ -21,6 +21,7 @@ import type { SlashCommandContext, QueueSnapshot } from "./slash-commands.js";
 
 export interface SlashCommandHandlerContext {
   account: GatewayAccount;
+  cfg?: unknown;
   log?: EngineLogger;
   getMessagePeerId: (msg: QueuedMessage) => string;
   getQueueSnapshot: (peerId: string) => QueueSnapshot;
@@ -81,6 +82,7 @@ export async function trySlashCommand(
       isGroup: msg.type === "group" || msg.type === "guild",
       allowFrom: account.config?.allowFrom,
       groupAllowFrom: account.config?.groupAllowFrom,
+      commandsAllowFrom: resolveQQBotCommandsAllowFrom(ctx.cfg),
     }),
     queueSnapshot: ctx.getQueueSnapshot(peerId),
   };

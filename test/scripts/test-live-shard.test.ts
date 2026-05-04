@@ -74,6 +74,9 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-src-gateway-core", allFiles)).not.toEqual(
       expect.arrayContaining(["src/gateway/gateway-cli-backend.live.test.ts"]),
     );
+    expect(selectLiveShardFiles("native-live-src-infra", allFiles)).toEqual(
+      expect.arrayContaining(["src/infra/push-apns-http2.live.test.ts"]),
+    );
     expect(selectLiveShardFiles("native-live-test", allFiles)).toEqual(
       expect.arrayContaining([
         "test/image-generation.infer-cli.live.test.ts",

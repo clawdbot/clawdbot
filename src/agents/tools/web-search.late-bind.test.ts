@@ -162,4 +162,20 @@ describe("web_search late-bound runtime fallback", () => {
       }),
     );
   });
+
+  it("honors late-bound disabled search config at execute time", async () => {
+    mocks.getActiveSecretsRuntimeSnapshot.mockReturnValue({
+      config: { tools: { web: { search: { enabled: false } } } },
+    });
+    const { createWebSearchTool } = await import("./web-search.js");
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "brave" } } } },
+      lateBindRuntimeConfig: true,
+    });
+
+    await expect(tool?.execute("call-search", { query: "openclaw" }, undefined)).rejects.toThrow(
+      "web_search is disabled.",
+    );
+    expect(mocks.runWebSearch).not.toHaveBeenCalled();
+  });
 });

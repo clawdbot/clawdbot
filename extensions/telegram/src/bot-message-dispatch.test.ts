@@ -815,6 +815,36 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
+  it("cleans up tool-only Telegram previews archived at assistant boundaries", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onItemEvent?.({
+        kind: "command",
+        name: "exec",
+        progressText: "exec git status",
+      });
+      await replyOptions?.onAssistantMessageStart?.();
+      return { queuedFinal: false };
+    });
+
+    const bot = createBot();
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial" } },
+      bot,
+    });
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      expect.stringMatching(/`🛠️ Exec: exec git status`$/),
+    );
+    expect(draftStream.materialize).toHaveBeenCalled();
+    expect(draftStream.forceNewMessage).toHaveBeenCalled();
+    expect(bot.api.deleteMessage).toHaveBeenCalledWith(123, 2001);
+  });
+
   it("streams Telegram command progress text by default when preview streaming is active", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);

@@ -1539,7 +1539,13 @@ export function renderApp(state: AppViewState) {
           : nothing}
         ${state.tab === "config"
           ? nothing
-          : html`<section class="content-header">
+          : html`<section
+              class=${isChat && state.chatHeaderControlsHidden
+                ? "content-header content-header--chat-hidden"
+                : "content-header"}
+              ?inert=${isChat && state.chatHeaderControlsHidden}
+              aria-hidden=${isChat && state.chatHeaderControlsHidden ? "true" : nothing}
+            >
               <div>
                 ${isChat
                   ? renderChatSessionSelect(state)
@@ -1714,6 +1720,23 @@ export function renderApp(state: AppViewState) {
                 },
                 onToggleFiltersCollapsed: () => {
                   state.sessionsFiltersCollapsed = !state.sessionsFiltersCollapsed;
+                },
+                onClearFilters: () => {
+                  state.sessionsFilterActive = "";
+                  state.sessionsFilterLimit = "";
+                  state.sessionsIncludeGlobal = true;
+                  state.sessionsIncludeUnknown = true;
+                  state.sessionsShowArchived = true;
+                  state.sessionsSearchQuery = "";
+                  state.sessionsSelectedKeys = new Set();
+                  state.sessionsPage = 0;
+                  void loadSessions(state, {
+                    activeMinutes: 0,
+                    limit: 0,
+                    includeGlobal: true,
+                    includeUnknown: true,
+                    showArchived: true,
+                  });
                 },
                 onSearchChange: (q) => {
                   state.sessionsSearchQuery = q;

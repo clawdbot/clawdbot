@@ -409,6 +409,7 @@ jobs:
               add_profile_suite native-live-src-gateway-profiles-xai "full"
               add_profile_suite native-live-src-gateway-profiles-zai "full"
               add_profile_suite native-live-src-gateway-backends "stable full"
+              add_profile_suite native-live-src-infra "stable full"
               add_profile_suite native-live-test "stable full"
               add_profile_suite native-live-extensions-l-n "full"
               add_profile_suite native-live-extensions-moonshot "full"
@@ -1987,6 +1988,12 @@ jobs:
             label: Native live gateway backends
             command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends
             timeout_minutes: 90
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: native-live-src-infra
+            label: Native live infra
+            command: OPENCLAW_LIVE_APNS_REACHABILITY=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra
+            timeout_minutes: 45
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-test

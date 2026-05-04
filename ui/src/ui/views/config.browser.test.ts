@@ -65,12 +65,14 @@ describe("config view", () => {
     clearButton?: HTMLButtonElement;
     saveButton?: HTMLButtonElement;
     applyButton?: HTMLButtonElement;
+    updateButton?: HTMLButtonElement;
   } {
     const buttons = Array.from(container.querySelectorAll("button"));
     return {
       clearButton: buttons.find((btn) => btn.textContent?.trim() === "Clear"),
       saveButton: buttons.find((btn) => btn.textContent?.trim() === "Save"),
       applyButton: buttons.find((btn) => btn.textContent?.trim() === "Apply"),
+      updateButton: buttons.find((btn) => btn.textContent?.trim() === "Update"),
     };
   }
 
@@ -169,6 +171,58 @@ describe("config view", () => {
 
     clearButton?.click();
     expect(onReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders inline progress inside busy action buttons without locking adjacent controls", () => {
+    const container = document.createElement("div");
+    const renderCase = (overrides: Partial<ConfigProps>) =>
+      render(
+        renderConfig({
+          ...baseProps(),
+          schema: {
+            type: "object",
+            properties: {
+              gateway: { type: "object", properties: { mode: { type: "string" } } },
+            },
+          },
+          formValue: { gateway: { mode: "remote" } },
+          originalValue: { gateway: { mode: "local" } },
+          ...overrides,
+        }),
+        container,
+      );
+
+    renderCase({ saving: true });
+    let busyButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Saving…"),
+    );
+    let { clearButton, applyButton } = findActionButtons(container);
+    expect(busyButton).toBeTruthy();
+    expect(busyButton?.disabled).toBe(true);
+    expect(busyButton?.getAttribute("aria-busy")).toBe("true");
+    expect(busyButton?.querySelector(".config-action-spinner")).not.toBeNull();
+    expect(clearButton?.disabled).toBe(false);
+    expect(applyButton?.disabled).toBe(false);
+
+    renderCase({ applying: true });
+    busyButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Applying…"),
+    );
+    ({ clearButton } = findActionButtons(container));
+    expect(busyButton).toBeTruthy();
+    expect(busyButton?.disabled).toBe(true);
+    expect(busyButton?.querySelector(".config-action-spinner")).not.toBeNull();
+    expect(clearButton?.disabled).toBe(false);
+
+    renderCase({ updating: true });
+    busyButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Updating…"),
+    );
+    ({ clearButton } = findActionButtons(container));
+    expect(busyButton).toBeTruthy();
+    expect(busyButton?.disabled).toBe(true);
+    expect(busyButton?.querySelector(".config-action-spinner")).not.toBeNull();
+    expect(clearButton?.disabled).toBe(false);
   });
 
   it("switches mode via the sidebar toggle", () => {

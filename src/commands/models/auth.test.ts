@@ -23,11 +23,13 @@ const mocks = vi.hoisted(() => ({
   isRemoteEnvironment: vi.fn(() => false),
   loadAuthProfileStoreForRuntime: vi.fn(),
   listProfilesForProvider: vi.fn(),
+  promoteAuthProfileInOrder: vi.fn(),
   clearAuthProfileCooldown: vi.fn(),
 }));
 
 vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   listProfilesForProvider: mocks.listProfilesForProvider,
+  promoteAuthProfileInOrder: mocks.promoteAuthProfileInOrder,
   upsertAuthProfile: mocks.upsertAuthProfile,
 }));
 
@@ -278,6 +280,7 @@ describe("modelsAuthLoginCommand", () => {
     mocks.clackSelect.mockReset();
     mocks.clackText.mockReset();
     mocks.upsertAuthProfile.mockReset();
+    mocks.promoteAuthProfileInOrder.mockReset();
 
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
@@ -390,6 +393,11 @@ describe("modelsAuthLoginCommand", () => {
         provider: "openai-codex",
       }),
       agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw/agents/main",
+      provider: "openai-codex",
+      profileId: "openai-codex:user@example.com",
     });
     expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:user@example.com"]).toMatchObject({
       provider: "openai-codex",

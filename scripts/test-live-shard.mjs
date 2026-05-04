@@ -11,6 +11,7 @@ export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
   "native-live-src-gateway-core",
   "native-live-src-gateway-profiles",
   "native-live-src-gateway-backends",
+  "native-live-src-infra",
   "native-live-test",
   "native-live-extensions-a-k",
   "native-live-extensions-l-n",
@@ -154,6 +155,8 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
       return files.filter(isGatewayProfilesLiveTest);
     case "native-live-src-gateway-backends":
       return files.filter(isGatewayBackendLiveTest);
+    case "native-live-src-infra":
+      return files.filter((file) => file.startsWith("src/infra/"));
     case "native-live-test":
       return files.filter((file) => file.startsWith("test/"));
     case "native-live-extensions-a-k":

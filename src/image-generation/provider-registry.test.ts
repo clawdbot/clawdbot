@@ -7,10 +7,6 @@ const { resolvePluginCapabilityProvidersMock } = vi.hoisted(() => ({
   resolvePluginCapabilityProvidersMock: vi.fn<() => ImageGenerationProviderPlugin[]>(() => []),
 }));
 
-vi.mock("../plugins/capability-provider-runtime.js", () => ({
-  resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
-}));
-
 let getImageGenerationProvider: typeof ProviderRegistry.getImageGenerationProvider;
 let listImageGenerationProviders: typeof ProviderRegistry.listImageGenerationProviders;
 
@@ -30,13 +26,19 @@ function createProvider(
   };
 }
 
+async function loadProviderRegistry() {
+  vi.resetModules();
+  vi.doMock("../plugins/capability-provider-runtime.js", () => ({
+    resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
+  }));
+  return await import("./provider-registry.js");
+}
+
 describe("image-generation provider registry", () => {
   beforeEach(async () => {
-    vi.resetModules();
     resolvePluginCapabilityProvidersMock.mockReset();
     resolvePluginCapabilityProvidersMock.mockReturnValue([]);
-    ({ getImageGenerationProvider, listImageGenerationProviders } =
-      await import("./provider-registry.js"));
+    ({ getImageGenerationProvider, listImageGenerationProviders } = await loadProviderRegistry());
   });
 
   it("delegates provider resolution to the capability provider boundary", () => {

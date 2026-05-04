@@ -1,6 +1,6 @@
 import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
-import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
+import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
@@ -217,6 +217,11 @@ export class OpenClawApp extends LitElement {
   @state() chatModelOverrides: Record<string, ChatModelOverride | null> = {};
   @state() chatModelsLoading = false;
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
+  @state() sessionSwitchNotice: { id: number; text: string } | null = null;
+  @state() sessionSwitchFlashKey: string | null = null;
+  private sessionSwitchNoticeSeq = 0;
+  private sessionSwitchNoticeTimer: number | null = null;
+  private sessionSwitchFlashTimer: number | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatQueueBySession: Record<string, ChatQueueItem[]> = {};
   @state() chatAttachments: ChatAttachment[] = [];
@@ -226,6 +231,7 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkTranscript: string | null = null;
   private realtimeTalkSession: RealtimeTalkSession | null = null;
   @state() chatManualRefreshInFlight = false;
+  @state() chatHeaderControlsHidden = false;
   @state() chatMobileControlsOpen = false;
   private chatMobileControlsTrigger: HTMLElement | null = null;
   @state() navDrawerOpen = false;
@@ -564,6 +570,7 @@ export class OpenClawApp extends LitElement {
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;
   private chatScrollTimeout: number | null = null;
+  private chatLastScrollTop = 0;
   private chatHasAutoScrolled = false;
   private chatUserNearBottom = true;
   @state() chatNewMessagesBelow = false;
@@ -649,6 +656,14 @@ export class OpenClawApp extends LitElement {
     document.removeEventListener("keydown", this.globalKeydownHandler);
     document.removeEventListener("keydown", this.chatMobileControlsKeydownHandler);
     document.removeEventListener("pointerdown", this.chatMobileControlsPointerdownHandler);
+    if (this.sessionSwitchNoticeTimer !== null) {
+      window.clearTimeout(this.sessionSwitchNoticeTimer);
+      this.sessionSwitchNoticeTimer = null;
+    }
+    if (this.sessionSwitchFlashTimer !== null) {
+      window.clearTimeout(this.sessionSwitchFlashTimer);
+      this.sessionSwitchFlashTimer = null;
+    }
     this.chatMobileControlsTrigger = null;
     handleDisconnected(this as unknown as Parameters<typeof handleDisconnected>[0]);
     super.disconnectedCallback();
@@ -848,6 +863,33 @@ export class OpenClawApp extends LitElement {
       borderRadius: value,
     });
     this.requestUpdate();
+  }
+
+  announceSessionSwitch(sessionKey: string, label: string) {
+    const id = ++this.sessionSwitchNoticeSeq;
+    if (this.sessionSwitchNoticeTimer !== null) {
+      window.clearTimeout(this.sessionSwitchNoticeTimer);
+    }
+    if (this.sessionSwitchFlashTimer !== null) {
+      window.clearTimeout(this.sessionSwitchFlashTimer);
+    }
+    this.sessionSwitchNotice = {
+      id,
+      text: t("chat.switchedSession", { session: label }),
+    };
+    this.sessionSwitchFlashKey = sessionKey;
+    this.sessionSwitchFlashTimer = window.setTimeout(() => {
+      if (this.sessionSwitchNotice?.id === id) {
+        this.sessionSwitchFlashKey = null;
+      }
+      this.sessionSwitchFlashTimer = null;
+    }, 200);
+    this.sessionSwitchNoticeTimer = window.setTimeout(() => {
+      if (this.sessionSwitchNotice?.id === id) {
+        this.sessionSwitchNotice = null;
+      }
+      this.sessionSwitchNoticeTimer = null;
+    }, 2800);
   }
 
   buildThemeOrder(active: ThemeName): ThemeName[] {

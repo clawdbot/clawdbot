@@ -47,6 +47,8 @@ const INHERITED_ALLOWLIST_RATIONALE: Record<string, string> = {
   SSH_AUTH_SOCK: "Trusted inherited SSH agent socket from operator runtime.",
   SSL_CERT_DIR: "Trusted inherited OpenSSL certificate directory path.",
   SSL_CERT_FILE: "Trusted inherited OpenSSL certificate file path.",
+  SYSTEMROOT: "Trusted inherited Windows system root selected by the host OS.",
+  WINDIR: "Trusted inherited Windows directory selected by the host OS.",
   ZDOTDIR: "Trusted inherited shell startup directory boundary.",
 };
 
@@ -83,7 +85,7 @@ describe("host env reported baseline coverage", () => {
       baseline.reportedDangerousEverywhereKeys.length +
         baseline.reportedDangerousOverrideOnlyKeys.length,
     ).toBe(baseline.expectedTotalReportedEntries);
-    expect(baseline.expectedTotalReportedEntries).toBe(232);
+    expect(baseline.expectedTotalReportedEntries).toBe(234);
     expect(sortUniqueUpper(baseline.reportedDangerousEverywhereKeys)).toEqual(
       baseline.reportedDangerousEverywhereKeys,
     );

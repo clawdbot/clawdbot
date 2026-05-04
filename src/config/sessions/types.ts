@@ -165,6 +165,8 @@ export type SessionEntry = {
   heartbeatTaskState?: Record<string, number>;
   /** Plugin-owned session state, grouped by plugin id then extension namespace. */
   pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
+  /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
+  pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
   /** Durable one-shot prompt additions drained before the next agent turn. */
   pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;

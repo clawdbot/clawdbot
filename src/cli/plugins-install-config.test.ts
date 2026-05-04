@@ -151,6 +151,36 @@ describe("loadConfigForInstall", () => {
     expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
   });
 
+  it("allows official plugin reinstall recovery from source-only runtime shadows", async () => {
+    const snapshotCfg = {
+      plugins: { installs: { discord: { source: "npm", installPath: "/bad/discord" } } },
+    } as unknown as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        parsed: { plugins: { installs: { discord: {} } } },
+        config: snapshotCfg,
+        issues: [
+          {
+            path: "plugins",
+            message:
+              "plugin: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, index.js, index.mjs, index.cjs",
+          },
+        ],
+      }),
+    );
+
+    const request = resolvePluginInstallRequestContext({
+      rawSpec: "npm:@openclaw/discord",
+    });
+    if (!request.ok) {
+      throw new Error(request.error);
+    }
+
+    const result = await loadConfigForInstall(request.request);
+    expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
+    expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
+  });
+
   it("allows explicit repo-checkout bundled-plugin reinstall recovery", async () => {
     const snapshotCfg = { plugins: {} } as OpenClawConfig;
     readConfigFileSnapshotMock.mockResolvedValue(
@@ -182,7 +212,7 @@ describe("loadConfigForInstall", () => {
     );
 
     await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
-      "Config invalid outside the bundled recovery path for discord",
+      "Config invalid outside the plugin recovery path for discord",
     );
   });
 

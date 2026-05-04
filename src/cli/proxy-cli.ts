@@ -67,6 +67,8 @@ export function registerProxyCli(program: Command) {
       collectOption,
     )
     .option("--denied-url <url>", "Destination expected to be blocked by the proxy", collectOption)
+    .option("--apns-reachable", "Also verify sandbox APNs HTTP/2 is reachable through the proxy")
+    .option("--apns-authority <url>", "APNs authority to probe with --apns-reachable")
     .option("--timeout-ms <ms>", "Per-request timeout in milliseconds", parseOptionalNumber)
     .action(
       async (opts: {
@@ -74,6 +76,8 @@ export function registerProxyCli(program: Command) {
         proxyUrl?: string;
         allowedUrl?: string[];
         deniedUrl?: string[];
+        apnsReachable?: boolean;
+        apnsAuthority?: string;
         timeoutMs?: number;
       }) => {
         const runtime = await loadProxyCliRuntime();
@@ -82,6 +86,8 @@ export function registerProxyCli(program: Command) {
           proxyUrl: opts.proxyUrl,
           allowedUrls: opts.allowedUrl,
           deniedUrls: opts.deniedUrl,
+          apnsReachability: opts.apnsReachable,
+          apnsAuthority: opts.apnsAuthority,
           timeoutMs: opts.timeoutMs,
         });
       },

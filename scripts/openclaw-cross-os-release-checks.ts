@@ -119,6 +119,9 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
 export const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
+export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS = 25 * 60;
+export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS =
+  (CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS + 5 * 60) * 1000;
 
 if (isMainModule()) {
   try {
@@ -2413,11 +2416,15 @@ function installTimeoutMs() {
 }
 
 function updateTimeoutMs() {
-  return process.platform === "win32" ? 30 * 60 * 1000 : 20 * 60 * 1000;
+  return process.platform === "win32"
+    ? CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS
+    : 20 * 60 * 1000;
 }
 
 function updateStepTimeoutSeconds() {
-  return process.platform === "win32" ? 1800 : 1200;
+  return process.platform === "win32"
+    ? CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS
+    : 1200;
 }
 
 async function runBundledPluginPostinstall(params) {

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/gradium-speech",
-  "version": "2026.5.3",
+  "version": "2026.5.4",
   "private": true,
   "description": "OpenClaw Gradium speech plugin",
   "type": "module",

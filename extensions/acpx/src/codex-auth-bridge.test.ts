@@ -56,13 +56,20 @@ function generatedClaudePaths(stateDir: string): {
 }
 
 function expectCodexWrapperCommand(command: string | undefined, wrapperPath: string): void {
-  expect(command).toContain(process.execPath);
-  expect(command).toContain(wrapperPath);
+  expect(command).toContain(quoteArg(process.execPath));
+  expect(command).toContain(quoteArg(wrapperPath));
 }
 
 function expectClaudeWrapperCommand(command: string | undefined, wrapperPath: string): void {
-  expect(command).toContain(process.execPath);
-  expect(command).toContain(wrapperPath);
+  expect(command).toContain(quoteArg(process.execPath));
+  expect(command).toContain(quoteArg(wrapperPath));
+}
+
+function expectWrapperToContainPathSuffix(wrapper: string, pathSuffix: string[]): void {
+  const nativeSuffix = pathSuffix.join(path.sep);
+  const escapedNativeSuffix = JSON.stringify(nativeSuffix).slice(1, -1);
+  const posixSuffix = pathSuffix.join("/");
+  expect(wrapper.includes(escapedNativeSuffix) || wrapper.includes(posixSuffix)).toBe(true);
 }
 
 afterEach(async () => {
@@ -199,7 +206,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain("@zed-industries/codex-acp");
-    expect(wrapper).toContain("bin/codex-acp.js");
+    expectWrapperToContainPathSuffix(wrapper, ["bin", "codex-acp.js"]);
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
   });
 
@@ -219,7 +226,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain("@agentclientprotocol/claude-agent-acp");
-    expect(wrapper).toContain("dist/index.js");
+    expectWrapperToContainPathSuffix(wrapper, ["dist", "index.js"]);
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
   });
 

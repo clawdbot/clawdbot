@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import AjvPkg from "ajv";
 import type { JsonSchemaObject } from "openclaw/plugin-sdk/config-schema";
 import { describe, expect, it } from "vitest";
@@ -45,7 +46,7 @@ describe("resolveMemoryWikiConfig", () => {
     );
 
     expect(config.vaultMode).toBe("bridge");
-    expect(config.vault.path).toBe("/Users/tester/vaults/wiki");
+    expect(config.vault.path).toBe(path.join("/Users/tester", "vaults", "wiki"));
     expect(config.vault.renderMode).toBe("obsidian");
   });
 

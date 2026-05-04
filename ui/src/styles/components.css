@@ -1821,6 +1821,32 @@
   margin-bottom: 0;
 }
 
+@media (max-width: 768px) {
+  .chat-side-result {
+    position: fixed;
+    left: max(8px, var(--safe-area-left));
+    right: max(8px, var(--safe-area-right));
+    bottom: calc(108px + var(--safe-area-bottom));
+    z-index: 35;
+    width: auto;
+    max-height: min(42vh, 320px);
+    margin: 0;
+    overflow: auto;
+    background: color-mix(in srgb, var(--card) 96%, var(--info) 4%);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .chat-side-result--error {
+    background: color-mix(in srgb, var(--card) 96%, var(--danger) 4%);
+  }
+
+  .chat-side-result__dismiss {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+}
+
 /* ===========================================
    Code Blocks
    =========================================== */
@@ -2481,6 +2507,20 @@
   border-bottom: 1px solid var(--border);
   color: var(--text);
   vertical-align: middle;
+}
+
+.data-table-empty-cell {
+  padding: 46px 16px !important;
+  color: var(--muted);
+  text-align: center;
+}
+
+.data-table-empty-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .data-table tbody tr {

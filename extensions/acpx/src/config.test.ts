@@ -5,7 +5,7 @@ import { resolveAcpxPluginConfig, resolveAcpxPluginRoot } from "./config.js";
 
 describe("embedded acpx plugin config", () => {
   it("resolves workspace stateDir and cwd by default", () => {
-    const workspaceDir = "/tmp/openclaw-acpx";
+    const workspaceDir = path.resolve("/tmp/openclaw-acpx");
     const resolved = resolveAcpxPluginConfig({
       rawConfig: undefined,
       workspaceDir,

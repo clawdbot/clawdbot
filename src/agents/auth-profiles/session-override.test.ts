@@ -19,7 +19,7 @@ const authStoreMocks = vi.hoisted(() => {
     state,
     ensureAuthProfileStore: vi.fn(() => state.store),
     hasAnyAuthProfileStoreSource: vi.fn(() => state.hasSource),
-    isProfileInCooldown: vi.fn(() => false),
+    isProfileInCooldown: vi.fn((_store: AuthProfileStore, _profileId: string) => false),
     reset() {
       state.hasSource = false;
       state.store = { version: 1, profiles: {} };
@@ -244,6 +244,57 @@ describe("resolveSessionAuthProfileOverride", () => {
 
       expect(resolved).toBe(TEST_PRIMARY_PROFILE_ID);
       expect(sessionEntry.authProfileOverride).toBe(TEST_PRIMARY_PROFILE_ID);
+    });
+  });
+
+  it("re-resolves a stale user session override when the selected profile becomes unusable", async () => {
+    await withAuthState(async (state) => {
+      const agentDir = state.agentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      authStoreMocks.state.hasSource = true;
+      authStoreMocks.state.store = createAuthStoreWithProfiles({
+        profiles: {
+          [TEST_PRIMARY_PROFILE_ID]: {
+            type: "api_key",
+            provider: "openai-codex",
+            key: "sk-stale",
+          },
+          [TEST_SECONDARY_PROFILE_ID]: {
+            type: "api_key",
+            provider: "openai-codex",
+            key: "sk-healthy",
+          },
+        },
+        order: {
+          "openai-codex": [TEST_SECONDARY_PROFILE_ID, TEST_PRIMARY_PROFILE_ID],
+        },
+      });
+      authStoreMocks.isProfileInCooldown.mockImplementation(
+        (_store: AuthProfileStore, profileId: string) => profileId === TEST_PRIMARY_PROFILE_ID,
+      );
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+        authProfileOverrideSource: "user",
+      };
+      const sessionStore = { "agent:main:main": sessionEntry };
+
+      const resolved = await resolveSessionAuthProfileOverride({
+        cfg: {} as OpenClawConfig,
+        provider: "openai-codex",
+        agentDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:main",
+        storePath: undefined,
+        isNewSession: false,
+      });
+
+      expect(resolved).toBe(TEST_SECONDARY_PROFILE_ID);
+      expect(sessionEntry.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
+      expect(sessionEntry.authProfileOverrideSource).toBe("auto");
     });
   });
 });

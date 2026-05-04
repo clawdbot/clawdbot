@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   modelsSetImageCommand: vi.fn().mockResolvedValue(undefined),
   noopAsync: vi.fn(async () => undefined),
   modelsAuthAddCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthSetupTokenCommand: vi.fn().mockResolvedValue(undefined),
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 
 const {
   modelsAuthAddCommand,
+  modelsAuthListCommand,
   modelsAuthLoginCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
@@ -35,6 +37,9 @@ vi.mock("../commands/models/auth.js", () => ({
   modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
   modelsAuthPasteTokenCommand: mocks.modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand: mocks.modelsAuthSetupTokenCommand,
+}));
+vi.mock("../commands/models/auth-list.js", () => ({
+  modelsAuthListCommand: mocks.modelsAuthListCommand,
 }));
 vi.mock("../commands/models/auth-order.js", () => ({
   modelsAuthOrderClearCommand: mocks.noopAsync,
@@ -71,6 +76,7 @@ vi.mock("../commands/models/set-image.js", () => ({
 describe("models cli", () => {
   beforeEach(() => {
     modelsAuthAddCommand.mockClear();
+    modelsAuthListCommand.mockClear();
     modelsAuthLoginCommand.mockClear();
     modelsAuthPasteTokenCommand.mockClear();
     modelsAuthSetupTokenCommand.mockClear();
@@ -139,6 +145,12 @@ describe("models cli", () => {
       expected: { agent: "poe" },
     },
     {
+      label: "list",
+      args: ["models", "auth", "--agent", "poe", "list", "--provider", "openai-codex"],
+      command: modelsAuthListCommand,
+      expected: { agent: "poe", provider: "openai-codex" },
+    },
+    {
       label: "login",
       args: ["models", "auth", "--agent", "poe", "login", "--provider", "openai-codex"],
       command: modelsAuthLoginCommand,
@@ -166,6 +178,15 @@ describe("models cli", () => {
     await runModelsCommand(args);
 
     expect(command).toHaveBeenCalledWith(expect.objectContaining(expected), expect.any(Object));
+  });
+
+  it("passes list-specific --agent and --json to models auth list", async () => {
+    await runModelsCommand(["models", "auth", "list", "--agent", "poe", "--json"]);
+
+    expect(modelsAuthListCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: "poe", json: true }),
+      expect.any(Object),
+    );
   });
 
   it.each([

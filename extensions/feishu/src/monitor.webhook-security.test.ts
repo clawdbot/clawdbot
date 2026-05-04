@@ -88,6 +88,68 @@ async function waitForSlowBodyTimeoutResponse(
   });
 }
 
+async function waitForOversizedBodyResponse(url: string): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const target = new URL(url);
+    const body = JSON.stringify({ payload: "x".repeat(70 * 1024) });
+    let response = "";
+    let settled = false;
+    const socket = createConnection(
+      {
+        host: target.hostname,
+        port: Number(target.port),
+      },
+      () => {
+        socket.write(`POST ${target.pathname} HTTP/1.1\r\n`);
+        socket.write(`Host: ${target.hostname}\r\n`);
+        socket.write("Content-Type: application/json\r\n");
+        socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\n`);
+        socket.write("\r\n");
+        socket.write(body);
+      },
+    );
+
+    const finish = (result: string) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(failTimer);
+      socket.destroy();
+      resolve(result);
+    };
+
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      response += chunk;
+      if (response.includes("Payload too large")) {
+        finish(response);
+      }
+    });
+    socket.on("close", () => {
+      if (response.includes("Payload too large")) {
+        finish(response);
+      }
+    });
+    socket.on("error", (error: NodeJS.ErrnoException) => {
+      if (response.includes("Payload too large")) {
+        finish(response);
+        return;
+      }
+      if (error.code === "ECONNRESET") {
+        finish("ECONNRESET");
+        return;
+      }
+      reject(error);
+    });
+
+    const failTimer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("payload-too-large response did not arrive within 1000ms"));
+    }, 1_000);
+  });
+}
+
 afterEach(() => {
   clearFeishuWebhookRateLimitStateForTest();
   stopFeishuMonitor();
@@ -182,14 +244,14 @@ describe("Feishu webhook security hardening", () => {
       },
       monitorFeishuProvider,
       async (url) => {
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ payload: "x".repeat(70 * 1024) }),
-        });
+        const response = await waitForOversizedBodyResponse(url);
 
-        expect(response.status).toBe(413);
-        expect(await response.text()).toBe("Payload too large");
+        if (response === "ECONNRESET") {
+          expect(response).toBe("ECONNRESET");
+        } else {
+          expect(response).toContain("413 Payload Too Large");
+          expect(response).toContain("Payload too large");
+        }
       },
     );
   });

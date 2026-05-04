@@ -37,7 +37,7 @@ function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: 
         commandPath,
         argv: process.argv,
       }),
-    ) === "allow-bundled-recovery"
+    ) === "allow-plugin-recovery"
   );
 }
 

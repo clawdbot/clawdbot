@@ -4,7 +4,7 @@
 
 /** Union type for items in the chat thread */
 export type ChatItem =
-  | { kind: "message"; key: string; message: unknown }
+  | { kind: "message"; key: string; message: unknown; duplicateCount?: number }
   | {
       kind: "divider";
       key: string;
@@ -22,7 +22,7 @@ export type MessageGroup = {
   key: string;
   role: string;
   senderLabel?: string | null;
-  messages: Array<{ message: unknown; key: string }>;
+  messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
   timestamp: number;
   isStreaming: boolean;
 };

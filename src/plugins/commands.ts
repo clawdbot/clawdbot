@@ -15,6 +15,7 @@ import {
   clearPluginCommandsForPlugin,
   isReservedCommandName,
   listPluginInvocationKeys,
+  pluginCommandSupportsChannel,
   registerPluginCommand,
   validateCommandName,
   validatePluginCommandDefinition,
@@ -61,6 +62,7 @@ export {
  */
 export function matchPluginCommand(
   commandBody: string,
+  options: { channel?: string } = {},
 ): { command: RegisteredPluginCommand; args?: string } | null {
   const trimmed = commandBody.trim();
   if (!trimmed.startsWith("/")) {
@@ -89,6 +91,7 @@ export function matchPluginCommand(
             listPluginInvocationNames(candidate).includes(candidateKey),
           ),
       )
+      .filter((candidate) => candidate && pluginCommandSupportsChannel(candidate, options.channel))
       .find(Boolean) ?? null;
 
   if (!command) {
@@ -197,6 +200,10 @@ export async function executePluginCommand(params: {
   const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
 
   // Check authorization
+  if (!pluginCommandSupportsChannel(command, channel)) {
+    logVerbose(`Plugin command /${command.name} skipped on unsupported channel ${channel}`);
+    return { continueAgent: true };
+  }
   const requireAuth = command.requireAuth !== false; // Default to true
   if (requireAuth && !isAuthorizedSender) {
     logVerbose(
@@ -216,11 +223,17 @@ export async function executePluginCommand(params: {
     logVerbose(`Plugin command /${command.name} blocked: unknown gateway scope`);
     return { text: "⚠️ This command has invalid gateway scope configuration." };
   }
-  if (requiredScopes.length > 0 && params.gatewayClientScopes) {
-    const scopes = new Set(params.gatewayClientScopes ?? []);
-    const hasAdmin = scopes.has(ADMIN_SCOPE);
-    const missingScope = requiredScopes.find((scope) => !hasAdmin && !scopes.has(scope));
-    if (missingScope) {
+  if (requiredScopes.length > 0) {
+    const senderIsOwner = params.senderIsOwner === true;
+    const scopes = Array.isArray(params.gatewayClientScopes)
+      ? new Set(params.gatewayClientScopes)
+      : undefined;
+    const hasGatewayScopeContext = scopes !== undefined;
+    const hasAdmin = scopes?.has(ADMIN_SCOPE) === true;
+    const missingScope = scopes
+      ? requiredScopes.find((scope) => !hasAdmin && !scopes.has(scope))
+      : requiredScopes[0];
+    if (missingScope && (hasGatewayScopeContext || !senderIsOwner)) {
       logVerbose(`Plugin command /${command.name} blocked: missing gateway scope ${missingScope}`);
       return { text: `⚠️ This command requires gateway scope: ${missingScope}.` };
     }
@@ -240,10 +253,11 @@ export async function executePluginCommand(params: {
   });
   const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
   const senderIsOwnerForCommand =
-    isTrustedReservedCommandOwner(command) &&
-    command.ownership === "reserved" &&
-    isReservedCommandName(command.name) &&
-    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+    requiredScopes.length > 0 ||
+    (isTrustedReservedCommandOwner(command) &&
+      command.ownership === "reserved" &&
+      isReservedCommandName(command.name) &&
+      command.pluginId === normalizeLowercaseStringOrEmpty(command.name))
       ? params.senderIsOwner
       : undefined;
   const diagnosticsPrivateRoutedForCommand =

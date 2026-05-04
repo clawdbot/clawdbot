@@ -191,6 +191,8 @@ export const pl: TranslationMap = {
     verbose: "Szczegółowo",
     reasoning: "Rozumowanie",
     noSessions: "Nie znaleziono sesji.",
+    noSessionsMatchFilters: "Żadne sesje nie pasują do Twoich filtrów.",
+    showAll: "Pokaż wszystkie",
     inherit: "dziedzicz",
     defaultOption: "Domyślnie ({value})",
     offExplicit: "wył. (jawnie)",
@@ -939,6 +941,7 @@ export const pl: TranslationMap = {
     updating: "Aktualizowanie…",
     updateNow: "Aktualizuj teraz",
     dismissUpdateBanner: "Odrzuć baner aktualizacji",
+    switchedSession: "Przełączono na {session}",
   },
   languages: {
     en: "Angielski (English)",

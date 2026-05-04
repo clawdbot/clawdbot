@@ -43,7 +43,7 @@ const resolveGatewayScopedToolsMock = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../config/config.js", () => ({
+vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => ({ session: { mainKey: "main" } }),
 }));
 
@@ -452,6 +452,7 @@ describe("mcp loopback server", () => {
         params: { body: "hello" },
         ctx: expect.objectContaining({
           agentId: "main",
+          config: { session: { mainKey: "main" } },
           sessionKey: "agent:main:main",
         }),
         signal: expect.any(AbortSignal),

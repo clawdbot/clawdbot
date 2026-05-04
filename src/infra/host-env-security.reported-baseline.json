@@ -222,6 +222,7 @@
     "SSL_CERT_DIR",
     "SSL_CERT_FILE",
     "SUDO_EDITOR",
+    "SYSTEMROOT",
     "TF_CLI_CONFIG_FILE",
     "TF_PLUGIN_CACHE_DIR",
     "UV_DEFAULT_INDEX",
@@ -232,10 +233,11 @@
     "VIRTUAL_ENV",
     "VISUAL",
     "WGETRC",
+    "WINDIR",
     "XDG_CONFIG_DIRS",
     "XDG_CONFIG_HOME",
     "YARN_RC_FILENAME",
     "ZDOTDIR"
   ],
-  "expectedTotalReportedEntries": 232
+  "expectedTotalReportedEntries": 234
 }

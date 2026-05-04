@@ -193,6 +193,8 @@ export const de: TranslationMap = {
     verbose: "Ausführlich",
     reasoning: "Reasoning",
     noSessions: "Keine Sitzungen gefunden.",
+    noSessionsMatchFilters: "Keine Sitzungen entsprechen Ihren Filtern.",
+    showAll: "Alle anzeigen",
     inherit: "Übernehmen",
     defaultOption: "Standard ({value})",
     offExplicit: "Aus (explizit)",
@@ -939,6 +941,7 @@ export const de: TranslationMap = {
     updating: "Wird aktualisiert…",
     updateNow: "Jetzt aktualisieren",
     dismissUpdateBanner: "Update-Banner ausblenden",
+    switchedSession: "Zu {session} gewechselt",
   },
   languages: {
     en: "Englisch",

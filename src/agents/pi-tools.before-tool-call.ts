@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import {
   diagnosticErrorCategory,
@@ -31,6 +32,7 @@ import { callGatewayTool } from "./tools/gateway.js";
 
 export type HookContext = {
   agentId?: string;
+  config?: OpenClawConfig;
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
@@ -491,6 +493,7 @@ export async function runBeforeToolCallHook(args: {
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
       },
       toolContext,
+      args.ctx?.config ? { config: args.ctx.config } : undefined,
     );
     if (trustedPolicyResult?.block) {
       return {

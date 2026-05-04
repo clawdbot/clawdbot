@@ -447,6 +447,7 @@ describe("POST /tools/invoke", () => {
         toolName: "agents_list",
         ctx: expect.objectContaining({
           agentId: "main",
+          config: cfg,
           sessionKey: "agent:main:main",
           loopDetection: { warnAt: 3 },
         }),
@@ -995,6 +996,7 @@ describe("tools.invoke Gateway RPC", () => {
         toolCallId: "rpc-rpc-tool-test",
         ctx: expect.objectContaining({
           agentId: "main",
+          config: cfg,
           sessionKey: "agent:main:main",
         }),
       }),

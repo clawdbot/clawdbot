@@ -68,6 +68,15 @@ function expectRouteRegistryState(params: { setup: () => void; assert: () => voi
   params.assert();
 }
 
+async function waitForCleanupSignal(signal: Promise<void>, label: string): Promise<void> {
+  await Promise.race([
+    signal,
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 500);
+    }),
+  ]);
+}
+
 describe("plugin runtime route registry", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
@@ -207,6 +216,78 @@ describe("setActivePluginRegistry", () => {
     setActivePluginRegistry(registry);
 
     expect(listImportedRuntimePluginIds()).toEqual(["runtime-plugin"]);
+  });
+
+  it.each([
+    {
+      name: "same active registry is refreshed",
+      refresh(nextRegistry: ReturnType<typeof createEmptyPluginRegistry>) {
+        setActivePluginRegistry(nextRegistry);
+      },
+    },
+    {
+      name: "active registry advances again",
+      refresh() {
+        setActivePluginRegistry(createEmptyPluginRegistry());
+      },
+    },
+  ] as const)("continues cleanup when the $name", async ({ refresh }) => {
+    let releaseFirstCleanup: (() => void) | undefined;
+    let markFirstCleanupStarted!: () => void;
+    let markSecondCleanupCalled!: () => void;
+    const firstCleanupStarted = new Promise<void>((resolve) => {
+      markFirstCleanupStarted = resolve;
+    });
+    const secondCleanupCalled = new Promise<void>((resolve) => {
+      markSecondCleanupCalled = resolve;
+    });
+    const previous = createEmptyPluginRegistry();
+    previous.plugins.push(
+      createPluginRecord({
+        id: "cleanup-refresh-race",
+        name: "Cleanup Refresh Race",
+        status: "loaded",
+      }),
+    );
+    previous.runtimeLifecycles = [
+      {
+        pluginId: "cleanup-refresh-race",
+        pluginName: "Cleanup Refresh Race",
+        lifecycle: {
+          id: "first-cleanup",
+          async cleanup() {
+            markFirstCleanupStarted();
+            await new Promise<void>((resolve) => {
+              releaseFirstCleanup = resolve;
+            });
+          },
+        },
+        source: "/virtual/cleanup-refresh-race/index.ts",
+        rootDir: "/virtual/cleanup-refresh-race",
+      },
+      {
+        pluginId: "cleanup-refresh-race",
+        pluginName: "Cleanup Refresh Race",
+        lifecycle: {
+          id: "second-cleanup",
+          cleanup() {
+            markSecondCleanupCalled();
+          },
+        },
+        source: "/virtual/cleanup-refresh-race/index.ts",
+        rootDir: "/virtual/cleanup-refresh-race",
+      },
+    ];
+    const next = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(previous);
+    setActivePluginRegistry(next);
+    await waitForCleanupSignal(firstCleanupStarted, "first cleanup start");
+
+    refresh(next);
+    releaseFirstCleanup?.();
+
+    await waitForCleanupSignal(secondCleanupCalled, "second cleanup");
   });
 
   it("includes plugin ids imported before registration failed", () => {

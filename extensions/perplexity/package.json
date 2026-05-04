@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/perplexity-plugin",
-  "version": "2026.5.3",
+  "version": "2026.5.4",
   "private": true,
   "description": "OpenClaw Perplexity plugin",
   "type": "module",

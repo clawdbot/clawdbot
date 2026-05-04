@@ -314,7 +314,21 @@
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/ui/chat/session-controls.ts",
+      "text": "Chat session"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/chat/session-controls.ts",
       "text": "Chat thinking level"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/chat/session-controls.ts",
+      "text": "Filter sessions by agent"
     },
     {
       "count": 1,

@@ -1,5 +1,7 @@
 /** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
+const HEADER_HIDE_SCROLL_DELTA = 12;
+const HEADER_SHOW_TOP_THRESHOLD = 24;
 
 type ScrollHost = {
   updateComplete: Promise<unknown>;
@@ -7,8 +9,10 @@ type ScrollHost = {
   style: CSSStyleDeclaration;
   chatScrollFrame: number | null;
   chatScrollTimeout: number | null;
+  chatLastScrollTop: number;
   chatHasAutoScrolled: boolean;
   chatUserNearBottom: boolean;
+  chatHeaderControlsHidden: boolean;
   chatNewMessagesBelow: boolean;
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
@@ -128,8 +132,21 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   if (!container) {
     return;
   }
+  const scrollTop = Math.max(0, container.scrollTop);
+  const delta = scrollTop - host.chatLastScrollTop;
+  host.chatLastScrollTop = scrollTop;
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   host.chatUserNearBottom = distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+  const hasUsefulScroll = container.scrollHeight - container.clientHeight > NEAR_BOTTOM_THRESHOLD;
+
+  if (!hasUsefulScroll || scrollTop <= HEADER_SHOW_TOP_THRESHOLD || host.chatUserNearBottom) {
+    host.chatHeaderControlsHidden = false;
+  } else if (delta > HEADER_HIDE_SCROLL_DELTA) {
+    host.chatHeaderControlsHidden = true;
+  } else if (delta < -HEADER_HIDE_SCROLL_DELTA) {
+    host.chatHeaderControlsHidden = false;
+  }
+
   // Clear the "new messages below" indicator when user scrolls back to bottom.
   if (host.chatUserNearBottom) {
     host.chatNewMessagesBelow = false;
@@ -148,6 +165,8 @@ export function handleLogsScroll(host: ScrollHost, event: Event) {
 export function resetChatScroll(host: ScrollHost) {
   host.chatHasAutoScrolled = false;
   host.chatUserNearBottom = true;
+  host.chatLastScrollTop = 0;
+  host.chatHeaderControlsHidden = false;
   host.chatNewMessagesBelow = false;
 }
 

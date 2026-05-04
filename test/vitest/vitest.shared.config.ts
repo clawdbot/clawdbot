@@ -303,6 +303,7 @@ export const sharedVitestConfig = {
       "**/node_modules/**",
       "**/vendor/**",
       "dist/OpenClaw.app/**",
+      "**/._*",
       "**/*.live.test.ts",
       "**/*.e2e.test.ts",
     ],

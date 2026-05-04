@@ -23,6 +23,7 @@ type MatrixHandlerTestHarnessOptions = {
   accountId?: string;
   accountConfig?: MatrixConfig;
   cfg?: unknown;
+  liveCfg?: unknown;
   client?: Partial<MatrixClient>;
   runtime?: RuntimeEnv;
   logger?: RuntimeLogger;
@@ -192,7 +193,7 @@ export function createMatrixHandlerTestHarness(
     } as never,
     core: {
       config: {
-        current: () => cfgForHandler,
+        current: () => options.liveCfg ?? cfgForHandler,
       },
       channel: {
         pairing: {

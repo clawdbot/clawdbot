@@ -39,8 +39,10 @@ function createScrollHost(
     style: { setProperty: vi.fn() } as unknown as CSSStyleDeclaration,
     chatScrollFrame: null as number | null,
     chatScrollTimeout: null as number | null,
+    chatLastScrollTop: 0,
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
+    chatHeaderControlsHidden: false,
     chatNewMessagesBelow: false,
     logsScrollFrame: null as number | null,
     logsAtBottom: true,
@@ -100,6 +102,38 @@ describe("handleChatScroll", () => {
     const event = createScrollEvent(2000, 1100, 400);
     handleChatScroll(host, event);
     expect(host.chatUserNearBottom).toBe(false);
+  });
+
+  it("hides chat header controls when scrolling down through transcript history", () => {
+    const { host } = createScrollHost({});
+    host.chatLastScrollTop = 100;
+    const event = createScrollEvent(3000, 260, 500);
+
+    handleChatScroll(host, event);
+
+    expect(host.chatHeaderControlsHidden).toBe(true);
+  });
+
+  it("shows chat header controls again when scrolling up", () => {
+    const { host } = createScrollHost({});
+    host.chatLastScrollTop = 800;
+    host.chatHeaderControlsHidden = true;
+    const event = createScrollEvent(3000, 700, 500);
+
+    handleChatScroll(host, event);
+
+    expect(host.chatHeaderControlsHidden).toBe(false);
+  });
+
+  it("keeps chat header controls visible near the bottom", () => {
+    const { host } = createScrollHost({});
+    host.chatLastScrollTop = 1900;
+    host.chatHeaderControlsHidden = true;
+    const event = createScrollEvent(3000, 2500, 500);
+
+    handleChatScroll(host, event);
+
+    expect(host.chatHeaderControlsHidden).toBe(false);
   });
 });
 
@@ -266,10 +300,14 @@ describe("resetChatScroll", () => {
     const { host } = createScrollHost({});
     host.chatHasAutoScrolled = true;
     host.chatUserNearBottom = false;
+    host.chatLastScrollTop = 300;
+    host.chatHeaderControlsHidden = true;
 
     resetChatScroll(host);
 
     expect(host.chatHasAutoScrolled).toBe(false);
     expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatLastScrollTop).toBe(0);
+    expect(host.chatHeaderControlsHidden).toBe(false);
   });
 });

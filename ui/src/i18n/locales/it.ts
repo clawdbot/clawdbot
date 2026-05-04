@@ -190,6 +190,8 @@ export const it: TranslationMap = {
     verbose: "Dettagliato",
     reasoning: "Ragionamento",
     noSessions: "Nessuna sessione trovata.",
+    noSessionsMatchFilters: "Nessuna sessione corrisponde ai tuoi filtri.",
+    showAll: "Mostra tutto",
     inherit: "eredita",
     defaultOption: "Predefinito ({value})",
     offExplicit: "disattivato (esplicito)",
@@ -938,6 +940,7 @@ export const it: TranslationMap = {
     updating: "Aggiornamento…",
     updateNow: "Aggiorna ora",
     dismissUpdateBanner: "Ignora banner di aggiornamento",
+    switchedSession: "Passato a {session}",
   },
   languages: {
     en: "English (Inglese)",

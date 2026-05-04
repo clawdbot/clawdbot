@@ -1,11 +1,18 @@
 import { statSync, writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   __testing,
   buildNativeHookRelayCommand,
@@ -17,6 +24,7 @@ import {
 afterEach(() => {
   vi.useRealTimers();
   resetGlobalHookRunner();
+  setActivePluginRegistry(createEmptyPluginRegistry());
   __testing.clearNativeHookRelaysForTests();
 });
 
@@ -627,6 +635,95 @@ describe("native hook relay registry", () => {
         toolCallId: "native-call-1",
       }),
     );
+  });
+
+  it("passes config to trusted policies for native pre-tool session extension reads", async () => {
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-native-relay-policy-"));
+    const storePath = path.join(stateDir, "sessions.json");
+    const config = { session: { store: storePath } };
+    const seen: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.sessionExtensions = [
+      {
+        pluginId: "policy-plugin",
+        pluginName: "Policy Plugin",
+        source: "test",
+        extension: {
+          namespace: "policy",
+          description: "policy state",
+        },
+      },
+    ];
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "policy-plugin",
+        pluginName: "Policy Plugin",
+        source: "test",
+        policy: {
+          id: "session-extension-policy",
+          description: "session extension policy",
+          evaluate(_event, ctx) {
+            const policyState = ctx.getSessionExtension?.("policy");
+            seen.push(policyState);
+            if ((policyState as { block?: boolean } | undefined)?.block) {
+              return { block: true, blockReason: "blocked by session extension" };
+            }
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    try {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:session-1"] = {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        } as SessionEntry;
+      });
+      await expect(
+        patchPluginSessionExtension({
+          cfg: config as never,
+          sessionKey: "agent:main:session-1",
+          pluginId: "policy-plugin",
+          namespace: "policy",
+          value: { block: true },
+        }),
+      ).resolves.toMatchObject({ ok: true });
+
+      const relay = registerNativeHookRelay({
+        provider: "codex",
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        config: config as never,
+        runId: "run-1",
+        allowedEvents: ["pre_tool_use"],
+      });
+
+      const response = await invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "native-policy-call-1",
+          tool_input: { command: "rm -rf dist" },
+        },
+      });
+
+      expect(JSON.parse(response.stdout)).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: "blocked by session extension",
+        },
+      });
+      expect(seen).toEqual([{ block: true }]);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("does not rewrite Codex native tool input when before_tool_call adjusts params", async () => {

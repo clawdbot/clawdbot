@@ -221,4 +221,77 @@ describe("web_fetch provider fallback normalization", () => {
       }),
     );
   });
+
+  it("scopes provider fallback cache entries by the late-bound provider", async () => {
+    global.fetch = withFetchPreconnect(
+      vi.fn(async () => {
+        throw new Error("network failed");
+      }),
+    );
+    resolveWebFetchDefinitionMock.mockImplementation(
+      ({ runtimeWebFetch }: { runtimeWebFetch?: { selectedProvider?: string } }) => {
+        const providerId = runtimeWebFetch?.selectedProvider ?? "unknown";
+        return {
+          provider: { id: providerId },
+          definition: {
+            description: providerId,
+            parameters: {},
+            execute: async () => ({
+              text: `${providerId} fallback body`,
+            }),
+          },
+        };
+      },
+    );
+
+    const executeWithProvider = async (providerId: string) => {
+      runtimeState.activeSecretsRuntimeSnapshot = {
+        config: {
+          tools: {
+            web: {
+              fetch: {
+                provider: providerId,
+              },
+            },
+          },
+        },
+      };
+      runtimeState.activeRuntimeWebToolsMetadata = {
+        fetch: {
+          providerConfigured: providerId,
+          providerSource: "configured",
+          selectedProvider: providerId,
+          selectedProviderKeySource: "config",
+          diagnostics: [],
+        },
+        diagnostics: [],
+      };
+      const tool = createWebFetchTool({
+        config: {} as OpenClawConfig,
+        sandboxed: false,
+        lateBindRuntimeConfig: true,
+      });
+      return tool?.execute?.("call-provider-fallback", {
+        url: "https://example.com/provider-cache-scope",
+      });
+    };
+
+    const first = await executeWithProvider("firecrawl");
+    const second = await executeWithProvider("perplexity-fetch");
+    const firstDetails = first?.details as {
+      externalContent?: { provider?: string };
+      text?: string;
+    };
+    const secondDetails = second?.details as {
+      cached?: boolean;
+      externalContent?: { provider?: string };
+      text?: string;
+    };
+
+    expect(firstDetails.externalContent?.provider).toBe("firecrawl");
+    expect(firstDetails.text).toContain("firecrawl fallback body");
+    expect(secondDetails.externalContent?.provider).toBe("perplexity-fetch");
+    expect(secondDetails.text).toContain("perplexity-fetch fallback body");
+    expect(secondDetails.cached).toBeUndefined();
+  });
 });

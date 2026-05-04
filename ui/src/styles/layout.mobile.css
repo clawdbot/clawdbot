@@ -5,44 +5,62 @@
 @media (max-width: 1320px) {
   .content--chat .content-header {
     align-items: stretch;
-    gap: 12px;
-    row-gap: 10px;
-    max-height: 180px;
+    gap: 8px;
+    row-gap: 0;
+    max-height: 56px;
     overflow: visible;
   }
 
   .content--chat .content-header > div:first-child {
-    flex: 1 1 100%;
     min-width: 0;
   }
 
   .content--chat .page-meta {
-    width: 100%;
     min-width: 0;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    row-gap: 8px;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    row-gap: 0;
   }
 
   .content--chat .chat-controls {
-    margin-left: auto;
+    margin-left: 0;
     justify-content: flex-end;
-    row-gap: 8px;
+    row-gap: 0;
   }
 
   .chat-controls__session-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    align-items: start;
-    gap: 10px 12px;
+    grid-template-columns:
+      minmax(96px, 5fr) minmax(112px, 7fr) minmax(116px, 5fr)
+      minmax(112px, 4fr);
+    grid-template-areas: "agent session model thinking";
+    align-items: center;
+    gap: 8px;
     width: 100%;
   }
 
+  .chat-controls__session-row--single-agent {
+    grid-template-columns: minmax(112px, 7fr) minmax(116px, 5fr) minmax(112px, 4fr);
+    grid-template-areas: "session model thinking";
+  }
+
+  .chat-controls__agent {
+    grid-area: agent;
+  }
+
+  .chat-controls__session-picker {
+    grid-area: session;
+  }
+
+  .chat-controls__model {
+    grid-area: model;
+  }
+
   .chat-controls__thinking-select {
-    grid-column: 1 / -1;
+    grid-area: thinking;
   }
 
   .chat-controls__session,
+  .chat-controls__agent,
   .chat-controls__model,
   .chat-controls__thinking-select {
     min-width: 0;
@@ -50,6 +68,7 @@
   }
 
   .chat-controls__session select,
+  .chat-controls__agent select,
   .chat-controls__model select,
   .chat-controls__thinking-select select {
     width: 100%;
@@ -381,23 +400,31 @@
 
   .chat-mobile-controls-wrapper .chat-controls-mobile-toggle {
     display: flex;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
   }
 
-  /* The dropdown panel — anchored below the gear in topbar */
+  /* The dropdown panel is viewport-clamped so narrow phones never crop controls. */
   .chat-mobile-controls-wrapper .chat-controls-dropdown {
     display: none;
-    position: absolute;
-    top: 100%;
-    right: 0;
+    position: fixed;
+    top: calc(var(--shell-topbar-height) + 8px);
+    right: max(8px, var(--safe-area-right));
+    left: auto;
     z-index: 100;
+    width: min(420px, calc(100vw - var(--safe-area-left) - var(--safe-area-right) - 16px));
     background: var(--card, #161b22);
     border: 1px solid var(--border, #30363d);
     border-radius: var(--radius-md);
-    padding: 8px;
+    padding: 10px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
     flex-direction: column;
-    gap: 4px;
-    min-width: 220px;
+    gap: 8px;
+    min-width: 0;
+    max-height: min(72vh, 520px);
+    overflow: auto;
+    overscroll-behavior: contain;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown.open {
@@ -407,8 +434,26 @@
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    align-items: stretch;
+    gap: 8px;
     width: 100%;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    grid-template-areas:
+      "agent session"
+      "model thinking";
+    gap: 8px;
+    width: 100%;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row--single-agent {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    grid-template-areas:
+      "session thinking"
+      "model model";
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session {
@@ -417,24 +462,63 @@
     width: 100%;
   }
 
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__agent {
+    grid-area: agent;
+    min-width: unset;
+    max-width: unset;
+    width: 100%;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-picker {
+    grid-area: session;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {
+    grid-area: model;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking-select {
+    grid-area: thinking;
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking-select-full {
+    display: block;
+    width: 100%;
+    max-width: none;
+  }
+
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select {
     width: 100%;
     font-size: 14px;
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__agent select {
+    width: 100%;
+    font-size: 14px;
+    min-height: 44px;
     padding: 10px 12px;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking {
     display: flex;
-    flex-direction: row;
+    flex-wrap: wrap;
     gap: 6px;
-    padding: 4px 0;
-    justify-content: center;
+    justify-content: flex-end;
+    width: 100%;
+    padding: 0;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .btn--icon {
+    width: 44px;
     min-width: 44px;
     height: 44px;
   }
+
   .content {
     padding: 4px 4px 16px;
     gap: 12px;
@@ -548,23 +632,34 @@
   }
 
   .agent-chat__input {
-    margin: 0 8px 10px;
+    margin: 0 8px calc(10px + var(--safe-area-bottom));
   }
 
   .agent-chat__toolbar {
-    padding: 4px 8px;
+    align-items: stretch;
+    gap: 8px;
+    padding: 6px 8px;
+  }
+
+  .agent-chat__toolbar-left,
+  .agent-chat__toolbar-right {
+    flex-wrap: wrap;
+    gap: 6px;
   }
 
   .agent-chat__input-btn,
-  .agent-chat__toolbar .btn--ghost {
-    width: 28px;
-    height: 28px;
+  .agent-chat__toolbar .btn--ghost,
+  .chat-send-btn {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
   }
 
   .agent-chat__input-btn svg,
-  .agent-chat__toolbar .btn--ghost svg {
-    width: 14px;
-    height: 14px;
+  .agent-chat__toolbar .btn--ghost svg,
+  .chat-send-btn svg {
+    width: 16px;
+    height: 16px;
   }
 
   /* Log stream */

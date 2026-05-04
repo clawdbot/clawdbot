@@ -227,6 +227,39 @@ describe("cron method validation", () => {
     expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
   });
 
+  it("rejects execution-derived diagnostics in cron.update state patches", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          state: {
+            lastDiagnostics: {
+              summary: "forged",
+              entries: [
+                {
+                  ts: 1,
+                  source: "agent-run",
+                  severity: "error",
+                  message: "forged",
+                },
+              ],
+            },
+          },
+        },
+      },
+      createCronJob(),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+      }),
+    );
+  });
+
   it("rejects ambiguous announce delivery on add when multiple channels are configured", async () => {
     getRuntimeConfig.mockReturnValue({
       session: {

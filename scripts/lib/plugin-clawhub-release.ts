@@ -60,6 +60,12 @@ type PluginReleasePlan = {
   skippedPublished: PluginReleasePlanItem[];
 };
 
+type ClawHubPackageOwnerDetail = {
+  owner?: {
+    handle?: unknown;
+  } | null;
+};
+
 type ClawHubPublishablePluginPackageFilters = {
   extensionIds?: readonly string[];
   packageNames?: readonly string[];
@@ -76,6 +82,7 @@ const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
   "scripts/lib/npm-publish-plan.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
+  "scripts/plugin-clawhub-owner-preflight.ts",
   "scripts/openclaw-npm-release-check.ts",
   "scripts/plugin-clawhub-publish.sh",
   "scripts/plugin-clawhub-release-check.ts",
@@ -341,6 +348,59 @@ async function isPluginVersionPublishedOnClawHub(
   throw new Error(
     `Failed to query ClawHub for ${packageName}@${version}: ${response.status} ${response.statusText}`,
   );
+}
+
+export async function collectClawHubOpenClawOwnerErrors(params: {
+  plugins: readonly Pick<PublishablePluginPackage, "packageName">[];
+  requiredOwnerHandle?: string;
+  registryBaseUrl?: string;
+  fetchImpl?: typeof fetch;
+}): Promise<string[]> {
+  const fetchImpl = params.fetchImpl ?? fetch;
+  const requiredOwnerHandle = params.requiredOwnerHandle ?? "openclaw";
+  const errors: string[] = [];
+
+  await Promise.all(
+    params.plugins.map(async (plugin) => {
+      if (!plugin.packageName.startsWith("@openclaw/")) {
+        return;
+      }
+
+      const url = new URL(
+        `/api/v1/packages/${encodeURIComponent(plugin.packageName)}`,
+        getRegistryBaseUrl(params.registryBaseUrl),
+      );
+      const response = await fetchImpl(url, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+
+      if (response.status === 404) {
+        errors.push(
+          `${plugin.packageName}: ClawHub package row must already exist under @${requiredOwnerHandle} before OpenClaw release publish.`,
+        );
+        return;
+      }
+      if (!response.ok) {
+        errors.push(
+          `${plugin.packageName}: failed to query ClawHub owner: ${response.status} ${response.statusText}`,
+        );
+        return;
+      }
+
+      const detail = (await response.json()) as ClawHubPackageOwnerDetail;
+      const ownerHandle = typeof detail.owner?.handle === "string" ? detail.owner.handle : null;
+      if (ownerHandle !== requiredOwnerHandle) {
+        errors.push(
+          `${plugin.packageName}: ClawHub package owner must be @${requiredOwnerHandle}; got ${ownerHandle ? `@${ownerHandle}` : "<missing>"}.`,
+        );
+      }
+    }),
+  );
+
+  return errors.toSorted();
 }
 
 export async function collectPluginClawHubReleasePlan(params?: {

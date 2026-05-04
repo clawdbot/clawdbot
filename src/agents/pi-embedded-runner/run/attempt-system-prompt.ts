@@ -1,15 +1,21 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { transformProviderSystemPrompt } from "../../../plugins/provider-runtime.js";
 import type { ProviderTransformSystemPromptContext } from "../../../plugins/types.js";
 import { appendAgentBootstrapSystemPromptSupplement } from "../../system-prompt.js";
 import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "../system-prompt.js";
 
 type EmbeddedSystemPromptParams = Parameters<typeof buildEmbeddedSystemPrompt>[0];
+type ProviderSystemPromptTransform = (params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir: string;
+  context: ProviderTransformSystemPromptContext;
+}) => string;
 
 export type BuildAttemptSystemPromptParams = {
   isRawModelRun: boolean;
   systemPromptOverrideText?: string;
   embeddedSystemPrompt: EmbeddedSystemPromptParams;
+  transformProviderSystemPrompt: ProviderSystemPromptTransform;
   providerTransform: {
     provider: string;
     config?: OpenClawConfig;
@@ -38,7 +44,7 @@ export function buildAttemptSystemPrompt(
 
   const systemPrompt = params.isRawModelRun
     ? ""
-    : transformProviderSystemPrompt({
+    : params.transformProviderSystemPrompt({
         provider: params.providerTransform.provider,
         config: params.providerTransform.config,
         workspaceDir: params.providerTransform.workspaceDir,

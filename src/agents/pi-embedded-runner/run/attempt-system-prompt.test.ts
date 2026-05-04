@@ -11,11 +11,16 @@ const baseProviderTransform = {
   },
 };
 
+const transformProviderSystemPrompt: Parameters<
+  typeof buildAttemptSystemPrompt
+>[0]["transformProviderSystemPrompt"] = ({ context }) => context.systemPrompt;
+
 describe("buildAttemptSystemPrompt", () => {
   it("preserves bootstrap Project Context when a system prompt override is configured", () => {
     const result = buildAttemptSystemPrompt({
       isRawModelRun: false,
       systemPromptOverrideText: "Custom override prompt.",
+      transformProviderSystemPrompt,
       embeddedSystemPrompt: {
         workspaceDir: "/tmp/openclaw",
         reasoningTagHint: false,
@@ -59,6 +64,7 @@ describe("buildAttemptSystemPrompt", () => {
   it("omits system prompts for raw model probes", () => {
     const result = buildAttemptSystemPrompt({
       isRawModelRun: true,
+      transformProviderSystemPrompt,
       embeddedSystemPrompt: {
         workspaceDir: "/tmp/openclaw",
         reasoningTagHint: false,

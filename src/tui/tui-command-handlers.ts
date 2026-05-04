@@ -642,6 +642,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         runId,
       });
       if (!isBtw) {
+        state.pendingChatRunId = runId;
         setActivityStatus("waiting");
         tui.requestRender();
       }
@@ -654,6 +655,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       if (!isBtw) {
         state.pendingOptimisticUserMessage = false;
+        state.pendingChatRunId = null;
         state.activeChatRunId = null;
       }
       chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);

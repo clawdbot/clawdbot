@@ -447,6 +447,7 @@ export function renderMessageGroup(
             item.key,
             {
               isStreaming: group.isStreaming && index === group.messages.length - 1,
+              duplicateCount: item.duplicateCount ?? 1,
               showReasoning: opts.showReasoning,
               showToolCalls: opts.showToolCalls ?? true,
               autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
@@ -1371,6 +1372,7 @@ function renderGroupedMessage(
   messageKey: string,
   opts: {
     isStreaming: boolean;
+    duplicateCount?: number;
     showReasoning: boolean;
     showToolCalls?: boolean;
     autoExpandToolCalls?: boolean;
@@ -1478,6 +1480,7 @@ function renderGroupedMessage(
       : "Tool output";
 
   const hasActions = canCopyMarkdown || canExpand;
+  const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
 
   return html`
     <div class="${bubbleClasses}">
@@ -1617,6 +1620,15 @@ function renderGroupedMessage(
                 })
               : nothing}
           `}
+      ${duplicateCount > 1
+        ? html`<div
+            class="chat-duplicate-count"
+            aria-label=${`${duplicateCount} consecutive identical messages collapsed`}
+            title=${`${duplicateCount} consecutive identical messages collapsed`}
+          >
+            ×${duplicateCount}
+          </div>`
+        : nothing}
     </div>
   `;
 }

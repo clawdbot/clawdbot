@@ -188,6 +188,28 @@ function createCurrentIndex(): InstalledPluginIndex {
   };
 }
 
+function createCurrentIndexWithNpmRecord(params: {
+  pluginId: string;
+  packageName: string;
+  packageDir: string;
+  version: string;
+}): InstalledPluginIndex {
+  return {
+    ...createCurrentIndex(),
+    installRecords: {
+      [params.pluginId]: {
+        source: "npm",
+        spec: `${params.packageName}@${params.version}`,
+        installPath: params.packageDir,
+        version: params.version,
+        resolvedName: params.packageName,
+        resolvedVersion: params.version,
+        resolvedSpec: `${params.packageName}@${params.version}`,
+      },
+    },
+  };
+}
+
 describe("maybeRepairPluginRegistryState", () => {
   it("refreshes an existing registry during repair", async () => {
     const stateDir = makeTempDir();
@@ -332,6 +354,65 @@ describe("maybeRepairPluginRegistryState", () => {
     expect(vi.mocked(note).mock.calls.join("\n")).toContain(
       "Removed stale managed npm plugin package",
     );
+  });
+
+  it("removes recovered npm install records when a managed package shadows a bundled plugin", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled", "google-meet");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    const managed = createManagedNpmPlugin({
+      stateDir,
+      id: "google-meet",
+      packageName: "@openclaw/google-meet",
+      version: "2026.5.3",
+    });
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithNpmRecord({
+        pluginId: "google-meet",
+        packageName: "@openclaw/google-meet",
+        packageDir: managed.packageDir,
+        version: "2026.5.3",
+      }),
+      { stateDir },
+    );
+
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      candidates: [
+        createBundledCandidate({
+          rootDir: bundledDir,
+          id: "google-meet",
+          packageName: "@openclaw/google-meet",
+          version: "2026.5.3",
+        }),
+      ],
+      env: hermeticEnv(),
+      config: {
+        plugins: {
+          allow: ["google-meet"],
+          entries: {
+            "google-meet": {
+              enabled: true,
+              config: {},
+            },
+          },
+        },
+      },
+      prompter: { shouldRepair: true },
+    });
+
+    expect(fs.existsSync(managed.packageDir)).toBe(false);
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      installRecords: {},
+      refreshReason: "migration",
+      plugins: [
+        expect.objectContaining({
+          pluginId: "google-meet",
+          origin: "bundled",
+          rootDir: bundledDir,
+        }),
+      ],
+    });
   });
 
   it("removes stale managed npm packages from the package lock during repair", async () => {

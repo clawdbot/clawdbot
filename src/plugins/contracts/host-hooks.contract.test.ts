@@ -161,6 +161,110 @@ describe("host-hook fixture plugin contract", () => {
     );
   });
 
+  it("allows the official ClawHub Codex plugin to keep /codex command ownership", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const codexRoot = path.join("/tmp", ".openclaw", "extensions", "codex");
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "codex",
+        name: "Codex",
+        packageName: "@openclaw/codex",
+        origin: "global",
+        rootDir: codexRoot,
+        source: path.join(codexRoot, "dist", "index.js"),
+      }),
+      register(api) {
+        api.registerCommand({
+          name: "codex",
+          description: "Official ClawHub Codex command",
+          ownership: "reserved",
+          handler: async () => ({ text: "ok" }),
+        });
+      },
+    });
+
+    expect(registry.registry.commands.map((entry) => entry.command.name)).toEqual(["codex"]);
+    expect(registry.registry.diagnostics).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "codex",
+          message: expect.stringContaining("only bundled plugins can claim reserved command"),
+        }),
+      ]),
+    );
+  });
+
+  it("rejects non-official global Codex plugins from /codex command ownership", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const codexRoot = path.join("/tmp", ".openclaw", "extensions", "codex");
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "codex",
+        name: "Codex",
+        origin: "global",
+        rootDir: codexRoot,
+        source: path.join(codexRoot, "dist", "index.js"),
+      }),
+      register(api) {
+        api.registerCommand({
+          name: "codex",
+          description: "Impostor Codex command",
+          ownership: "reserved",
+          handler: async () => ({ text: "no" }),
+        });
+      },
+    });
+
+    expect(registry.registry.commands).toHaveLength(0);
+    expect(registry.registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "codex",
+          message: expect.stringContaining("only bundled plugins can claim reserved command"),
+        }),
+      ]),
+    );
+  });
+
+  it("rejects workspace Codex plugins that spoof the official package name", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const codexRoot = path.join("/tmp", "workspace", "codex");
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "codex",
+        name: "Codex",
+        packageName: "@openclaw/codex",
+        origin: "workspace",
+        rootDir: codexRoot,
+        source: path.join(codexRoot, "dist", "index.js"),
+      }),
+      register(api) {
+        api.registerCommand({
+          name: "codex",
+          description: "Workspace Codex command",
+          ownership: "reserved",
+          handler: async () => ({ text: "no" }),
+        });
+      },
+    });
+
+    expect(registry.registry.commands).toHaveLength(0);
+    expect(registry.registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "codex",
+          message: expect.stringContaining("only bundled plugins can claim reserved command"),
+        }),
+      ]),
+    );
+  });
+
   it("rejects reserved command ownership for non-reserved bundled command names", () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
@@ -1201,7 +1305,7 @@ describe("host-hook fixture plugin contract", () => {
     expect(validatePluginsUiDescriptorsParams({ pluginId: "host-hook-fixture" })).toBe(false);
   });
 
-  it("enforces command requiredScopes for gateway clients while preserving text command continuations", async () => {
+  it("enforces command requiredScopes for gateway clients and command owners", async () => {
     const handlerCalls: string[] = [];
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
@@ -1256,6 +1360,7 @@ describe("host-hook fixture plugin contract", () => {
         senderId: "owner",
         channel: "whatsapp",
         isAuthorizedSender: true,
+        senderIsOwner: true,
         sessionKey: "agent:main:main",
         commandBody: "/approval-fixture resume-text",
         config,

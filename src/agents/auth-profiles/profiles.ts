@@ -1,7 +1,7 @@
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { normalizeProviderId } from "../provider-id.js";
+import { findNormalizedProviderKey, normalizeProviderId } from "../provider-id.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
@@ -36,6 +36,41 @@ export async function setAuthProfileOrder(params: {
         return true;
       }
       store.order[providerKey] = deduped;
+      return true;
+    },
+  });
+}
+
+export async function promoteAuthProfileInOrder(params: {
+  agentDir?: string;
+  provider: string;
+  profileId: string;
+}): Promise<AuthProfileStore | null> {
+  const providerKey = resolveProviderIdForAuth(params.provider);
+  return await updateAuthProfileStoreWithLock({
+    agentDir: params.agentDir,
+    updater: (store) => {
+      const profile = store.profiles[params.profileId];
+      if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
+        return false;
+      }
+      const orderKey =
+        findNormalizedProviderKey(store.order, providerKey) ?? normalizeProviderId(providerKey);
+      const existing = store.order?.[orderKey];
+      if (!existing || existing.length === 0) {
+        return false;
+      }
+      const next = dedupeProfileIds([
+        params.profileId,
+        ...existing.filter((profileId) => profileId !== params.profileId),
+      ]);
+      if (
+        next.length === existing.length &&
+        next.every((profileId, idx) => profileId === existing[idx])
+      ) {
+        return false;
+      }
+      store.order = { ...store.order, [orderKey]: next };
       return true;
     },
   });

@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1094,14 +1095,14 @@ describe("registerTelegramNativeCommands — session metadata", () => {
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
         storePath: "/tmp/openclaw-sessions/sessions.json",
         sessionsDir: "/tmp/openclaw-sessions",
-        fallbackSessionFile: "/tmp/openclaw-sessions/sess-topic-topic-42.jsonl",
+        fallbackSessionFile: path.resolve("/tmp/openclaw-sessions", "sess-topic-topic-42.jsonl"),
       }),
     );
     expect(pluginRuntimeMocks.executePluginCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
         sessionId: "sess-topic",
-        sessionFile: "/tmp/openclaw-sessions/sess-topic-topic-42.jsonl",
+        sessionFile: path.resolve("/tmp/openclaw-sessions", "sess-topic-topic-42.jsonl"),
         messageThreadId: 42,
       }),
     );

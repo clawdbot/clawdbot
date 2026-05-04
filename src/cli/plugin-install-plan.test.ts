@@ -6,6 +6,7 @@ import {
   resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
   resolveOfficialExternalInstallPlanBeforeNpm,
+  resolveOfficialExternalNpmPackageTrust,
 } from "./plugin-install-plan.js";
 
 describe("plugin install plan helpers", () => {
@@ -83,6 +84,36 @@ describe("plugin install plan helpers", () => {
       }),
     });
 
+    expect(result).toBeNull();
+  });
+
+  it("trusts exact official external npm packages without remapping the spec", () => {
+    const findOfficialExternalPackage = vi.fn().mockReturnValue({
+      pluginId: "discord",
+      npmSpec: "@openclaw/discord",
+    });
+
+    const result = resolveOfficialExternalNpmPackageTrust({
+      npmSpec: "@openclaw/discord",
+      findOfficialExternalPackage,
+    });
+
+    expect(findOfficialExternalPackage).toHaveBeenCalledWith("@openclaw/discord");
+    expect(result).toEqual({
+      pluginId: "discord",
+      trustedSourceLinkedOfficialInstall: true,
+    });
+  });
+
+  it("does not trust npm package names outside the official external catalog", () => {
+    const findOfficialExternalPackage = vi.fn();
+
+    const result = resolveOfficialExternalNpmPackageTrust({
+      npmSpec: "brave",
+      findOfficialExternalPackage,
+    });
+
+    expect(findOfficialExternalPackage).toHaveBeenCalledWith("brave");
     expect(result).toBeNull();
   });
 

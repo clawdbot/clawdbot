@@ -152,12 +152,13 @@ describe("replaceDirectoryContents", () => {
 
     await fs.writeFile(path.join(source, "safe.txt"), "ok");
     await fs.writeFile(path.join(source, "linked-entry"), "remote-plain-file");
-    await fs.symlink("/tmp/trusted-host-target", path.join(target, "linked-entry"));
+    const trustedTarget = path.resolve("/tmp/trusted-host-target");
+    await fs.symlink(trustedTarget, path.join(target, "linked-entry"));
 
     await replaceDirectoryContents({ sourceDir: source, targetDir: target });
 
     expect(await fs.readFile(path.join(target, "safe.txt"), "utf8")).toBe("ok");
-    expect(await fs.readlink(path.join(target, "linked-entry"))).toBe("/tmp/trusted-host-target");
+    expect(await fs.readlink(path.join(target, "linked-entry"))).toBe(trustedTarget);
   });
 });
 

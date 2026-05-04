@@ -529,6 +529,26 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
+  it("clears pendingChatRunId when an event for that runId arrives", () => {
+    const { state, handleChatEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+        pendingOptimisticUserMessage: true,
+        pendingChatRunId: "run-pending",
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-pending",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hi" },
+    });
+
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.activeChatRunId).toBe("run-pending");
+  });
+
   function createConcurrentRunHarness(localContent = "partial") {
     const { state, chatLog, setActivityStatus, loadHistory, handleChatEvent } =
       createHandlersHarness({

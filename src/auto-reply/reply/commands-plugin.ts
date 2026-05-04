@@ -26,7 +26,7 @@ export const handlePluginCommand: CommandHandler = async (
   }
 
   // Try to match a plugin command
-  const match = matchPluginCommand(command.commandBodyNormalized);
+  const match = matchPluginCommand(command.commandBodyNormalized, { channel: command.channel });
   if (!match) {
     return null;
   }

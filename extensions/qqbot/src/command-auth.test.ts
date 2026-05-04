@@ -8,10 +8,8 @@
  *   "qqbot:<id>" in channel.allowFrom matches the inbound event.senderId "<id>".
  *   Verified against the normalization logic in the gateway.ts inbound path.
  *
- * Note: commands.allowFrom.qqbot precedence over channel allowFrom is enforced
- * by the framework's resolveCommandAuthorization(). QQBot routes requireAuth:true
- * commands through the framework (api.registerCommand), so that behavior is
- * covered by the framework's own tests rather than duplicated here.
+ * Note: framework command authorization precedence is covered by the
+ * framework's own tests rather than duplicated here.
  */
 
 import { describe, expect, it } from "vitest";
