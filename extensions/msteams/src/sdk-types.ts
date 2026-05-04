@@ -63,6 +63,12 @@ type MSTeamsStreamer = {
 
 export type MSTeamsTurnContext = {
   activity: MSTeamsActivity;
+  /** Resolve the activity sender's Bot Framework OAuth token or start SDK-owned consent. */
+  signin?: (options?: {
+    connectionName?: string;
+    oauthCardText?: string;
+    signInButtonText?: string;
+  }) => Promise<string | undefined>;
   sendActivity: (activity: MSTeamsActivityLike) => Promise<unknown>;
   sendActivities: (activities: Array<MSTeamsActivityParams>) => Promise<unknown>;
   updateActivity: (activity: MSTeamsActivityParams) => Promise<{ id?: string } | void>;

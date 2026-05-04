@@ -31,6 +31,7 @@ import {
 import { extractHtmlFromAttachment } from "../attachments/shared.js";
 import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url.js";
 import type { StoredConversationReference } from "../conversation-store.js";
+import { createMSTeamsDelegatedAuthContext } from "../delegated-auth.js";
 import { formatUnknownError } from "../errors.js";
 import {
   fetchChannelMessage,
@@ -949,6 +950,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             },
           }
         : undefined;
+    const pluginAuth = createMSTeamsDelegatedAuthContext({
+      context,
+      connectionName: msteamsCfg?.sso?.enabled ? msteamsCfg.sso.connectionName : undefined,
+      onDebug: (message, meta) => log.debug?.(message, meta),
+    });
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
@@ -996,7 +1002,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
                 ctxPayload,
                 dispatcher,
                 onSettled: () => markDispatchIdle(),
-                replyOptions,
+                replyOptions: {
+                  ...replyOptions,
+                  ...(pluginAuth ? { pluginAuth } : {}),
+                },
                 configOverride,
               }),
           }),
