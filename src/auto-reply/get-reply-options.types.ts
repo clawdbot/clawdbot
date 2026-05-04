@@ -2,6 +2,7 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import type { OpenClawPluginAuthContext } from "../plugins/tool-types.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
@@ -134,6 +135,8 @@ export type GetReplyOptions = {
   enableHeartbeatTool?: boolean;
   /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
   forceHeartbeatTool?: boolean;
+  /** Runtime-only delegated auth resolver for trusted plugin tools. */
+  pluginAuth?: OpenClawPluginAuthContext;
   /**
    * If true, dispatch skips default tool/progress text messages and expects the
    * channel to surface progress via its own streaming/edit UX.

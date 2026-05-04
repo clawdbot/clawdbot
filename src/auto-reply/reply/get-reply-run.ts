@@ -1636,6 +1636,7 @@ export async function runPreparedReply(
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
+      pluginAuth: opts?.pluginAuth,
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, {
         config: cfg,

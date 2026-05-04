@@ -141,10 +141,17 @@ describe("agent-runner-utils", () => {
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
+    const pluginAuth = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: false as const,
+        reason: "not_configured" as const,
+      })),
+    };
     const run = makeRun({
       enforceFinalTag: true,
       cwd: "/tmp/task-repo",
       taskSuggestionDeliveryMode: "gateway",
+      pluginAuth,
     });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
@@ -183,6 +190,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.runId).toBe("run-1");
     expect(resolved.promptCacheKey).toBe("webchat-cache-key");
     expect(resolved.taskSuggestionDeliveryMode).toBe("gateway");
+    expect(resolved.pluginAuth).toBe(pluginAuth);
   });
 
   it("threads prompt cache affinity through embedded execution params", () => {

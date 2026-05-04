@@ -108,6 +108,40 @@ describe("openclaw plugin tool context", () => {
     });
   });
 
+  it("forwards runtime-only plugin auth context", async () => {
+    const pluginAuth = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: false as const,
+        reason: "not_configured" as const,
+      })),
+    };
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        pluginAuth,
+      },
+    });
+
+    expect(result.context.auth).toBe(pluginAuth);
+    await expect(
+      result.context.auth?.getDelegatedAccessToken({ provider: "msteams" }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "not_configured",
+    });
+  });
+
+  it("forwards trusted chat type", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        currentChatType: "direct",
+      },
+    });
+
+    expect(result.context.chatType).toBe("direct");
+  });
+
   it("does not duplicate provider-qualified active model refs", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {

@@ -1,3 +1,4 @@
+import type { ChatType } from "../channels/chat-type.js";
 import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
@@ -8,6 +9,7 @@ import {
  * Normalizes workspace, delivery, browser, sandbox, and active-model inputs before plugin tool invocation.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawPluginAuthContext } from "../plugins/tool-types.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
@@ -19,6 +21,7 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 export type OpenClawPluginToolOptions = {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
+  currentChatType?: ChatType;
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
@@ -34,6 +37,7 @@ export type OpenClawPluginToolOptions = {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   requesterAgentIdOverride?: string;
   sessionId?: string;
+  pluginAuth?: OpenClawPluginAuthContext;
   /**
    * Explicit one-shot local CLI runs should not keep plugin-owned process
    * resources alive after emitting their result.
@@ -99,10 +103,12 @@ export function resolveOpenClawPluginToolInputs(params: {
         allowHostControl: options?.allowHostBrowserControl,
       },
       messageChannel: options?.agentChannel,
+      chatType: options?.currentChatType,
       agentAccountId: options?.agentAccountId,
       deliveryContext,
       nativeChannelId: options?.nativeChannelId,
       requesterSenderId: options?.requesterSenderId ?? undefined,
+      auth: options?.pluginAuth,
       senderIsOwner: options?.senderIsOwner,
       conversationReadOrigin: normalizeConversationReadInvocationOrigin(
         options?.conversationReadOrigin,

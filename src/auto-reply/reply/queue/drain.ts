@@ -310,7 +310,16 @@ function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
 }
 
 function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
-  return item.currentInboundEventKind === "room_event" || item.currentInboundAudio === true;
+  return (
+    item.currentInboundEventKind === "room_event" ||
+    item.currentInboundAudio === true ||
+    item.run.pluginAuth !== undefined
+  );
+}
+
+function stripSyntheticRunPluginAuth(run: FollowupRun["run"]): FollowupRun["run"] {
+  const { pluginAuth: _pluginAuth, ...safeRun } = run;
+  return safeRun;
 }
 
 function buildCollectTranscriptPrompt(items: FollowupRun[]): string {
@@ -889,7 +898,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
-    run: source.run,
+    run: stripSyntheticRunPluginAuth(source.run),
   };
 }
 
@@ -942,7 +951,7 @@ async function runSyntheticOverflowSummary(params: {
     transcriptPrompt: params.prompt,
     messageId: params.source.messageId,
     userTurnTranscriptRecorder,
-    run: params.source.run,
+    run: stripSyntheticRunPluginAuth(params.source.run),
     enqueuedAt: Date.now(),
     abortSignal: params.abortSignal,
     onFollowupAdmissionWaitChange: collectRuntimeMetadata(params.sources)
@@ -1256,7 +1265,7 @@ export function scheduleFollowupDrain(
                 prompt,
                 transcriptPrompt,
                 ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
-                run,
+                run: stripSyntheticRunPluginAuth(run),
                 messageId:
                   groupSource?.messageId ??
                   (groupSource ? resolveFollowupReplyAnchor(groupSource) : undefined),

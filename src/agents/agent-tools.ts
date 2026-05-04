@@ -18,6 +18,7 @@ import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { logWarn } from "../logger.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import type { OpenClawPluginAuthContext } from "../plugins/tool-types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -289,6 +290,8 @@ type OpenClawCodingToolsOptions = {
   clientCaps?: string[];
   /** Normalized conversation kind when the caller already has channel metadata. */
   chatType?: ChatType;
+  /** Runtime-only delegated auth resolver for trusted plugin tools. */
+  pluginAuth?: OpenClawPluginAuthContext;
   /** Specific ingress provider used only for transport tool availability. */
   toolPolicyMessageProvider?: string;
   agentAccountId?: string;
@@ -858,6 +861,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             agentChannel: resolveGatewayMessageChannel(
               options?.messageChannel ?? options?.messageProvider,
             ),
+            currentChatType: options?.chatType,
+            pluginAuth: options?.pluginAuth,
             agentAccountId: options?.agentAccountId,
             agentTo: options?.messageTo,
             agentThreadId: options?.messageThreadId,
@@ -951,6 +956,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             agentChannel: resolveGatewayMessageChannel(
               options?.messageChannel ?? options?.messageProvider,
             ),
+            pluginAuth: options?.pluginAuth,
             agentAccountId: options?.agentAccountId,
             agentTo: options?.messageTo,
             agentThreadId: options?.messageThreadId,

@@ -206,6 +206,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           messageChannel: attempt.messageChannel,
           clientCaps: attempt.clientCaps,
           chatType: attempt.chatType,
+          pluginAuth: attempt.pluginAuth,
           exec: {
             ...attempt.execOverrides,
             config: attempt.config,

@@ -12,6 +12,7 @@ import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
+import type { OpenClawPluginAuthContext } from "../../../plugins/tool-types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../../skills/types.js";
@@ -180,6 +181,8 @@ export type FollowupRun = {
     allowEmptyAssistantReplyAsSilent?: boolean;
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
+    /** Runtime-only delegated auth resolver for trusted plugin tools. */
+    pluginAuth?: OpenClawPluginAuthContext;
   };
 };
 

@@ -15,6 +15,7 @@ import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
+import type { OpenClawPluginAuthContext } from "../plugins/tool-types.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
@@ -121,6 +122,8 @@ export function createOpenClawTools(
     runSessionKey?: string;
     agentChannel?: GatewayMessageChannel;
     runId?: string;
+    /** Runtime-only delegated auth resolver for trusted plugin tools. */
+    pluginAuth?: OpenClawPluginAuthContext;
     agentAccountId?: string;
     /** Delivery target for topic/thread routing. */
     agentTo?: string;

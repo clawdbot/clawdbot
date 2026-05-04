@@ -107,6 +107,7 @@ export function buildEmbeddedRunBaseParams(params: {
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
     clientCaps: params.run.clientCaps,
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
+    pluginAuth: params.run.pluginAuth,
     provider: params.provider,
     model: params.model,
     modelSelectionLocked: params.run.modelSelectionLocked,
