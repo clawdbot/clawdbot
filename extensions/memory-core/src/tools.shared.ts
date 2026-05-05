@@ -179,11 +179,23 @@ export async function searchMemoryCorpusSupplements(params: {
   if (supplements.length === 0) {
     return [];
   }
-  const results = (
-    await Promise.all(
-      supplements.map(async (registration) => await registration.supplement.search(params)),
-    )
-  ).flat();
+  // Use allSettled so a single misbehaving supplement does not discard sibling
+  // results. Invariant: result ⊇ ⋃_{s succeeds} s.search(params).
+  const settled = await Promise.allSettled(
+    supplements.map(async (registration) => await registration.supplement.search(params)),
+  );
+  const results: MemoryCorpusSearchResult[] = [];
+  for (let i = 0; i < settled.length; i++) {
+    const outcome = settled[i];
+    if (outcome.status === "fulfilled") {
+      results.push(...outcome.value);
+    } else {
+      const pluginId = supplements[i]?.pluginId ?? "<unknown>";
+      console.warn(
+        `memory-core: corpus supplement "${pluginId}" search failed; sibling results preserved (${formatSupplementError(outcome.reason)}).`,
+      );
+    }
+  }
   return results
     .toSorted((left, right) => {
       if (left.score !== right.score) {
@@ -192,6 +204,20 @@ export async function searchMemoryCorpusSupplements(params: {
       return left.path.localeCompare(right.path);
     })
     .slice(0, Math.max(1, params.maxResults ?? 10));
+}
+
+function formatSupplementError(reason: unknown): string {
+  if (reason instanceof Error) {
+    return reason.message || reason.name || "Error";
+  }
+  if (typeof reason === "string") {
+    return reason;
+  }
+  try {
+    return JSON.stringify(reason);
+  } catch {
+    return String(reason);
+  }
 }
 
 export async function getMemoryCorpusSupplementResult(params: {
