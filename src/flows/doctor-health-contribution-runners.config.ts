@@ -190,5 +190,11 @@ export async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContex
     for (const issue of finalSnapshot.issues) {
       ctx.runtime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
     }
+    // Automation contract (#77804): plain `openclaw doctor` must exit non-zero
+    // when the final on-disk config is still invalid. Preserve an earlier
+    // nonzero exit code if one was already selected.
+    if (!process.exitCode) {
+      process.exitCode = 1;
+    }
   }
 }

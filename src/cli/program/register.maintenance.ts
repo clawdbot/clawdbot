@@ -173,7 +173,7 @@ export function registerMaintenanceCommands(program: Command) {
           sessionSqliteGithubIssue: Boolean(opts.githubIssue),
           json: Boolean(opts.json),
         });
-        defaultRuntime.exit(0);
+        defaultRuntime.exit(typeof process.exitCode === "number" ? process.exitCode : 0);
       });
     });
   setCommandJsonMode(doctor, "output", isDoctorMachineOutput);

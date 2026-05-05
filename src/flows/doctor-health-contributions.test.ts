@@ -3565,6 +3565,90 @@ describe("doctor health contributions", () => {
       });
     });
 
+    describe("final-config-validation exit code (#77804)", () => {
+      const previousExitCode = process.exitCode;
+
+      afterEach(() => {
+        process.exitCode = previousExitCode;
+      });
+
+      function runFinalConfigValidation() {
+        const contribution = requireDoctorContribution("doctor:final-config-validation");
+        return contribution.run({
+          cfg: {},
+          cfgForPersistence: {},
+          configResult: { cfg: {} },
+          configPath: "/tmp/fake-openclaw.json",
+          sourceConfigValid: true,
+          prompter: buildDoctorPrompter(true),
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          options: {},
+          env: {},
+        } as Parameters<(typeof contribution)["run"]>[0]);
+      }
+
+      it("sets process.exitCode to 1 when the final config snapshot is invalid", async () => {
+        process.exitCode = 0;
+        mocks.readConfigFileSnapshot.mockResolvedValue({
+          exists: true,
+          valid: false,
+          config: {},
+          issues: [
+            {
+              path: "models.providers.bailian.models.0.compat.thinkingFormat",
+              message: "Invalid input",
+            },
+          ],
+        });
+
+        await runFinalConfigValidation();
+
+        expect(process.exitCode).toBe(1);
+      });
+
+      it("leaves process.exitCode at 0 when the final config snapshot is valid", async () => {
+        process.exitCode = 0;
+        mocks.readConfigFileSnapshot.mockResolvedValue({
+          exists: true,
+          valid: true,
+          config: {},
+          issues: [],
+        });
+
+        await runFinalConfigValidation();
+
+        expect(process.exitCode).toBe(0);
+      });
+
+      it("leaves process.exitCode at 0 when the config file does not exist", async () => {
+        process.exitCode = 0;
+        mocks.readConfigFileSnapshot.mockResolvedValue({
+          exists: false,
+          valid: false,
+          config: {},
+          issues: [],
+        });
+
+        await runFinalConfigValidation();
+
+        expect(process.exitCode).toBe(0);
+      });
+
+      it("does not lower a non-zero process.exitCode set earlier in the run", async () => {
+        process.exitCode = 2;
+        mocks.readConfigFileSnapshot.mockResolvedValue({
+          exists: true,
+          valid: false,
+          config: {},
+          issues: [{ path: "<root>", message: "Invalid input" }],
+        });
+
+        await runFinalConfigValidation();
+
+        expect(process.exitCode).toBe(2);
+      });
+    });
+
     it("allows allowConfigSizeDrop when not in update", async () => {
       const ctx = buildWriteConfigCtx({});
       await writeConfigContribution.run(ctx);
