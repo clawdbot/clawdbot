@@ -174,6 +174,25 @@ describe("validateBindMounts", () => {
     expect(() => validateBindMounts(["/home/tester/.netrc:/mnt/netrc:ro"])).toThrow(/blocked path/);
   });
 
+  it("allows drive-absolute Windows bind sources", () => {
+    expect(() => validateBindMounts(["D:/data/openclaw/src:/src:ro"])).not.toThrow();
+    expect(() => validateBindMounts(["D:\\data\\openclaw\\output:/output:rw"])).not.toThrow();
+  });
+
+  it("compares Windows allowed roots case-insensitively", () => {
+    expect(() =>
+      validateBindMounts(["d:/DATA/OpenClaw/src:/src:ro"], {
+        allowedSourceRoots: ["D:/data/openclaw"],
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      validateBindMounts(["D:/other/project:/src:ro"], {
+        allowedSourceRoots: ["d:/data/openclaw"],
+      }),
+    ).toThrow(/outside allowed roots/);
+  });
+
   it("blocks credential binds through canonical home aliases", () => {
     if (process.platform === "win32") {
       return;
@@ -193,14 +212,7 @@ describe("validateBindMounts", () => {
 
   it("blocks symlink escapes into blocked directories", () => {
     if (process.platform === "win32") {
-      // Symlinks to non-existent targets like /etc require
-      // SeCreateSymbolicLinkPrivilege on Windows.  The Windows branch of this
-      // test does not need a real symlink — it only asserts that Windows source
-      // paths are rejected as non-POSIX.
-      const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
-      const fakePath = join(dir, "etc-link", "passwd");
-      const run = () => validateBindMounts([`${fakePath}:/mnt/passwd:ro`]);
-      expect(run).toThrow(/non-absolute source path/);
+      // Symlink setup for blocked POSIX targets like /etc is POSIX-only.
       return;
     }
 
@@ -213,7 +225,7 @@ describe("validateBindMounts", () => {
 
   it("blocks symlink-parent escapes with non-existent leaf outside allowed roots", () => {
     if (process.platform === "win32") {
-      // Windows source paths (e.g. C:\\...) are intentionally rejected as non-POSIX.
+      // Windows symlink semantics differ; POSIX symlink escape coverage runs on POSIX hosts.
       return;
     }
     const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
@@ -233,7 +245,7 @@ describe("validateBindMounts", () => {
 
   it("blocks symlink-parent escapes into blocked paths when leaf does not exist", () => {
     if (process.platform === "win32") {
-      // Windows source paths (e.g. C:\\...) are intentionally rejected as non-POSIX.
+      // Symlink setup for blocked POSIX targets like /var/run is POSIX-only.
       return;
     }
     const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));

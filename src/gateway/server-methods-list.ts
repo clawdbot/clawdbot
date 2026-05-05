@@ -148,6 +148,8 @@ const BASE_METHODS = [
   "cron.run",
   "cron.runs",
   "gateway.identity.get",
+  "gateway.restart.preflight",
+  "gateway.restart.request",
   "system-presence",
   "system-event",
   "message.action",

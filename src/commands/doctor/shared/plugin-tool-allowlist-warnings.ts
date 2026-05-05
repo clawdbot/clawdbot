@@ -193,3 +193,21 @@ export function collectPluginToolAllowlistWarnings(params: {
 
   return warnings;
 }
+
+export function collectBundledProviderAllowlistPolicyWarnings(params: {
+  cfg: OpenClawConfig;
+}): string[] {
+  if (params.cfg.plugins?.enabled === false) {
+    return [];
+  }
+  const allow = params.cfg.plugins?.allow;
+  if (!Array.isArray(allow) || allow.length === 0) {
+    return [];
+  }
+  if (params.cfg.plugins?.bundledDiscovery !== "compat") {
+    return [];
+  }
+  return [
+    '- plugins.allow is restrictive, but bundled provider discovery is still in legacy compatibility mode. Bundled provider plugins can still appear in runtime provider inventories; set plugins.bundledDiscovery to "allowlist" after confirming omitted bundled providers are intentionally blocked.',
+  ];
+}

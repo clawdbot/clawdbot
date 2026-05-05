@@ -763,7 +763,11 @@ describe("gateway hot reload", () => {
 
       const restartTesting = (await import("../infra/restart.js")).__testing;
       restartTesting.resetSigusr1State();
-      hoisted.activeTaskCount.value = 1;
+      hoisted.activeTaskBlockers.push({
+        taskId: "task-running-1",
+        status: "running",
+        runtime: "subagent",
+      });
       const signalSpy = vi.fn();
       process.once("SIGUSR1", signalSpy);
       vi.useFakeTimers();
@@ -792,7 +796,7 @@ describe("gateway hot reload", () => {
         await Promise.resolve();
         expect(signalSpy).toHaveBeenCalledTimes(1);
       } finally {
-        hoisted.activeTaskCount.value = 0;
+        hoisted.activeTaskBlockers.length = 0;
         vi.useRealTimers();
         process.removeListener("SIGUSR1", signalSpy);
         restartTesting.resetSigusr1State();

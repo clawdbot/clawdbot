@@ -73,7 +73,7 @@ describe("openrouter provider hooks", () => {
 
   it("advertises xhigh thinking for OpenRouter-routed DeepSeek V4 models", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const expectedV4Levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+    const expectedV4Levels = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
     expect(
       provider
@@ -309,7 +309,7 @@ describe("openrouter provider hooks", () => {
 
     expect(capturedPayload).toMatchObject({
       thinking: { type: "enabled" },
-      reasoning_effort: "max",
+      reasoning_effort: "xhigh",
       messages: [
         { role: "user", content: "read file" },
         {
@@ -322,6 +322,50 @@ describe("openrouter provider hooks", () => {
       ],
     });
     expect(baseStreamFn).toHaveBeenCalledOnce();
+  });
+
+  it("keeps OpenRouter DeepSeek V4 reasoning_effort within OpenRouter values", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn = vi.fn(
+      (
+        ...args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>
+      ): ReturnType<import("@mariozechner/pi-agent-core").StreamFn> => {
+        const payload = { messages: [] };
+        void args[2]?.onPayload?.(payload, args[0]);
+        payloads.push(payload);
+        return { async *[Symbol.asyncIterator]() {} } as never;
+      },
+    );
+
+    for (const thinkingLevel of ["minimal", "low", "medium", "high", "xhigh", "max"] as const) {
+      const wrapped = provider.wrapStreamFn?.({
+        provider: "openrouter",
+        modelId: "openrouter/deepseek/deepseek-v4-pro",
+        streamFn: baseStreamFn,
+        thinkingLevel,
+      } as never);
+      void wrapped?.(
+        {
+          provider: "openrouter",
+          api: "openai-completions",
+          id: "openrouter/deepseek/deepseek-v4-pro",
+          baseUrl: "https://openrouter.ai/api/v1",
+          compat: {},
+        } as never,
+        { messages: [] } as never,
+        {},
+      );
+    }
+
+    expect(payloads.map((payload) => payload.reasoning_effort)).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "xhigh",
+    ]);
   });
 
   it("recognizes full OpenRouter DeepSeek V4 refs but skips custom proxy routes", async () => {

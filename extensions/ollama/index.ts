@@ -27,6 +27,7 @@ import {
   promptAndConfigureOllama,
   queryOllamaModelShowInfo,
 } from "./api.js";
+import { resolveThinkingProfile as resolveOllamaThinkingProfile } from "./provider-policy-api.js";
 import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
@@ -249,13 +250,7 @@ export default definePluginEntry({
       contributeResolvedModelCompat: ({ model }) =>
         usesOllamaOpenAICompatTransport(model) ? { supportsUsageInStreaming: true } : undefined,
       resolveReasoningOutputMode: () => "native",
-      resolveThinkingProfile: ({ reasoning }) => ({
-        levels:
-          reasoning === true
-            ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
-            : [{ id: "off" }],
-        defaultLevel: "off",
-      }),
+      resolveThinkingProfile: resolveOllamaThinkingProfile,
       wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
       createEmbeddingProvider: async ({ config, model, provider: embeddingProvider, remote }) => {
         const { provider, client } = await createOllamaEmbeddingProvider({

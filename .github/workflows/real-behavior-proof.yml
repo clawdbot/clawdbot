@@ -1,0 +1,29 @@
+name: Real behavior proof
+
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] trusted base checkout only; no untrusted PR code execution
+    types: [opened, edited, synchronize, reopened, ready_for_review, labeled, unlabeled]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  real-behavior-proof:
+    name: Real behavior proof
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Check real behavior proof
+        run: node scripts/github/real-behavior-proof-check.mjs

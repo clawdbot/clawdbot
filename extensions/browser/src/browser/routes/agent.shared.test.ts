@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import {
   readBody,
   resolveSafeRouteTabUrl,
   resolveTargetIdFromBody,
   resolveTargetIdFromQuery,
+  withRouteTabContext,
 } from "./agent.shared.js";
+import { createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
 
 function requestWithBody(body: unknown): BrowserRequest {
@@ -34,6 +37,31 @@ function profileContext(tabs: Array<{ targetId: string; url: string }>) {
     },
     listTabs: async () => tabs,
   };
+}
+
+function routeContextForTab(url: string): BrowserRouteContext {
+  const profileCtx = {
+    profile: {
+      cdpUrl: "http://127.0.0.1:9222",
+      name: "default",
+    },
+    ensureTabAvailable: vi.fn(async () => ({
+      targetId: "tab-1",
+      title: "Tab",
+      url,
+      type: "page",
+    })),
+  } as unknown as ProfileContext;
+
+  return {
+    forProfile: () => profileCtx,
+    state: () => ({
+      resolved: {
+        ssrfPolicy: {},
+      },
+    }),
+    mapTabError: () => null,
+  } as unknown as BrowserRouteContext;
 }
 
 describe("browser route shared helpers", () => {
@@ -98,6 +126,46 @@ describe("browser route shared helpers", () => {
           targetId: "tab-1",
         }),
       ).resolves.toBeUndefined();
+    });
+  });
+
+  describe("withRouteTabContext", () => {
+    it("does not enforce current-tab URL policy unless requested", async () => {
+      const response = createBrowserRouteResponse();
+      const run = vi.fn(async () => {
+        response.res.json({ ok: true });
+      });
+
+      await withRouteTabContext({
+        req: requestWithBody({}),
+        res: response.res,
+        ctx: routeContextForTab("http://127.0.0.1:8080/admin"),
+        run,
+      });
+
+      expect(run).toHaveBeenCalledOnce();
+      expect(response.body).toEqual({ ok: true });
+    });
+
+    it("blocks guarded routes before running on a disallowed current tab", async () => {
+      const response = createBrowserRouteResponse();
+      const run = vi.fn(async () => {
+        response.res.json({ ok: true });
+      });
+
+      await withRouteTabContext({
+        req: requestWithBody({}),
+        res: response.res,
+        ctx: routeContextForTab("http://127.0.0.1:8080/admin"),
+        enforceCurrentUrlAllowed: true,
+        run,
+      });
+
+      expect(run).not.toHaveBeenCalled();
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toMatchObject({ error: expect.any(String) });
+      const body = response.body as { error?: unknown };
+      expect(body.error).not.toBe("");
     });
   });
 });

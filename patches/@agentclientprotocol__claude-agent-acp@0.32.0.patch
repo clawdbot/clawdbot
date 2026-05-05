@@ -1,8 +1,8 @@
 diff --git a/dist/acp-agent.js b/dist/acp-agent.js
-index 0a8f5e3c57ed05189cba546bd65fc18143744d09..a8522d86a5a2f1bbcdd446d222cb9b7b5acb79ca 100644
+index e1d9aa9f0815f57ea2fd299a7f2b8ef0917ca191..875fdfb25fbfa905ca80728355d25a17e6d89148 100644
 --- a/dist/acp-agent.js
 +++ b/dist/acp-agent.js
-@@ -421,6 +421,7 @@ export class ClaudeAcpAgent {
+@@ -436,6 +436,7 @@ export class ClaudeAcpAgent {
          session.promptRunning = true;
          let handedOff = false;
          let stopReason = "end_turn";
@@ -10,7 +10,7 @@ index 0a8f5e3c57ed05189cba546bd65fc18143744d09..a8522d86a5a2f1bbcdd446d222cb9b7b
          try {
              while (true) {
                  const { value: message, done } = await session.query.next();
-@@ -428,6 +429,9 @@ export class ClaudeAcpAgent {
+@@ -443,6 +444,9 @@ export class ClaudeAcpAgent {
                      if (session.cancelled) {
                          return { stopReason: "cancelled" };
                      }
@@ -20,7 +20,7 @@ index 0a8f5e3c57ed05189cba546bd65fc18143744d09..a8522d86a5a2f1bbcdd446d222cb9b7b
                      break;
                  }
                  if (session.emitRawSDKMessages &&
-@@ -496,7 +500,7 @@ export class ClaudeAcpAgent {
+@@ -499,7 +503,7 @@ export class ClaudeAcpAgent {
                                  break;
                              }
                              case "session_state_changed": {
@@ -29,7 +29,7 @@ index 0a8f5e3c57ed05189cba546bd65fc18143744d09..a8522d86a5a2f1bbcdd446d222cb9b7b
                                      return { stopReason, usage: sessionUsage(session) };
                                  }
                                  break;
-@@ -601,6 +605,7 @@ export class ClaudeAcpAgent {
+@@ -621,6 +625,7 @@ export class ClaudeAcpAgent {
                                  unreachable(message, this.logger);
                                  break;
                          }

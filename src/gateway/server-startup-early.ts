@@ -119,7 +119,8 @@ export async function startGatewayEarlyRuntime(params: {
       cronRuntimeAuthoritative: true,
     });
     taskRegistryMaintenance.startTaskRegistryMaintenance();
-    getActiveTaskCount = () => taskRegistryMaintenance.getInspectableTaskRegistrySummary().active;
+    getActiveTaskCount = () =>
+      taskRegistryMaintenance.getInspectableActiveTaskRestartBlockers().length;
   }
 
   const skillsChangeUnsub = params.minimalTestGateway

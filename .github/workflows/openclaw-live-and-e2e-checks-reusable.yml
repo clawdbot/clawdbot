@@ -34,7 +34,7 @@ on:
         default: 1
         type: number
       published_upgrade_survivor_baseline:
-        description: Published OpenClaw package baseline for the published-upgrade-survivor/update-migration Docker lane
+        description: Published OpenClaw package baseline for the published-upgrade-survivor/update-migration Docker lanes
         required: false
         default: openclaw@latest
         type: string
@@ -129,7 +129,7 @@ on:
         default: 1
         type: number
       published_upgrade_survivor_baseline:
-        description: Published OpenClaw package baseline for the published-upgrade-survivor/update-migration Docker lane
+        description: Published OpenClaw package baseline for the published-upgrade-survivor/update-restart-auth/update-migration Docker lanes
         required: false
         default: openclaw@latest
         type: string
@@ -489,7 +489,18 @@ jobs:
           fi
 
       - name: Verify live prompt cache floors
-        run: pnpm test:live:cache
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "live-cache attempt ${attempt}/3"
+            if pnpm test:live:cache; then
+              exit 0
+            fi
+            if [[ "$attempt" == "3" ]]; then
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
 
   validate_repo_e2e:
     needs: validate_selected_ref
@@ -850,36 +861,24 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
-      groups_json: ${{ steps.plan.outputs.groups_json }}
+      groups_json: ${{ steps.groups.outputs.groups_json }}
     steps:
-      - name: Plan targeted Docker lane groups
-        id: plan
+      - name: Checkout trusted release harness
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Build targeted Docker lane groups
+        id: groups
         shell: bash
         env:
           LANES: ${{ inputs.docker_lanes }}
           GROUP_SIZE: ${{ inputs.targeted_docker_lane_group_size }}
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
         run: |
           set -euo pipefail
-          groups_json="$(
-            LANES="$LANES" GROUP_SIZE="$GROUP_SIZE" node <<'NODE'
-          const lanes = [...new Set(String(process.env.LANES || "").split(/[,\s]+/u).map((lane) => lane.trim()).filter(Boolean))];
-          if (lanes.length === 0) {
-            throw new Error("docker_lanes is required when planning targeted Docker lane groups.");
-          }
-          const rawGroupSize = Number.parseInt(process.env.GROUP_SIZE || "1", 10);
-          const groupSize = Number.isFinite(rawGroupSize) && rawGroupSize > 0 ? rawGroupSize : 1;
-          const sanitize = (lane) => lane.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "targeted";
-          const groups = [];
-          for (let index = 0; index < lanes.length; index += groupSize) {
-            const groupLanes = lanes.slice(index, index + groupSize);
-            const first = sanitize(groupLanes[0]);
-            const last = sanitize(groupLanes[groupLanes.length - 1]);
-            const label = groupLanes.length === 1 ? first : `${first}--${last}`;
-            groups.push({ label, docker_lanes: groupLanes.join(" ") });
-          }
-          process.stdout.write(JSON.stringify(groups));
-          NODE
-          )"
+          groups_json="$(node scripts/plan-targeted-docker-lane-groups.mjs)"
           echo "groups_json=${groups_json}" >> "$GITHUB_OUTPUT"
 
   validate_docker_lanes:
@@ -946,7 +945,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ matrix.group.published_upgrade_survivor_baselines || inputs.published_upgrade_survivor_baselines }}
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
@@ -987,6 +986,7 @@ jobs:
         shell: bash
         env:
           LANES: ${{ matrix.group.docker_lanes }}
+          GROUP_LABEL: ${{ matrix.group.label }}
           INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
           INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include_release_path_suites }}
         run: |
@@ -1006,7 +1006,7 @@ jobs:
           plan_path=".artifacts/docker-tests/targeted-plan.json"
           node .release-harness/scripts/test-docker-all.mjs --plan-json > "$plan_path"
           node .release-harness/scripts/docker-e2e.mjs github-outputs "$plan_path" >> "$GITHUB_OUTPUT"
-          suffix="$(printf '%s' "$LANES" | tr ',[:space:]' '-' | tr -cd 'A-Za-z0-9._-' | sed -E 's/-+/-/g; s/^-//; s/-$//')"
+          suffix="$(printf '%s' "${GROUP_LABEL:-$LANES}" | tr ',[:space:]' '-' | tr -cd 'A-Za-z0-9._-' | sed -E 's/-+/-/g; s/^-//; s/-$//')"
           echo "artifact_suffix=${suffix:-targeted}" >> "$GITHUB_OUTPUT"
           echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
 

@@ -96,17 +96,19 @@ export function loadManifestMetadataSnapshot(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): PluginMetadataSnapshot {
+  const config = params.config ?? {};
   const env = params.env ?? process.env;
   const current = getCurrentPluginMetadataSnapshot({
-    config: params.config,
+    config,
     env,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
   });
   if (current) {
     return current;
   }
   return loadPluginMetadataSnapshot({
-    config: params.config ?? {},
+    config,
     env,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });

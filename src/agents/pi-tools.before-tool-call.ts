@@ -30,6 +30,14 @@ import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
+export type ToolOutcomeObservation = {
+  toolName: string;
+  argsHash: string;
+  resultHash: string;
+};
+
+export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
+
 export type HookContext = {
   agentId?: string;
   config?: OpenClawConfig;
@@ -39,6 +47,7 @@ export type HookContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   loopDetection?: ToolLoopDetectionConfig;
+  onToolOutcome?: ToolOutcomeObserver;
 };
 
 type HookBlockedKind = "veto" | "failure";
@@ -372,16 +381,17 @@ async function recordLoopOutcome(args: {
   result?: unknown;
   error?: unknown;
 }): Promise<void> {
-  if (!args.ctx?.sessionKey) {
+  if (!args.ctx?.sessionKey && !args.ctx?.sessionId) {
     return;
   }
+  let recordedOutcome: ToolOutcomeObservation | undefined;
   try {
     const { getDiagnosticSessionState, recordToolCallOutcome } = await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
-      sessionId: args.ctx?.agentId,
+      sessionId: args.ctx.sessionId,
     });
-    recordToolCallOutcome(sessionState, {
+    const record = recordToolCallOutcome(sessionState, {
       toolName: args.toolName,
       toolParams: args.toolParams,
       toolCallId: args.toolCallId,
@@ -390,8 +400,18 @@ async function recordLoopOutcome(args: {
       config: args.ctx.loopDetection,
       ...(args.ctx.runId && { runId: args.ctx.runId }),
     });
+    if (record?.resultHash && args.ctx.onToolOutcome) {
+      recordedOutcome = {
+        toolName: record.toolName,
+        argsHash: record.argsHash,
+        resultHash: record.resultHash,
+      };
+    }
   } catch (err) {
     log.warn(`tool loop outcome tracking failed: tool=${args.toolName} error=${String(err)}`);
+  }
+  if (recordedOutcome) {
+    args.ctx.onToolOutcome?.(recordedOutcome);
   }
 }
 
@@ -411,7 +431,7 @@ export async function runBeforeToolCallHook(args: {
       await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
-      sessionId: args.ctx?.agentId,
+      sessionId: args.ctx.sessionId,
     });
 
     const loopScope = args.ctx.runId ? { runId: args.ctx.runId } : undefined;
@@ -428,7 +448,7 @@ export async function runBeforeToolCallHook(args: {
         log.error(`Blocking ${toolName} due to critical loop: ${loopResult.message}`);
         logToolLoopAction({
           sessionKey: args.ctx.sessionKey,
-          sessionId: args.ctx?.agentId,
+          sessionId: args.ctx.sessionId,
           toolName,
           level: "critical",
           action: "block",
@@ -451,7 +471,7 @@ export async function runBeforeToolCallHook(args: {
         log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
         logToolLoopAction({
           sessionKey: args.ctx.sessionKey,
-          sessionId: args.ctx?.agentId,
+          sessionId: args.ctx.sessionId,
           toolName,
           level: "warning",
           action: "warn",

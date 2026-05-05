@@ -241,7 +241,7 @@ jobs:
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       - name: Verify package-local runtime build
-        run: pnpm release:plugins:npm:runtime:check --package "${{ matrix.plugin.packageDir }}"
+        run: node scripts/check-plugin-npm-runtime-builds.mjs --package "${{ matrix.plugin.packageDir }}"
 
       - name: Preview publish command
         env:

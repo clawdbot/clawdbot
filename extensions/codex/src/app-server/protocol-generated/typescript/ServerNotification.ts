@@ -35,11 +35,14 @@ import type { RawResponseItemCompletedNotification } from "./v2/RawResponseItemC
 import type { ReasoningSummaryPartAddedNotification } from "./v2/ReasoningSummaryPartAddedNotification.js";
 import type { ReasoningSummaryTextDeltaNotification } from "./v2/ReasoningSummaryTextDeltaNotification.js";
 import type { ReasoningTextDeltaNotification } from "./v2/ReasoningTextDeltaNotification.js";
+import type { RemoteControlStatusChangedNotification } from "./v2/RemoteControlStatusChangedNotification.js";
 import type { ServerRequestResolvedNotification } from "./v2/ServerRequestResolvedNotification.js";
 import type { SkillsChangedNotification } from "./v2/SkillsChangedNotification.js";
 import type { TerminalInteractionNotification } from "./v2/TerminalInteractionNotification.js";
 import type { ThreadArchivedNotification } from "./v2/ThreadArchivedNotification.js";
 import type { ThreadClosedNotification } from "./v2/ThreadClosedNotification.js";
+import type { ThreadGoalClearedNotification } from "./v2/ThreadGoalClearedNotification.js";
+import type { ThreadGoalUpdatedNotification } from "./v2/ThreadGoalUpdatedNotification.js";
 import type { ThreadNameUpdatedNotification } from "./v2/ThreadNameUpdatedNotification.js";
 import type { ThreadRealtimeClosedNotification } from "./v2/ThreadRealtimeClosedNotification.js";
 import type { ThreadRealtimeErrorNotification } from "./v2/ThreadRealtimeErrorNotification.js";
@@ -73,6 +76,8 @@ export type ServerNotification =
   | { method: "thread/closed"; params: ThreadClosedNotification }
   | { method: "skills/changed"; params: SkillsChangedNotification }
   | { method: "thread/name/updated"; params: ThreadNameUpdatedNotification }
+  | { method: "thread/goal/updated"; params: ThreadGoalUpdatedNotification }
+  | { method: "thread/goal/cleared"; params: ThreadGoalClearedNotification }
   | { method: "thread/tokenUsage/updated"; params: ThreadTokenUsageUpdatedNotification }
   | { method: "turn/started"; params: TurnStartedNotification }
   | { method: "hook/started"; params: HookStartedNotification }
@@ -105,6 +110,7 @@ export type ServerNotification =
   | { method: "account/updated"; params: AccountUpdatedNotification }
   | { method: "account/rateLimits/updated"; params: AccountRateLimitsUpdatedNotification }
   | { method: "app/list/updated"; params: AppListUpdatedNotification }
+  | { method: "remoteControl/status/changed"; params: RemoteControlStatusChangedNotification }
   | {
       method: "externalAgentConfig/import/completed";
       params: ExternalAgentConfigImportCompletedNotification;

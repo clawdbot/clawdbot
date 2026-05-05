@@ -8,11 +8,11 @@
   },
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "0.71.1",
+    "@mariozechner/pi-coding-agent": "0.73.0",
     "@openai/codex": "0.128.0",
     "ajv": "^8.20.0",
     "ws": "^8.20.0",
-    "zod": "^4.4.1"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

@@ -1,4 +1,8 @@
 import type { ChatItem, MessageGroup, ToolCard } from "../types/chat-types.ts";
+import {
+  isAssistantHeartbeatAckForDisplay,
+  stripHeartbeatTokenForDisplay,
+} from "./heartbeat-display.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
@@ -248,7 +252,9 @@ function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
 
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
-  const history = Array.isArray(props.messages) ? props.messages : [];
+  const history = (Array.isArray(props.messages) ? props.messages : []).filter(
+    (message) => !isAssistantHeartbeatAckForDisplay(message),
+  );
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
   const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
   if (historyStart > 0) {
@@ -349,12 +355,14 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
     if (props.stream.trim().length > 0) {
-      items.push({
-        kind: "stream",
-        key,
-        text: props.stream,
-        startedAt: props.streamStartedAt ?? Date.now(),
-      });
+      if (!stripHeartbeatTokenForDisplay(props.stream).shouldSkip) {
+        items.push({
+          kind: "stream",
+          key,
+          text: props.stream,
+          startedAt: props.streamStartedAt ?? Date.now(),
+        });
+      }
     } else {
       items.push({ kind: "reading-indicator", key });
     }

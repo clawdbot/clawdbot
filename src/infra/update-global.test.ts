@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
@@ -148,6 +149,95 @@ describe("update global helpers", () => {
     ).resolves.toMatchObject({
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
     });
+  });
+
+  it("uses an absolute POSIX script shell for npm lifecycle scripts during global installs", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const existsSyncSpy = vi
+      .spyOn(fsSync, "existsSync")
+      .mockImplementation((candidate) => candidate === "/bin/sh");
+    try {
+      await expect(
+        createGlobalInstallEnv({
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
+          PATH: "/home/peter/.npm-global/bin",
+        }),
+      ).resolves.toMatchObject({
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
+        NPM_CONFIG_SCRIPT_SHELL: "/bin/sh",
+      });
+    } finally {
+      existsSyncSpy.mockRestore();
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("preserves explicit npm script shell config for global installs", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      await expect(
+        createGlobalInstallEnv({
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
+          NPM_CONFIG_SCRIPT_SHELL: "/custom/sh",
+        }),
+      ).resolves.toMatchObject({
+        NPM_CONFIG_SCRIPT_SHELL: "/custom/sh",
+      });
+      await expect(
+        createGlobalInstallEnv({
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
+          npm_config_script_shell: "/custom/lower-sh",
+        }),
+      ).resolves.toMatchObject({
+        npm_config_script_shell: "/custom/lower-sh",
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("resolves portable Git paths from process-local app data only", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      await withTempDir({ prefix: "openclaw-update-portable-git-" }, async (base) => {
+        envSnapshot = captureEnv(["LOCALAPPDATA"]);
+        const injectedLocalAppData = path.join(base, "injected-local-app-data");
+        const trustedLocalAppData = path.join(base, "trusted-local-app-data");
+        const injectedGitDir = path.join(
+          injectedLocalAppData,
+          "OpenClaw",
+          "deps",
+          "portable-git",
+          "cmd",
+        );
+        const trustedGitDir = path.join(
+          trustedLocalAppData,
+          "OpenClaw",
+          "deps",
+          "portable-git",
+          "cmd",
+        );
+        await fs.mkdir(injectedGitDir, { recursive: true });
+        await fs.mkdir(trustedGitDir, { recursive: true });
+
+        delete process.env.LOCALAPPDATA;
+        const injectedOnlyEnv = await createGlobalInstallEnv({
+          LOCALAPPDATA: injectedLocalAppData,
+          PATH: "base-bin",
+        });
+        expect(injectedOnlyEnv?.PATH).not.toContain(injectedGitDir);
+
+        process.env.LOCALAPPDATA = trustedLocalAppData;
+        const trustedEnv = await createGlobalInstallEnv({
+          LOCALAPPDATA: injectedLocalAppData,
+          PATH: "base-bin",
+        });
+        expect(trustedEnv?.PATH).toContain(trustedGitDir);
+        expect(trustedEnv?.PATH).not.toContain(injectedGitDir);
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 
   it("classifies main and raw install specs separately from registry selectors", () => {

@@ -1,3 +1,4 @@
+import os from "node:os";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -18,6 +19,7 @@ import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
@@ -154,6 +156,16 @@ function formatAgentTaskCountsLine(agentId: string): string | undefined {
     return undefined;
   }
   return `📌 Tasks: ${snapshot.activeCount} active · ${snapshot.totalCount} total · agent-local`;
+}
+
+function formatStatusUptimeDuration(ms: number): string {
+  return formatDurationCompact(ms, { spaced: true }) ?? "0s";
+}
+
+export function buildStatusUptimeLine(): string {
+  const gatewayUptimeMs = Math.max(0, Math.round(process.uptime() * 1000));
+  const systemUptimeMs = Math.max(0, Math.round(os.uptime() * 1000));
+  return `⏱️ Uptime: gateway ${formatStatusUptimeDuration(gatewayUptimeMs)} · system ${formatStatusUptimeDuration(systemUptimeMs)}`;
 }
 
 export async function buildStatusText(params: BuildStatusTextParams): Promise<string> {
@@ -365,6 +377,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     resolvedElevated: resolvedElevatedLevel,
     modelAuth: selectedModelAuth,
     activeModelAuth,
+    uptimeLine: buildStatusUptimeLine(),
     usageLine: usageLine ?? undefined,
     queue: {
       mode: queueSettings.mode,

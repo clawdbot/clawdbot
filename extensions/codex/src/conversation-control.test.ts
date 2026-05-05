@@ -102,4 +102,25 @@ describe("codex conversation controls", () => {
     });
     expect(binding?.modelProvider).toBeUndefined();
   });
+
+  it("escapes model names returned from Codex before chat display", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      model: "gpt-5.4",
+      modelProvider: "openai",
+    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async () => ({
+        thread: { id: "thread-1", cwd: tempDir },
+        model: "gpt-5.5 <@U123> [trusted](https://evil)",
+        modelProvider: "openai",
+      })),
+    });
+
+    await expect(setCodexConversationModel({ sessionFile, model: "gpt-5.5" })).resolves.toBe(
+      "Codex model set to gpt-5.5 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09.",
+    );
+  });
 });

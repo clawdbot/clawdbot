@@ -343,6 +343,7 @@ export const CronListParamsSchema = Type.Object(
     enabled: Type.Optional(CronJobsEnabledFilterSchema),
     sortBy: Type.Optional(CronJobsSortBySchema),
     sortDir: Type.Optional(CronSortDirSchema),
+    agentId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

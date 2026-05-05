@@ -34,6 +34,7 @@ import { DEFAULT_QA_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
 import {
   QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV,
   QA_LIVE_SETUP_TOKEN_VALUE_ENV,
+  stageQaLiveApiKeyProfiles,
   stageQaLiveAnthropicSetupToken,
 } from "./providers/live-frontier/auth.js";
 import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
@@ -314,6 +315,7 @@ export const __testing = {
   redactQaGatewayDebugText,
   readQaLiveProviderConfigOverrides,
   resolveQaGatewayChildProviderMode,
+  stageQaLiveApiKeyProfiles,
   stageQaLiveAnthropicSetupToken,
   stageQaMockAuthProfiles,
   resolveQaLiveCliAuthEnv,
@@ -573,6 +575,11 @@ export async function startQaGatewayChild(params: {
     });
   const buildStagedGatewayConfig = async (gatewayPort: number) => {
     let cfg = buildGatewayConfig(gatewayPort);
+    cfg = await stageQaLiveApiKeyProfiles({
+      cfg,
+      stateDir,
+      providerIds: liveProviderIds,
+    });
     cfg = await stageQaLiveAnthropicSetupToken({
       cfg,
       stateDir,

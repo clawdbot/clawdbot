@@ -352,6 +352,10 @@ describe("local media root guard", () => {
     const actualLstat = await fs.lstat(tinyPngFile);
     const actualStat = await fs.stat(tinyPngFile);
     const zeroDev = typeof actualLstat.dev === "bigint" ? 0n : 0;
+    // Resolve before mocking platform: under `win32` the helper returns the
+    // os.tmpdir() fallback rather than the POSIX `/tmp/openclaw` root that
+    // actually holds `tinyPngFile` on this Linux test runner (#60713).
+    const realTmpRoot = resolvePreferredOpenClawTmpDir();
 
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const lstatSpy = vi
@@ -361,7 +365,7 @@ describe("local media root guard", () => {
 
     try {
       const result = await loadWebMedia(tinyPngFile, 1024 * 1024, {
-        localRoots: [resolvePreferredOpenClawTmpDir()],
+        localRoots: [realTmpRoot],
       });
       expect(result.kind).toBe("image");
       expect(result.buffer.length).toBeGreaterThan(0);

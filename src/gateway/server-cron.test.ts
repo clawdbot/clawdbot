@@ -150,8 +150,10 @@ describe("buildGatewayCronService", () => {
         expect.objectContaining({
           action: "added",
           jobId: job.id,
+          sessionTarget: "main",
           job: expect.objectContaining({
             id: job.id,
+            sessionTarget: "main",
             state: expect.objectContaining({ nextRunAtMs: job.state.nextRunAtMs }),
           }),
         }),
@@ -191,13 +193,56 @@ describe("buildGatewayCronService", () => {
         expect.objectContaining({
           action: "removed",
           jobId: job.id,
+          sessionTarget: "main",
           job: expect.objectContaining({
             id: job.id,
             name: "to-be-removed",
+            sessionTarget: "main",
           }),
         }),
         expect.objectContaining({
           getCron: expect.any(Function),
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("cron_changed hook event includes agentId from the job", async () => {
+    const cfg = createCronConfig("server-cron-hook-agentId");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "agent-scoped-job",
+        enabled: true,
+        agentId: "yinze",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_000 },
+        sessionTarget: "session:project-alpha",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "agent check" },
+      });
+
+      expect(runCronChangedMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "added",
+          jobId: job.id,
+          sessionTarget: "session:project-alpha",
+          agentId: "yinze",
+          job: expect.objectContaining({
+            id: job.id,
+            agentId: "yinze",
+            sessionTarget: "session:project-alpha",
+          }),
+        }),
+        expect.objectContaining({
+          config: cfg,
         }),
       );
     } finally {

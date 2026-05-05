@@ -116,12 +116,15 @@ function resolveMainSessionResumeBlockReason(messages: unknown[]): string | null
   return null;
 }
 
-function buildResumeMessage(): string {
-  return (
+function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {
+  const base =
     "[System] Your previous turn was interrupted by a gateway restart while " +
     "OpenClaw was waiting on tool/model work. Continue from the existing " +
-    "transcript and finish the interrupted response."
-  );
+    "transcript and finish the interrupted response.";
+  if (pendingFinalDeliveryText) {
+    return `${base}\n\nNote: The interrupted final reply was captured: "${pendingFinalDeliveryText}"`;
+  }
+  return base;
 }
 
 async function markSessionFailed(params: {
@@ -140,6 +143,13 @@ async function markSessionFailed(params: {
       entry.abortedLastRun = true;
       entry.endedAt = Date.now();
       entry.updatedAt = entry.endedAt;
+      entry.pendingFinalDelivery = undefined;
+      entry.pendingFinalDeliveryText = undefined;
+      entry.pendingFinalDeliveryCreatedAt = undefined;
+      entry.pendingFinalDeliveryLastAttemptAt = undefined;
+      entry.pendingFinalDeliveryAttemptCount = undefined;
+      entry.pendingFinalDeliveryLastError = undefined;
+      entry.pendingFinalDeliveryContext = undefined;
       store[params.sessionKey] = entry;
     },
     { skipMaintenance: true },
@@ -150,12 +160,13 @@ async function markSessionFailed(params: {
 async function resumeMainSession(params: {
   storePath: string;
   sessionKey: string;
+  pendingFinalDeliveryText?: string | null;
 }): Promise<boolean> {
   try {
     await callGateway<{ runId: string }>({
       method: "agent",
       params: {
-        message: buildResumeMessage(),
+        message: buildResumeMessage(params.pendingFinalDeliveryText),
         sessionKey: params.sessionKey,
         idempotencyKey: crypto.randomUUID(),
         deliver: false,
@@ -170,13 +181,24 @@ async function resumeMainSession(params: {
         if (!entry) {
           return;
         }
+        const now = Date.now();
         entry.abortedLastRun = false;
-        entry.updatedAt = Date.now();
+        entry.updatedAt = now;
+        if (entry.pendingFinalDelivery || entry.pendingFinalDeliveryText) {
+          entry.pendingFinalDeliveryLastAttemptAt = now;
+          entry.pendingFinalDeliveryAttemptCount =
+            (entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
+          entry.pendingFinalDeliveryLastError = null;
+        }
         store[params.sessionKey] = entry;
       },
       { skipMaintenance: true },
     );
-    log.info(`resumed interrupted main session: ${params.sessionKey}`);
+    log.info(
+      `resumed interrupted main session: ${params.sessionKey}${
+        params.pendingFinalDeliveryText ? " (with pending payload)" : ""
+      }`,
+    );
     return true;
   } catch (err) {
     log.warn(`failed to resume interrupted main session ${params.sessionKey}: ${String(err)}`);
@@ -290,6 +312,7 @@ async function recoverStore(params: {
     const resumed = await resumeMainSession({
       storePath: params.storePath,
       sessionKey,
+      pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
     });
     if (resumed) {
       params.resumedSessionKeys.add(sessionKey);

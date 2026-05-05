@@ -294,6 +294,19 @@ export function getDiagnosticSessionActivitySnapshot(
   };
 }
 
+export function markDiagnosticRunProgressForTest(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+  reason: string;
+}): void {
+  const activity = resolveSessionActivity({ ...params, create: true });
+  if (!activity) {
+    return;
+  }
+  touchSessionActivity(activity, params.reason);
+}
+
 export function resetDiagnosticRunActivityForTest(): void {
   activityByRef.clear();
   activityByRunId.clear();

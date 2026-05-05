@@ -60,9 +60,11 @@ Video generation is asynchronous. When the agent calls `video_generate` in a
 session:
 
 1. OpenClaw submits the request to the provider and immediately returns a task id.
-2. The provider processes the job in the background (typically 30 seconds to 5 minutes depending on the provider and resolution).
+2. The provider processes the job in the background (typically 30 seconds to several minutes depending on the provider and resolution; slow queue-backed providers can run up to the configured timeout).
 3. When the video is ready, OpenClaw wakes the same session with an internal completion event.
-4. The agent posts the finished video back into the original conversation.
+4. The agent tells the user and attaches the finished video. In group/channel
+   chats that use message-tool-only visible delivery, the agent relays the
+   result through the message tool instead of OpenClaw posting it directly.
 
 While a job is in flight, duplicate `video_generate` calls in the same
 session return the current task status instead of starting another
@@ -82,12 +84,12 @@ rejects an oversized file.
 
 ### Task lifecycle
 
-| State       | Meaning                                                                                          |
-| ----------- | ------------------------------------------------------------------------------------------------ |
-| `queued`    | Task created, waiting for the provider to accept it.                                             |
-| `running`   | Provider is processing (typically 30 seconds to 5 minutes depending on provider and resolution). |
-| `succeeded` | Video ready; the agent wakes and posts it to the conversation.                                   |
-| `failed`    | Provider error or timeout; the agent wakes with error details.                                   |
+| State       | Meaning                                                                                                |
+| ----------- | ------------------------------------------------------------------------------------------------------ |
+| `queued`    | Task created, waiting for the provider to accept it.                                                   |
+| `running`   | Provider is processing (typically 30 seconds to several minutes depending on provider and resolution). |
+| `succeeded` | Video ready; the agent wakes and posts it to the conversation.                                         |
+| `failed`    | Provider error or timeout; the agent wakes with error details.                                         |
 
 Check status from the CLI:
 
@@ -196,9 +198,9 @@ role or use `first_frame` for single-image image-to-video.
 ### Style controls
 
 <ParamField path="aspectRatio" type="string">
-  `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `4:5`, `5:4`, `9:16`, `16:9`, `21:9`, or `adaptive`.
+  Aspect-ratio hint such as `1:1`, `16:9`, `9:16`, `adaptive`, or a provider-specific value. OpenClaw normalizes or ignores unsupported values per provider.
 </ParamField>
-<ParamField path="resolution" type="string">`480P`, `720P`, `768P`, or `1080P`.</ParamField>
+<ParamField path="resolution" type="string">Resolution hint such as `480P`, `720P`, `768P`, `1080P`, `4K`, or a provider-specific value. OpenClaw normalizes or ignores unsupported values per provider.</ParamField>
 <ParamField path="durationSeconds" type="number">
   Target duration in seconds (rounded to nearest provider-supported value).
 </ParamField>
@@ -221,7 +223,7 @@ dimensions). Providers that do not declare it surface the value via
 </ParamField>
 <ParamField path="model" type="string">Provider/model override (e.g. `runway/gen4.5`).</ParamField>
 <ParamField path="filename" type="string">Output filename hint.</ParamField>
-<ParamField path="timeoutMs" type="number">Optional provider request timeout in milliseconds.</ParamField>
+<ParamField path="timeoutMs" type="number">Optional provider operation timeout in milliseconds.</ParamField>
 <ParamField path="providerOptions" type="object">
   Provider-specific options as a JSON object (e.g. `{"seed": 42, "draft": true}`).
   Providers that declare a typed schema validate the keys and types; unknown
@@ -375,16 +377,22 @@ only the explicit `model`, `primary`, and `fallbacks` entries.
     image-to-video through the configured graph.
   </Accordion>
   <Accordion title="fal">
-    Uses a queue-backed flow for long-running jobs. Most fal video models
+    Uses a queue-backed flow for long-running jobs. OpenClaw waits up to 20
+    minutes by default before treating an in-progress fal queue job as timed
+    out. Most fal video models
     accept a single image reference. Seedance 2.0 reference-to-video
     models accept up to 9 images, 3 videos, and 3 audio references, with
     at most 12 total reference files.
   </Accordion>
   <Accordion title="Google (Gemini / Veo)">
-    Supports one image or one video reference.
+    Supports one image or one video reference. Generated-audio requests are
+    ignored with a warning on the Gemini API path because that API rejects
+    the `generateAudio` parameter for current Veo video generation.
   </Accordion>
   <Accordion title="MiniMax">
-    Single image reference only.
+    Single image reference only. MiniMax accepts `768P` and `1080P`
+    resolutions; requests such as `720P` are normalized to the closest
+    supported value before submission.
   </Accordion>
   <Accordion title="OpenAI">
     Only `size` override is forwarded. Other style overrides

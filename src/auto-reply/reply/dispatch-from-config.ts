@@ -84,6 +84,7 @@ import {
   resolveSessionStoreEntry,
   resolveStorePath,
   triggerInternalHook,
+  updateSessionStoreEntry,
 } from "./dispatch-from-config.runtime.js";
 import type {
   DispatchFromConfigParams,
@@ -325,6 +326,34 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
     return undefined;
   }
 };
+
+async function clearPendingFinalDeliveryAfterSuccess(params: {
+  storePath?: string;
+  sessionKey?: string;
+}): Promise<void> {
+  if (!params.storePath || !params.sessionKey) {
+    return;
+  }
+  await updateSessionStoreEntry({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    update: async (entry) => {
+      if (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText) {
+        return null;
+      }
+      return {
+        pendingFinalDelivery: undefined,
+        pendingFinalDeliveryText: undefined,
+        pendingFinalDeliveryCreatedAt: undefined,
+        pendingFinalDeliveryLastAttemptAt: undefined,
+        pendingFinalDeliveryAttemptCount: undefined,
+        pendingFinalDeliveryLastError: undefined,
+        pendingFinalDeliveryContext: undefined,
+        updatedAt: Date.now(),
+      };
+    },
+  });
+}
 
 export type {
   DispatchFromConfigParams,
@@ -750,6 +779,7 @@ export async function dispatchReplyFromConfig(
     sourceReplyDeliveryMode,
     suppressAutomaticSourceDelivery,
     suppressDelivery,
+    sendPolicyDenied,
     deliverySuppressionReason,
     suppressHookUserDelivery,
     suppressHookReplyLifecycle,
@@ -1470,18 +1500,38 @@ export async function dispatchReplyFromConfig(
 
     let queuedFinal = false;
     let routedFinalCount = 0;
-    if (!suppressDelivery) {
-      for (const reply of replies) {
-        // Suppress reasoning payloads from channel delivery — channels using this
-        // generic dispatch path do not have a dedicated reasoning lane.
-        if (reply.isReasoning === true) {
-          continue;
-        }
-        const finalReply = await sendFinalPayload(reply);
-        queuedFinal = finalReply.queuedFinal || queuedFinal;
-        routedFinalCount += finalReply.routedFinalCount;
+    let attemptedFinalDelivery = false;
+    let finalDeliveryFailed = false;
+    const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
+      suppressAutomaticSourceDelivery &&
+      !sendPolicyDenied &&
+      getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true;
+    for (const reply of replies) {
+      // Suppress reasoning payloads from channel delivery — channels using this
+      // generic dispatch path do not have a dedicated reasoning lane.
+      if (reply.isReasoning === true) {
+        continue;
       }
+      if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
+        continue;
+      }
+      attemptedFinalDelivery = true;
+      const finalReply = await sendFinalPayload(reply);
+      queuedFinal = finalReply.queuedFinal || queuedFinal;
+      routedFinalCount += finalReply.routedFinalCount;
+      if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
+        finalDeliveryFailed = true;
+      }
+    }
 
+    if (attemptedFinalDelivery && !finalDeliveryFailed) {
+      await clearPendingFinalDeliveryAfterSuccess({
+        storePath: sessionStoreEntry.storePath,
+        sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+      });
+    }
+
+    if (!suppressDelivery) {
       const ttsMode = resolveConfiguredTtsMode(cfg, {
         agentId: sessionAgentId,
         channelId: deliveryChannel,

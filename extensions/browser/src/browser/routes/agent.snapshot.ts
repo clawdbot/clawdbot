@@ -318,6 +318,7 @@ export function registerBrowserAgentSnapshotRoutes(
         ctx,
         targetId,
         feature: "pdf",
+        enforceCurrentUrlAllowed: true,
         run: async ({ cdpUrl, tab, pw }) => {
           const pdf = await pw.pdfViaPlaywright({
             cdpUrl,
@@ -361,17 +362,18 @@ export function registerBrowserAgentSnapshotRoutes(
         res,
         ctx,
         targetId,
+        enforceCurrentUrlAllowed: true,
         run: async ({ profileCtx, tab, cdpUrl }) => {
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
             const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
-            if (element) {
-              return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.screenshotElement);
-            }
             if (ssrfPolicyOpts.ssrfPolicy) {
               await assertBrowserNavigationResultAllowed({
                 url: tab.url,
                 ...ssrfPolicyOpts,
               });
+            }
+            if (element) {
+              return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.screenshotElement);
             }
             if (labels) {
               const snapshot = await takeChromeMcpSnapshot({

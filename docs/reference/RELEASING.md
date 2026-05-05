@@ -114,11 +114,13 @@ the maintainer-only release runbook.
 - Run the manual `Full Release Validation` workflow before release approval to
   kick off all pre-release test boxes from one entrypoint. It accepts a branch,
   tag, or full commit SHA, dispatches manual `CI`, and dispatches
-  `OpenClaw Release Checks` for install smoke, package acceptance, Docker
-  release-path suites, live/E2E, OpenWebUI, QA Lab parity, Matrix, and Telegram
-  lanes. With `release_profile=full` and `rerun_group=all`, it also runs package
-  Telegram E2E against the `release-package-under-test` artifact from release
-  checks. Provide `npm_telegram_package_spec` after publishing when the same
+  `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS
+  package checks, QA Lab parity, Matrix, and Telegram lanes. Stable/default runs
+  keep exhaustive live/E2E and Docker release-path soak behind
+  `run_release_soak=true`; `release_profile=full` forces soak on. With
+  `release_profile=full` and `rerun_group=all`, it also runs package Telegram
+  E2E against the `release-package-under-test` artifact from release checks.
+  Provide `npm_telegram_package_spec` after publishing when the same
   Telegram E2E should prove the published npm package too. Provide
   `package_acceptance_package_spec` after publishing when Package Acceptance
   should run its package/update matrix against the shipped npm package instead
@@ -139,11 +141,13 @@ the maintainer-only release runbook.
   `telegram_mode=mock-openai` or `telegram_mode=live-frontier`. When the
   selected Docker lanes include `published-upgrade-survivor`, the package
   artifact is the candidate and `published_upgrade_survivor_baseline` selects
-  the published baseline.
+  the published baseline. `update-restart-auth` uses the candidate package as
+  both the installed CLI and the package-under-test so it exercises the
+  candidate update command's managed restart path.
   Example: `gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product -f published_upgrade_survivor_baseline=openclaw@2026.4.26 -f telegram_mode=mock-openai`
   Common profiles:
   - `smoke`: install/channel/agent, gateway network, and config reload lanes
-  - `package`: artifact-native package/update/plugin lanes without OpenWebUI or live ClawHub
+  - `package`: artifact-native package/update/restart/plugin lanes without OpenWebUI or live ClawHub
   - `product`: package profile plus MCP channels, cron/subagent cleanup,
     OpenAI web search, and OpenWebUI
   - `full`: Docker release-path chunks with OpenWebUI
@@ -293,8 +297,8 @@ parent `release-package-under-test` artifact for package-facing checks, and
 dispatches standalone package Telegram E2E when `release_profile=full` with
 `rerun_group=all` or when `npm_telegram_package_spec` is set. `OpenClaw Release
 Checks` then fans out install smoke, cross-OS release checks, live/E2E Docker
-release-path coverage, Package Acceptance with Telegram package QA, QA Lab
-parity, live Matrix, and live Telegram. A full run is only acceptable when the
+release-path coverage when soak is enabled, Package Acceptance with Telegram
+package QA, QA Lab parity, live Matrix, and live Telegram. A full run is only acceptable when the
 `Full Release Validation`
 summary shows `normal_ci` and `release_checks` as successful. In full/all mode,
 the `npm_telegram` child must also be successful; outside full/all it is skipped
@@ -318,10 +322,18 @@ Use `release_profile` to select live/provider breadth:
 - `stable`: minimum plus stable provider/backend coverage for release approval
 - `full`: stable plus broad advisory provider/media coverage
 
+Use `run_release_soak=true` with `stable` when the release-blocking lanes are
+green and you want the exhaustive live/E2E, Docker release-path, and
+bounded published upgrade-survivor sweep before promotion. That sweep covers
+the latest four stable packages plus pinned `2026.4.23` and `2026.5.2`
+baselines plus older `2026.4.15` coverage, with duplicate baselines removed and
+each baseline sharded into its own Docker runner job. `full` implies
+`run_release_soak=true`.
+
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the target
-ref once as `release-package-under-test` and reuses that artifact in both
-release-path Docker checks and Package Acceptance. This keeps all
-package-facing boxes on the same bytes and avoids repeated package builds.
+ref once as `release-package-under-test` and reuses that artifact in cross-OS,
+Package Acceptance, and release-path Docker checks when soak runs. This keeps
+all package-facing boxes on the same bytes and avoids repeated package builds.
 The cross-OS OpenAI install smoke uses `OPENCLAW_CROSS_OS_OPENAI_MODEL` when the
 repo/org variable is set, otherwise `openai/gpt-5.4`, because this lane is
 proving package install, onboarding, gateway startup, and one live agent turn
@@ -372,7 +384,10 @@ runs only the release-only plugin child, `release-checks` runs every release
 box, and the narrower release groups are `install-smoke`, `cross-os`,
 `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and `npm-telegram`.
 Focused `npm-telegram` reruns require `npm_telegram_package_spec`; full/all runs
-with `release_profile=full` use the release-checks package artifact.
+with `release_profile=full` use the release-checks package artifact. Focused
+cross-OS reruns can add `cross_os_suite_filter=windows/packaged-upgrade` or
+another OS/suite filter. QA release-check failures are advisory; a QA-only
+failure does not block release validation.
 
 ### Vitest
 
@@ -473,12 +488,14 @@ Supported candidate sources:
 
 `OpenClaw Release Checks` runs Package Acceptance with `source=artifact`, the
 prepared release package artifact, `suite_profile=custom`,
-`docker_lanes=doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update`,
-`published_upgrade_survivor_baselines=all-since-2026.4.23`,
-`published_upgrade_survivor_scenarios=reported-issues`, and
-`telegram_mode=mock-openai`. Package Acceptance keeps migration, update, stale
-plugin dependency cleanup, offline plugin fixtures, plugin update, and Telegram
-package QA against the same resolved tarball. The upgrade matrix covers every stable npm-published baseline from `2026.4.23` through `latest`; use
+`docker_lanes=doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update`,
+`telegram_mode=mock-openai`. Package Acceptance keeps migration, update,
+configured-auth update restart, stale plugin dependency cleanup, offline plugin
+fixtures, plugin update, and Telegram package QA against the same resolved
+tarball. Blocking release checks use the default latest published package
+baseline; `run_release_soak=true` or
+`release_profile=full` expands to every stable npm-published baseline from
+`2026.4.23` through `latest` plus reported-issue fixtures. Use
 Package Acceptance with `source=npm` for an already shipped candidate, or
 `source=ref`/`source=artifact` for a SHA-backed local npm tarball before
 publish. It is the GitHub-native
@@ -522,8 +539,8 @@ Common package profiles:
 
 - `smoke`: quick package install/channel/agent, gateway network, and config
   reload lanes
-- `package`: install/update/plugin package contracts without live ClawHub; this is the release-check
-  default
+- `package`: install/update/restart/plugin package contracts without live
+  ClawHub; this is the release-check default
 - `product`: `package` plus MCP channels, cron/subagent cleanup, OpenAI web
   search, and OpenWebUI
 - `full`: Docker release-path chunks with OpenWebUI
@@ -615,6 +632,9 @@ OpenClaw package must not be published.
 - `ref`: branch, tag, or full commit SHA to validate. Secret-bearing checks
   require the resolved commit to be reachable from an OpenClaw branch or
   release tag.
+- `run_release_soak`: opt into exhaustive live/E2E, Docker release-path, and
+  all-since upgrade-survivor soak on stable/default release checks. It is forced
+  on by `release_profile=full`.
 
 Rules:
 

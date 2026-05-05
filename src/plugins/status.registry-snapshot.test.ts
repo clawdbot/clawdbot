@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
+import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { refreshPluginRegistry } from "./plugin-registry.js";
 import { buildPluginRegistrySnapshotReport, buildPluginSnapshotReport } from "./status.js";
 import {
@@ -17,11 +19,120 @@ function makeTempDir() {
   return makeTrackedTempDir("openclaw-plugin-status", tempDirs);
 }
 
+function writeManagedNpmPlugin(params: {
+  stateDir: string;
+  packageName: string;
+  pluginId: string;
+  version: string;
+  dependencySpec?: string;
+}): string {
+  const npmRoot = path.join(params.stateDir, "npm");
+  const rootManifestPath = path.join(npmRoot, "package.json");
+  fs.mkdirSync(npmRoot, { recursive: true });
+  const rootManifest = fs.existsSync(rootManifestPath)
+    ? (JSON.parse(fs.readFileSync(rootManifestPath, "utf8")) as {
+        dependencies?: Record<string, string>;
+      })
+    : {};
+  fs.writeFileSync(
+    rootManifestPath,
+    JSON.stringify(
+      {
+        ...rootManifest,
+        private: true,
+        dependencies: {
+          ...rootManifest.dependencies,
+          [params.packageName]: params.dependencySpec ?? params.version,
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const packageDir = path.join(npmRoot, "node_modules", params.packageName);
+  fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({
+      name: params.packageName,
+      version: params.version,
+      openclaw: { extensions: ["./dist/index.js"] },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(packageDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: params.pluginId,
+      name: "WhatsApp",
+      configSchema: { type: "object" },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(packageDir, "dist", "index.js"), "export {};\n", "utf8");
+  return packageDir;
+}
+
 afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("buildPluginRegistrySnapshotReport", () => {
+  it("keeps recovered managed npm plugins visible when the persisted registry is stale", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      ...createColdPluginHermeticEnv(tempRoot, {
+        bundledPluginsDir: makeTempDir(),
+        disablePersistedRegistry: false,
+      }),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const config = {
+      plugins: {
+        entries: {
+          whatsapp: { enabled: true },
+        },
+      },
+    };
+    const whatsappDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/whatsapp",
+      pluginId: "whatsapp",
+      version: "2026.5.2",
+    });
+    const staleIndex = loadInstalledPluginIndex({
+      config,
+      env,
+      installRecords: {},
+    });
+    expect(staleIndex.plugins.some((plugin) => plugin.pluginId === "whatsapp")).toBe(false);
+    writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
+
+    const report = buildPluginRegistrySnapshotReport({
+      config,
+      env,
+    });
+
+    expect(report.registrySource).toBe("derived");
+    expect(report.registryDiagnostics).toContainEqual(
+      expect.objectContaining({ code: "persisted-registry-stale-source" }),
+    );
+    expect(report.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "whatsapp",
+          name: "WhatsApp",
+          source: fs.realpathSync(path.join(whatsappDir, "dist", "index.js")),
+          status: "loaded",
+        }),
+      ]),
+    );
+  });
+
   it("reconstructs list metadata from indexed manifests without importing plugin runtime", () => {
     const fixture = createColdPluginFixture({
       rootDir: makeTempDir(),

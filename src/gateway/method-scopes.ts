@@ -112,6 +112,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "cron.status",
     "cron.runs",
     "gateway.identity.get",
+    "gateway.restart.preflight",
     "system-presence",
     "last-heartbeat",
     "node.list",
@@ -199,6 +200,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "system-event",
     "agents.files.set",
     "update.status",
+    "gateway.restart.request",
   ],
   [TALK_SECRETS_SCOPE]: [],
 };

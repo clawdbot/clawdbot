@@ -187,6 +187,7 @@ describe("qa scenario catalog", () => {
           pluginId?: string;
           pluginPersonality?: string;
           adversarialPersonality?: string;
+          expectedSurfaceIds?: Record<string, string[]>;
           expectedAdversarialDiagnostics?: string[];
         }
       | undefined;
@@ -198,9 +199,22 @@ describe("qa scenario catalog", () => {
     expect(config?.pluginId).toBe("openclaw-kitchen-sink-fixture");
     expect(config?.pluginPersonality).toBe("conformance");
     expect(config?.adversarialPersonality).toBe("adversarial");
+    expect(config?.expectedSurfaceIds?.webSearchProviderIds).toContain(
+      "kitchen-sink-web-search-provider",
+    );
+    expect(config?.expectedSurfaceIds?.realtimeVoiceProviderIds).toContain(
+      "kitchen-sink-realtime-voice-provider",
+    );
     expect(config?.expectedAdversarialDiagnostics).toContain(
       "only bundled plugins can register agent tool result middleware",
     );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "control UI descriptor registration requires id, surface, label, and valid optional fields",
+    );
+    expect(
+      config?.expectedAdversarialDiagnostics?.every((entry) => typeof entry === "string"),
+    ).toBe(true);
+    expect(JSON.stringify(scenario.execution.flow)).toContain("--runtime");
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
       "installs and inspects the Kitchen Sink plugin",
       "restarts gateway with Kitchen Sink configured",

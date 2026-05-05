@@ -170,6 +170,29 @@ describe("noteDevicePairingHealth", () => {
     });
   });
 
+  it("does not suggest rotating local auth for a role that is no longer approved", async () => {
+    await withApprovedOperatorPairing(async ({ identity }) => {
+      storeDeviceAuthToken({
+        deviceId: identity.deviceId,
+        role: "node",
+        token: "stale-node-token",
+        scopes: [],
+      });
+
+      await noteDevicePairingHealth({
+        cfg: { gateway: { mode: "local" } },
+        healthOk: false,
+      });
+
+      expect(noteMock).toHaveBeenCalledTimes(1);
+      const message = String(noteMock.mock.calls[0]?.[0] ?? "");
+      expect(message).toContain("Local cached node device auth");
+      expect(message).toContain("role is no longer approved");
+      expect(message).toContain("remove the stale cached node auth entry");
+      expect(message).not.toContain("--role node");
+    });
+  });
+
   it("uses gateway device pairing state when the gateway is healthy", async () => {
     callGatewayMock.mockResolvedValue({
       pending: [

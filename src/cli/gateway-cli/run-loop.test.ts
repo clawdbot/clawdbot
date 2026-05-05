@@ -14,6 +14,17 @@ const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
 const peekGatewaySigusr1RestartReason = vi.fn<() => string | undefined>(() => undefined);
 const resetGatewayRestartStateForInProcessRestart = vi.fn();
+const writeGatewayRestartHandoffSync = vi.fn((_opts: unknown) => ({
+  kind: "gateway-supervisor-restart-handoff" as const,
+  version: 1 as const,
+  intentId: "test-intent",
+  pid: process.pid,
+  createdAt: Date.now(),
+  expiresAt: Date.now() + 60_000,
+  source: "unknown" as const,
+  restartKind: "full-process" as const,
+  supervisorMode: "external" as const,
+}));
 const scheduleGatewaySigusr1Restart = vi.fn((_opts?: { delayMs?: number; reason?: string }) => ({
   ok: true,
   pid: process.pid,
@@ -105,6 +116,10 @@ vi.mock("../../infra/process-respawn.js", () => ({
 
 vi.mock("../../infra/restart-sentinel.js", () => ({
   markUpdateRestartSentinelFailure: (reason: string) => markUpdateRestartSentinelFailure(reason),
+}));
+
+vi.mock("../../infra/restart-handoff.js", () => ({
+  writeGatewayRestartHandoffSync: (opts: unknown) => writeGatewayRestartHandoffSync(opts),
 }));
 
 vi.mock("../../process/command-queue.js", () => ({
@@ -390,7 +405,9 @@ describe("runGatewayLoop", () => {
       expect(waitForActiveEmbeddedRuns).not.toHaveBeenCalled();
       expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
       expect(gatewayLog.warn).toHaveBeenCalledWith(
-        expect.stringContaining("restart blocked by active task run(s): taskId=task-force"),
+        expect.stringContaining(
+          "restart blocked by active background task run(s): taskId=task-force",
+        ),
       );
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "forced restart requested; skipping active work drain",
@@ -593,6 +610,7 @@ describe("runGatewayLoop", () => {
       expect(lockRelease).toHaveBeenCalled();
       expect(runtime.exit).toHaveBeenCalledWith(0);
       expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
+      expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
     });
   });
 
@@ -614,6 +632,12 @@ describe("runGatewayLoop", () => {
         sigusr1();
         await expect(exited).resolves.toBe(0);
         expect(runtime.exit).toHaveBeenCalledWith(0);
+        expect(writeGatewayRestartHandoffSync).toHaveBeenCalledWith({
+          restartKind: "full-process",
+          reason: undefined,
+          processInstanceId: expect.any(String),
+          supervisorMode: "launchd",
+        });
         expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1400);
       });
     } finally {
@@ -717,7 +741,38 @@ describe("runGatewayLoop", () => {
       expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
       expect(start).toHaveBeenCalledTimes(1);
       expect(markUpdateRestartSentinelFailure).not.toHaveBeenCalled();
+      expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
     });
+  });
+
+  it("writes a handoff before exiting for supervised update restarts", async () => {
+    vi.clearAllMocks();
+    peekGatewaySigusr1RestartReason.mockReturnValue("update.run");
+    respawnGatewayProcessForUpdate.mockReturnValueOnce({
+      mode: "supervised",
+    });
+    try {
+      setPlatform("freebsd");
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { runtime, exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
+
+        sigusr1();
+
+        await expect(exited).resolves.toBe(0);
+        expect(runtime.exit).toHaveBeenCalledWith(0);
+        expect(writeGatewayRestartHandoffSync).toHaveBeenCalledWith({
+          restartKind: "update-process",
+          reason: "update.run",
+          processInstanceId: expect.any(String),
+          supervisorMode: "external",
+        });
+      });
+    } finally {
+      if (originalPlatformDescriptor) {
+        Object.defineProperty(process, "platform", originalPlatformDescriptor);
+      }
+    }
   });
 
   it("probes the configured gateway host for update respawn health", async () => {

@@ -330,6 +330,12 @@ export async function resolveGatewayListenHosts(
   if (bindHost !== "127.0.0.1") {
     return [bindHost];
   }
+  // Windows: uv_tcp_bind6 creates a dual-stack socket (no UV_TCP_IPV6ONLY), which
+  // also accepts ::ffff:127.0.0.1 connections. Binding both ::1 and 127.0.0.1 on
+  // the same port causes non-deterministic TCP routing → HTTP requests hang silently.
+  if (process.platform === "win32") {
+    return [bindHost];
+  }
   const canBind = opts?.canBindToHost ?? canBindToHost;
   if (await canBind("::1")) {
     return [bindHost, "::1"];

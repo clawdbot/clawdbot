@@ -49,6 +49,7 @@ export function getCurrentPluginMetadataSnapshot(
     config?: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
     workspaceDir?: string;
+    allowWorkspaceScopedSnapshot?: boolean;
   } = {},
 ): PluginMetadataSnapshot | undefined {
   const { snapshot: rawSnapshot, configFingerprint } = getCurrentPluginMetadataSnapshotState();
@@ -62,12 +63,15 @@ export function getCurrentPluginMetadataSnapshot(
   ) {
     return undefined;
   }
+  const requestedWorkspaceDir =
+    params.workspaceDir ??
+    (params.allowWorkspaceScopedSnapshot === true ? snapshot.workspaceDir : undefined);
   if (params.config) {
     const requestedConfigFingerprint = resolvePluginMetadataControlPlaneFingerprint(params.config, {
       env: params.env,
       index: snapshot.index,
       policyHash: snapshot.policyHash,
-      workspaceDir: params.workspaceDir,
+      workspaceDir: requestedWorkspaceDir,
     });
     if (configFingerprint && configFingerprint !== requestedConfigFingerprint) {
       return undefined;
@@ -76,12 +80,12 @@ export function getCurrentPluginMetadataSnapshot(
       return undefined;
     }
   }
-  if (snapshot.workspaceDir !== undefined && params.workspaceDir === undefined) {
+  if (snapshot.workspaceDir !== undefined && requestedWorkspaceDir === undefined) {
     return undefined;
   }
   if (
-    params.workspaceDir !== undefined &&
-    (snapshot.workspaceDir ?? "") !== (params.workspaceDir ?? "")
+    requestedWorkspaceDir !== undefined &&
+    (snapshot.workspaceDir ?? "") !== (requestedWorkspaceDir ?? "")
   ) {
     return undefined;
   }

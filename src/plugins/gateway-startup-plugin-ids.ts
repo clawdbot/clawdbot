@@ -39,6 +39,11 @@ export type GatewayStartupPluginPlan = {
 };
 
 type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfigWithRegistry>;
+type GenerationProviderContractKey =
+  | "imageGenerationProviders"
+  | "videoGenerationProviders"
+  | "musicGenerationProviders";
+type ConfiguredGenerationProviderIds = Record<GenerationProviderContractKey, ReadonlySet<string>>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -207,6 +212,123 @@ function manifestOwnsConfiguredSpeechProvider(params: {
     const normalized = normalizeConfiguredSpeechProviderIdForStartup(providerId);
     return normalized ? params.configuredSpeechProviderIds.has(normalized) : false;
   });
+}
+
+function listModelProviderRefs(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+  const refs: string[] = [];
+  if (typeof value.primary === "string") {
+    refs.push(value.primary);
+  }
+  if (Array.isArray(value.fallbacks)) {
+    for (const fallback of value.fallbacks) {
+      if (typeof fallback === "string") {
+        refs.push(fallback);
+      }
+    }
+  }
+  return refs;
+}
+
+function collectModelProviderIds(value: unknown): ReadonlySet<string> {
+  return new Set(
+    listModelProviderRefs(value)
+      .map((ref) => {
+        const slashIndex = ref.indexOf("/");
+        return slashIndex > 0 ? normalizeOptionalLowercaseString(ref.slice(0, slashIndex)) : "";
+      })
+      .filter((providerId): providerId is string => Boolean(providerId)),
+  );
+}
+
+function collectConfiguredGenerationProviderIds(
+  config: OpenClawConfig,
+): ConfiguredGenerationProviderIds {
+  const defaults = config.agents?.defaults;
+  return {
+    imageGenerationProviders: collectModelProviderIds(defaults?.imageGenerationModel),
+    videoGenerationProviders: collectModelProviderIds(defaults?.videoGenerationModel),
+    musicGenerationProviders: collectModelProviderIds(defaults?.musicGenerationModel),
+  };
+}
+
+function manifestOwnsConfiguredGenerationProvider(params: {
+  manifest: PluginManifestRecord | undefined;
+  configuredGenerationProviderIds: ConfiguredGenerationProviderIds;
+}): boolean {
+  for (const contractKey of [
+    "imageGenerationProviders",
+    "videoGenerationProviders",
+    "musicGenerationProviders",
+  ] as const) {
+    const configuredProviderIds = params.configuredGenerationProviderIds[contractKey];
+    if (configuredProviderIds.size === 0) {
+      continue;
+    }
+    if (
+      (params.manifest?.contracts?.[contractKey] ?? []).some((providerId) => {
+        const normalized = normalizeOptionalLowercaseString(providerId);
+        return normalized ? configuredProviderIds.has(normalized) : false;
+      })
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function canStartConfiguredGenerationProviderPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  configuredGenerationProviderIds: ConfiguredGenerationProviderIds;
+  platform?: NodeJS.Platform;
+}): boolean {
+  if (
+    !manifestOwnsConfiguredGenerationProvider({
+      manifest: params.manifest,
+      configuredGenerationProviderIds: params.configuredGenerationProviderIds,
+    })
+  ) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return (
+    activationState.enabled &&
+    (params.plugin.origin === "bundled" || activationState.explicitlyEnabled)
+  );
 }
 
 function canStartConfiguredSpeechProviderPlugin(params: {
@@ -512,6 +634,8 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
   const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
+  const configuredGenerationProviderIds =
+    collectConfiguredGenerationProviderIds(activationSourceConfig);
   const normalizePluginId = createPluginRegistryIdNormalizer(params.index, {
     manifestRegistry: params.manifestRegistry,
   });
@@ -576,6 +700,19 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           pluginsConfig,
           activationSource,
           configuredSpeechProviderIds,
+          platform: params.platform,
+        })
+      ) {
+        return true;
+      }
+      if (
+        canStartConfiguredGenerationProviderPlugin({
+          plugin,
+          manifest,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
+          configuredGenerationProviderIds,
           platform: params.platform,
         })
       ) {

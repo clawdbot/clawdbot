@@ -82,6 +82,7 @@ import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
@@ -92,6 +93,11 @@ import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
+import {
+  createPostCompactionLoopGuard,
+  PostCompactionLoopPersistedError,
+  type PostCompactionGuardObservation,
+} from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
 import {
@@ -503,7 +509,9 @@ export async function runEmbeddedPiAgent(
         dynamicModelResolution.model || pluginHarnessOwnsTransport
           ? dynamicModelResolution
           : await (async () => {
-              await ensureOpenClawModelsJson(params.config, agentDir);
+              await ensureOpenClawModelsJson(params.config, agentDir, {
+                workspaceDir: resolvedWorkspace,
+              });
               return await resolveModelAsync(provider, modelId, agentDir, params.config);
             })();
       const { model, error, authStorage, modelRegistry } = modelResolution;
@@ -780,6 +788,28 @@ export async function runEmbeddedPiAgent(
       // unit-tested in run/idle-timeout-breaker.test.ts; the run loop just
       // feeds it the outcome of each attempt.
       const idleTimeoutBreakerState = createIdleTimeoutBreakerState();
+      // Post-compaction loop guard for #77474. Armed at each compaction-success
+      // site below; observed from the live tool-outcome path so it can abort
+      // while the post-compaction prompt is still running.
+      const resolvedLoopDetectionConfig = resolveToolLoopDetectionConfig({
+        cfg: params.config,
+        agentId: sessionAgentId,
+      });
+      const postCompactionGuard = createPostCompactionLoopGuard(
+        resolvedLoopDetectionConfig?.postCompactionGuard,
+        { enabled: resolvedLoopDetectionConfig?.enabled !== false },
+      );
+      let postCompactionAbortController: AbortController | undefined;
+      let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
+      const observePostCompactionToolOutcome = (
+        observation: PostCompactionGuardObservation,
+      ): void => {
+        const verdict = postCompactionGuard.observe(observation);
+        if (verdict.shouldAbort) {
+          postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
+          postCompactionAbortController?.abort(postCompactionAbortError);
+        }
+      };
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
@@ -1072,6 +1102,17 @@ export async function runEmbeddedPiAgent(
             startupStagesEmitted = true;
           }
 
+          const attemptAbortController = new AbortController();
+          postCompactionAbortController = attemptAbortController;
+          const parentAbortSignal = params.abortSignal;
+          const relayParentAbort = (): void => {
+            attemptAbortController.abort(parentAbortSignal?.reason);
+          };
+          if (parentAbortSignal?.aborted) {
+            relayParentAbort();
+          } else {
+            parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
+          }
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -1140,6 +1181,7 @@ export async function runEmbeddedPiAgent(
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,
             thinkLevel,
+            onToolOutcome: observePostCompactionToolOutcome,
             fastMode: params.fastMode,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
@@ -1149,7 +1191,7 @@ export async function runEmbeddedPiAgent(
             bashElevated: params.bashElevated,
             timeoutMs: params.timeoutMs,
             runId: params.runId,
-            abortSignal: params.abortSignal,
+            abortSignal: attemptAbortController.signal,
             replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
@@ -1188,7 +1230,19 @@ export async function runEmbeddedPiAgent(
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
             suppressNextUserMessagePersistence,
             onUserMessagePersisted,
-          });
+          })
+            .catch((err: unknown): never => {
+              throw postCompactionAbortError ?? err;
+            })
+            .finally(() => {
+              parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
+              if (postCompactionAbortController === attemptAbortController) {
+                postCompactionAbortController = undefined;
+              }
+            });
+          if (postCompactionAbortError) {
+            throw postCompactionAbortError;
+          }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
 
           const {
@@ -1459,6 +1513,7 @@ export async function runEmbeddedPiAgent(
                 log.info(
                   `[timeout-compaction] compaction succeeded for ${provider}/${modelId}; retrying prompt`,
                 );
+                postCompactionGuard.armPostCompaction();
                 continue;
               } else {
                 log.warn(
@@ -1648,6 +1703,7 @@ export async function runEmbeddedPiAgent(
                 }
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
+                postCompactionGuard.armPostCompaction();
                 if (preflightRecovery?.source === "mid-turn") {
                   continueFromCurrentTranscript();
                 } else if (
@@ -2423,6 +2479,7 @@ export async function runEmbeddedPiAgent(
               `compaction interrupted visible final answer: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `compactions=${attemptCompactionCount} — retrying ${compactionContinuationRetryAttempts}/1 with compacted-transcript continuation`,
             );
+            postCompactionGuard.armPostCompaction();
             continue;
           }
           compactionContinuationRetryInstruction = null;

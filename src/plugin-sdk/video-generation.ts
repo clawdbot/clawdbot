@@ -33,7 +33,7 @@ export type GeneratedVideoAsset = {
   metadata?: Record<string, unknown>;
 };
 
-export type VideoGenerationResolution = "480P" | "720P" | "768P" | "1080P";
+export type VideoGenerationResolution = "480P" | "720P" | "768P" | "1080P" | (string & {});
 
 /**
  * Canonical semantic role hints for reference assets (first/last frame,

@@ -67,6 +67,32 @@ describe("openai transport policy", () => {
     ).toBeUndefined();
   });
 
+  it("keeps Codex request identity session-scoped while adding turn metadata", () => {
+    expect(
+      resolveOpenAITransportTurnState({
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        model: {
+          ...nativeModel,
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+          baseUrl: "https://chatgpt.com/backend-api",
+        },
+        sessionId: "session-123",
+        turnId: "turn-123",
+        attempt: 2,
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      headers: {
+        "x-client-request-id": "session-123",
+        "x-openclaw-session-id": "session-123",
+        "x-openclaw-turn-id": "turn-123",
+        "x-openclaw-turn-attempt": "2",
+      },
+    });
+  });
+
   it("returns websocket session headers and cooldown for native routes", () => {
     expect(
       resolveOpenAIWebSocketSessionPolicy({

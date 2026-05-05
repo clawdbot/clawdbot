@@ -1,5 +1,6 @@
 export {
   looksLikeWhatsAppTargetId,
+  normalizeWhatsAppAllowFromEntry,
   normalizeWhatsAppMessagingTarget,
   isWhatsAppGroupJid,
   isWhatsAppNewsletterJid,

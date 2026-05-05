@@ -5,8 +5,11 @@ import {
   publishSlackDisconnectedStatus,
   startSlackSocketAndWaitForDisconnect,
 } from "./provider-support.js";
-import { formatSlackSocketReconnectMessage } from "./provider.js";
-import { waitForSlackSocketDisconnect } from "./reconnect-policy.js";
+import {
+  formatSlackSocketReconnectMessage,
+  formatSlackSocketStartRetryMessage,
+} from "./provider.js";
+import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-policy.js";
 
 class FakeEmitter {
   private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
@@ -95,6 +98,28 @@ describe("slack socket reconnect helpers", () => {
         delayMs: 2_340,
       }),
     ).toBe("slack socket disconnected (disconnect); reconnecting in 2s (attempt 1/12)");
+  });
+
+  it("formats missing and unserializable socket errors without leaking undefined", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    expect(formatUnknownError(undefined)).toBe("unknown error");
+    expect(formatUnknownError(null)).toBe("unknown error");
+    expect(formatUnknownError("")).toBe("unknown error");
+    expect(formatUnknownError(new Error(""))).toBe("Error");
+    expect(formatUnknownError(circular)).toBe("unknown error");
+  });
+
+  it("formats socket start retries with an explicit reason field", () => {
+    expect(
+      formatSlackSocketStartRetryMessage({
+        attempt: 1,
+        maxAttempts: 12,
+        delayMs: 2_340,
+        error: undefined,
+      }),
+    ).toBe('slack socket mode failed to start; retry 1/12 in 2s reason="unknown error"');
   });
 
   it("resolves disconnect waiter on socket disconnect event", async () => {

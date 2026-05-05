@@ -2,10 +2,12 @@ import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-r
 import { listPotentialConfiguredChannelPresenceSignals } from "../../../channels/config-presence.js";
 import { normalizeChatChannelId } from "../../../channels/registry.js";
 import { isChannelConfigured } from "../../../config/channel-configured.js";
+import { collectConfiguredModelRefs } from "../../../config/model-refs.js";
 import { detectPluginAutoEnableCandidates } from "../../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../../../config/version.js";
 import { isTruthyEnvValue } from "../../../infra/env.js";
+import { getOfficialExternalPluginCatalogEntry } from "../../../plugins/official-external-plugin-catalog.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
 import { VERSION } from "../../../version.js";
@@ -151,49 +153,13 @@ function collectConfiguredProviderIds(cfg: OpenClawConfig): Set<string> {
   for (const providerId of Object.keys(asObjectRecord(cfg.models?.providers) ?? {})) {
     add(providerId);
   }
-  const collectModelRef = (value: unknown) => {
-    const ref = normalizeId(value);
-    const slash = ref?.indexOf("/") ?? -1;
-    if (ref && slash > 0) {
-      add(ref.slice(0, slash));
+  for (const { value } of collectConfiguredModelRefs(cfg, {
+    includeChannelModelOverrides: false,
+  })) {
+    const slash = value.indexOf("/");
+    if (slash > 0) {
+      add(value.slice(0, slash));
     }
-  };
-  const collectModelConfig = (value: unknown) => {
-    if (typeof value === "string") {
-      collectModelRef(value);
-      return;
-    }
-    const record = asObjectRecord(value);
-    if (!record) {
-      return;
-    }
-    collectModelRef(record.primary);
-    if (Array.isArray(record.fallbacks)) {
-      for (const fallback of record.fallbacks) {
-        collectModelRef(fallback);
-      }
-    }
-  };
-  const collectAgent = (agent: unknown) => {
-    const record = asObjectRecord(agent);
-    if (!record) {
-      return;
-    }
-    for (const key of [
-      "model",
-      "imageGenerationModel",
-      "videoGenerationModel",
-      "musicGenerationModel",
-    ]) {
-      collectModelConfig(record[key]);
-    }
-    for (const modelRef of Object.keys(asObjectRecord(record.models) ?? {})) {
-      collectModelRef(modelRef);
-    }
-  };
-  collectAgent(cfg.agents?.defaults);
-  for (const agent of Array.isArray(cfg.agents?.list) ? cfg.agents.list : []) {
-    collectAgent(agent);
   }
   return ids;
 }
@@ -247,6 +213,27 @@ function collectAcpRuntimePluginIds(cfg: OpenClawConfig): string[] {
     return [];
   }
   return ["acpx"];
+}
+
+function collectAllowOnlyOfficialPluginIds(cfg: OpenClawConfig): string[] {
+  const allow = cfg.plugins?.allow;
+  if (!Array.isArray(allow) || allow.length === 0) {
+    return [];
+  }
+  const materialEntryIds = new Set(
+    collectMaterialPluginEntryIds(cfg).map((id) => id.toLowerCase()),
+  );
+  const ids: string[] = [];
+  for (const rawPluginId of allow) {
+    const pluginId = normalizeId(rawPluginId);
+    if (!pluginId || materialEntryIds.has(pluginId.toLowerCase())) {
+      continue;
+    }
+    if (getOfficialExternalPluginCatalogEntry(pluginId)) {
+      ids.push(pluginId);
+    }
+  }
+  return ids;
 }
 
 function addEligiblePluginId(cfg: OpenClawConfig, pluginIds: Set<string>, pluginId: string): void {
@@ -307,6 +294,9 @@ export function collectReleaseConfiguredPluginIds(params: {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const pluginId of collectAcpRuntimePluginIds(params.cfg)) {
+    addEligiblePluginId(params.cfg, pluginIds, pluginId);
+  }
+  for (const pluginId of collectAllowOnlyOfficialPluginIds(params.cfg)) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const channelId of collectConfiguredChannelIds(params.cfg, env)) {

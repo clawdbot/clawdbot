@@ -273,7 +273,7 @@ export function renderMattermostModelSummaryView(params: {
       "",
       "Tap below to browse models, or use:",
       "/oc_model <provider/model> to switch",
-      "/oc_model <provider/model> --runtime <runtime> for runtime",
+      "Browse keeps the current runtime; use /oc_model <provider/model> --runtime <runtime> to switch runtime too",
       "/oc_model status for details",
     ].join("\n"),
     buttons: [

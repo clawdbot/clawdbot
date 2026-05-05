@@ -188,7 +188,7 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
     });
 
     expect(result).toEqual({
-      success: true,
+      success: false,
       contentItems: [{ type: "inputText", text: "blocked by policy" }],
     });
     expect(execute).not.toHaveBeenCalled();

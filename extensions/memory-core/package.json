@@ -6,6 +6,7 @@
   "type": "module",
   "dependencies": {
     "chokidar": "^5.0.0",
+    "json5": "^2.2.3",
     "typebox": "1.1.37"
   },
   "devDependencies": {

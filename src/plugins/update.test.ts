@@ -250,12 +250,24 @@ function createCodexAppServerInstallConfig(params: {
   };
 }
 
-function createInstalledPackageDir(params: { name?: string; version: string }): string {
+function createInstalledPackageDir(params: {
+  name?: string;
+  version: string;
+  peerDependencies?: Record<string, string>;
+}): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-test-"));
   tempDirs.push(dir);
   fs.writeFileSync(
     path.join(dir, "package.json"),
-    JSON.stringify({ name: params.name ?? "test-plugin", version: params.version }, null, 2),
+    JSON.stringify(
+      {
+        name: params.name ?? "test-plugin",
+        version: params.version,
+        ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
+      },
+      null,
+      2,
+    ),
   );
   return dir;
 }
@@ -708,6 +720,119 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("repairs missing openclaw peer links before skipping unchanged npm plugins", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/codex",
+      version: "2026.5.3",
+      peerDependencies: { openclaw: ">=2026.5.3" },
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/codex",
+      version: "2026.5.3",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "codex",
+        targetDir: installPath,
+        version: "2026.5.3",
+        npmResolution: {
+          name: "@openclaw/codex",
+          version: "2026.5.3",
+          resolvedSpec: "@openclaw/codex@2026.5.3",
+        },
+      }),
+    );
+    const config: OpenClawConfig = {
+      plugins: {
+        installs: {
+          codex: {
+            source: "npm",
+            spec: "@openclaw/codex",
+            installPath,
+            resolvedName: "@openclaw/codex",
+            resolvedVersion: "2026.5.3",
+            resolvedSpec: "@openclaw/codex@2026.5.3",
+            integrity: "sha512-same",
+            shasum: "same",
+          },
+        },
+      },
+    };
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["codex"],
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/codex",
+        mode: "update",
+        expectedPluginId: "codex",
+      }),
+    );
+    expect(result.changed).toBe(true);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "codex",
+        status: "unchanged",
+        currentVersion: "2026.5.3",
+        nextVersion: "2026.5.3",
+        message: "codex already at 2026.5.3.",
+      },
+    ]);
+  });
+
+  it("skips unchanged npm plugins when the openclaw peer link already resolves", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/codex",
+      version: "2026.5.3",
+      peerDependencies: { openclaw: ">=2026.5.3" },
+    });
+    fs.mkdirSync(path.join(installPath, "node_modules", "openclaw"), { recursive: true });
+    mockNpmViewMetadata({
+      name: "@openclaw/codex",
+      version: "2026.5.3",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex",
+              installPath,
+              resolvedName: "@openclaw/codex",
+              resolvedVersion: "2026.5.3",
+              resolvedSpec: "@openclaw/codex@2026.5.3",
+              integrity: "sha512-same",
+              shasum: "same",
+            },
+          },
+        },
+      },
+      pluginIds: ["codex"],
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "codex",
+        status: "unchanged",
+        currentVersion: "2026.5.3",
+        nextVersion: "2026.5.3",
+        message: "codex is up to date (2026.5.3).",
+      },
+    ]);
+  });
+
   it("refreshes legacy npm install records before skipping unchanged artifacts", async () => {
     const installPath = createInstalledPackageDir({
       name: "@martian-engineering/lossless-claw",
@@ -1032,6 +1157,61 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("disables enabled tracked plugin update failures when requested", async () => {
+    const warn = vi.fn();
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "registry timeout",
+    });
+    const config = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+            config: { preserved: true },
+          },
+        },
+        installs: {
+          demo: {
+            source: "npm" as const,
+            spec: "@acme/demo",
+            installPath: "/tmp/demo",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      skipDisabledPlugins: true,
+      disableOnFailure: true,
+      logger: { warn },
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@acme/demo",
+        expectedPluginId: "demo",
+      }),
+    );
+    const message =
+      'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: registry timeout';
+    expect(warn).toHaveBeenCalledWith(message);
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.entries?.demo).toEqual({
+      enabled: false,
+      config: { preserved: true },
+    });
+    expect(result.config.plugins?.installs?.demo).toEqual(config.plugins.installs.demo);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "demo",
+        status: "skipped",
+        message,
+      },
+    ]);
+  });
+
   it("aborts exact pinned npm plugin updates on integrity drift by default", async () => {
     const warn = vi.fn();
     installPluginFromNpmSpecMock.mockImplementation(
@@ -1291,6 +1471,87 @@ describe("updateNpmInstalledPlugins", () => {
       version: "0.2.6",
       resolvedSpec: "openclaw-codex-app-server@0.2.6",
     });
+  });
+
+  it("falls back to the default npm spec when the beta package exists but is invalid", async () => {
+    installPluginFromNpmSpecMock
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "Installed plugin package uses a TypeScript entry without compiled runtime output.",
+      })
+      .mockResolvedValueOnce(
+        createSuccessfulNpmUpdateResult({
+          pluginId: "openclaw-codex-app-server",
+          targetDir: "/tmp/openclaw-codex-app-server",
+          version: "0.2.6",
+          npmResolution: {
+            name: "openclaw-codex-app-server",
+            version: "0.2.6",
+            resolvedSpec: "openclaw-codex-app-server@0.2.6",
+          },
+        }),
+      );
+
+    const warnMessages: string[] = [];
+    const result = await updateNpmInstalledPlugins({
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server",
+      }),
+      pluginIds: ["openclaw-codex-app-server"],
+      updateChannel: "beta",
+      logger: { warn: (msg) => warnMessages.push(msg) },
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server@beta",
+      }),
+    );
+    expect(installPluginFromNpmSpecMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server",
+      }),
+    );
+    expect(warnMessages).toEqual([expect.stringContaining("failed beta npm update")]);
+    expectCodexAppServerInstallState({
+      result,
+      spec: "openclaw-codex-app-server",
+      version: "0.2.6",
+      resolvedSpec: "openclaw-codex-app-server@0.2.6",
+    });
+  });
+
+  it("reports the fallback npm spec when beta fallback also fails", async () => {
+    installPluginFromNpmSpecMock
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "Installed plugin package uses a TypeScript entry without compiled runtime output.",
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "npm_package_not_found",
+        error: "npm package not found",
+      });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server",
+      }),
+      pluginIds: ["openclaw-codex-app-server"],
+      updateChannel: "beta",
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(2);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "openclaw-codex-app-server",
+        status: "error",
+        message:
+          "Failed to update openclaw-codex-app-server: npm package not found for openclaw-codex-app-server.",
+      },
+    ]);
   });
 
   it("preserves explicit npm tags when updating on the beta channel", async () => {

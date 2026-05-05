@@ -13,8 +13,8 @@ describe("acpx package manifest", () => {
     ) as AcpxPackageManifest;
 
     expect(packageJson.dependencies?.acpx).toBeDefined();
-    expect(packageJson.dependencies?.["@zed-industries/codex-acp"]).toBe("0.12.0");
-    expect(packageJson.dependencies?.["@agentclientprotocol/claude-agent-acp"]).toBe("0.31.4");
+    expect(packageJson.dependencies?.["@zed-industries/codex-acp"]).toBe("0.13.0");
+    expect(packageJson.dependencies?.["@agentclientprotocol/claude-agent-acp"]).toBe("0.32.0");
     expect(packageJson.devDependencies?.["@agentclientprotocol/claude-agent-acp"]).toBeUndefined();
   });
 });

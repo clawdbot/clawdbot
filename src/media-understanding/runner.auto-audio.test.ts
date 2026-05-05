@@ -95,6 +95,52 @@ describe("runCapability auto audio entries", () => {
     expect(result.decision.outcome).toBe("success");
   });
 
+  it("uses the provider audio default instead of the active Codex chat model", async () => {
+    let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
+    let seenModel: string | undefined;
+
+    await withAudioFixture("openclaw-auto-audio-codex", async ({ ctx, media, cache }) => {
+      const providerRegistry = createProviderRegistry({
+        "openai-codex": {
+          id: "openai-codex",
+          capabilities: ["image", "audio"],
+          defaultModels: { image: "gpt-5.5", audio: "gpt-4o-transcribe" },
+          transcribeAudio: async (req) => {
+            seenModel = req.model;
+            return { text: "codex audio", model: req.model ?? "unknown" };
+          },
+        },
+      });
+      const cfg = {
+        models: {
+          providers: {
+            "openai-codex": {
+              apiKey: "codex-test-key", // pragma: allowlist secret
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      runResult = await runCapability({
+        capability: "audio",
+        cfg,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry,
+        activeModel: { provider: "openai-codex", model: "gpt-5.5" },
+      });
+    });
+
+    expect(runResult?.outputs[0]).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-4o-transcribe",
+      text: "codex audio",
+    });
+    expect(seenModel).toBe("gpt-4o-transcribe");
+  });
+
   it("prefers provider keys over auto-detected local whisper", async () => {
     const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-audio-bin-"));
     try {

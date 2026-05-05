@@ -22,8 +22,14 @@ DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
 DOCKER_HOME_MOUNT=()
 DOCKER_TRUSTED_HARNESS_MOUNT=()
 DOCKER_TRUSTED_HARNESS_CONTAINER_DIR=""
+DOCKER_CACHE_CONTAINER_DIR="/tmp/openclaw-cache"
+DOCKER_CLI_TOOLS_CONTAINER_DIR="/tmp/openclaw-npm-global"
 DOCKER_EXTRA_ENV_FILES=()
 DOCKER_AUTH_PRESTAGED=0
+
+openclaw_live_codex_harness_is_ci() {
+  [[ -n "${CI:-}" && "${CI:-}" != "false" ]] || [[ -n "${GITHUB_ACTIONS:-}" && "${GITHUB_ACTIONS:-}" != "false" ]]
+}
 
 openclaw_live_codex_harness_append_build_extension() {
   local extension="${1:?extension required}"
@@ -50,6 +56,13 @@ if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" && -z "${OPENAI_API_KEY:-}" ]]; th
   echo "ERROR: OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key requires OPENAI_API_KEY." >&2
   exit 1
 fi
+if [[ "$CODEX_HARNESS_AUTH_MODE" != "api-key" && ! -s "$HOME/.codex/auth.json" ]]; then
+  echo "ERROR: OPENCLAW_LIVE_CODEX_HARNESS_AUTH=codex-auth requires ~/.codex/auth.json before building the live Docker image." >&2
+  if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+    echo "If this is a Testbox/API-key run, set OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key and run through openclaw-testbox-env." >&2
+  fi
+  exit 1
+fi
 
 cleanup_temp_dirs() {
   if ((${#TEMP_DIRS[@]} > 0)); then
@@ -60,7 +73,7 @@ trap cleanup_temp_dirs EXIT
 
 if [[ -n "${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-}" ]]; then
   CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR}"
-elif [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+elif openclaw_live_codex_harness_is_ci; then
   CLI_TOOLS_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cli-tools.XXXXXX")"
   TEMP_DIRS+=("$CLI_TOOLS_DIR")
 else
@@ -68,7 +81,7 @@ else
 fi
 if [[ -n "${OPENCLAW_DOCKER_CACHE_HOME_DIR:-}" ]]; then
   CACHE_HOME_DIR="${OPENCLAW_DOCKER_CACHE_HOME_DIR}"
-elif [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+elif openclaw_live_codex_harness_is_ci; then
   CACHE_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cache.XXXXXX")"
   TEMP_DIRS+=("$CACHE_HOME_DIR")
 else
@@ -77,7 +90,10 @@ fi
 
 mkdir -p "$CLI_TOOLS_DIR"
 mkdir -p "$CACHE_HOME_DIR"
-if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+if openclaw_live_codex_harness_is_ci; then
+  chmod 0777 "$CLI_TOOLS_DIR" "$CACHE_HOME_DIR" || true
+fi
+if openclaw_live_codex_harness_is_ci; then
   DOCKER_USER="$(id -u):$(id -g)"
   DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
   TEMP_DIRS+=("$DOCKER_HOME_DIR")
@@ -146,6 +162,11 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 export COREPACK_HOME="${COREPACK_HOME:-$XDG_CACHE_HOME/node/corepack}"
 export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$XDG_CACHE_HOME/npm}"
 export npm_config_cache="$NPM_CONFIG_CACHE"
+if [ "${OPENCLAW_LIVE_CODEX_HARNESS_DEBUG:-}" = "1" ]; then
+  id
+  mount | grep -E 'openclaw-cache|openclaw-npm|/home/node' || true
+  ls -ld "$HOME" "$XDG_CACHE_HOME" "$NPM_CONFIG_PREFIX" 2>/dev/null || true
+fi
 # Force the Codex harness to use the staged `~/.codex` auth files. This lane
 # is not meant to exercise raw OpenAI API-key routing unless the lane
 # explicitly opts into API-key auth for CI.
@@ -254,6 +275,12 @@ DOCKER_RUN_ARGS=(docker run --rm -t \
   --entrypoint bash \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e HOME=/home/node \
+  -e NPM_CONFIG_PREFIX="$DOCKER_CLI_TOOLS_CONTAINER_DIR" \
+  -e npm_config_prefix="$DOCKER_CLI_TOOLS_CONTAINER_DIR" \
+  -e XDG_CACHE_HOME="$DOCKER_CACHE_CONTAINER_DIR" \
+  -e COREPACK_HOME="$DOCKER_CACHE_CONTAINER_DIR/node/corepack" \
+  -e NPM_CONFIG_CACHE="$DOCKER_CACHE_CONTAINER_DIR/npm" \
+  -e npm_config_cache="$DOCKER_CACHE_CONTAINER_DIR/npm" \
   -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
   -e OPENCLAW_AGENT_HARNESS_FALLBACK=none \
   -e OPENCLAW_DOCKER_AUTH_PRESTAGED="$DOCKER_AUTH_PRESTAGED" \
@@ -287,14 +314,22 @@ openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_EXTRA_ENV_FILES
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_TRUSTED_HARNESS_MOUNT
 DOCKER_RUN_ARGS+=(\
-  -v "$CACHE_HOME_DIR":/home/node/.cache \
+  -v "$CACHE_HOME_DIR":"$DOCKER_CACHE_CONTAINER_DIR" \
   -v "$ROOT_DIR":/src:ro \
   -v "$CONFIG_DIR":/home/node/.openclaw \
   -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace \
-  -v "$CLI_TOOLS_DIR":/home/node/.npm-global)
+  -v "$CLI_TOOLS_DIR":"$DOCKER_CLI_TOOLS_CONTAINER_DIR")
 openclaw_live_append_array DOCKER_RUN_ARGS EXTERNAL_AUTH_MOUNTS
 openclaw_live_append_array DOCKER_RUN_ARGS PROFILE_MOUNT
 DOCKER_RUN_ARGS+=(\
   "$LIVE_IMAGE_NAME" \
   -lc "$LIVE_TEST_CMD")
+if [[ "${OPENCLAW_LIVE_CODEX_HARNESS_DEBUG:-}" == "1" ]]; then
+  echo "==> Docker debug: host ids and mounted dirs"
+  id
+  ls -ld "$CACHE_HOME_DIR" "$CLI_TOOLS_DIR" "${DOCKER_HOME_DIR:-$HOME}" 2>/dev/null || true
+  printf '==> Docker debug args:'
+  printf ' %q' "${DOCKER_RUN_ARGS[@]}"
+  printf '\n'
+fi
 "${DOCKER_RUN_ARGS[@]}"

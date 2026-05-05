@@ -33,14 +33,18 @@ const {
   captureWsEventSpy,
   GatewayPlugin,
   globalFetchMock,
+  HttpsAgent,
   HttpsProxyAgent,
   getLastAgent,
+  getLastProxyAgent,
   resolveDebugProxySettingsMock,
   resetLastAgent,
   webSocketSpy,
+  httpsAgentSpy,
   wsProxyAgentSpy,
 } = vi.hoisted(() => {
   const wsProxyAgentSpy = vi.fn();
+  const httpsAgentSpy = vi.fn();
   const globalFetchMock = vi.fn();
   const baseRegisterClientSpy = vi.fn();
   const webSocketSpy = vi.fn();
@@ -78,6 +82,16 @@ const {
     }
   }
 
+  class HttpsAgent {
+    static lastCreated: HttpsAgent | undefined;
+    options: unknown;
+    constructor(options?: unknown) {
+      this.options = options;
+      HttpsAgent.lastCreated = this;
+      httpsAgentSpy(options);
+    }
+  }
+
   class HttpsProxyAgent {
     static lastCreated: HttpsProxyAgent | undefined;
     proxyUrl: string;
@@ -96,12 +110,16 @@ const {
     GatewayIntents,
     GatewayPlugin,
     globalFetchMock,
+    HttpsAgent,
     HttpsProxyAgent,
-    getLastAgent: () => HttpsProxyAgent.lastCreated,
+    getLastAgent: () => HttpsAgent.lastCreated,
+    getLastProxyAgent: () => HttpsProxyAgent.lastCreated,
     captureHttpExchangeSpy,
     captureWsEventSpy,
+    httpsAgentSpy,
     resolveDebugProxySettingsMock,
     resetLastAgent: () => {
+      HttpsAgent.lastCreated = undefined;
       HttpsProxyAgent.lastCreated = undefined;
     },
     webSocketSpy,
@@ -118,6 +136,10 @@ vi.mock("../internal/gateway.js", () => ({
 vi.mock("../internal/gateway.js", () => ({
   GatewayIntents,
   GatewayPlugin,
+}));
+
+vi.mock("node:https", () => ({
+  Agent: HttpsAgent,
 }));
 
 vi.mock("https-proxy-agent", () => ({
@@ -279,6 +301,7 @@ describe("createDiscordGatewayPlugin", () => {
     vi.useRealTimers();
     baseRegisterClientSpy.mockClear();
     globalFetchMock.mockClear();
+    httpsAgentSpy.mockClear();
     wsProxyAgentSpy.mockClear();
     webSocketSpy.mockClear();
     captureHttpExchangeSpy.mockClear();
@@ -321,9 +344,16 @@ describe("createDiscordGatewayPlugin", () => {
       .createWebSocket;
     createWebSocket("wss://gateway.discord.gg");
 
-    expect(webSocketSpy).toHaveBeenCalledWith("wss://gateway.discord.gg", {
-      handshakeTimeout: 30_000,
-    });
+    expect(httpsAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ lookup: expect.any(Function) }),
+    );
+    expect(webSocketSpy).toHaveBeenCalledWith(
+      "wss://gateway.discord.gg",
+      expect.objectContaining({
+        agent: getLastAgent(),
+        handshakeTimeout: 30_000,
+      }),
+    );
     expect(wsProxyAgentSpy).not.toHaveBeenCalled();
   });
 
@@ -437,7 +467,7 @@ describe("createDiscordGatewayPlugin", () => {
     expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://127.0.0.1:8080");
     expect(webSocketSpy).toHaveBeenCalledWith(
       "wss://gateway.discord.gg",
-      expect.objectContaining({ agent: getLastAgent(), handshakeTimeout: 30_000 }),
+      expect.objectContaining({ agent: getLastProxyAgent(), handshakeTimeout: 30_000 }),
     );
     expect(runtime.log).toHaveBeenCalledWith("discord: gateway proxy enabled");
     expect(runtime.error).not.toHaveBeenCalled();

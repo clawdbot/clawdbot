@@ -232,6 +232,55 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await cleanup();
   });
 
+  it("defers retryable gateway readiness startup failures without terminal error logs", async () => {
+    vi.useFakeTimers();
+    const channelRuntime = createRuntimeChannel();
+    const readinessError = new Error("gateway event loop readiness timeout");
+    const start = vi.fn().mockRejectedValueOnce(readinessError).mockResolvedValueOnce(undefined);
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const logger = {
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      child: vi.fn(),
+      isEnabled: vi.fn().mockReturnValue(true),
+      isVerboseEnabled: vi.fn().mockReturnValue(false),
+      verbose: vi.fn(),
+    };
+    createChannelApprovalHandlerFromCapability
+      .mockResolvedValueOnce({ start, stop })
+      .mockResolvedValueOnce({ start, stop });
+
+    const cleanup = await startTestBootstrap({ channelRuntime, logger });
+
+    registerApprovalContext(channelRuntime);
+    await flushTransitions();
+
+    expect(start).toHaveBeenCalledTimes(1);
+    await flushTransitions();
+    expect(logger.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("failed to start native approval handler"),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("native approval handler deferred until gateway readiness recovers"),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("gateway readiness unavailable before approval handler start"),
+    );
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("gateway event loop readiness timeout"),
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushTransitions();
+
+    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(2);
+    expect(start).toHaveBeenCalledTimes(2);
+
+    await cleanup();
+  });
+
   it("does not retry terminal native approval startup failures", async () => {
     vi.useFakeTimers();
     const channelRuntime = createRuntimeChannel();

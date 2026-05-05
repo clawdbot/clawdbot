@@ -216,6 +216,7 @@ async function resolveRuntimeModel(params: {
   provider: string;
   model: string;
   agentDir: string;
+  workspaceDir?: string;
   sessionEntry?: StoredSessionEntry;
   sessionStore?: Record<string, StoredSessionEntry>;
   sessionKey?: string;
@@ -226,7 +227,8 @@ async function resolveRuntimeModel(params: {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 }> {
-  await ensureOpenClawModelsJson(params.cfg, params.agentDir);
+  const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
+  await ensureOpenClawModelsJson(params.cfg, params.agentDir, modelsOptions);
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
   const model = resolveModelWithRegistry({
@@ -319,11 +321,17 @@ export async function runBtwSideQuestion(
     throw new Error("No active session context.");
   }
 
+  const sessionAgentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+  });
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
   const { model, authProfileId } = await resolveRuntimeModel({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
     agentDir: params.agentDir,
+    workspaceDir,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
@@ -341,11 +349,6 @@ export async function runBtwSideQuestion(
     apiKeyInfo.mode === "aws-sdk" && !apiKeyInfo.apiKey
       ? undefined
       : requireApiKey(apiKeyInfo, model.provider);
-  const sessionAgentId = resolveSessionAgentId({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-  });
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
   if (apiKey) {
     const preparedAuth = await prepareProviderRuntimeAuth({
       provider: model.provider,

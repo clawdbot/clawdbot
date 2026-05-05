@@ -18,6 +18,10 @@ import {
 } from "./components/selectors.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
+import {
+  TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
+  TUI_SESSION_PICKER_LIMIT,
+} from "./tui-session-list-policy.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
@@ -190,6 +194,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const openSessionSelector = async () => {
     try {
       const result = await client.listSessions({
+        limit: TUI_SESSION_PICKER_LIMIT,
+        activeMinutes: TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
         includeGlobal: false,
         includeUnknown: false,
         includeDerivedTitles: true,

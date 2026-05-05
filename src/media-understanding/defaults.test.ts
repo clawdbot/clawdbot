@@ -58,9 +58,9 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         autoPriority: { image: 10, audio: 10 },
       },
       "openai-codex": {
-        capabilities: ["image"],
-        defaultModels: { image: "gpt-5.5" },
-        autoPriority: { image: 20 },
+        capabilities: ["image", "audio"],
+        defaultModels: { image: "gpt-5.5", audio: "gpt-4o-transcribe" },
+        autoPriority: { image: 20, audio: 20 },
       },
       opencode: { capabilities: ["image"], defaultModels: { image: "gpt-5-nano" } },
       "opencode-go": { capabilities: ["image"], defaultModels: { image: "kimi-k2.6" } },
@@ -108,6 +108,9 @@ describe("resolveDefaultMediaModel", () => {
     expect(resolveDefaultMediaModel({ providerId: "mistral", capability: "audio" })).toBe(
       "voxtral-mini-latest",
     );
+    expect(resolveDefaultMediaModel({ providerId: "openai-codex", capability: "audio" })).toBe(
+      "gpt-4o-transcribe",
+    );
   });
 
   it("resolves bundled image defaults beyond the historical core set", () => {
@@ -136,6 +139,7 @@ describe("resolveAutoMediaKeyProviders", () => {
   it("keeps the bundled audio fallback order", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "audio" })).toEqual([
       "openai",
+      "openai-codex",
       "xai",
       "google",
       "mistral",

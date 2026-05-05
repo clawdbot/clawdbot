@@ -178,6 +178,12 @@ that agent. To force a different Claude mode, set explicit raw backend args
 such as `--permission-mode default` or `--permission-mode acceptEdits` under
 `agents.defaults.cliBackends.claude-cli.args` and matching `resumeArgs`.
 
+The bundled Anthropic `claude-cli` backend also maps OpenClaw `/think` levels
+to Claude Code's native `--effort` flag for non-off levels. `minimal` and
+`low` map to `low`, `adaptive` and `medium` map to `medium`, and `high`,
+`xhigh`, and `max` map directly. Other CLI backends need their owning plugin to
+declare an equivalent argv mapper before `/think` can affect the spawned CLI.
+
 Before OpenClaw can use the bundled `claude-cli` backend, Claude Code itself
 must already be logged in on the same host:
 

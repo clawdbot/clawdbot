@@ -54,6 +54,11 @@ export type ReplyOperation = {
   attachBackend(handle: ReplyBackendHandle): void;
   detachBackend(handle: ReplyBackendHandle): void;
   complete(): void;
+  /**
+   * Complete the operation, clear active-run state, then run follow-up work.
+   * Use when the follow-up can create another ReplyOperation for this session.
+   */
+  completeThen(afterClear: () => void): void;
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
   abortByUser(): void;
   abortForRestart(): void;
@@ -331,6 +336,10 @@ export function createReplyOperation(params: {
         phase = "completed";
       }
       clearState();
+    },
+    completeThen(afterClear) {
+      operation.complete();
+      afterClear();
     },
     fail(code, cause) {
       if (!result) {

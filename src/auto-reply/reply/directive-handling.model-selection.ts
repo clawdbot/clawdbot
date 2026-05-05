@@ -80,6 +80,7 @@ export function resolveModelSelectionFromDirective(params: {
         defaultModel: params.defaultModel,
         aliasIndex: params.aliasIndex,
         allowedModelKeys: params.allowedModelKeys,
+        rawRuntime: params.directives.rawModelRuntime,
       })
     : null;
   const useStoredNumericProfile =
@@ -131,6 +132,7 @@ export function resolveModelSelectionFromDirective(params: {
       defaultModel: params.defaultModel,
       aliasIndex: params.aliasIndex,
       allowedModelKeys: params.allowedModelKeys,
+      rawRuntime: params.directives.rawModelRuntime,
     });
 
     if (resolved.error) {

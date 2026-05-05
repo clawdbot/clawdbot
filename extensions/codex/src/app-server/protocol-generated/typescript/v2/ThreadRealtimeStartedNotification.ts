@@ -8,6 +8,6 @@ import type { RealtimeConversationVersion } from "../RealtimeConversationVersion
  */
 export type ThreadRealtimeStartedNotification = {
   threadId: string;
-  sessionId: string | null;
+  realtimeSessionId: string | null;
   version: RealtimeConversationVersion;
 };

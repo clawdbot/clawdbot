@@ -52,16 +52,24 @@ export function filterSparseMissingOxlintTargets(
   } = {},
 ) {
   if (!isSparseCheckoutEnabled({ cwd })) {
-    return { args, hadExplicitTargets: false, remainingExplicitTargets: 0, skippedTargets: [] };
+    return {
+      args,
+      hadExplicitTargets: false,
+      remainingExplicitTargets: 0,
+      skippedTargets: [],
+      skippedConfigs: [],
+    };
   }
 
   const filteredArgs = [];
   const skippedTargets = [];
+  const skippedConfigs = [];
   let hadExplicitTargets = false;
   let remainingExplicitTargets = 0;
   let consumeNextValue = false;
 
-  for (const arg of args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     if (consumeNextValue) {
       filteredArgs.push(arg);
       consumeNextValue = false;
@@ -74,6 +82,29 @@ export function filterSparseMissingOxlintTargets(
     }
 
     if (arg.startsWith("--")) {
+      if (arg === "--tsconfig") {
+        const value = args[index + 1];
+        if (value !== undefined) {
+          index += 1;
+          if (!fileExists(path.resolve(cwd, value)) && isTrackedPath({ cwd, target: value })) {
+            skippedConfigs.push(value);
+            continue;
+          }
+          filteredArgs.push(arg, value);
+          continue;
+        }
+      }
+      if (arg.startsWith("--tsconfig=")) {
+        const value = arg.slice("--tsconfig=".length);
+        if (
+          value &&
+          !fileExists(path.resolve(cwd, value)) &&
+          isTrackedPath({ cwd, target: value })
+        ) {
+          skippedConfigs.push(value);
+          continue;
+        }
+      }
       filteredArgs.push(arg);
       if (!arg.includes("=") && OXLINT_VALUE_FLAGS.has(arg)) {
         consumeNextValue = true;
@@ -97,7 +128,13 @@ export function filterSparseMissingOxlintTargets(
     filteredArgs.push(arg);
   }
 
-  return { args: filteredArgs, hadExplicitTargets, remainingExplicitTargets, skippedTargets };
+  return {
+    args: filteredArgs,
+    hadExplicitTargets,
+    remainingExplicitTargets,
+    skippedTargets,
+    skippedConfigs,
+  };
 }
 
 function getSparseCheckoutEnabled({ cwd }) {
@@ -158,6 +195,12 @@ export async function main(argv = process.argv.slice(2), runtimeEnv = process.en
     console.error(
       `[oxlint] sparse checkout is missing tracked target(s); skipping ${sparseTargets.skippedTargets.join(", ")}`,
     );
+  }
+  if (sparseTargets.skippedConfigs.length > 0) {
+    console.error(
+      `[oxlint] sparse checkout is missing tracked config(s); skipping oxlint: ${sparseTargets.skippedConfigs.join(", ")}`,
+    );
+    return;
   }
   if (sparseTargets.hadExplicitTargets && sparseTargets.remainingExplicitTargets === 0) {
     console.error("[oxlint] no present sparse-checkout targets remain; skipping oxlint.");

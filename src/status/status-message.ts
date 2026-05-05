@@ -97,6 +97,7 @@ export type StatusArgs = {
   activeModelAuth?: string;
   usageLine?: string;
   timeLine?: string;
+  uptimeLine?: string;
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
@@ -961,6 +962,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   return [
     versionLine,
     args.timeLine,
+    args.uptimeLine,
     modelLine,
     configuredFallbacksLine,
     fallbackLine,

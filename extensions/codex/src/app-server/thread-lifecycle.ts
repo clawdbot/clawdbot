@@ -47,20 +47,37 @@ export async function startOrResumeThread(params: {
     agentDir: params.params.agentDir,
     config: params.params.config,
   });
+  let preserveExistingBinding = false;
   if (binding?.threadId) {
     // `/codex resume <thread>` writes a binding before the next turn can know
     // the dynamic tool catalog, so only invalidate fingerprints we actually have.
     if (
       binding.dynamicToolsFingerprint &&
-      binding.dynamicToolsFingerprint !== dynamicToolsFingerprint
+      !areDynamicToolFingerprintsCompatible(
+        binding.dynamicToolsFingerprint,
+        dynamicToolsFingerprint,
+      )
     ) {
-      embeddedAgentLog.debug(
-        "codex app-server dynamic tool catalog changed; starting a new thread",
-        {
-          threadId: binding.threadId,
-        },
-      );
-      await clearCodexAppServerBinding(params.params.sessionFile);
+      preserveExistingBinding = shouldStartTransientNoToolThread({
+        previous: binding.dynamicToolsFingerprint,
+        next: dynamicToolsFingerprint,
+      });
+      if (preserveExistingBinding) {
+        embeddedAgentLog.debug(
+          "codex app-server dynamic tools unavailable for turn; starting transient thread",
+          {
+            threadId: binding.threadId,
+          },
+        );
+      } else {
+        embeddedAgentLog.debug(
+          "codex app-server dynamic tool catalog changed; starting a new thread",
+          {
+            threadId: binding.threadId,
+          },
+        );
+        await clearCodexAppServerBinding(params.params.sessionFile);
+      }
     } else {
       try {
         const authProfileId = params.params.authProfileId ?? binding.authProfileId;
@@ -142,23 +159,25 @@ export async function startOrResumeThread(params: {
     config: params.params.config,
   });
   const createdAt = new Date().toISOString();
-  await writeCodexAppServerBinding(
-    params.params.sessionFile,
-    {
-      threadId: response.thread.id,
-      cwd: params.cwd,
-      authProfileId: params.params.authProfileId,
-      model: response.model ?? params.params.modelId,
-      modelProvider: response.modelProvider ?? modelProvider,
-      dynamicToolsFingerprint,
-      createdAt,
-    },
-    {
-      authProfileStore: params.params.authProfileStore,
-      agentDir: params.params.agentDir,
-      config: params.params.config,
-    },
-  );
+  if (!preserveExistingBinding) {
+    await writeCodexAppServerBinding(
+      params.params.sessionFile,
+      {
+        threadId: response.thread.id,
+        cwd: params.cwd,
+        authProfileId: params.params.authProfileId,
+        model: response.model ?? params.params.modelId,
+        modelProvider: response.modelProvider ?? modelProvider,
+        dynamicToolsFingerprint,
+        createdAt,
+      },
+      {
+        authProfileStore: params.params.authProfileStore,
+        agentDir: params.params.agentDir,
+        config: params.params.config,
+      },
+    );
+  }
   return {
     schemaVersion: 1,
     threadId: response.thread.id,
@@ -284,8 +303,21 @@ function buildHeartbeatCollaborationInstructions(): string {
   ].join("\n\n");
 }
 
+export function codexDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[]): string {
+  return fingerprintDynamicTools(dynamicTools);
+}
+
+export function areCodexDynamicToolFingerprintsCompatible(params: {
+  previous?: string;
+  next: string;
+}): boolean {
+  return areDynamicToolFingerprintsCompatible(params.previous, params.next);
+}
+
 function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
-  return JSON.stringify(dynamicTools.map(fingerprintDynamicToolSpec));
+  return JSON.stringify(
+    dynamicTools.map(fingerprintDynamicToolSpec).toSorted(compareJsonFingerprint),
+  );
 }
 
 function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
@@ -318,6 +350,27 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
     stable[key] = stabilizeJsonValue(child);
   }
   return stable;
+}
+
+const EMPTY_DYNAMIC_TOOLS_FINGERPRINT = JSON.stringify([]);
+
+function areDynamicToolFingerprintsCompatible(previous: string | undefined, next: string): boolean {
+  return !previous || previous === next;
+}
+
+function shouldStartTransientNoToolThread(params: {
+  previous: string | undefined;
+  next: string;
+}): boolean {
+  return Boolean(
+    params.previous &&
+    params.previous !== EMPTY_DYNAMIC_TOOLS_FINGERPRINT &&
+    params.next === EMPTY_DYNAMIC_TOOLS_FINGERPRINT,
+  );
+}
+
+function compareJsonFingerprint(left: JsonValue, right: JsonValue): number {
+  return JSON.stringify(left).localeCompare(JSON.stringify(right));
 }
 
 export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {

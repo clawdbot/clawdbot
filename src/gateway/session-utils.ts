@@ -372,6 +372,7 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
 type SessionListRowContext = {
   subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
   storeChildSessionsByKey: Map<string, string[]>;
+  selectedModelByOverrideRef: Map<string, ReturnType<typeof resolveSessionModelRef>>;
   thinkingLevelsByModelRef: Map<string, ReturnType<typeof listThinkingLevelOptions>>;
 };
 
@@ -489,12 +490,43 @@ function buildSessionListRowContext(params: {
   return {
     subagentRuns,
     storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
+    selectedModelByOverrideRef: new Map(),
     thinkingLevelsByModelRef: new Map(),
   };
 }
 
 function createSessionRowModelCacheKey(provider: string | undefined, model: string | undefined) {
   return `${normalizeLowercaseStringOrEmpty(provider)}\0${normalizeOptionalString(model) ?? ""}`;
+}
+
+function resolveSessionSelectedModelRef(params: {
+  cfg: OpenClawConfig;
+  entry?: SessionEntry;
+  agentId: string;
+  rowContext?: SessionListRowContext;
+}): ReturnType<typeof resolveSessionModelRef> | null {
+  const override = normalizeStoredOverrideModel({
+    providerOverride: params.entry?.providerOverride,
+    modelOverride: params.entry?.modelOverride,
+  });
+  if (!override.modelOverride) {
+    return null;
+  }
+  if (!params.rowContext) {
+    return resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  }
+  const key = [
+    normalizeAgentId(params.agentId),
+    override.providerOverride ?? "",
+    override.modelOverride,
+  ].join("\0");
+  const cached = params.rowContext.selectedModelByOverrideRef.get(key);
+  if (cached) {
+    return cached;
+  }
+  const selected = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  params.rowContext.selectedModelByOverrideRef.set(key, selected);
+  return selected;
 }
 
 function resolveSessionRowThinkingLevels(params: {
@@ -1540,9 +1572,12 @@ export function buildGatewaySessionRow(params: {
           ? resolveSessionRuntimeMs(subagentRun, now)
           : undefined))
     : undefined;
-  const selectedModel = entry?.modelOverride?.trim()
-    ? resolveSessionModelRef(cfg, entry, sessionAgentId)
-    : null;
+  const selectedModel = resolveSessionSelectedModelRef({
+    cfg,
+    entry,
+    agentId: sessionAgentId,
+    rowContext,
+  });
   const resolvedModel = resolveSessionModelIdentityRef(
     cfg,
     entry,

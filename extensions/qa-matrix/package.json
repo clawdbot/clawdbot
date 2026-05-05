@@ -5,7 +5,7 @@
   "description": "OpenClaw Matrix QA runner plugin",
   "type": "module",
   "dependencies": {
-    "undici": "8.1.0"
+    "undici": "8.2.0"
   },
   "devDependencies": {
     "@openclaw/matrix": "workspace:*",

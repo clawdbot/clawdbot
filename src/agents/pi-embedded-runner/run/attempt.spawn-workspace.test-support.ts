@@ -69,10 +69,13 @@ type AttemptSpawnWorkspaceHoisted = {
   installContextEngineLoopHookMock: UnknownMock;
   flushPendingToolResultsAfterIdleMock: AsyncUnknownMock;
   releaseWsSessionMock: UnknownMock;
+  resolveBootstrapFilesForRunMock: Mock<(...args: unknown[]) => Promise<WorkspaceBootstrapFile[]>>;
   resolveBootstrapContextForRunMock: Mock<() => Promise<BootstrapContext>>;
   isWorkspaceBootstrapPendingMock: Mock<(workspaceDir: string) => Promise<boolean>>;
   resolveContextInjectionModeMock: Mock<() => "always" | "continuation-skip">;
   hasCompletedBootstrapTurnMock: Mock<() => Promise<boolean>>;
+  resolveEmbeddedRunSkillEntriesMock: UnknownMock;
+  resolveSkillsPromptForRunMock: UnknownMock;
   supportsModelToolsMock: Mock<(model?: unknown) => boolean>;
   getGlobalHookRunnerMock: Mock<() => unknown>;
   initializeGlobalHookRunnerMock: UnknownMock;
@@ -139,6 +142,12 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     bootstrapFiles: [],
     contextFiles: [],
   }));
+  const resolveBootstrapFilesForRunMock = vi.fn<
+    (...args: unknown[]) => Promise<WorkspaceBootstrapFile[]>
+  >(async () => {
+    const context = await resolveBootstrapContextForRunMock();
+    return context.bootstrapFiles;
+  });
   const isWorkspaceBootstrapPendingMock = vi.fn<(workspaceDir: string) => Promise<boolean>>(
     async () => false,
   );
@@ -146,6 +155,11 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     () => "always",
   );
   const hasCompletedBootstrapTurnMock = vi.fn<() => Promise<boolean>>(async () => false);
+  const resolveEmbeddedRunSkillEntriesMock = vi.fn(() => ({
+    shouldLoadSkillEntries: false,
+    skillEntries: undefined,
+  }));
+  const resolveSkillsPromptForRunMock = vi.fn(() => "");
   const supportsModelToolsMock = vi.fn<(model?: unknown) => boolean>(() => true);
   const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
   const initializeGlobalHookRunnerMock = vi.fn();
@@ -188,10 +202,13 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     installContextEngineLoopHookMock,
     flushPendingToolResultsAfterIdleMock,
     releaseWsSessionMock,
+    resolveBootstrapFilesForRunMock,
     resolveBootstrapContextForRunMock,
     isWorkspaceBootstrapPendingMock,
     resolveContextInjectionModeMock,
     hasCompletedBootstrapTurnMock,
+    resolveEmbeddedRunSkillEntriesMock,
+    resolveSkillsPromptForRunMock,
     supportsModelToolsMock,
     getGlobalHookRunnerMock,
     initializeGlobalHookRunnerMock,
@@ -286,6 +303,7 @@ vi.mock("../../bootstrap-files.js", async () => {
     ...actual,
     makeBootstrapWarn: () => () => {},
     isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
+    resolveBootstrapFilesForRun: hoisted.resolveBootstrapFilesForRunMock,
     resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
     resolveContextInjectionMode: hoisted.resolveContextInjectionModeMock,
     hasCompletedBootstrapTurn: hoisted.hasCompletedBootstrapTurnMock,
@@ -295,14 +313,12 @@ vi.mock("../../bootstrap-files.js", async () => {
 vi.mock("../../skills.js", () => ({
   applySkillEnvOverrides: () => () => {},
   applySkillEnvOverridesFromSnapshot: () => () => {},
-  resolveSkillsPromptForRun: () => "",
+  resolveSkillsPromptForRun: (...args: unknown[]) => hoisted.resolveSkillsPromptForRunMock(...args),
 }));
 
 vi.mock("../skills-runtime.js", () => ({
-  resolveEmbeddedRunSkillEntries: () => ({
-    shouldLoadSkillEntries: false,
-    skillEntries: undefined,
-  }),
+  resolveEmbeddedRunSkillEntries: (...args: unknown[]) =>
+    hoisted.resolveEmbeddedRunSkillEntriesMock(...args),
 }));
 
 vi.mock("../context-engine-maintenance.js", () => ({
@@ -821,9 +837,18 @@ export function resetEmbeddedAttemptHarness(
     bootstrapFiles: [],
     contextFiles: [],
   });
+  hoisted.resolveBootstrapFilesForRunMock.mockReset().mockImplementation(async () => {
+    const context = await hoisted.resolveBootstrapContextForRunMock();
+    return context.bootstrapFiles;
+  });
   hoisted.isWorkspaceBootstrapPendingMock.mockReset().mockResolvedValue(false);
   hoisted.resolveContextInjectionModeMock.mockReset().mockReturnValue("always");
   hoisted.hasCompletedBootstrapTurnMock.mockReset().mockResolvedValue(false);
+  hoisted.resolveEmbeddedRunSkillEntriesMock.mockReset().mockReturnValue({
+    shouldLoadSkillEntries: false,
+    skillEntries: undefined,
+  });
+  hoisted.resolveSkillsPromptForRunMock.mockReset().mockReturnValue("");
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);
   hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);

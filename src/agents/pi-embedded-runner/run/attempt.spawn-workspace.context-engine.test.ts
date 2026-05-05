@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -157,6 +158,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionPrompt: async (session, prompt) => {
         seen.prompt = prompt;
         seen.messages = [...session.messages];
+        seen.systemPrompt = session.agent.state.systemPrompt;
         session.messages = [
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 2 },
@@ -181,6 +183,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       "OpenClaw runtime context for the immediately preceding user message.",
     );
     expect(JSON.stringify(seen.messages)).not.toContain("not user-authored");
+    expect(seen.systemPrompt).not.toContain("secret runtime context");
+    expect(seen.systemPrompt).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
     const trajectoryEvents = (
       await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
     )
@@ -205,6 +209,102 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       expect(String(value)).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
       expect(String(value)).not.toContain("secret runtime context");
     }
+  });
+
+  it("rebuilds skill prompt inputs from the sandbox workspace for non-rw sandbox runs", async () => {
+    const sandboxWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
+    tempPaths.push(sandboxWorkspace);
+    hoisted.resolveSandboxContextMock.mockResolvedValue({
+      enabled: true,
+      workspaceAccess: "ro",
+      workspaceDir: sandboxWorkspace,
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        skillsSnapshot: {
+          prompt:
+            "<available_skills><skill><location>~/.openclaw/skills/smaug/SKILL.md</location></skill></available_skills>",
+          skills: [{ name: "smaug" }],
+          resolvedSkills: [
+            {
+              name: "smaug",
+              description: "Host copy",
+              disableModelInvocation: false,
+              filePath: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
+              baseDir: "/Users/alice/.openclaw/skills/smaug",
+              source: "openclaw-workspace",
+              sourceInfo: {
+                path: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
+                source: "openclaw-workspace",
+                scope: "project",
+                origin: "top-level",
+                baseDir: "/Users/alice/.openclaw/skills/smaug",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(hoisted.resolveEmbeddedRunSkillEntriesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: sandboxWorkspace,
+        skillsSnapshot: undefined,
+      }),
+    );
+    expect(hoisted.resolveSkillsPromptForRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: sandboxWorkspace,
+        skillsSnapshot: undefined,
+      }),
+    );
+  });
+
+  it("keeps before_prompt_build prependContext out of system prompt on transcriptPrompt runs", async () => {
+    const runBeforePromptBuild = vi.fn(async () => ({ prependContext: "dynamic hook context" }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
+      runBeforePromptBuild,
+      runBeforeAgentStart: vi.fn(),
+    });
+    const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: "visible ask",
+        transcriptPrompt: "visible ask",
+      },
+      sessionPrompt: async (session, prompt) => {
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
+        seen.systemPrompt = session.agent.state.systemPrompt;
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seen.prompt).toBe("visible ask");
+    expect(result.finalPromptText).toBe("visible ask");
+    expect(seen.systemPrompt).not.toContain("dynamic hook context");
+    expect(seen.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          display: false,
+          content: "dynamic hook context",
+        }),
+      ]),
+    );
   });
 
   it("keeps bootstrap truncation warnings out of WebChat runtime context", async () => {
@@ -314,6 +414,54 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(systemPrompt).toContain("BOOTSTRAP.md is included below in Project Context");
     expect(systemPrompt).toContain("## /tmp/openclaw-override-workspace/BOOTSTRAP.md");
     expect(systemPrompt).toContain("Ask who I am.");
+  });
+
+  it("includes hook-adjusted bootstrap files preloaded before routing", async () => {
+    const workspaceDir = "/tmp/openclaw-hook-workspace";
+    hoisted.resolveBootstrapFilesForRunMock.mockResolvedValueOnce([
+      {
+        name: "BOOTSTRAP.md",
+        path: `${workspaceDir}/BOOTSTRAP.md`,
+        content: "Ask who I am before continuing.",
+        missing: false,
+      },
+    ]);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        config: {
+          agents: {
+            defaults: {
+              systemPromptOverride: "Custom override prompt.",
+            },
+          },
+        } as OpenClawConfig,
+        prompt: "visible ask",
+        transcriptPrompt: "visible ask",
+        trigger: "user",
+        workspaceDir,
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(hoisted.resolveBootstrapFilesForRunMock).toHaveBeenCalledOnce();
+    expect(hoisted.resolveBootstrapContextForRunMock).not.toHaveBeenCalled();
+    const systemPrompt =
+      hoisted.systemPromptOverrideTexts.find((text) => text.includes("Custom override prompt.")) ??
+      "";
+
+    expect(systemPrompt).toContain("## Bootstrap Pending");
+    expect(systemPrompt).toContain("BOOTSTRAP.md is included below in Project Context");
+    expect(systemPrompt).toContain(`## ${workspaceDir}/BOOTSTRAP.md`);
+    expect(systemPrompt).toContain("Ask who I am before continuing.");
   });
 
   it("adds explicit reply context to the current model input without exposing generic runtime context", async () => {

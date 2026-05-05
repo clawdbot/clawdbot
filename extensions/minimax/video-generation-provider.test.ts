@@ -29,7 +29,10 @@ installMinimaxProviderHttpMockCleanup();
 
 describe("minimax video generation provider", () => {
   it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildMinimaxVideoGenerationProvider());
+    const provider = buildMinimaxVideoGenerationProvider();
+    expectExplicitVideoGenerationCapabilities(provider);
+    expect(provider.capabilities.generate?.resolutions).toEqual(["768P", "1080P"]);
+    expect(provider.capabilities.imageToVideo?.resolutions).toEqual(["768P", "1080P"]);
   });
 
   it("creates a task, polls status, and downloads the generated video", async () => {
@@ -64,6 +67,7 @@ describe("minimax video generation provider", () => {
       prompt: "A fox sprints across snowy hills",
       cfg: {},
       durationSeconds: 5,
+      resolution: "720P",
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledWith(
@@ -71,6 +75,7 @@ describe("minimax video generation provider", () => {
         url: "https://api.minimax.io/v1/video_generation",
         body: expect.objectContaining({
           duration: 6,
+          resolution: "768P",
         }),
       }),
     );

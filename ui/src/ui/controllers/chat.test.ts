@@ -223,6 +223,17 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toEqual([]);
   });
 
+  it("drops HEARTBEAT_OK final payload from another run without clearing active stream", () => {
+    const state = createActiveStreamingState();
+    const payload = createOtherRunSilentFinalPayload("HEARTBEAT_OK");
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatStreamStartedAt).toBe(123);
+    expect(state.chatMessages).toEqual([]);
+  });
+
   it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
     "keeps plain-text %s final payload from another run without clearing active stream",
     (text) => {
@@ -236,6 +247,23 @@ describe("handleChatEvent", () => {
       expect(state.chatMessages).toEqual([payload.message]);
     },
   );
+
+  it("ignores HEARTBEAT_OK delta updates", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Previous visible text",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }] },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Previous visible text");
+  });
 
   it("replaces the stream when a delta snapshot gets shorter", () => {
     const state = createState({

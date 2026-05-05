@@ -6,6 +6,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { formatHealthCheckFailure } from "./health-format.js";
+import type { StatusSummary } from "./status.types.js";
 
 export type GatewayMemoryProbe = {
   checked: boolean;
@@ -28,13 +29,14 @@ export async function checkGatewayHealth(params: {
   runtime: RuntimeEnv;
   cfg: OpenClawConfig;
   timeoutMs?: number;
-}) {
+}): Promise<{ healthOk: boolean; status?: StatusSummary }> {
   const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
   const timeoutMs =
     typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 10_000;
   let healthOk = false;
+  let status: StatusSummary | undefined;
   try {
-    await callGateway({
+    status = await callGateway<StatusSummary>({
       method: "status",
       params: { includeChannelSummary: false },
       timeoutMs,
@@ -77,7 +79,7 @@ export async function checkGatewayHealth(params: {
     }
   }
 
-  return { healthOk };
+  return { healthOk, status };
 }
 
 export async function probeGatewayMemoryStatus(params: {

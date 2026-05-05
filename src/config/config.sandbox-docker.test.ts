@@ -62,6 +62,42 @@ describe("sandbox docker config", () => {
     }
   });
 
+  it("accepts Windows drive-letter binds in sandbox.docker config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              binds: ["D:/data/openclaw/src:/src:ro", "D:\\data\\openclaw\\output:/output:rw"],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.docker?.binds).toEqual([
+        "D:/data/openclaw/src:/src:ro",
+        "D:\\data\\openclaw\\output:/output:rw",
+      ]);
+    }
+  });
+
+  it("rejects drive-relative Windows binds in sandbox.docker config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              binds: ["D:relative\\path:/src:ro"],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
   it("accepts non-empty Docker GPU passthrough config", () => {
     const res = validateConfigObject({
       agents: {

@@ -176,16 +176,36 @@ export function formatPluginInstallWithHookFallbackError(
   pluginError: string,
   hookError: string,
 ): string {
+  const formattedPluginError = formatPluginInstallAttemptError(pluginError);
+  const formattedHookError = formatPluginInstallAttemptError(hookError);
   if (/plugin already exists: .+ \(delete it first\)/.test(pluginError)) {
-    return `${pluginError}\nUse \`openclaw plugins update <id-or-npm-spec>\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
+    return `${formattedPluginError}\nUse \`openclaw plugins update <id-or-npm-spec>\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
   }
   if (
     pluginError.startsWith("Invalid extensions directory:") ||
     pluginError === "Invalid path: must stay within extensions directory"
   ) {
-    return pluginError;
+    return formattedPluginError;
   }
-  return `${pluginError}\nAlso not a valid hook pack: ${hookError}`;
+  return `${formattedPluginError}\nAlso not a valid hook pack: ${formattedHookError}`;
+}
+
+const MISSING_GIT_FOR_NPM_DEPENDENCY_HINT =
+  "Git is required because one of this plugin's npm dependencies is fetched from a git URL, but `git` was not found on PATH. Install Git and rerun the install. On Windows, use `winget install --id Git.Git -e` or add a portable Git `bin` directory to PATH.";
+
+function formatPluginInstallAttemptError(error: string): string {
+  if (!isMissingGitForNpmDependencyError(error)) {
+    return error;
+  }
+  if (error.includes(MISSING_GIT_FOR_NPM_DEPENDENCY_HINT)) {
+    return error;
+  }
+  return `${error}\n\n${MISSING_GIT_FOR_NPM_DEPENDENCY_HINT}`;
+}
+
+function isMissingGitForNpmDependencyError(error: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(error);
+  return /\bspawn\s+git\b/u.test(normalized) && /\benoent\b/u.test(normalized);
 }
 
 export function logHookPackRestartHint(runtime: RuntimeEnv = defaultRuntime) {

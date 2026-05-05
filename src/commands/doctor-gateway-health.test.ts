@@ -29,7 +29,7 @@ describe("checkGatewayHealth", () => {
 
     await expect(
       checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({ healthOk: true });
+    ).resolves.toEqual({ healthOk: true, status: { ok: true } });
 
     expect(callGateway).toHaveBeenNthCalledWith(1, {
       method: "status",
@@ -55,7 +55,7 @@ describe("checkGatewayHealth", () => {
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Health check failed: Error: gateway timeout after 3000ms"),
+      expect.stringContaining("gateway timeout after 3000ms"),
     );
   });
 });

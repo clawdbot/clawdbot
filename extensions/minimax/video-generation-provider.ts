@@ -19,12 +19,19 @@ import type {
 const DEFAULT_MINIMAX_VIDEO_BASE_URL = "https://api.minimax.io";
 const DEFAULT_MINIMAX_VIDEO_MODEL = "MiniMax-Hailuo-2.3";
 const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_OPERATION_TIMEOUT_MS = 1_200_000;
 const POLL_INTERVAL_MS = 10_000;
-const MAX_POLL_ATTEMPTS = 90;
+const MAX_POLL_ATTEMPTS = 120;
 const MINIMAX_MODEL_ALLOWED_DURATIONS: Readonly<Record<string, readonly number[]>> = {
   "MiniMax-Hailuo-2.3": [6, 10],
   "MiniMax-Hailuo-02": [6, 10],
 };
+const MINIMAX_MODEL_ALLOWED_RESOLUTIONS: Readonly<Record<string, readonly string[]>> = {
+  "MiniMax-Hailuo-2.3": ["768P", "1080P"],
+  "MiniMax-Hailuo-2.3-Fast": ["768P", "1080P"],
+  "MiniMax-Hailuo-02": ["768P", "1080P"],
+};
+const MINIMAX_RESOLUTION_ORDER = ["480P", "720P", "768P", "1080P"] as const;
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -110,6 +117,43 @@ function resolveDurationSeconds(params: {
   return allowed.reduce((best, current) =>
     Math.abs(current - rounded) < Math.abs(best - rounded) ? current : best,
   );
+}
+
+function resolveResolution(params: {
+  model: string;
+  resolution: string | undefined;
+}): string | undefined {
+  const requested = normalizeOptionalString(params.resolution)?.toUpperCase();
+  if (!requested) {
+    return undefined;
+  }
+  const allowed = MINIMAX_MODEL_ALLOWED_RESOLUTIONS[params.model];
+  if (!allowed || allowed.length === 0 || allowed.includes(requested)) {
+    return requested;
+  }
+  const requestedIndex = MINIMAX_RESOLUTION_ORDER.indexOf(
+    requested as (typeof MINIMAX_RESOLUTION_ORDER)[number],
+  );
+  if (requestedIndex < 0) {
+    return undefined;
+  }
+  return allowed.reduce((best, current) => {
+    const currentIndex = MINIMAX_RESOLUTION_ORDER.indexOf(
+      current as (typeof MINIMAX_RESOLUTION_ORDER)[number],
+    );
+    const bestIndex = MINIMAX_RESOLUTION_ORDER.indexOf(
+      best as (typeof MINIMAX_RESOLUTION_ORDER)[number],
+    );
+    if (currentIndex < 0) {
+      return best;
+    }
+    if (bestIndex < 0) {
+      return current;
+    }
+    return Math.abs(currentIndex - requestedIndex) < Math.abs(bestIndex - requestedIndex)
+      ? current
+      : best;
+  });
 }
 
 async function pollMinimaxVideo(params: {
@@ -246,6 +290,7 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
         maxVideos: 1,
         maxDurationSeconds: 10,
         supportedDurationSecondsByModel: MINIMAX_MODEL_ALLOWED_DURATIONS,
+        resolutions: ["768P", "1080P"],
         supportsResolution: true,
         supportsWatermark: false,
       },
@@ -255,6 +300,7 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
         maxInputImages: 1,
         maxDurationSeconds: 10,
         supportedDurationSecondsByModel: MINIMAX_MODEL_ALLOWED_DURATIONS,
+        resolutions: ["768P", "1080P"],
         supportsResolution: true,
         supportsWatermark: false,
       },
@@ -278,7 +324,7 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
 
       const fetchFn = fetch;
       const deadline = createProviderOperationDeadline({
-        timeoutMs: req.timeoutMs,
+        timeoutMs: req.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
         label: "MiniMax video generation",
       });
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
@@ -303,8 +349,12 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
       if (firstFrameImage) {
         body.first_frame_image = firstFrameImage;
       }
-      if (req.resolution) {
-        body.resolution = req.resolution;
+      const resolution = resolveResolution({
+        model,
+        resolution: req.resolution,
+      });
+      if (resolution) {
+        body.resolution = resolution;
       }
       const durationSeconds = resolveDurationSeconds({
         model,
@@ -338,7 +388,7 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
           headers,
           timeoutMs: resolveProviderOperationTimeoutMs({
             deadline,
-            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+            defaultTimeoutMs: DEFAULT_OPERATION_TIMEOUT_MS,
           }),
           baseUrl,
           fetchFn,

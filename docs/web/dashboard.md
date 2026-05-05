@@ -39,6 +39,10 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
 
 - After onboarding, the CLI auto-opens the dashboard and prints a clean (non-tokenized) link.
 - Re-open anytime: `openclaw dashboard` (copies link, opens browser if possible, shows SSH hint if headless).
+- If clipboard and browser delivery fail, `openclaw dashboard` still prints the
+  clean URL and tells you to use the token from `OPENCLAW_GATEWAY_TOKEN` or
+  `gateway.auth.token` as the URL fragment key `token`; it does not print token
+  values in logs.
 - If the UI prompts for shared-secret auth, paste the configured token or
   password into Control UI settings.
 

@@ -257,6 +257,9 @@ AI CLI backend such as `codex-cli`.
   plugin default before running the CLI.
 - Use `normalizeConfig` when a backend needs compatibility rewrites after merge
   (for example normalizing old flag shapes).
+- Use `resolveExecutionArgs` for request-scoped argv rewrites that belong to
+  the CLI dialect, such as mapping OpenClaw thinking levels to a native effort
+  flag.
 
 ### Exclusive slots
 

@@ -51,6 +51,16 @@ export type PluginsConfig = {
   allow?: string[];
   /** Optional plugin denylist (plugin ids). */
   deny?: string[];
+  /**
+   * Controls how bundled plugins participate in runtime provider discovery when
+   * `allow` is configured.
+   *
+   * - `"allowlist"` (default): bundled provider plugins are gated by `allow`
+   *   and `entries.<id>.enabled` like third-party plugins.
+   * - `"compat"`: legacy mode for migrated configs; bundled provider plugins
+   *   can be force-loaded regardless of the allowlist.
+   */
+  bundledDiscovery?: "compat" | "allowlist";
   load?: PluginsLoadConfig;
   slots?: PluginSlotsConfig;
   entries?: Record<string, PluginEntryConfig>;

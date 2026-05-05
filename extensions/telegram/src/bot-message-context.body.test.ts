@@ -70,6 +70,64 @@ describe("resolveTelegramInboundBody", () => {
     });
   });
 
+  it("uses saved media MIME for no-caption photo placeholders", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 3,
+        date: 1_700_000_003,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        photo: [{ file_id: "photo-1", file_unique_id: "photo-u1", width: 120, height: 80 }],
+      } as never,
+      allMedia: [{ path: "/tmp/upload.bin", contentType: "application/octet-stream" }],
+    });
+
+    expect(result).toMatchObject({
+      rawBody: "<media:image>",
+      bodyText: "<media:document>",
+    });
+  });
+
+  it("summarizes multiple saved images as images", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 4,
+        date: 1_700_000_004,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        photo: [{ file_id: "photo-2", file_unique_id: "photo-u2", width: 120, height: 80 }],
+      } as never,
+      allMedia: [
+        { path: "/tmp/photo-1.webp", contentType: "image/webp" },
+        { path: "/tmp/photo-2.png", contentType: "image/png" },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      bodyText: "<media:image> (2 images)",
+    });
+  });
+
+  it("summarizes mixed saved media as attachments", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 5,
+        date: 1_700_000_005,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        photo: [{ file_id: "photo-3", file_unique_id: "photo-u3", width: 120, height: 80 }],
+      } as never,
+      allMedia: [
+        { path: "/tmp/photo.webp", contentType: "image/webp" },
+        { path: "/tmp/report.pdf", contentType: "application/pdf" },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      bodyText: "<media:document> (2 attachments)",
+    });
+  });
+
   it("does not transcribe group audio for unauthorized senders", async () => {
     transcribeFirstAudioMock.mockReset();
     const logger = { info: vi.fn() };

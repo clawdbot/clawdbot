@@ -22,10 +22,15 @@ export async function writeQaAuthProfiles(params: {
   agentDir: string;
   profiles: Record<string, QaAuthProfileCredential>;
 }): Promise<void> {
+  const authPath = path.join(params.agentDir, "auth-profiles.json");
+  const existing = await fs
+    .readFile(authPath, "utf8")
+    .then((raw) => JSON.parse(raw) as { profiles?: Record<string, QaAuthProfileCredential> })
+    .catch(() => ({ profiles: {} }));
   await fs.mkdir(params.agentDir, { recursive: true });
   await fs.writeFile(
-    path.join(params.agentDir, "auth-profiles.json"),
-    `${JSON.stringify({ version: 1, profiles: params.profiles }, null, 2)}\n`,
+    authPath,
+    `${JSON.stringify({ version: 1, profiles: { ...existing.profiles, ...params.profiles } }, null, 2)}\n`,
     "utf8",
   );
 }

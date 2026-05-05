@@ -18,6 +18,7 @@ import {
   FIREWORKS_K2_6_MAX_TOKENS,
   FIREWORKS_K2_6_MODEL_ID,
 } from "./provider-catalog.js";
+import { resolveThinkingProfile } from "./provider-policy-api.js";
 
 function createFireworksDefaultRuntimeModel(params: { reasoning: boolean }): ProviderRuntimeModel {
   return {
@@ -143,5 +144,43 @@ describe("fireworks provider plugin", () => {
       id: "accounts/fireworks/models/kimi-k2p6",
       reasoning: false,
     });
+  });
+
+  it("exposes off-only thinking policy for Fireworks Kimi models", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/routers/kimi-k2p5-turbo",
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }],
+      defaultLevel: "off",
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "fireworks",
+        modelId: FIREWORKS_K2_6_MODEL_ID,
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }],
+      defaultLevel: "off",
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/qwen3.6-plus",
+      }),
+    ).toBeUndefined();
+    expect(resolveThinkingProfile({ modelId: FIREWORKS_K2_6_MODEL_ID })).toEqual({
+      levels: [{ id: "off" }],
+      defaultLevel: "off",
+    });
+    expect(
+      resolveThinkingProfile({
+        modelId: "accounts/fireworks/models/qwen3.6-plus",
+      }),
+    ).toBeUndefined();
   });
 });

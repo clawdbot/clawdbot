@@ -1,7 +1,18 @@
+import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
 
 type OllamaProviderConfigDraft = Partial<ModelProviderConfig>;
+
+const OLLAMA_REASONING_THINKING_PROFILE = {
+  levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
+  defaultLevel: "off",
+} satisfies ProviderThinkingProfile;
+
+const OLLAMA_NON_REASONING_THINKING_PROFILE = {
+  levels: [{ id: "off" }],
+  defaultLevel: "off",
+} satisfies ProviderThinkingProfile;
 
 /**
  * Provider policy surface for Ollama: normalize provider configs used by
@@ -37,4 +48,12 @@ export function normalizeConfig({
   }
 
   return next;
+}
+
+export function resolveThinkingProfile({
+  reasoning,
+}: {
+  reasoning?: boolean;
+}): ProviderThinkingProfile {
+  return reasoning ? OLLAMA_REASONING_THINKING_PROFILE : OLLAMA_NON_REASONING_THINKING_PROFILE;
 }

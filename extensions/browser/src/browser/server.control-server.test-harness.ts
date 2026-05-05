@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { installChromeUserDataDirHooks } from "./chrome-user-data-dir.test-harness.js";
 import { getFreePort } from "./test-port.js";
@@ -10,6 +11,7 @@ type HarnessState = {
   reachable: boolean;
   cfgAttachOnly: boolean;
   cfgEvaluateEnabled: boolean;
+  cfgSsrfPolicy: SsrFPolicy | undefined;
   cfgDefaultProfile: string;
   cfgProfiles: Record<
     string,
@@ -21,6 +23,7 @@ type HarnessState = {
       attachOnly?: boolean;
     }
   >;
+  tabUrl: string;
   prevGatewayPort: string | undefined;
   prevGatewayToken: string | undefined;
   prevGatewayPassword: string | undefined;
@@ -32,8 +35,10 @@ const state: HarnessState = {
   reachable: false,
   cfgAttachOnly: false,
   cfgEvaluateEnabled: true,
+  cfgSsrfPolicy: undefined,
   cfgDefaultProfile: "openclaw",
   cfgProfiles: {},
+  tabUrl: "https://example.com",
   prevGatewayPort: undefined,
   prevGatewayToken: undefined,
   prevGatewayPassword: undefined,
@@ -59,8 +64,16 @@ export function setBrowserControlServerEvaluateEnabled(enabled: boolean): void {
   state.cfgEvaluateEnabled = enabled;
 }
 
+export function setBrowserControlServerSsrFPolicy(policy: SsrFPolicy | undefined): void {
+  state.cfgSsrfPolicy = policy;
+}
+
 export function setBrowserControlServerReachable(reachable: boolean): void {
   state.reachable = reachable;
+}
+
+export function setBrowserControlServerTabUrl(url: string): void {
+  state.tabUrl = url;
 }
 
 export function setBrowserControlServerProfiles(
@@ -152,6 +165,7 @@ const pwMocks = vi.hoisted(() => ({
   clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   closePlaywrightBrowserConnection: vi.fn(async () => {}),
+  cookiesGetViaPlaywright: vi.fn(async () => ({ cookies: [] })),
   downloadViaPlaywright: vi.fn(async () => ({
     url: "https://example.com/report.pdf",
     suggestedFilename: "report.pdf",
@@ -161,6 +175,8 @@ const pwMocks = vi.hoisted(() => ({
   evaluateViaPlaywright: vi.fn(async (_opts?: unknown) => "ok"),
   fillFormViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   getConsoleMessagesViaPlaywright: vi.fn(async () => []),
+  getNetworkRequestsViaPlaywright: vi.fn(async () => ({ requests: [] })),
+  getPageErrorsViaPlaywright: vi.fn(async () => ({ errors: [] })),
   hoverViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   scrollIntoViewViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
@@ -181,7 +197,9 @@ const pwMocks = vi.hoisted(() => ({
     refs: { e1: { role: "button", name: "Role" } },
     stats: { lines: 1, chars: 24, refs: 1, interactive: 1 },
   })),
+  storageGetViaPlaywright: vi.fn(async () => ({ values: {} })),
   storeAriaSnapshotRefsViaPlaywright: vi.fn(async () => {}),
+  traceStartViaPlaywright: vi.fn(async () => {}),
   traceStopViaPlaywright: vi.fn(async () => {}),
   takeScreenshotViaPlaywright: vi.fn(async () => ({
     buffer: Buffer.from("png"),
@@ -393,13 +411,13 @@ vi.mock("../config/config.js", async () => {
         evaluateEnabled: state.cfgEvaluateEnabled,
         color: "#FF4500",
         attachOnly: state.cfgAttachOnly,
+        ssrfPolicy: state.cfgSsrfPolicy ?? { dangerouslyAllowPrivateNetwork: true },
         headless: true,
         defaultProfile: state.cfgDefaultProfile,
         profiles:
           Object.keys(state.cfgProfiles).length > 0
             ? state.cfgProfiles
             : defaultProfilesForState(state.testPort),
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
       },
     };
   };
@@ -513,8 +531,10 @@ export async function resetBrowserControlServerTestContext(): Promise<void> {
   state.reachable = false;
   state.cfgAttachOnly = false;
   state.cfgEvaluateEnabled = true;
+  state.cfgSsrfPolicy = undefined;
   state.cfgDefaultProfile = "openclaw";
   state.cfgProfiles = defaultProfilesForState(state.testPort);
+  state.tabUrl = "https://example.com";
 
   mockClearAll(pwMocks);
   mockClearAll(cdpMocks);
@@ -580,7 +600,7 @@ export function installBrowserControlServerHooks() {
             {
               id: "abcd1234",
               title: "Tab",
-              url: "https://example.com",
+              url: state.tabUrl,
               webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/abcd1234",
               type: "page",
             },

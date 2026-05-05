@@ -2142,6 +2142,35 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span.end(evt.ts);
       };
 
+      const recordDiagnosticPhaseCompleted = (
+        evt: Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>,
+      ) => {
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number> = {
+          "openclaw.phase": lowCardinalityAttr(evt.name, "unknown"),
+          ...(evt.cpuUserMs !== undefined ? { "openclaw.phase.cpu_user_ms": evt.cpuUserMs } : {}),
+          ...(evt.cpuSystemMs !== undefined
+            ? { "openclaw.phase.cpu_system_ms": evt.cpuSystemMs }
+            : {}),
+          ...(evt.cpuTotalMs !== undefined
+            ? { "openclaw.phase.cpu_total_ms": evt.cpuTotalMs }
+            : {}),
+          ...(evt.cpuCoreRatio !== undefined
+            ? { "openclaw.phase.cpu_core_ratio": evt.cpuCoreRatio }
+            : {}),
+        };
+        for (const [key, value] of Object.entries(evt.details ?? {})) {
+          spanAttrs[`openclaw.phase.detail.${key}`] =
+            typeof value === "boolean" ? String(value) : value;
+        }
+        const span = spanWithDuration("openclaw.diagnostic.phase", spanAttrs, evt.durationMs, {
+          endTimeMs: evt.ts,
+        });
+        span.end(evt.ts);
+      };
+
       const recordTelemetryExporter = (
         evt: TelemetryExporterDiagnosticEvent,
         metadata: DiagnosticEventMetadata,
@@ -2207,6 +2236,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "session.long_running":
             case "session.stalled":
+            case "session.recovery.completed":
+            case "session.recovery.requested":
               return;
             case "session.stuck":
               recordSessionStuck(evt);
@@ -2221,6 +2252,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "diagnostic.liveness.warning":
               recordLivenessWarning(evt);
+              return;
+            case "diagnostic.phase.completed":
+              recordDiagnosticPhaseCompleted(evt);
               return;
             case "run.started":
               recordRunStarted(evt, metadata);

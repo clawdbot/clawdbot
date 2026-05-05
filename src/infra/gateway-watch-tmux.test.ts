@@ -43,6 +43,7 @@ describe("gateway-watch tmux wrapper", () => {
       env: {
         OPENCLAW_GATEWAY_PORT: "19001",
         OPENCLAW_PROFILE: "Dev Profile",
+        OPENCLAW_TRACE_SYNC_IO: "0",
         SHELL: "/bin/zsh",
       },
       nodePath: "/opt/node",
@@ -57,6 +58,7 @@ describe("gateway-watch tmux wrapper", () => {
     expect(command).toContain("'FORCE_COLOR=1'");
     expect(command).toContain("'OPENCLAW_GATEWAY_PORT=19001'");
     expect(command).toContain("'OPENCLAW_PROFILE=Dev Profile'");
+    expect(command).toContain("'OPENCLAW_TRACE_SYNC_IO=0'");
     expect(command).toContain("/opt/node");
     expect(command).toContain("scripts/watch-node.mjs");
     expect(command).toContain("gateway");
@@ -87,11 +89,44 @@ describe("gateway-watch tmux wrapper", () => {
     expect(code).toBe(0);
     const command = spawnSync.mock.calls[1]?.[1]?.[6] as string;
     expect(command).toContain("'OPENCLAW_RUN_NODE_CPU_PROF_DIR=.artifacts/gateway-watch-profiles'");
+    expect(command).toContain("'OPENCLAW_TRACE_SYNC_IO=0'");
     expect(command).not.toContain("--benchmark");
     expect(command).toContain("'gateway'");
     expect(command).toContain("'--force'");
     expect(stderr.chunks.join("")).toContain(
       "gateway:watch benchmark CPU profiles: .artifacts/gateway-watch-profiles",
+    );
+  });
+
+  it("preserves explicit sync I/O tracing in benchmark mode", () => {
+    const stdout = createOutput();
+    const stderr = createOutput();
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
+
+    const code = runGatewayWatchTmuxMain({
+      args: ["gateway", "--force", "--benchmark"],
+      cwd: "/repo",
+      env: { OPENCLAW_TRACE_SYNC_IO: "1", SHELL: "/bin/zsh" },
+      nodePath: "/node",
+      spawnSync,
+      stderr: stderr.stream,
+      stdout: stdout.stream,
+    });
+
+    expect(code).toBe(0);
+    const command = spawnSync.mock.calls[1]?.[1]?.[6] as string;
+    expect(command).toContain("'OPENCLAW_TRACE_SYNC_IO=1'");
+    expect(command).toContain(
+      "'OPENCLAW_RUN_NODE_OUTPUT_LOG=.artifacts/gateway-watch-profiles/gateway-watch-output.log'",
+    );
+    expect(command).toContain("'OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR=1'");
+    expect(stderr.chunks.join("")).toContain(
+      "gateway:watch benchmark trace output: .artifacts/gateway-watch-profiles/gateway-watch-output.log",
     );
   });
 

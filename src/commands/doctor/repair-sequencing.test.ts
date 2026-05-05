@@ -363,7 +363,7 @@ describe("doctor repair sequencing", () => {
   it("does not remove deferred configured plugins during the package update doctor pass", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
       changes: [
-        'Deferred missing configured plugin "brave" install repair until post-update doctor.',
+        'Skipped package-manager repair for configured plugin "brave" during package update; rerun "openclaw doctor --fix" after the update completes.',
       ],
       warnings: [],
     });
@@ -432,7 +432,7 @@ describe("doctor repair sequencing", () => {
     expect(result.state.candidate.plugins?.allow).toEqual(["brave"]);
     expect(result.state.candidate.plugins?.entries?.brave?.enabled).toBe(true);
     expect(result.changeNotes).toContain(
-      'Deferred missing configured plugin "brave" install repair until post-update doctor.',
+      'Skipped package-manager repair for configured plugin "brave" during package update; rerun "openclaw doctor --fix" after the update completes.',
     );
   });
 

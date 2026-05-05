@@ -62,10 +62,10 @@ describe("bundled root-aware plugin lookups", () => {
       listChannelCatalogEntries: (params?: { env?: NodeJS.ProcessEnv }) => {
         const activeRoot = params?.env?.OPENCLAW_BUNDLED_PLUGINS_DIR;
         if (activeRoot === rootA.pluginsDir) {
-          return [{ pluginId: "alpha" }];
+          return [{ pluginId: "alpha", channel: { id: "alpha-chat" } }];
         }
         if (activeRoot === rootB.pluginsDir) {
-          return [{ pluginId: "beta" }];
+          return [{ pluginId: "beta", channel: { id: "beta-chat" } }];
         }
         return [];
       },
@@ -78,9 +78,11 @@ describe("bundled root-aware plugin lookups", () => {
 
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = rootA.pluginsDir;
     expect(bundledIds.listBundledChannelPluginIds()).toEqual(["alpha"]);
+    expect(bundledIds.listBundledChannelIds()).toEqual(["alpha-chat"]);
 
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = rootB.pluginsDir;
     expect(bundledIds.listBundledChannelPluginIds()).toEqual(["beta"]);
+    expect(bundledIds.listBundledChannelIds()).toEqual(["beta-chat"]);
   });
 
   it("reads bootstrap plugins from the active bundled root without re-importing", async () => {

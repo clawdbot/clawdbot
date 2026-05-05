@@ -789,9 +789,14 @@
       }
     },
     "openai-codex": {
-      "capabilities": ["image"],
+      "capabilities": ["image", "audio"],
       "defaultModels": {
-        "image": "gpt-5.5"
+        "image": "gpt-5.5",
+        "audio": "gpt-4o-transcribe"
+      },
+      "autoPriority": {
+        "image": 20,
+        "audio": 20
       }
     }
   },

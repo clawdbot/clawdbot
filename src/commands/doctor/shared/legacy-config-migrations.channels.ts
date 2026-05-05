@@ -1,5 +1,6 @@
 import {
   defineLegacyConfigMigration,
+  ensureRecord,
   getRecord,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
@@ -7,6 +8,196 @@ import {
 
 function hasOwnKey(target: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(target, key);
+}
+
+function cleanupEmptyRecord(parent: Record<string, unknown>, key: string): void {
+  const value = getRecord(parent[key]);
+  if (value && Object.keys(value).length === 0) {
+    delete parent[key];
+  }
+}
+
+function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
+  groups: Record<string, unknown>;
+  entry: Record<string, unknown>;
+} | null {
+  const existingGroups = section.groups;
+  if (existingGroups !== undefined && !getRecord(existingGroups)) {
+    return null;
+  }
+  const groups = getRecord(existingGroups) ?? {};
+  const defaultKey = "*";
+  const existingEntry = groups[defaultKey];
+  if (existingEntry !== undefined && !getRecord(existingEntry)) {
+    return null;
+  }
+  const entry = getRecord(existingEntry) ?? {};
+  return { groups, entry };
+}
+
+function migrateChannelDefaultRequireMention(params: {
+  section: Record<string, unknown>;
+  channelId: string;
+  legacyPath: string;
+  requireMention: unknown;
+  changes: string[];
+}): boolean {
+  const defaultGroupEntry = resolveCompatibleDefaultGroupEntry(params.section);
+  if (!defaultGroupEntry) {
+    params.changes.push(
+      `Removed ${params.legacyPath} (channels.${params.channelId}.groups has an incompatible shape; fix remaining issues manually).`,
+    );
+    return false;
+  }
+
+  const { groups, entry } = defaultGroupEntry;
+  if (entry.requireMention === undefined) {
+    entry.requireMention = params.requireMention;
+    groups["*"] = entry;
+    params.section.groups = groups;
+    params.changes.push(
+      `Moved ${params.legacyPath} → channels.${params.channelId}.groups."*".requireMention.`,
+    );
+    return true;
+  }
+
+  params.changes.push(
+    `Removed ${params.legacyPath} (channels.${params.channelId}.groups."*" already set).`,
+  );
+  return false;
+}
+
+function migrateRoutingAllowFrom(raw: Record<string, unknown>, changes: string[]): void {
+  const routing = getRecord(raw.routing);
+  if (!routing || routing.allowFrom === undefined) {
+    return;
+  }
+
+  const channels = getRecord(raw.channels);
+  const whatsapp = getRecord(channels?.whatsapp);
+  if (!channels || !whatsapp) {
+    delete routing.allowFrom;
+    cleanupEmptyRecord(raw, "routing");
+    changes.push("Removed routing.allowFrom (channels.whatsapp not configured).");
+    return;
+  }
+
+  if (whatsapp.allowFrom === undefined) {
+    whatsapp.allowFrom = routing.allowFrom;
+    changes.push("Moved routing.allowFrom → channels.whatsapp.allowFrom.");
+  } else {
+    changes.push("Removed routing.allowFrom (channels.whatsapp.allowFrom already set).");
+  }
+
+  delete routing.allowFrom;
+  channels.whatsapp = whatsapp;
+  raw.channels = channels;
+  cleanupEmptyRecord(raw, "routing");
+}
+
+function migrateRoutingGroupChatMessages(params: {
+  raw: Record<string, unknown>;
+  routing: Record<string, unknown>;
+  groupChat: Record<string, unknown>;
+  changes: string[];
+}): void {
+  const migrateMessageGroupField = (field: "historyLimit" | "mentionPatterns") => {
+    const value = params.groupChat[field];
+    if (value === undefined) {
+      return;
+    }
+
+    const messages = ensureRecord(params.raw, "messages");
+    const messagesGroup = ensureRecord(messages, "groupChat");
+    if (messagesGroup[field] === undefined) {
+      messagesGroup[field] = value;
+      params.changes.push(`Moved routing.groupChat.${field} → messages.groupChat.${field}.`);
+    } else {
+      params.changes.push(
+        `Removed routing.groupChat.${field} (messages.groupChat.${field} already set).`,
+      );
+    }
+    delete params.groupChat[field];
+  };
+
+  migrateMessageGroupField("historyLimit");
+  migrateMessageGroupField("mentionPatterns");
+
+  if (Object.keys(params.groupChat).length === 0) {
+    delete params.routing.groupChat;
+  } else {
+    params.routing.groupChat = params.groupChat;
+  }
+}
+
+function migrateRoutingGroupChatRequireMention(params: {
+  raw: Record<string, unknown>;
+  groupChat: Record<string, unknown>;
+  changes: string[];
+}): void {
+  const requireMention = params.groupChat.requireMention;
+  if (requireMention === undefined) {
+    return;
+  }
+
+  const channels = getRecord(params.raw.channels);
+  let matchedChannel = false;
+  if (channels) {
+    for (const channelId of ["whatsapp", "telegram", "imessage"]) {
+      const section = getRecord(channels[channelId]);
+      if (!section) {
+        continue;
+      }
+      matchedChannel = true;
+      migrateChannelDefaultRequireMention({
+        section,
+        channelId,
+        legacyPath: "routing.groupChat.requireMention",
+        requireMention,
+        changes: params.changes,
+      });
+      channels[channelId] = section;
+    }
+    params.raw.channels = channels;
+  }
+
+  if (!matchedChannel) {
+    params.changes.push(
+      "Removed routing.groupChat.requireMention (no configured WhatsApp, Telegram, or iMessage channel found).",
+    );
+  }
+  delete params.groupChat.requireMention;
+}
+
+function migrateRoutingGroupChat(raw: Record<string, unknown>, changes: string[]): void {
+  const routing = getRecord(raw.routing);
+  const groupChat = getRecord(routing?.groupChat);
+  if (!routing || !groupChat) {
+    return;
+  }
+
+  migrateRoutingGroupChatRequireMention({ raw, groupChat, changes });
+  migrateRoutingGroupChatMessages({ raw, routing, groupChat, changes });
+  cleanupEmptyRecord(raw, "routing");
+}
+
+function migrateTelegramRequireMention(raw: Record<string, unknown>, changes: string[]): void {
+  const channels = getRecord(raw.channels);
+  const telegram = getRecord(channels?.telegram);
+  if (!channels || !telegram || telegram.requireMention === undefined) {
+    return;
+  }
+
+  migrateChannelDefaultRequireMention({
+    section: telegram,
+    channelId: "telegram",
+    legacyPath: "channels.telegram.requireMention",
+    requireMention: telegram.requireMention,
+    changes,
+  });
+  delete telegram.requireMention;
+  channels.telegram = telegram;
+  raw.channels = channels;
 }
 
 function hasLegacyThreadBindingTtl(value: unknown): boolean {
@@ -190,7 +381,46 @@ const THREAD_BINDING_RULES: LegacyConfigRule[] = [
   },
 ];
 
+const GROUP_ROUTING_RULES: LegacyConfigRule[] = [
+  {
+    path: ["routing", "allowFrom"],
+    message:
+      'routing.allowFrom was removed; use channels.whatsapp.allowFrom instead. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["routing", "groupChat", "requireMention"],
+    message:
+      'routing.groupChat.requireMention was removed; use channels.<channel>.groups."*".requireMention instead. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["routing", "groupChat", "historyLimit"],
+    message:
+      'routing.groupChat.historyLimit was moved; use messages.groupChat.historyLimit instead. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["routing", "groupChat", "mentionPatterns"],
+    message:
+      'routing.groupChat.mentionPatterns was moved; use messages.groupChat.mentionPatterns instead. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["channels", "telegram", "requireMention"],
+    message:
+      'channels.telegram.requireMention was removed; use channels.telegram.groups."*".requireMention instead. Run "openclaw doctor --fix".',
+  },
+];
+
 export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "legacy-group-routing->channel-groups",
+    describe:
+      "Move legacy routing group chat settings to current channel group and messages config",
+    legacyRules: GROUP_ROUTING_RULES,
+    apply: (raw, changes) => {
+      migrateRoutingAllowFrom(raw, changes);
+      migrateRoutingGroupChat(raw, changes);
+      migrateTelegramRequireMention(raw, changes);
+    },
+  }),
   defineLegacyConfigMigration({
     id: "thread-bindings.ttlHours->idleHours",
     describe:

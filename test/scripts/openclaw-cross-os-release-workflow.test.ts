@@ -10,6 +10,8 @@ describe("cross-OS release checks workflow", () => {
     const workflow = readFileSync(WORKFLOW_PATH, "utf8");
 
     expect(workflow).toContain(HARNESS);
+    expect(workflow).toContain("suite_filter:");
+    expect(workflow).toContain('--suite-filter "${INPUT_SUITE_FILTER}"');
     expect(workflow).not.toContain('pnpm dlx "tsx@${TSX_VERSION}"');
   });
 

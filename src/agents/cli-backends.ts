@@ -38,6 +38,7 @@ export type ResolvedCliBackend = {
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
+  resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   nativeToolMode?: CliBackendNativeToolMode;
 };
 
@@ -62,6 +63,7 @@ type FallbackCliBackendPolicy = {
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
+  resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   nativeToolMode?: CliBackendNativeToolMode;
 };
 
@@ -99,6 +101,7 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     defaultAuthProfileId: entry.backend.defaultAuthProfileId,
     authEpochMode: entry.backend.authEpochMode,
     prepareExecution: entry.backend.prepareExecution,
+    resolveExecutionArgs: entry.backend.resolveExecutionArgs,
     nativeToolMode: entry.backend.nativeToolMode,
   };
 }
@@ -237,6 +240,7 @@ export function resolveCliBackendConfig(
       defaultAuthProfileId: registered.defaultAuthProfileId,
       authEpochMode: registered.authEpochMode,
       prepareExecution: registered.prepareExecution,
+      resolveExecutionArgs: registered.resolveExecutionArgs,
       nativeToolMode: registered.nativeToolMode,
     };
   }
@@ -266,6 +270,7 @@ export function resolveCliBackendConfig(
       defaultAuthProfileId: fallbackPolicy.defaultAuthProfileId,
       authEpochMode: fallbackPolicy.authEpochMode,
       prepareExecution: fallbackPolicy.prepareExecution,
+      resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
       nativeToolMode: fallbackPolicy.nativeToolMode,
     };
   }
@@ -292,6 +297,7 @@ export function resolveCliBackendConfig(
     defaultAuthProfileId: fallbackPolicy?.defaultAuthProfileId,
     authEpochMode: fallbackPolicy?.authEpochMode,
     prepareExecution: fallbackPolicy?.prepareExecution,
+    resolveExecutionArgs: fallbackPolicy?.resolveExecutionArgs,
     nativeToolMode: fallbackPolicy?.nativeToolMode,
   };
 }

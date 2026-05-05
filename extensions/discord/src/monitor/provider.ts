@@ -29,7 +29,6 @@ import {
 import { Client } from "../internal/discord.js";
 import { GatewayCloseCodes } from "../internal/gateway.js";
 import { fetchDiscordApplicationId, parseApplicationIdFromToken } from "../probe.js";
-import { resolveDiscordProxyFetchForAccount } from "../proxy-fetch.js";
 import { normalizeDiscordToken } from "../token.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
@@ -203,7 +202,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const discordAccountThreadBindings =
     cfg.channels?.discord?.accounts?.[account.accountId]?.threadBindings;
   const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
-  const discordProxyFetch = resolveDiscordProxyFetchForAccount(account, cfg, runtime);
   const dmConfig = rawDiscordCfg.dm;
   const configuredDmAllowFrom = resolveDiscordAccountAllowFrom({
     cfg,
@@ -429,7 +427,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       accountId: account.accountId,
       applicationId,
       token,
-      proxyFetch: discordProxyFetch,
+      restFetch: discordRestFetch,
       commands,
       components,
       modals,

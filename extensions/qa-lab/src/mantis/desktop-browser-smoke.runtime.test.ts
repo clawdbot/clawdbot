@@ -50,8 +50,10 @@ describe("mantis desktop browser smoke runtime", () => {
           expect(outputDir).toBeTypeOf("string");
           await fs.mkdir(outputDir as string, { recursive: true });
           await fs.writeFile(path.join(outputDir as string, "desktop-browser-smoke.png"), "png");
+          await fs.writeFile(path.join(outputDir as string, "desktop-browser-smoke.mp4"), "mp4");
           await fs.writeFile(path.join(outputDir as string, "remote-metadata.json"), "{}\n");
           await fs.writeFile(path.join(outputDir as string, "chrome.log"), "chrome\n");
+          await fs.writeFile(path.join(outputDir as string, "ffmpeg.log"), "ffmpeg\n");
           return { stdout: "", stderr: "" };
         }
         return { stdout: "", stderr: "" };
@@ -80,11 +82,10 @@ describe("mantis desktop browser smoke runtime", () => {
     expect(commands.every((entry) => entry.env === runtimeEnv)).toBe(true);
     const rsyncArgs = commands.find((entry) => entry.command === "rsync")?.args ?? [];
     expect(rsyncArgs).not.toContain("--delete");
+    expect(rsyncArgs).toEqual(expect.arrayContaining(["--exclude", "chrome-profile/**"]));
     expect(rsyncArgs).toEqual(
       expect.arrayContaining([
-        "crabbox@203.0.113.10:/tmp/openclaw-mantis-desktop-2026-05-04T12-00-00-000Z/desktop-browser-smoke.png",
-        "crabbox@203.0.113.10:/tmp/openclaw-mantis-desktop-2026-05-04T12-00-00-000Z/remote-metadata.json",
-        "crabbox@203.0.113.10:/tmp/openclaw-mantis-desktop-2026-05-04T12-00-00-000Z/chrome.log",
+        "crabbox@203.0.113.10:/tmp/openclaw-mantis-desktop-2026-05-04T12-00-00-000Z/",
       ]),
     );
     const remoteScript = commands
@@ -94,9 +95,14 @@ describe("mantis desktop browser smoke runtime", () => {
     expect(remoteScript).toContain("${CHROME_BIN:-}");
     expect(remoteScript).toContain("chromium-browser");
     expect(remoteScript).toContain("base64 -d");
+    expect(remoteScript).toContain("ffmpeg");
+    expect(remoteScript).toContain('sudo apt-get update -y >>"$out/apt.log" 2>&1 || true');
+    expect(remoteScript).toContain("desktop-browser-smoke.mp4");
+    expect(remoteScript).not.toContain("-video_size");
     expect(remoteScript).toContain('url="file://$out/input.html"');
     expect(remoteScript).toContain('"browserBinary": "$browser_bin"');
     await expect(fs.readFile(result.screenshotPath ?? "", "utf8")).resolves.toBe("png");
+    await expect(fs.readFile(result.videoPath ?? "", "utf8")).resolves.toBe("mp4");
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
       browserUrl: string;
       crabbox: { id: string; vncCommand: string };

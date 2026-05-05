@@ -10,6 +10,7 @@ import type { Verbosity } from "../Verbosity.js";
 import type { WebSearchMode } from "../WebSearchMode.js";
 import type { AnalyticsConfig } from "./AnalyticsConfig.js";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer.js";
+import type { AppsConfig } from "./AppsConfig.js";
 import type { AskForApproval } from "./AskForApproval.js";
 import type { ProfileV2 } from "./ProfileV2.js";
 import type { SandboxMode } from "./SandboxMode.js";
@@ -22,10 +23,11 @@ export type Config = {
   model_context_window: bigint | null;
   model_auto_compact_token_limit: bigint | null;
   model_provider: string | null;
-  approval_policy: AskForApproval | null /**
+  approval_policy: AskForApproval | null;
+  /**
    * [UNSTABLE] Optional default for where approval requests are routed for
    * review.
-   */;
+   */
   approvals_reviewer: ApprovalsReviewer | null;
   sandbox_mode: SandboxMode | null;
   sandbox_workspace_write: SandboxWorkspaceWrite | null;
@@ -43,6 +45,7 @@ export type Config = {
   model_verbosity: Verbosity | null;
   service_tier: ServiceTier | null;
   analytics: AnalyticsConfig | null;
+  apps: AppsConfig | null;
 } & {
   [key in string]?:
     | number

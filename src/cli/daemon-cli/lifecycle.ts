@@ -1,12 +1,14 @@
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { callGatewayCli } from "../../gateway/call.js";
 import { probeGateway } from "../../gateway/probe.js";
 import {
   findVerifiedGatewayListenerPidsOnPortSync,
   formatGatewayPidList,
   signalVerifiedGatewayPidSync,
 } from "../../infra/gateway-processes.js";
+import type { SafeGatewayRestartRequestResult } from "../../infra/restart-coordinator.js";
 import { type GatewayRestartIntent, writeGatewayRestartIntentSync } from "../../infra/restart.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -139,6 +141,50 @@ function resolveGatewayRestartIntentOptions(
   return undefined;
 }
 
+function formatSafeRestartWarnings(result: SafeGatewayRestartRequestResult): string[] | undefined {
+  if (result.preflight.blockers.length === 0) {
+    return undefined;
+  }
+  return [result.preflight.summary];
+}
+
+async function requestSafeGatewayRestart(opts: DaemonLifecycleOptions): Promise<boolean> {
+  if (opts.force) {
+    throw new Error("--safe cannot be combined with --force; omit --safe to force restart now");
+  }
+  if (opts.wait !== undefined) {
+    throw new Error("--safe cannot be combined with --wait; safe restart uses gateway deferral");
+  }
+  const result = await callGatewayCli<SafeGatewayRestartRequestResult>({
+    method: "gateway.restart.request",
+    params: { reason: "gateway.restart.safe" },
+    timeoutMs: 10_000,
+  });
+  const message =
+    result.status === "coalesced"
+      ? "safe restart request joined an existing pending gateway restart"
+      : result.status === "deferred"
+        ? "safe restart requested; gateway will restart after active work drains"
+        : "safe restart requested; gateway will restart momentarily";
+  const payload = {
+    ok: true,
+    result: result.status,
+    message,
+    preflight: result.preflight,
+    restart: result.restart,
+    warnings: formatSafeRestartWarnings(result),
+  };
+  if (opts.json) {
+    defaultRuntime.log(JSON.stringify(payload, null, 2));
+  } else {
+    defaultRuntime.log(message);
+    if (result.preflight.blockers.length > 0) {
+      defaultRuntime.log(theme.warn(result.preflight.summary));
+    }
+  }
+  return true;
+}
+
 async function restartGatewayWithoutServiceManager(
   port: number,
   restartIntent?: GatewayRestartIntent,
@@ -218,6 +264,9 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
  * Throws/exits on check or restart failures.
  */
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
+  if (opts.safe) {
+    return await requestSafeGatewayRestart(opts);
+  }
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
   let restartedWithoutServiceManager = false;

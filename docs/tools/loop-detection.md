@@ -86,6 +86,29 @@ When a run id is available, recent tool-call history is evaluated only within th
   - disable only the detector causing issues
   - reduce `historySize` for less strict historical context
 
+## Post-compaction guard
+
+When the runner completes an auto-compaction-retry (after a context-overflow), it arms a short-window guard that watches the next few tool calls. If the agent emits the _same_ `(toolName, args, result)` triple multiple times within that window, the guard concludes that compaction did not break the loop and aborts the run with a `compaction_loop_persisted` error.
+
+This is a separate code path from the global `tools.loopDetection` detectors. It is independently configurable:
+
+```json5
+{
+  tools: {
+    loopDetection: {
+      enabled: true, // existing master switch; set false to disable loop guards
+      postCompactionGuard: {
+        windowSize: 3, // default: 3
+      },
+    },
+  },
+}
+```
+
+- `windowSize`: number of post-compaction tool calls during which the guard stays armed _and_ the count of identical (tool, args, result) triples that triggers an abort.
+
+The guard never aborts when results are changing, only when results are byte-identical across the window. It is intentionally narrow: it fires only in the immediate aftermath of a compaction-retry.
+
 ## Logs and expected behavior
 
 When a loop is detected, OpenClaw reports a loop event and blocks or dampens the next tool-cycle depending on severity.

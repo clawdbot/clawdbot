@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import { isUpdatePlanToolEnabledForOpenClawTools } from "./openclaw-tools.registration.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 
@@ -31,6 +32,25 @@ describe("openclaw-tools update_plan gating", () => {
     expectUpdatePlanEnabled({ config: {} as OpenClawConfig }, false);
   });
 
+  it("does not expose update_plan from default tool construction", () => {
+    const defaultTools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      modelProvider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    });
+    const emptyAllowlistTools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      pluginToolAllowlist: [],
+      modelProvider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect(defaultTools.some((tool) => tool.name === "update_plan")).toBe(false);
+    expect(emptyAllowlistTools.some((tool) => tool.name === "update_plan")).toBe(false);
+  });
+
   it("registers update_plan when explicitly enabled", () => {
     const config = {
       tools: {
@@ -42,6 +62,54 @@ describe("openclaw-tools update_plan gating", () => {
 
     expectUpdatePlanEnabled({ config }, true);
     expect(createUpdatePlanTool().displaySummary).toBe("Track a short structured work plan.");
+  });
+
+  it("registers update_plan when the runtime allowlist explicitly requests it", () => {
+    const tools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      pluginToolAllowlist: ["update_plan"],
+      modelProvider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect(tools.some((tool) => tool.name === "update_plan")).toBe(true);
+  });
+
+  it("registers update_plan when a config allowlist group includes it", () => {
+    const tools = createOpenClawTools({
+      config: { tools: { allow: ["group:agents"] } } as OpenClawConfig,
+      disablePluginTools: true,
+      modelProvider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect(tools.some((tool) => tool.name === "update_plan")).toBe(true);
+  });
+
+  it("registers update_plan when a runtime allowlist group includes it", () => {
+    const tools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      pluginToolAllowlist: ["group:agents"],
+      modelProvider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect(tools.some((tool) => tool.name === "update_plan")).toBe(true);
+  });
+
+  it("respects deny policy while constructing update_plan for grouped allowlists", () => {
+    const tools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      pluginToolAllowlist: ["group:agents"],
+      pluginToolDenylist: ["update_plan"],
+      modelProvider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect(tools.some((tool) => tool.name === "update_plan")).toBe(false);
   });
 
   it("auto-enables update_plan for unconfigured GPT-5 openai runs", () => {

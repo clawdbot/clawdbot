@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -51,6 +51,7 @@ import {
   resolveGlobalInstallSpec,
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
@@ -110,6 +111,7 @@ const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
 const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
 const POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL";
 const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
+const POST_CORE_UPDATE_RESULT_POLL_MS = 100;
 const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
   "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
@@ -183,15 +185,32 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 export async function collectMissingPluginInstallPayloads(params: {
   records: Record<string, PluginInstallRecord>;
+  config?: OpenClawConfig;
+  skipDisabledPlugins?: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<MissingPluginInstallPayload[]> {
   const env = params.env ?? process.env;
+  const normalizedPluginConfig =
+    params.skipDisabledPlugins && params.config
+      ? normalizePluginsConfig(params.config.plugins)
+      : undefined;
   const missing: MissingPluginInstallPayload[] = [];
   for (const [pluginId, record] of Object.entries(params.records).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
     if (!isTrackedPackageInstallRecord(record)) {
       continue;
+    }
+    if (normalizedPluginConfig && params.config) {
+      const enableState = resolveEffectiveEnableState({
+        id: pluginId,
+        origin: "global",
+        config: normalizedPluginConfig,
+        rootConfig: params.config,
+      });
+      if (!enableState.enabled) {
+        continue;
+      }
     }
     const rawInstallPath = normalizeOptionalString(record.installPath);
     if (!rawInstallPath) {
@@ -1090,7 +1109,11 @@ async function updatePluginsAfterCoreUpdate(params: {
   const repairMissingPayloads = async (
     records: Record<string, PluginInstallRecord>,
   ): Promise<readonly string[]> => {
-    const missing = await collectMissingPluginInstallPayloads({ records });
+    const missing = await collectMissingPluginInstallPayloads({
+      records,
+      config: pluginConfig,
+      skipDisabledPlugins: true,
+    });
     if (missing.length === 0) {
       return [];
     }
@@ -1109,6 +1132,8 @@ async function updatePluginsAfterCoreUpdate(params: {
       pluginIds: missingIds,
       timeoutMs: params.timeoutMs,
       updateChannel: params.channel,
+      skipDisabledPlugins: true,
+      disableOnFailure: true,
       logger: pluginLogger,
       onIntegrityDrift: onPluginIntegrityDrift,
     });
@@ -1129,6 +1154,7 @@ async function updatePluginsAfterCoreUpdate(params: {
     updateChannel: params.channel,
     skipIds: new Set([...syncResult.summary.switchedToNpm, ...repairedMissingPayloadIds]),
     skipDisabledPlugins: true,
+    disableOnFailure: true,
     logger: pluginLogger,
     onIntegrityDrift: onPluginIntegrityDrift,
   });
@@ -1139,6 +1165,8 @@ async function updatePluginsAfterCoreUpdate(params: {
 
   const remainingMissingPayloads = await collectMissingPluginInstallPayloads({
     records: pluginConfig.plugins?.installs ?? {},
+    config: pluginConfig,
+    skipDisabledPlugins: true,
   });
   pluginUpdateOutcomes.push(
     ...remainingMissingPayloads.map(
@@ -1608,6 +1636,25 @@ async function readPostCorePluginUpdateResultFile(
   return undefined;
 }
 
+function stopPostCoreUpdateChild(child: ChildProcess): void {
+  if (process.platform === "win32" && child.pid) {
+    try {
+      const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      killer.once("error", () => {
+        child.kill();
+      });
+      return;
+    } catch {
+      child.kill();
+      return;
+    }
+  }
+  child.kill();
+}
+
 async function continuePostCoreUpdateInFreshProcess(params: {
   root: string;
   channel: "stable" | "beta" | "dev";
@@ -1632,11 +1679,8 @@ async function continuePostCoreUpdateInFreshProcess(params: {
   if (params.opts.timeout) {
     argv.push("--timeout", params.opts.timeout);
   }
-  const resultDir =
-    params.opts.json === true
-      ? await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-post-core-"))
-      : null;
-  const resultPath = resultDir ? path.join(resultDir, "plugins.json") : null;
+  const resultDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-post-core-"));
+  const resultPath = path.join(resultDir, "plugins.json");
 
   try {
     const child = spawn(resolveNodeRunner(), argv, {
@@ -1648,24 +1692,65 @@ async function continuePostCoreUpdateInFreshProcess(params: {
         ...(params.requestedChannel
           ? { [POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV]: params.requestedChannel }
           : {}),
-        ...(resultPath ? { [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath } : {}),
+        [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath,
       },
     });
 
-    const exitCode = await new Promise<number>((resolve, reject) => {
-      child.once("error", reject);
+    const childResult = await new Promise<
+      | { kind: "exit"; exitCode: number }
+      | { kind: "plugin-update"; pluginUpdate: PostCorePluginUpdateResult }
+    >((resolve, reject) => {
+      let settled = false;
+      const finish = (
+        result:
+          | { kind: "exit"; exitCode: number }
+          | { kind: "plugin-update"; pluginUpdate: PostCorePluginUpdateResult },
+      ) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearInterval(resultPoll);
+        resolve(result);
+      };
+      const resultPoll = setInterval(() => {
+        void readPostCorePluginUpdateResultFile(resultPath)
+          .then((pluginUpdate) => {
+            if (!pluginUpdate) {
+              return;
+            }
+            stopPostCoreUpdateChild(child);
+            finish({ kind: "plugin-update", pluginUpdate });
+          })
+          .catch(() => undefined);
+      }, POST_CORE_UPDATE_RESULT_POLL_MS);
+      child.once("error", (error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearInterval(resultPoll);
+        reject(error);
+      });
       child.once("exit", (code, signal) => {
+        if (settled) {
+          return;
+        }
         if (signal) {
+          settled = true;
+          clearInterval(resultPoll);
           reject(new Error(`post-update process terminated by signal ${signal}`));
           return;
         }
-        resolve(code ?? 1);
+        finish({ kind: "exit", exitCode: code ?? 1 });
       });
     });
 
-    const pluginUpdate = resultPath
-      ? await readPostCorePluginUpdateResultFile(resultPath)
-      : undefined;
+    const pluginUpdate =
+      childResult.kind === "plugin-update"
+        ? childResult.pluginUpdate
+        : await readPostCorePluginUpdateResultFile(resultPath);
+    const exitCode = childResult.kind === "exit" ? childResult.exitCode : 0;
     if (exitCode !== 0) {
       if (pluginUpdate) {
         return { resumed: true, pluginUpdate };
@@ -1675,9 +1760,7 @@ async function continuePostCoreUpdateInFreshProcess(params: {
     }
     return { resumed: true, ...(pluginUpdate ? { pluginUpdate } : {}) };
   } finally {
-    if (resultDir) {
-      await fs.rm(resultDir, { recursive: true, force: true }).catch(() => undefined);
-    }
+    await fs.rm(resultDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
@@ -1752,11 +1835,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       opts,
       timeoutMs: updateStepTimeoutMs,
     });
-    if (opts.json) {
+    if (process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
       await writePostCorePluginUpdateResultFile(
         process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],
         pluginUpdate,
       );
+    }
+    if (opts.json) {
       if (!process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
         const result: UpdateRunResult = {
           status: pluginUpdate.status === "error" ? "error" : "ok",
@@ -1773,6 +1858,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       defaultRuntime.exit(1);
       return;
     }
+    defaultRuntime.exit(0);
     return;
   }
 

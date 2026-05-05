@@ -32,6 +32,7 @@ import { asNullableObjectRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: {
@@ -919,6 +920,16 @@ export async function noteStateIntegrity(
         warnings.push(wedgedReasons.map((reason) => `  Reason: ${reason}`).join("\n"));
       }
     }
+
+    await runPluginSessionStateDoctorRepairs({
+      cfg,
+      store,
+      absoluteStorePath,
+      prompter,
+      env,
+      warnings,
+      changes,
+    });
 
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];

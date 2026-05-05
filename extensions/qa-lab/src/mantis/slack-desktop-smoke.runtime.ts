@@ -35,6 +35,7 @@ export type MantisSlackDesktopSmokeResult = {
   screenshotPath?: string;
   status: "pass" | "fail";
   summaryPath: string;
+  videoPath?: string;
 };
 
 type CommandResult = {
@@ -66,6 +67,7 @@ type MantisSlackDesktopSmokeSummary = {
     screenshotPath?: string;
     slackQaDir?: string;
     summaryPath: string;
+    videoPath?: string;
   };
   crabbox: {
     bin: string;
@@ -302,6 +304,24 @@ fi
 if [ -z "$slack_url" ]; then
   slack_url="https://app.slack.com/client"
 fi
+video_pid=""
+if command -v ffmpeg >/dev/null 2>&1; then
+  :
+else
+  sudo apt-get update -y >>"$out/apt.log" 2>&1 || true
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg >>"$out/apt.log" 2>&1 || true
+fi
+if command -v ffmpeg >/dev/null 2>&1; then
+  display_input="$DISPLAY"
+  case "$display_input" in
+    *.*) ;;
+    *) display_input="$display_input.0" ;;
+  esac
+  ffmpeg -hide_banner -loglevel error -y -f x11grab -framerate 15 -i "$display_input" -t 45 -pix_fmt yuv420p "$out/slack-desktop-smoke.mp4" >"$out/ffmpeg.log" 2>&1 &
+  video_pid=$!
+else
+  echo "ffmpeg missing; video artifact skipped" >"$out/ffmpeg.log"
+fi
 if [ "$setup_gateway" = "1" ]; then
   nohup "$browser_bin" \
     --user-data-dir="$profile" \
@@ -376,6 +396,9 @@ MANTIS_SLACK_PATCH
 } >"$out/slack-desktop-command.log" 2>&1 || qa_status=$?
 sleep 5
 scrot "$out/slack-desktop-smoke.png" || true
+if [ -n "$video_pid" ]; then
+  wait "$video_pid" || true
+fi
 if [ "$setup_gateway" != "1" ]; then
   kill "$chrome_pid" >/dev/null 2>&1 || true
 fi
@@ -422,9 +445,13 @@ function renderReport(summary: MantisSlackDesktopSmokeSummary) {
     summary.artifacts.screenshotPath
       ? `- Screenshot: \`${path.basename(summary.artifacts.screenshotPath)}\``
       : "- Screenshot: missing",
+    summary.artifacts.videoPath
+      ? `- Video: \`${path.basename(summary.artifacts.videoPath)}\``
+      : "- Video: missing",
     summary.artifacts.slackQaDir ? "- Slack QA artifacts: `slack-qa/`" : undefined,
     "- Remote metadata: `remote-metadata.json`",
     "- Remote command log: `slack-desktop-command.log`",
+    "- FFmpeg log: `ffmpeg.log`",
     "- Chrome log: `chrome.log`",
     summary.error ? `- Error: ${summary.error}` : undefined,
     "",
@@ -544,10 +571,7 @@ async function copyRemoteArtifacts(params: {
       "-az",
       "-e",
       sshArgs,
-      `${sshUser}@${host}:${params.remoteOutputDir}/slack-desktop-smoke.png`,
-      `${sshUser}@${host}:${params.remoteOutputDir}/remote-metadata.json`,
-      `${sshUser}@${host}:${params.remoteOutputDir}/chrome.log`,
-      `${sshUser}@${host}:${params.remoteOutputDir}/slack-desktop-command.log`,
+      `${sshUser}@${host}:${params.remoteOutputDir}/`,
       `${params.outputDir}/`,
     ],
     cwd: params.cwd,
@@ -636,6 +660,7 @@ export async function runMantisSlackDesktopSmoke(
   let summary: MantisSlackDesktopSmokeSummary | undefined;
   let screenshotPath: string | undefined;
   let slackQaDir: string | undefined;
+  let videoPath: string | undefined;
 
   try {
     leaseId =
@@ -702,6 +727,10 @@ export async function runMantisSlackDesktopSmoke(
       runner,
     });
     screenshotPath = path.join(outputDir, "slack-desktop-smoke.png");
+    videoPath = path.join(outputDir, "slack-desktop-smoke.mp4");
+    if (!(await pathExists(videoPath))) {
+      videoPath = undefined;
+    }
     slackQaDir = path.join(outputDir, "slack-qa");
     if (!(await pathExists(screenshotPath))) {
       throw new Error("Slack desktop screenshot was not copied back from Crabbox.");
@@ -715,6 +744,7 @@ export async function runMantisSlackDesktopSmoke(
         screenshotPath,
         slackQaDir,
         summaryPath,
+        videoPath,
       },
       crabbox: {
         bin: crabboxBin,
@@ -738,6 +768,7 @@ export async function runMantisSlackDesktopSmoke(
       screenshotPath,
       status: "pass",
       summaryPath,
+      videoPath,
     };
   } catch (error) {
     summary = {
@@ -746,6 +777,7 @@ export async function runMantisSlackDesktopSmoke(
         screenshotPath,
         slackQaDir,
         summaryPath,
+        videoPath,
       },
       crabbox: {
         bin: crabboxBin,
@@ -771,6 +803,7 @@ export async function runMantisSlackDesktopSmoke(
       screenshotPath,
       status: "fail",
       summaryPath,
+      videoPath,
     };
   } finally {
     if (summary) {

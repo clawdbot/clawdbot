@@ -45,12 +45,18 @@ export function registerCronListCommand(cron: Command) {
       .command("list")
       .description("List cron jobs")
       .option("--all", "Include disabled jobs", false)
+      .option("--agent <id>", "Filter by agent id")
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
-          const res = await callGatewayFromCli("cron.list", opts, {
+          const listParams: Record<string, unknown> = {
             includeDisabled: Boolean(opts.all),
-          });
+          };
+          const agentId = normalizeOptionalString(opts.agent);
+          if (agentId) {
+            listParams.agentId = sanitizeAgentId(agentId);
+          }
+          const res = await callGatewayFromCli("cron.list", opts, listParams);
           if (opts.json) {
             printCronJson(res);
             return;

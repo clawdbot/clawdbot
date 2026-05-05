@@ -9,7 +9,7 @@
     "@grammyjs/transformer-throttler": "^1.2.1",
     "grammy": "^1.42.0",
     "typebox": "1.1.37",
-    "undici": "8.1.0"
+    "undici": "8.2.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

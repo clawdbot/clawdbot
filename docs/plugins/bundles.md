@@ -262,8 +262,8 @@ dual-format packages from being partially installed as bundles.
   downloadable through the plugin installer. Gateway startup never runs a
   package manager for them.
 - `openclaw doctor --fix` removes legacy staged dependency directories and can
-  install configured downloadable plugins that are missing from the local
-  plugin index.
+  recover downloadable plugins that are missing from the local plugin index when
+  config references them.
 
 ## Security
 

@@ -1,9 +1,26 @@
 import chalk from "chalk";
+import { resolveDefaultAgentId, resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { resolveFastModeState } from "../agents/fast-mode.js";
+import {
+  resolveConfiguredModelRef,
+  resolveThinkingDefault,
+  legacyModelKey,
+  modelKey,
+} from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../security/dangerous-config-flags.js";
+
+type StartupThinkLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max";
 
 export function logGatewayStartup(params: {
   cfg: OpenClawConfig;
@@ -22,8 +39,13 @@ export function logGatewayStartup(params: {
     defaultModel: DEFAULT_MODEL,
   });
   const modelRef = `${agentProvider}/${agentModel}`;
-  params.log.info(`agent model: ${modelRef}`, {
-    consoleMessage: `agent model: ${chalk.whiteBright(modelRef)}`,
+  const modelDetails = formatAgentModelStartupDetails({
+    cfg: params.cfg,
+    provider: agentProvider,
+    model: agentModel,
+  });
+  params.log.info(`agent model: ${modelRef} (${modelDetails})`, {
+    consoleMessage: `agent model: ${chalk.whiteBright(modelRef)} (${modelDetails})`,
   });
   const startupDurationMs =
     typeof params.startupStartedAt === "number" ? Date.now() - params.startupStartedAt : null;
@@ -44,6 +66,67 @@ export function logGatewayStartup(params: {
       "Run `openclaw security audit`.";
     params.log.warn(warning);
   }
+}
+
+function normalizeStartupThinkLevel(value: unknown): StartupThinkLevel | undefined {
+  return value === "off" ||
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh" ||
+    value === "adaptive" ||
+    value === "max"
+    ? value
+    : undefined;
+}
+
+function resolveExplicitStartupThinking(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+  defaultAgentThinking: unknown;
+}): StartupThinkLevel | undefined {
+  const models = params.cfg.agents?.defaults?.models;
+  const canonicalKey = modelKey(params.provider, params.model);
+  const legacyKey = legacyModelKey(params.provider, params.model);
+  return (
+    normalizeStartupThinkLevel(params.defaultAgentThinking) ??
+    normalizeStartupThinkLevel(models?.[canonicalKey]?.params?.thinking) ??
+    normalizeStartupThinkLevel(legacyKey ? models?.[legacyKey]?.params?.thinking : undefined) ??
+    normalizeStartupThinkLevel(params.cfg.agents?.defaults?.thinkingDefault)
+  );
+}
+
+export function formatAgentModelStartupDetails(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): string {
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const defaultAgentConfig = resolveAgentConfig(params.cfg, defaultAgentId);
+  const explicitThinking = resolveExplicitStartupThinking({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    defaultAgentThinking: defaultAgentConfig?.thinkingDefault,
+  });
+  const resolvedThinking =
+    explicitThinking ??
+    resolveThinkingDefault({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+    });
+  const thinking = explicitThinking ?? (resolvedThinking === "off" ? "medium" : resolvedThinking);
+  const fast = resolveFastModeState({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    agentId: defaultAgentId,
+  });
+
+  return `thinking=${thinking}, fast=${fast.enabled ? "on" : "off"}`;
 }
 
 function formatReadyDetails(

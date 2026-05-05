@@ -227,7 +227,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
       shouldUseOpenAIResponsesTransport({ provider, api, baseUrl })
         ? { api: "openai-responses", baseUrl }
         : undefined,
-    ...buildOpenAIResponsesProviderHooks({ openaiWsWarmup: true }),
+    ...buildOpenAIResponsesProviderHooks({ transport: "sse" }),
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
     resolveReasoningOutputMode: () => "native",

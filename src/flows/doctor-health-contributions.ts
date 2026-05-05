@@ -29,6 +29,7 @@ type DoctorHealthFlowContext = {
   env?: NodeJS.ProcessEnv;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
+  gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
 };
 
@@ -493,18 +494,29 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
   const { checkGatewayHealth, probeGatewayMemoryStatus } =
     await import("../commands/doctor-gateway-health.js");
-  const { healthOk } = await checkGatewayHealth({
+  const { healthOk, status } = await checkGatewayHealth({
     runtime: ctx.runtime,
     cfg: ctx.cfg,
     timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
   });
   ctx.healthOk = healthOk;
+  ctx.gatewayStatus = status;
   ctx.gatewayMemoryProbe = healthOk
     ? await probeGatewayMemoryStatus({
         cfg: ctx.cfg,
         timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
       })
     : { checked: false, ready: false, skipped: false };
+}
+
+async function runWhatsappResponsivenessHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteWhatsappResponsivenessHealth } =
+    await import("../commands/doctor-whatsapp-responsiveness.js");
+  await noteWhatsappResponsivenessHealth({
+    cfg: ctx.cfg,
+    status: ctx.gatewayStatus,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
 }
 
 async function runMemorySearchHealthContribution(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -650,7 +662,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     }),
     createDoctorHealthContribution({
       id: "doctor:release-configured-plugin-installs",
-      label: "Configured plugin installs",
+      label: "Configured plugin repair",
       run: runReleaseConfiguredPluginInstallsHealth,
     }),
     createDoctorHealthContribution({
@@ -742,6 +754,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:gateway-health",
       label: "Gateway health",
       run: runGatewayHealthChecks,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:whatsapp-responsiveness",
+      label: "WhatsApp responsiveness",
+      run: runWhatsappResponsivenessHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:memory-search",

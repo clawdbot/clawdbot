@@ -42,6 +42,7 @@ import {
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
+import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import {
   createEditorSubmitHandler,
   createSubmitBurstCoalescer,
@@ -635,6 +636,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     }
     const sessions = await client
       .listSessions({
+        limit: TUI_SESSION_LOOKUP_LIMIT,
+        search: rememberedKey,
         includeGlobal: false,
         includeUnknown: false,
         agentId: currentAgentId,

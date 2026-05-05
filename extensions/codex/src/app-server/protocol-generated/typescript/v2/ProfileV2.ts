@@ -14,11 +14,12 @@ import type { ToolsV2 } from "./ToolsV2.js";
 export type ProfileV2 = {
   model: string | null;
   model_provider: string | null;
-  approval_policy: AskForApproval | null /**
+  approval_policy: AskForApproval | null;
+  /**
    * [UNSTABLE] Optional profile-level override for where approval requests
    * are routed for review. If omitted, the enclosing config default is
    * used.
-   */;
+   */
   approvals_reviewer: ApprovalsReviewer | null;
   service_tier: ServiceTier | null;
   model_reasoning_effort: ReasoningEffort | null;

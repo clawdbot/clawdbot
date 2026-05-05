@@ -239,10 +239,14 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
   const emitBlockReply = (
     payload: BlockReplyPayload,
-    options?: { assistantMessageIndex?: number },
+    options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
   ) => {
     const withAssistantDirectives = consumePendingAssistantReplyDirectivesIntoReply(state, payload);
-    emitBlockReplySafely(consumePendingToolMediaIntoReply(state, withAssistantDirectives), options);
+    const withToolMedia =
+      options?.consumePendingToolMedia === false
+        ? withAssistantDirectives
+        : consumePendingToolMediaIntoReply(state, withAssistantDirectives);
+    emitBlockReplySafely(withToolMedia, options);
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -761,6 +765,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       },
       {
         assistantMessageIndex: options?.assistantMessageIndex ?? state.assistantMessageIndex,
+        consumePendingToolMedia:
+          options?.final === true || Boolean(mediaUrls?.length || audioAsVoice),
       },
     );
   };

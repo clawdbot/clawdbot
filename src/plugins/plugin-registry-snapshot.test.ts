@@ -50,6 +50,61 @@ function writePackagePlugin(rootDir: string) {
   );
 }
 
+function writeManagedNpmPlugin(params: {
+  stateDir: string;
+  packageName: string;
+  pluginId: string;
+  version: string;
+  dependencySpec?: string;
+}): string {
+  const npmRoot = path.join(params.stateDir, "npm");
+  const rootManifestPath = path.join(npmRoot, "package.json");
+  fs.mkdirSync(npmRoot, { recursive: true });
+  const rootManifest = fs.existsSync(rootManifestPath)
+    ? (JSON.parse(fs.readFileSync(rootManifestPath, "utf8")) as {
+        dependencies?: Record<string, string>;
+      })
+    : {};
+  fs.writeFileSync(
+    rootManifestPath,
+    JSON.stringify(
+      {
+        ...rootManifest,
+        private: true,
+        dependencies: {
+          ...rootManifest.dependencies,
+          [params.packageName]: params.dependencySpec ?? params.version,
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const packageDir = path.join(npmRoot, "node_modules", params.packageName);
+  fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({
+      name: params.packageName,
+      version: params.version,
+      openclaw: { extensions: ["./dist/index.js"] },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(packageDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: params.pluginId,
+      configSchema: { type: "object" },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(packageDir, "dist", "index.js"), "export {};\n", "utf8");
+  return packageDir;
+}
+
 function replaceFilePreservingSizeAndMtime(filePath: string, contents: string) {
   const previous = fs.statSync(filePath);
   expect(Buffer.byteLength(contents)).toBe(previous.size);
@@ -72,6 +127,61 @@ function createManifestlessClaudeBundleIndex(params: {
 }
 
 describe("loadPluginRegistrySnapshotWithMetadata", () => {
+  it("recovers managed npm plugins missing from a stale persisted registry", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const config = {};
+    const whatsappDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/whatsapp",
+      pluginId: "whatsapp",
+      version: "2026.5.2",
+    });
+    const staleIndex = loadInstalledPluginIndex({
+      config,
+      env,
+      stateDir,
+      installRecords: {},
+    });
+    expect(staleIndex.plugins.some((plugin) => plugin.pluginId === "whatsapp")).toBe(false);
+    writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      stateDir,
+    });
+
+    expect(result.source).toBe("derived");
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "persisted-registry-stale-source" }),
+    );
+    expect(result.snapshot.installRecords).toMatchObject({
+      whatsapp: {
+        source: "npm",
+        spec: "@openclaw/whatsapp@2026.5.2",
+        installPath: whatsappDir,
+        version: "2026.5.2",
+        resolvedName: "@openclaw/whatsapp",
+        resolvedVersion: "2026.5.2",
+        resolvedSpec: "@openclaw/whatsapp@2026.5.2",
+      },
+    });
+    expect(result.snapshot.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "whatsapp",
+          origin: "global",
+        }),
+      ]),
+    );
+  });
+
   it("keeps persisted manifestless Claude bundles on the fast path", () => {
     const tempRoot = makeTempDir();
     const rootDir = path.join(tempRoot, "workspace");

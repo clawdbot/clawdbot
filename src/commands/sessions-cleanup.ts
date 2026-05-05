@@ -93,6 +93,11 @@ function renderStoreDryRunPlan(params: {
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
+  if (params.summary.unreferencedArtifacts?.scannedFiles) {
+    params.runtime.log(
+      `Would prune unreferenced artifacts: ${params.summary.unreferencedArtifacts.removedFiles}`,
+    );
+  }
   if (params.summary.diskBudget) {
     params.runtime.log(
       `Would enforce disk budget: ${params.summary.diskBudget.totalBytesBefore} -> ${params.summary.diskBudget.totalBytesAfter} bytes (files ${params.summary.diskBudget.removedFiles}, entries ${params.summary.diskBudget.removedEntries})`,
@@ -141,6 +146,11 @@ function renderAppliedSummaries(params: {
     }
     params.runtime.log(`Session store: ${summary.storePath}`);
     params.runtime.log(`Applied maintenance. Current entries: ${summary.appliedCount ?? 0}`);
+    if (summary.unreferencedArtifacts?.removedFiles) {
+      params.runtime.log(
+        `Pruned unreferenced artifacts: ${summary.unreferencedArtifacts.removedFiles}`,
+      );
+    }
   }
 }
 

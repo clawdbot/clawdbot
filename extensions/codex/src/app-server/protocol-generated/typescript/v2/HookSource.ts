@@ -8,6 +8,8 @@ export type HookSource =
   | "project"
   | "mdm"
   | "sessionFlags"
+  | "plugin"
+  | "cloudRequirements"
   | "legacyManagedConfigFile"
   | "legacyManagedConfigMdm"
   | "unknown";

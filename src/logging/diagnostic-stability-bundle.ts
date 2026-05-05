@@ -348,6 +348,7 @@ function readStabilityEventRecord(
   assignOptionalCodeString(sanitized, "reason", record.reason, `${label}.reason`);
   assignOptionalCodeString(sanitized, "outcome", record.outcome, `${label}.outcome`);
   assignOptionalCodeString(sanitized, "level", record.level, `${label}.level`);
+  assignOptionalCodeString(sanitized, "phase", record.phase, `${label}.phase`);
   assignOptionalCodeString(sanitized, "detector", record.detector, `${label}.detector`);
   assignOptionalCodeString(sanitized, "toolName", record.toolName, `${label}.toolName`);
   assignOptionalCodeString(

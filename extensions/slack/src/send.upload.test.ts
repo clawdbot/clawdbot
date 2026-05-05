@@ -1,6 +1,10 @@
 import type { WebClient } from "@slack/web-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+import {
+  clearSlackThreadParticipationCache,
+  hasSlackThreadParticipation,
+} from "./sent-thread-cache.js";
 
 // --- Module mocks (must precede dynamic import) ---
 installSlackBlockTestMocks();
@@ -96,6 +100,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
     loadOutboundMediaFromUrlMock.mockClear();
     clearSlackDmChannelCache();
     clearSlackSendQueuesForTest();
+    clearSlackThreadParticipationCache();
   });
 
   afterEach(() => {
@@ -297,6 +302,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
         thread_ts: "171.222",
       }),
     );
+    expect(hasSlackThreadParticipation("default", "C123CHAN", "171.222")).toBe(true);
   });
 
   it("uses explicit upload filename and title overrides when provided", async () => {

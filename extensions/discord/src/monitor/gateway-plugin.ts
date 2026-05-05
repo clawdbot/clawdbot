@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { Agent as HttpsAgent } from "node:https";
 import * as httpsProxyAgent from "https-proxy-agent";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
 import {
@@ -10,6 +11,7 @@ import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import * as ws from "ws";
 import * as discordGateway from "../internal/gateway.js";
+import { createDiscordDnsLookup } from "../network-config.js";
 import { validateDiscordProxyUrl } from "../proxy-fetch.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
@@ -28,11 +30,15 @@ export {
 } from "./gateway-metadata.js";
 
 const DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS = 30_000;
+const discordDnsLookup = createDiscordDnsLookup();
 
 type DiscordGatewayWebSocketCtor = new (
   url: string,
   options?: { agent?: unknown; handshakeTimeout?: number },
 ) => ws.WebSocket;
+type DiscordGatewayWebSocketAgent =
+  | InstanceType<typeof HttpsAgent>
+  | InstanceType<typeof httpsProxyAgent.HttpsProxyAgent<string>>;
 const registrationPromises = new WeakMap<discordGateway.GatewayPlugin, Promise<void>>();
 type DiscordGatewayClient = Parameters<discordGateway.GatewayPlugin["registerClient"]>[0];
 type GatewayPluginTestingOptions = {
@@ -100,7 +106,7 @@ function createGatewayPlugin(params: {
   gatewayInfoTimeoutMs: number;
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
-  wsAgent?: InstanceType<typeof httpsProxyAgent.HttpsProxyAgent<string>>;
+  wsAgent?: DiscordGatewayWebSocketAgent;
   runtime?: RuntimeEnv;
   testing?: GatewayPluginTestingOptions;
 }): discordGateway.GatewayPlugin {
@@ -263,7 +269,9 @@ export function createDiscordGatewayPlugin(params: {
     env: process.env,
   });
   let fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled);
-  let wsAgent: InstanceType<typeof httpsProxyAgent.HttpsProxyAgent<string>> | undefined;
+  let wsAgent: DiscordGatewayWebSocketAgent = new HttpsAgent({
+    lookup: discordDnsLookup,
+  });
 
   if (proxy) {
     try {

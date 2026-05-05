@@ -394,17 +394,31 @@ describe("createPdfTool", () => {
 
   it("uses native PDF path without eager extraction", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
+      const workspaceDir = path.join(agentDir, "workspace");
       await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
       vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
       const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent");
       const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
-      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+      const tool = requirePdfTool(
+        (await loadCreatePdfTool())({ config: cfg, agentDir, workspaceDir }),
+      );
 
       const result = await tool.execute("t1", {
         prompt: "summarize",
         pdf: "/tmp/doc.pdf",
       });
 
+      expect(modelsConfig.ensureOpenClawModelsJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({
+              pdfModel: { primary: ANTHROPIC_PDF_MODEL },
+            }),
+          }),
+        }),
+        agentDir,
+        { workspaceDir },
+      );
       expect(extractSpy).not.toHaveBeenCalled();
       expect(result).toMatchObject({
         content: [{ type: "text", text: "native summary" }],

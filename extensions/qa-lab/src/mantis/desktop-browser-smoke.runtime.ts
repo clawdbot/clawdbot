@@ -28,6 +28,7 @@ export type MantisDesktopBrowserSmokeResult = {
   screenshotPath?: string;
   status: "pass" | "fail";
   summaryPath: string;
+  videoPath?: string;
 };
 
 type CommandResult = {
@@ -58,6 +59,7 @@ type MantisDesktopBrowserSmokeSummary = {
     reportPath: string;
     screenshotPath?: string;
     summaryPath: string;
+    videoPath?: string;
   };
   browserUrl: string;
   htmlFile?: string;
@@ -232,6 +234,24 @@ if [ -z "$browser_bin" ]; then
   echo "No browser binary found. Checked BROWSER, CHROME_BIN, google-chrome, chromium, chromium-browser." >&2
   exit 127
 fi
+video_pid=""
+if command -v ffmpeg >/dev/null 2>&1; then
+  :
+else
+  sudo apt-get update -y >>"$out/apt.log" 2>&1 || true
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg >>"$out/apt.log" 2>&1 || true
+fi
+if command -v ffmpeg >/dev/null 2>&1; then
+  display_input="$DISPLAY"
+  case "$display_input" in
+    *.*) ;;
+    *) display_input="$display_input.0" ;;
+  esac
+  ffmpeg -hide_banner -loglevel error -y -f x11grab -framerate 15 -i "$display_input" -t 10 -pix_fmt yuv420p "$out/desktop-browser-smoke.mp4" >"$out/ffmpeg.log" 2>&1 &
+  video_pid=$!
+else
+  echo "ffmpeg missing; video artifact skipped" >"$out/ffmpeg.log"
+fi
 "$browser_bin" \
   --user-data-dir="$profile" \
   --no-first-run \
@@ -248,6 +268,9 @@ cleanup() {
 trap cleanup EXIT
 sleep 8
 scrot "$out/desktop-browser-smoke.png"
+if [ -n "$video_pid" ]; then
+  wait "$video_pid" || true
+fi
 cleanup
 trap - EXIT
 sleep 1
@@ -291,7 +314,11 @@ function renderReport(summary: MantisDesktopBrowserSmokeSummary) {
     summary.artifacts.screenshotPath
       ? `- Screenshot: \`${path.basename(summary.artifacts.screenshotPath)}\``
       : "- Screenshot: missing",
+    summary.artifacts.videoPath
+      ? `- Video: \`${path.basename(summary.artifacts.videoPath)}\``
+      : "- Video: missing",
     "- Remote metadata: `remote-metadata.json`",
+    "- FFmpeg log: `ffmpeg.log`",
     "- Chrome log: `chrome.log`",
     summary.error ? `- Error: ${summary.error}` : undefined,
     "",
@@ -401,9 +428,9 @@ async function copyRemoteArtifacts(params: {
         "-o",
         "UserKnownHostsFile=/dev/null",
       ].join(" "),
-      `${sshUser}@${host}:${params.remoteOutputDir}/desktop-browser-smoke.png`,
-      `${sshUser}@${host}:${params.remoteOutputDir}/remote-metadata.json`,
-      `${sshUser}@${host}:${params.remoteOutputDir}/chrome.log`,
+      "--exclude",
+      "chrome-profile/**",
+      `${sshUser}@${host}:${params.remoteOutputDir}/`,
       `${params.outputDir}/`,
     ],
     cwd: params.cwd,
@@ -524,14 +551,17 @@ export async function runMantisDesktopBrowserSmoke(
       runner,
     });
     const screenshotPath = path.join(outputDir, "desktop-browser-smoke.png");
+    const videoPath = path.join(outputDir, "desktop-browser-smoke.mp4");
     if (!(await pathExists(screenshotPath))) {
       throw new Error("Desktop browser screenshot was not copied back from Crabbox.");
     }
+    const copiedVideoPath = (await pathExists(videoPath)) ? videoPath : undefined;
     summary = {
       artifacts: {
         reportPath,
         screenshotPath,
         summaryPath,
+        videoPath: copiedVideoPath,
       },
       browserUrl,
       htmlFile,
@@ -556,6 +586,7 @@ export async function runMantisDesktopBrowserSmoke(
       screenshotPath,
       status: "pass",
       summaryPath,
+      videoPath: copiedVideoPath,
     };
   } catch (error) {
     summary = {

@@ -395,6 +395,12 @@ describe("sessionsCleanupCommand", () => {
             missing: 0,
             pruned: 1,
             capped: 0,
+            unreferencedArtifacts: {
+              scannedFiles: 5,
+              removedFiles: 2,
+              freedBytes: 128,
+              olderThanMs: 604800000,
+            },
             diskBudget: null,
             wouldMutate: true,
           },
@@ -420,6 +426,7 @@ describe("sessionsCleanupCommand", () => {
     );
 
     expect(logs.some((line) => line.includes("Planned session actions:"))).toBe(true);
+    expect(logs.some((line) => line.includes("Would prune unreferenced artifacts: 2"))).toBe(true);
     expect(logs.some((line) => line.includes("Action") && line.includes("Key"))).toBe(true);
     expect(logs.some((line) => line.includes("fresh") && line.includes("keep"))).toBe(true);
     expect(logs.some((line) => line.includes("stale") && line.includes("prune-stale"))).toBe(true);

@@ -388,10 +388,14 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("secrets.providers.default.path");
   });
 
-  it("treats diagnostics.stuckSessionWarnMs as no-op for gateway restart planning", () => {
-    const plan = buildGatewayReloadPlan(["diagnostics.stuckSessionWarnMs"]);
+  it("treats diagnostics stuck-session thresholds as no-op for gateway restart planning", () => {
+    const plan = buildGatewayReloadPlan([
+      "diagnostics.stuckSessionWarnMs",
+      "diagnostics.stuckSessionAbortMs",
+    ]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.noopPaths).toContain("diagnostics.stuckSessionWarnMs");
+    expect(plan.noopPaths).toContain("diagnostics.stuckSessionAbortMs");
   });
 
   it("restarts for gateway.auth.token changes", () => {

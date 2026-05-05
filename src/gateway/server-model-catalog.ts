@@ -71,7 +71,7 @@ function startGatewayModelCatalogRefresh(
   const refresh = resolveLoadModelCatalog(params)
     .then((loadModelCatalog) => loadModelCatalog({ config, readOnly }))
     .then((catalog) => {
-      if (catalog.length > 0 && refreshGeneration === cache.staleGeneration) {
+      if ((readOnly || catalog.length > 0) && refreshGeneration === cache.staleGeneration) {
         cache.lastSuccessfulCatalog = catalog;
         cache.appliedGeneration = cache.staleGeneration;
       }
@@ -105,10 +105,10 @@ export async function loadGatewayModelCatalog(
 ): Promise<GatewayModelChoice[]> {
   const cache = resolveGatewayModelCatalogCache(params);
   const isStale = isGatewayModelCatalogStale(cache);
-  if (!isStale && cache.lastSuccessfulCatalog) {
+  if (!isStale && cache.lastSuccessfulCatalog !== null) {
     return cache.lastSuccessfulCatalog;
   }
-  if (isStale && cache.lastSuccessfulCatalog) {
+  if (isStale && cache.lastSuccessfulCatalog !== null) {
     if (!cache.inFlightRefresh) {
       void startGatewayModelCatalogRefresh(params).catch(() => undefined);
     }

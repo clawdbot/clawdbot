@@ -28,6 +28,7 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/outbound-runtime";
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -75,7 +76,7 @@ import {
   shouldSuppressTelegramError,
 } from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
-import { renderTelegramHtmlText } from "./format.js";
+import { markdownToTelegramChunks, renderTelegramHtmlText } from "./format.js";
 import {
   type ArchivedPreview,
   createLaneDeliveryStateTracker,
@@ -784,6 +785,27 @@ export const dispatchTelegramMessage = async ({
       }
       return { ...payload, text };
     };
+    const applyTextToFollowUpPayload = (payload: ReplyPayload, text: string): ReplyPayload => {
+      const next = applyTextToPayload(payload, text);
+      const {
+        replyToId: _replyToId,
+        replyToCurrent: _replyToCurrent,
+        replyToTag: _replyToTag,
+        ...followUp
+      } = next;
+      return followUp;
+    };
+    const splitFinalTextForPreview = (text: string): string[] => {
+      const markdownChunks =
+        chunkMode === "newline"
+          ? chunkMarkdownTextWithMode(text, draftMaxChars, chunkMode)
+          : [text];
+      return markdownChunks.flatMap((chunk) =>
+        markdownToTelegramChunks(chunk, draftMaxChars, { tableMode }).map(
+          (telegramChunk) => telegramChunk.text,
+        ),
+      );
+    };
     const applyQuoteReplyTarget = (payload: ReplyPayload): ReplyPayload => {
       if (
         !implicitQuoteReplyTargetId ||
@@ -836,6 +858,8 @@ export const dispatchTelegramMessage = async ({
       retainPreviewOnCleanupByLane,
       draftMaxChars,
       applyTextToPayload,
+      applyTextToFollowUpPayload,
+      splitFinalTextForPreview,
       sendPayload,
       flushDraftLane,
       stopDraftLane: async (lane) => {

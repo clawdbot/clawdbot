@@ -628,6 +628,8 @@ export type PluginHookGatewayCronJobState = {
 
 export type PluginHookGatewayCronJob = {
   id: string;
+  /** Agent id that owns this cron job. */
+  agentId?: string;
   name?: string;
   description?: string;
   enabled?: boolean;
@@ -662,6 +664,10 @@ export type PluginHookCronChangedEvent = {
   action: "added" | "updated" | "removed" | "started" | "finished";
   jobId: string;
   job?: PluginHookGatewayCronJob;
+  /** Top-level session target for downstream routing (mirrors job.sessionTarget). */
+  sessionTarget?: string;
+  /** Agent id that owns this cron job (mirrors job.agentId). */
+  agentId?: string;
   runAtMs?: number;
   durationMs?: number;
   status?: PluginHookGatewayCronRunStatus;

@@ -24,6 +24,7 @@ export type DiagnosticStabilityEventRecord = {
   outcome?: string;
   mode?: string;
   level?: string;
+  phase?: string;
   detector?: string;
   deliveryKind?: string;
   toolName?: string;
@@ -249,6 +250,27 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
         record.toolName = event.activeToolName;
       }
       break;
+    case "session.recovery.requested":
+      record.outcome = event.state;
+      record.action = event.allowActiveAbort ? "abort" : "recover";
+      record.ageMs = event.ageMs;
+      record.queueDepth = event.queueDepth;
+      if (event.activeWorkKind) {
+        record.activeWorkKind = event.activeWorkKind;
+      }
+      assignReasonCode(record, event.reason);
+      break;
+    case "session.recovery.completed":
+      record.outcome = event.status;
+      record.action = event.action;
+      record.ageMs = event.ageMs;
+      record.queueDepth = event.queueDepth;
+      record.count = event.released;
+      if (event.activeWorkKind) {
+        record.activeWorkKind = event.activeWorkKind;
+      }
+      assignReasonCode(record, event.outcomeReason ?? event.reason);
+      break;
     case "queue.lane.enqueue":
       record.source = event.lane;
       record.queueSize = event.queueSize;
@@ -292,6 +314,17 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.active = event.active;
       record.waiting = event.waiting;
       record.queued = event.queued;
+      record.phase = event.phase;
+      if (event.activeWorkLabels?.length) {
+        record.source = event.activeWorkLabels[0];
+      } else if (event.queuedWorkLabels?.length) {
+        record.source = event.queuedWorkLabels[0];
+      }
+      break;
+    case "diagnostic.phase.completed":
+      record.phase = event.name;
+      record.durationMs = event.durationMs;
+      record.cpuCoreRatio = event.cpuCoreRatio;
       break;
     case "tool.loop":
       record.toolName = event.toolName;

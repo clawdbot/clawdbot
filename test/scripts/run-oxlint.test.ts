@@ -49,6 +49,27 @@ describe("run-oxlint", () => {
       hadExplicitTargets: true,
       remainingExplicitTargets: 1,
       skippedTargets: ["ui", "packages"],
+      skippedConfigs: [],
+    });
+  });
+
+  it("filters tracked tsconfig files missing from sparse checkouts", () => {
+    const result = filterSparseMissingOxlintTargets(
+      ["--tsconfig", "config/tsconfig/oxlint.core.json", "src"],
+      {
+        fileExists: (target: string) => target.endsWith("/src"),
+        isSparseCheckoutEnabled: () => true,
+        isTrackedPath: ({ target }: { target: string }) =>
+          target === "config/tsconfig/oxlint.core.json",
+      },
+    );
+
+    expect(result).toEqual({
+      args: ["src"],
+      hadExplicitTargets: true,
+      remainingExplicitTargets: 1,
+      skippedTargets: [],
+      skippedConfigs: ["config/tsconfig/oxlint.core.json"],
     });
   });
 
@@ -63,6 +84,7 @@ describe("run-oxlint", () => {
       args: ["src", "typo"],
       remainingExplicitTargets: 2,
       skippedTargets: [],
+      skippedConfigs: [],
     });
   });
 });

@@ -1452,6 +1452,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       service,
       source: record.source,
       origin: record.origin,
+      trustedOfficialInstall: record.trustedOfficialInstall,
       rootDir: record.rootDir,
     });
   };

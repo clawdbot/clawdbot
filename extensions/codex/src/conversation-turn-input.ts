@@ -1,4 +1,5 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { PluginHookInboundClaimEvent } from "openclaw/plugin-sdk/plugin-entry";
 import type { CodexUserInput } from "./app-server/protocol.js";
 
@@ -48,8 +49,10 @@ function toCodexImageInput(media: InboundMedia): CodexUserInput | undefined {
   if (!isImageMedia(media)) {
     return undefined;
   }
-  if (media.path) {
-    return { type: "localImage", path: normalizeFileUrl(media.path) };
+  const localPath = media.path ?? readLocalMediaPath(media.url);
+  if (localPath) {
+    const normalized = normalizeFileUrl(localPath);
+    return normalized ? { type: "localImage", path: normalized } : undefined;
   }
   return media.url ? { type: "image", url: media.url } : undefined;
 }
@@ -65,8 +68,31 @@ function isImageMedia(media: InboundMedia): boolean {
   return IMAGE_EXTENSIONS.has(path.extname(candidate.split(/[?#]/, 1)[0] ?? "").toLowerCase());
 }
 
-function normalizeFileUrl(value: string): string {
-  return value.startsWith("file://") ? new URL(value).pathname : value;
+function normalizeFileUrl(value: string): string | undefined {
+  if (!value.startsWith("file://")) {
+    return value;
+  }
+  try {
+    return fileURLToPath(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function readLocalMediaPath(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (value.startsWith("file://")) {
+    return value;
+  }
+  if (value.startsWith("//")) {
+    return undefined;
+  }
+  if (path.isAbsolute(value) || path.win32.isAbsolute(value)) {
+    return value;
+  }
+  return /^[a-z][a-z0-9+.-]*:/i.test(value) ? undefined : value;
 }
 
 function readStringArray(value: unknown): string[] {

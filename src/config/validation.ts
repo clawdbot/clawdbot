@@ -13,6 +13,10 @@ import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
+  getOfficialExternalPluginCatalogEntry,
+  resolveOfficialExternalPluginInstall,
+} from "../plugins/official-external-plugin-catalog.js";
+import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
@@ -35,6 +39,7 @@ import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-value
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import { collectConfiguredModelRefs } from "./model-refs.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
 import { OpenClawSchema } from "./zod-schema.js";
@@ -50,10 +55,6 @@ type AllowedValuesCollection = {
   hasValues: boolean;
 };
 type JsonSchemaLike = Record<string, unknown>;
-type ConfiguredModelRef = {
-  path: string;
-  value: string;
-};
 
 function stripDeprecatedValidationKeys(raw: unknown): unknown {
   if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
@@ -94,6 +95,22 @@ function toConfigPathSegments(path: unknown): ConfigPathSegment[] {
 
 function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
   return segments.join(".");
+}
+
+function formatMissingOfficialExternalPluginWarning(pluginId: string): string | null {
+  const catalogEntry = getOfficialExternalPluginCatalogEntry(pluginId);
+  if (!catalogEntry) {
+    return null;
+  }
+  const install = resolveOfficialExternalPluginInstall(catalogEntry);
+  const npmSpec = install?.npmSpec?.trim();
+  const clawhubSpec = install?.clawhubSpec?.trim();
+  const installSpec =
+    install?.defaultChoice === "clawhub" ? (clawhubSpec ?? npmSpec) : (npmSpec ?? clawhubSpec);
+  if (!installSpec) {
+    return null;
+  }
+  return `plugin not installed: ${pluginId} — install the official external plugin with: openclaw plugins install ${installSpec}`;
 }
 
 function asJsonSchemaLike(value: unknown): JsonSchemaLike | null {
@@ -1110,58 +1127,6 @@ function validateConfigObjectWithPluginsBase(
     issues.push(issue);
   };
 
-  const collectConfiguredModelRefs = (): ConfiguredModelRef[] => {
-    const refs: ConfiguredModelRef[] = [];
-    const pushModelRef = (path: string, value: unknown) => {
-      if (typeof value === "string" && value.trim()) {
-        refs.push({ path, value: value.trim() });
-      }
-    };
-    const collectModelConfig = (path: string, value: unknown) => {
-      if (typeof value === "string") {
-        pushModelRef(path, value);
-        return;
-      }
-      if (!isRecord(value)) {
-        return;
-      }
-      pushModelRef(`${path}.primary`, value.primary);
-      if (Array.isArray(value.fallbacks)) {
-        for (const [index, entry] of value.fallbacks.entries()) {
-          pushModelRef(`${path}.fallbacks.${index}`, entry);
-        }
-      }
-    };
-    const collectFromAgent = (path: string, agent: unknown) => {
-      if (!isRecord(agent)) {
-        return;
-      }
-      for (const key of [
-        "model",
-        "imageModel",
-        "imageGenerationModel",
-        "videoGenerationModel",
-        "musicGenerationModel",
-        "pdfModel",
-      ]) {
-        collectModelConfig(`${path}.${key}`, agent[key]);
-      }
-      if (isRecord(agent.models)) {
-        for (const modelRef of Object.keys(agent.models)) {
-          pushModelRef(`${path}.models.${modelRef}`, modelRef);
-        }
-      }
-    };
-
-    collectFromAgent("agents.defaults", config.agents?.defaults);
-    if (Array.isArray(config.agents?.list)) {
-      for (const [index, entry] of config.agents.list.entries()) {
-        collectFromAgent(`agents.list.${index}`, entry);
-      }
-    }
-    return refs;
-  };
-
   const parseProviderModelRef = (value: string): { provider: string; model: string } | null => {
     const slashIndex = value.indexOf("/");
     if (slashIndex <= 0 || slashIndex >= value.length - 1) {
@@ -1173,7 +1138,7 @@ function validateConfigObjectWithPluginsBase(
   };
 
   const validateConfiguredModelRefs = () => {
-    const configuredRefs = collectConfiguredModelRefs();
+    const configuredRefs = collectConfiguredModelRefs(config);
     if (configuredRefs.length === 0) {
       return;
     }
@@ -1495,6 +1460,16 @@ function validateConfigObjectWithPluginsBase(
         issues.push({ path, message });
       }
       return;
+    }
+    if (opts?.warnOnly) {
+      const externalInstallWarning = formatMissingOfficialExternalPluginWarning(pluginId);
+      if (externalInstallWarning) {
+        warnings.push({
+          path,
+          message: externalInstallWarning,
+        });
+        return;
+      }
     }
     if (opts?.warnOnly) {
       warnings.push({

@@ -86,9 +86,18 @@ export async function dashboardCommand(
         : "Browser launch disabled (--no-open). Use the URL above.";
   }
 
+  const fallbackToManualAuth = !copied && !opened && includeTokenInUrl;
+  const suppressNoOpenHint = options.noOpen === true && fallbackToManualAuth;
+
   if (opened) {
     runtime.log("Opened in your browser. Keep that tab to control OpenClaw.");
-  } else if (hint) {
+  } else if (hint && !suppressNoOpenHint) {
     runtime.log(hint);
+  }
+
+  if (fallbackToManualAuth) {
+    runtime.log(
+      "Token auto-auth not delivered. Append your gateway token (from OPENCLAW_GATEWAY_TOKEN or gateway.auth.token) as a URL fragment with key `token` to authenticate.",
+    );
   }
 }

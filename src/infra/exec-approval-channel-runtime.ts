@@ -365,7 +365,11 @@ export function createExecApprovalChannelRuntime<
             },
           });
           if (!readiness.ready) {
-            throw new Error("gateway event loop readiness timeout");
+            throw new Error(
+              readiness.aborted
+                ? "gateway approval runtime start aborted before readiness"
+                : "gateway readiness unavailable before exec approval runtime start",
+            );
           }
           await ready;
           if (stopClientIfInactive(client)) {

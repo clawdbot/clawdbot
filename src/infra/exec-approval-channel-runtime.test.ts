@@ -291,7 +291,9 @@ describe("createExecApprovalChannelRuntime", () => {
       finalizeResolved: async () => undefined,
     });
 
-    await expect(runtime.start()).rejects.toThrow("gateway event loop readiness timeout");
+    await expect(runtime.start()).rejects.toThrow(
+      "gateway readiness unavailable before exec approval runtime start",
+    );
 
     expect(mockGatewayClientStarts).not.toHaveBeenCalled();
     expect(mockGatewayClientStops).toHaveBeenCalledTimes(1);

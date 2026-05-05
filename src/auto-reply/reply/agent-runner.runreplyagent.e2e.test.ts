@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
@@ -112,6 +115,7 @@ function createMinimalRun(params?: {
   isRunActive?: () => boolean;
   shouldFollowup?: boolean;
   resolvedQueueMode?: string;
+  sessionCtx?: Partial<TemplateContext>;
   runOverrides?: Partial<FollowupRun["run"]>;
 }) {
   const typing = createMockTypingController();
@@ -119,6 +123,7 @@ function createMinimalRun(params?: {
   const sessionCtx = {
     Provider: "whatsapp",
     MessageSid: "msg",
+    ...params?.sessionCtx,
   } as unknown as TemplateContext;
   const resolvedQueue = {
     mode: params?.resolvedQueueMode ?? "interrupt",
@@ -274,6 +279,100 @@ describe("runReplyAgent heartbeat followup guard", () => {
     } finally {
       persistSpy.mockRestore();
     }
+  });
+});
+
+describe("runReplyAgent pending final delivery capture", () => {
+  async function createSessionStoreFile(entry: SessionEntry) {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-pending-"));
+    const storePath = join(dir, "sessions.json");
+    await writeFile(storePath, JSON.stringify({ main: entry }), "utf8");
+    return storePath;
+  }
+
+  async function readStoredMainSession(storePath: string): Promise<SessionEntry> {
+    const raw = await readFile(storePath, "utf8");
+    return JSON.parse(raw).main as SessionEntry;
+  }
+
+  it("does not persist message-tool-only final replies for heartbeat replay", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "private final" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.pendingFinalDelivery).toBeUndefined();
+    expect(stored.pendingFinalDeliveryText).toBeUndefined();
+  });
+
+  it("does not persist sendPolicy-denied final replies for heartbeat replay", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      sendPolicy: "deny",
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "denied final" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.pendingFinalDelivery).toBeUndefined();
+    expect(stored.pendingFinalDeliveryText).toBeUndefined();
+  });
+
+  it("persists only visible non-reasoning final reply text", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hidden reasoning", isReasoning: true }, { text: "visible final" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.pendingFinalDelivery).toBe(true);
+    expect(stored.pendingFinalDeliveryText).toBe("visible final");
   });
 });
 

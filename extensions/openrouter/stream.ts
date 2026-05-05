@@ -3,6 +3,8 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 import { OPENROUTER_THINKING_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
+  type DeepSeekV4ReasoningEffort,
+  type DeepSeekV4ThinkingLevel,
   createPayloadPatchStreamWrapper,
   stripTrailingAssistantPrefillMessages,
 } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -53,6 +55,27 @@ function shouldPatchDeepSeekV4OpenRouterPayload(model: Parameters<StreamFn>[0]):
     isOpenRouterDeepSeekV4ModelId(model.id) &&
     isVerifiedOpenRouterRoute(model)
   );
+}
+
+function resolveOpenRouterDeepSeekV4ReasoningEffort(
+  thinkingLevel: DeepSeekV4ThinkingLevel,
+): DeepSeekV4ReasoningEffort {
+  switch (thinkingLevel) {
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+      return thinkingLevel;
+    case "max":
+      return "xhigh";
+    case "adaptive":
+      return "medium";
+    case "off":
+    case undefined:
+      return "high";
+  }
+  return "high";
 }
 
 function isEnabledReasoningValue(value: unknown): boolean {
@@ -125,6 +148,7 @@ function createOpenRouterDeepSeekV4ThinkingWrapper(
     baseStreamFn,
     thinkingLevel,
     shouldPatchModel: shouldPatchDeepSeekV4OpenRouterPayload,
+    resolveReasoningEffort: resolveOpenRouterDeepSeekV4ReasoningEffort,
   });
 }
 
@@ -156,12 +180,3 @@ export function wrapOpenRouterProviderStream(
     createOpenRouterDeepSeekV4ThinkingWrapper(wrappedStreamFn, ctx.thinkingLevel),
   );
 }
-
-export const __testing = {
-  isOpenRouterDeepSeekV4ModelId,
-  isOpenRouterAnthropicModelId,
-  isOpenRouterReasoningPayloadEnabled,
-  isVerifiedOpenRouterRoute,
-  shouldPatchDeepSeekV4OpenRouterPayload,
-  shouldPatchAnthropicOpenRouterPayload,
-};

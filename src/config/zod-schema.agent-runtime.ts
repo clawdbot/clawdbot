@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
+import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
@@ -158,15 +160,16 @@ const SandboxDockerSchema = z
           });
           continue;
         }
-        const firstColon = bind.indexOf(":");
-        const source = (firstColon <= 0 ? bind : bind.slice(0, firstColon)).trim();
-        if (!source.startsWith("/")) {
+
+        const parsed = splitSandboxBindSpec(bind);
+        const source = (parsed ? parsed.host : bind).trim();
+        if (!isSandboxHostPathAbsolute(source)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["binds", i],
             message:
               `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
-              "Only absolute POSIX paths are supported for sandbox binds.",
+              "Only absolute POSIX or Windows drive-letter paths are supported for sandbox binds.",
           });
         }
       }
@@ -502,6 +505,13 @@ const ToolLoopDetectionDetectorSchema = z
   .strict()
   .optional();
 
+const ToolLoopPostCompactionGuardSchema = z
+  .object({
+    windowSize: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 const ToolLoopDetectionSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -511,6 +521,7 @@ const ToolLoopDetectionSchema = z
     criticalThreshold: z.number().int().positive().optional(),
     globalCircuitBreakerThreshold: z.number().int().positive().optional(),
     detectors: ToolLoopDetectionDetectorSchema,
+    postCompactionGuard: ToolLoopPostCompactionGuardSchema,
   })
   .strict()
   .superRefine((value, ctx) => {

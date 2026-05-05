@@ -102,7 +102,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
   <Accordion title="Notify defaults for cron and media">
     Main-session cron tasks use `silent` notify policy by default — they create records for tracking but do not generate notifications. Isolated cron tasks also default to `silent` but are more visible because they run in their own session.
 
-    Session-backed `music_generate` and `video_generate` runs also use `silent` notify policy. They still create task records, but completion is handed back to the original agent session as an internal wake so the agent can write the follow-up message and attach the finished media itself. If you opt into `tools.media.asyncCompletion.directSend`, async `video_generate` completions can try direct channel delivery first; async `music_generate` completions stay on the requester-session wake path.
+    Session-backed `music_generate` and `video_generate` runs also use `silent` notify policy. They still create task records, but completion is handed back to the original agent session as an internal wake so the agent can write the follow-up message and attach the finished media itself. Group/channel completions follow the normal visible-reply policy, so the agent uses the message tool when source delivery requires it. If the completion agent fails to produce message-tool delivery evidence in a tool-only route, OpenClaw sends the completion fallback directly to the original channel instead of leaving the media private.
 
   </Accordion>
   <Accordion title="Concurrent video_generate guardrail">

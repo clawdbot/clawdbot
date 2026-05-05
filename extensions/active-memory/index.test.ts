@@ -125,6 +125,23 @@ describe("active-memory plugin", () => {
       "utf8",
     );
   };
+  const makeMemoryToolAllowlistError = (
+    reason: string,
+    sources = "runtime toolsAllow: memory_recall, memory_search, memory_get",
+  ) =>
+    new Error(
+      `No callable tools remain after resolving explicit tool allowlist ` +
+        `(${sources}); ${reason}. ` +
+        `Fix the allowlist or enable the plugin that registers the requested tool.`,
+    );
+  const hasDebugLine = (needle: string) =>
+    vi
+      .mocked(api.logger.debug)
+      .mock.calls.some((call: unknown[]) => String(call[0]).includes(needle));
+  const hasWarnLine = (needle: string) =>
+    vi
+      .mocked(api.logger.warn)
+      .mock.calls.some((call: unknown[]) => String(call[0]).includes(needle));
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -1074,9 +1091,12 @@ describe("active-memory plugin", () => {
       "Your job is to search memory and return only the most relevant memory context for that model.",
     );
     expect(runParams?.prompt).toContain(
-      "You receive conversation context, including the user's latest message.",
+      "You receive a bounded search query plus conversation context, including the user's latest message.",
     );
     expect(runParams?.prompt).toContain("Use only the available memory tools.");
+    expect(runParams?.prompt).toContain(
+      "Use the bounded search query as the memory_search or memory_recall query.",
+    );
     expect(runParams?.prompt).toContain("Prefer memory_recall when available.");
     expect(runParams?.prompt).toContain(
       "If memory_recall is unavailable, use memory_search and memory_get.",
@@ -1641,6 +1661,133 @@ describe("active-memory plugin", () => {
     );
 
     expect(result).toBeUndefined();
+  });
+
+  it("skips the recall subagent when no registered memory tools match", async () => {
+    const sessionKey = "agent:main:missing-memory-tools";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-missing-memory-tools",
+      updatedAt: 0,
+    };
+    const error = makeMemoryToolAllowlistError("no registered tools matched");
+    expect(__testing.isMissingRegisteredMemoryToolsError(error)).toBe(true);
+    runEmbeddedPiAgent.mockRejectedValueOnce(error);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? missing memory tools", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hasDebugLine("no memory tools registered")).toBe(true);
+    expect(hasWarnLine("No callable tools remain")).toBe(false);
+    const lines = getActiveMemoryLines(sessionKey);
+    expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=empty")]);
+    expect(lines.join("\n")).not.toContain("status=unavailable");
+  });
+
+  it("skips missing memory tools when the allowlist error includes inherited sources", async () => {
+    const sessionKey = "agent:main:missing-memory-tools-with-policy-source";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-missing-memory-tools-with-policy-source",
+      updatedAt: 0,
+    };
+    const error = makeMemoryToolAllowlistError(
+      "no registered tools matched",
+      "tools.allow: *, lobster; runtime toolsAllow: memory_recall, memory_search, memory_get",
+    );
+    expect(__testing.isMissingRegisteredMemoryToolsError(error)).toBe(true);
+    runEmbeddedPiAgent.mockRejectedValueOnce(error);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? missing memory tools with policy", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hasDebugLine("no memory tools registered")).toBe(true);
+    expect(hasWarnLine("No callable tools remain")).toBe(false);
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=empty"),
+    ]);
+  });
+
+  it("keeps memory-tool allowlist errors visible when upstream policy can filter memory tools", async () => {
+    const sessionKey = "agent:main:memory-tools-filtered-by-policy";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-memory-tools-filtered-by-policy",
+      updatedAt: 0,
+    };
+    const error = makeMemoryToolAllowlistError(
+      "no registered tools matched",
+      "tools.allow: read, exec; runtime toolsAllow: memory_recall, memory_search, memory_get",
+    );
+    expect(__testing.isMissingRegisteredMemoryToolsError(error)).toBe(false);
+    runEmbeddedPiAgent.mockRejectedValueOnce(error);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? memory tools filtered by policy", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hasDebugLine("no memory tools registered")).toBe(false);
+    expect(hasWarnLine("No callable tools remain")).toBe(true);
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=unavailable"),
+    ]);
+  });
+
+  it.each([
+    ["disabled tools", "tools are disabled for this run"],
+    ["models without tool support", "the selected model does not support tools"],
+  ])("keeps allowlist errors for %s visible", async (_label, reason) => {
+    const sessionKey = `agent:main:${reason.replace(/\W+/g, "-")}`;
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: `s-${reason.replace(/\W+/g, "-")}`,
+      updatedAt: 0,
+    };
+    const error = makeMemoryToolAllowlistError(reason);
+    expect(__testing.isMissingRegisteredMemoryToolsError(error)).toBe(false);
+    runEmbeddedPiAgent.mockRejectedValueOnce(error);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: `what wings should i order? ${reason}`, messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hasDebugLine("no memory tools registered")).toBe(false);
+    expect(hasWarnLine(reason)).toBe(true);
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=unavailable"),
+    ]);
+  });
+
+  it("does not skip missing memory-tool allowlist errors after abort", async () => {
+    const sessionKey = "agent:main:missing-memory-tools-after-abort";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-missing-memory-tools-after-abort",
+      updatedAt: 0,
+    };
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
+      Object.defineProperty(params.abortSignal as AbortSignal, "aborted", {
+        configurable: true,
+        value: true,
+      });
+      throw makeMemoryToolAllowlistError("no registered tools matched");
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? missing memory tools after abort", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hasDebugLine("no memory tools registered")).toBe(false);
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=timeout"),
+    ]);
   });
 
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
@@ -2753,6 +2900,33 @@ describe("active-memory plugin", () => {
     });
   });
 
+  it("skips colon-containing session-store channels for embedded recall (#77396)", async () => {
+    hoisted.sessionStore["agent:main:qqbot:direct:12345"] = {
+      sessionId: "session-a",
+      updatedAt: 25,
+      channel: "c2c:10D4F7C2",
+      origin: {
+        provider: "qqbot",
+      },
+    };
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? scoped stored channel", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:qqbot:direct:12345",
+        messageProvider: "qqbot",
+        channelId: "qqbot",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      messageChannel: "qqbot",
+      messageProvider: "qqbot",
+    });
+  });
+
   it("preserves an explicit real channel hint over a stale stored wrapper channel", async () => {
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",
@@ -2867,8 +3041,52 @@ describe("active-memory plugin", () => {
     );
 
     const prompt = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.prompt;
+    expect(prompt).toContain("Bounded memory search query:\nwhat should i grab on the way?");
     expect(prompt).toContain("Conversation context:\nwhat should i grab on the way?");
     expect(prompt).not.toContain("Recent conversation tail:");
+  });
+
+  it("sends a bounded latest-message query instead of channel metadata to memory search", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "recent",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: [
+          "Conversation info:",
+          "Sender: discord:user-123",
+          "Untrusted Discord message body",
+          "---",
+          "do you remember my flight preferences?",
+        ].join("\n"),
+        messages: [
+          { role: "user", content: "i have a flight tomorrow" },
+          { role: "assistant", content: "got it" },
+        ],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prompt = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.prompt;
+    expect(prompt).toContain(
+      "Bounded memory search query:\ndo you remember my flight preferences?",
+    );
+    expect(prompt).toContain(
+      "Do not use channel metadata, provider metadata, debug output, or the full conversation context as the memory tool query.",
+    );
+    expect(prompt).toContain("Conversation context:");
+    expect(prompt).toContain("Conversation info:");
+    expect(prompt).not.toContain("Bounded memory search query:\nConversation info:");
+    expect(prompt).not.toContain("Bounded memory search query:\nSender:");
+    expect(prompt).not.toContain("Bounded memory search query:\nUntrusted Discord message body");
   });
 
   it("supports full mode by sending the whole conversation", async () => {
@@ -3209,7 +3427,6 @@ describe("active-memory plugin", () => {
         `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-[a-z0-9]+-[a-f0-9]{8}\\.jsonl$`,
       ),
     );
-    expect(rmSpy).not.toHaveBeenCalled();
     expect(
       vi
         .mocked(api.logger.info)
@@ -3217,6 +3434,7 @@ describe("active-memory plugin", () => {
           String(call[0]).includes(`transcript=${expectedDir}${path.sep}`),
         ),
     ).toBe(true);
+    expect(rmSpy.mock.calls.some(([target]) => String(target).startsWith(expectedDir))).toBe(false);
   });
 
   it("falls back to the default transcript directory when transcriptDir is unsafe", async () => {

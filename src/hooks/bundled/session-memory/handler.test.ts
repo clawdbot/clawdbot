@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createHookEvent } from "../../hooks.js";
+import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import {
   findPreviousSessionFile,
   getRecentSessionContent,
@@ -18,6 +19,7 @@ vi.mock("../../llm-slug-generator.js", () => ({
 }));
 
 let handler: typeof import("./handler.js").default;
+let flushSessionMemoryWritesForTest: typeof import("./handler.js").flushSessionMemoryWritesForTest;
 let suiteWorkspaceRoot = "";
 let workspaceCaseCounter = 0;
 
@@ -29,7 +31,7 @@ async function createCaseWorkspace(prefix = "case"): Promise<string> {
 }
 
 beforeAll(async () => {
-  ({ default: handler } = await import("./handler.js"));
+  ({ default: handler, flushSessionMemoryWritesForTest } = await import("./handler.js"));
   suiteWorkspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-memory-"));
 });
 
@@ -93,6 +95,7 @@ async function runNewWithPreviousSessionEntry(params: {
   }
 
   await handler(event);
+  await flushSessionMemoryWritesForTest();
 
   const memoryDir = path.join(params.tempDir, "memory");
   const files = await fs.readdir(memoryDir);
@@ -190,6 +193,16 @@ function expectMemoryConversation(params: {
   }
 }
 
+async function waitUntil(condition: () => boolean, timeoutMs = 500): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) {
+      throw new Error("condition was not met before timeout");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 describe("session-memory hook", () => {
   it("skips non-command events", async () => {
     const tempDir = await createCaseWorkspace("workspace");
@@ -237,6 +250,136 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: 2+2 equals 4");
   });
 
+  it("does not call the model provider for a filename slug by default", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Hello there" },
+      { role: "assistant", content: "Hi! How can I help?" },
+    ]);
+
+    const generateSlug = vi.mocked(generateSlugViaLLM);
+    generateSlug.mockClear();
+
+    await withEnvAsync(
+      {
+        NODE_ENV: "production",
+        OPENCLAW_TEST_FAST: undefined,
+        VITEST: undefined,
+      },
+      async () => {
+        const { files } = await runNewWithPreviousSession({ sessionContent });
+        expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}-\d{4}\.md$/);
+      },
+    );
+
+    expect(generateSlug).not.toHaveBeenCalled();
+  });
+
+  it("uses a model-generated filename slug only when explicitly enabled", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "What is 2+2?" },
+      { role: "assistant", content: "2+2 equals 4" },
+    ]);
+
+    const generateSlug = vi.mocked(generateSlugViaLLM);
+    generateSlug.mockClear();
+    generateSlug.mockResolvedValueOnce("simple-math");
+
+    await withEnvAsync(
+      {
+        NODE_ENV: "production",
+        OPENCLAW_TEST_FAST: undefined,
+        VITEST: undefined,
+      },
+      async () => {
+        const { files } = await runNewWithPreviousSession({
+          sessionContent,
+          cfg: (tempDir) =>
+            ({
+              agents: { defaults: { workspace: tempDir } },
+              hooks: {
+                internal: {
+                  entries: {
+                    "session-memory": {
+                      enabled: true,
+                      llmSlug: true,
+                    },
+                  },
+                },
+              },
+            }) satisfies OpenClawConfig,
+        });
+        expect(files).toEqual([expect.stringMatching(/^\d{4}-\d{2}-\d{2}-simple-math\.md$/)]);
+      },
+    );
+
+    expect(generateSlug).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not block reset command handling on opt-in model slug generation", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([
+        { role: "user", content: "Investigate slow WhatsApp reset" },
+        { role: "assistant", content: "Checking reset hooks" },
+      ]),
+    });
+
+    let resolveSlug: ((slug: string | null) => void) | undefined;
+    const generateSlug = vi.mocked(generateSlugViaLLM);
+    generateSlug.mockClear();
+    generateSlug.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSlug = resolve;
+        }),
+    );
+
+    await withEnvAsync(
+      {
+        NODE_ENV: "production",
+        OPENCLAW_TEST_FAST: undefined,
+        VITEST: undefined,
+      },
+      async () => {
+        const event = createHookEvent("command", "new", "agent:main:main", {
+          cfg: {
+            agents: { defaults: { workspace: tempDir } },
+            hooks: {
+              internal: {
+                entries: {
+                  "session-memory": {
+                    enabled: true,
+                    llmSlug: true,
+                  },
+                },
+              },
+            },
+          } satisfies OpenClawConfig,
+          previousSessionEntry: {
+            sessionId: "test-123",
+            sessionFile,
+          },
+        });
+
+        const startedAt = Date.now();
+        await handler(event);
+        expect(Date.now() - startedAt).toBeLessThan(100);
+
+        await waitUntil(() => generateSlug.mock.calls.length === 1);
+        resolveSlug?.("slow-reset");
+        await flushSessionMemoryWritesForTest();
+
+        const files = await fs.readdir(path.join(tempDir, "memory"));
+        expect(files).toEqual([expect.stringMatching(/^\d{4}-\d{2}-\d{2}-slow-reset\.md$/)]);
+      },
+    );
+  });
+
   it("creates memory file with session content on /reset command", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "Please reset and keep notes" },
@@ -267,6 +410,41 @@ describe("session-memory hook", () => {
       expect(files).toEqual(["2025-12-31-2330.md"]);
       expect(memoryContent).toMatch(/^# Session: 2025-12-31 23:30:15(?: EST| GMT-5)?/);
       expect(memoryContent).not.toContain("# Session: 2026-01-01 04:30:15 UTC");
+    });
+  });
+
+  it("keeps same-minute fallback timestamp captures by adding a filename suffix", async () => {
+    await withEnvAsync({ TZ: "UTC" }, async () => {
+      const tempDir = await createCaseWorkspace("workspace");
+      const timestamp = new Date("2026-01-01T04:30:15.000Z");
+
+      await runNewWithPreviousSessionEntry({
+        tempDir,
+        timestamp,
+        previousSessionEntry: {
+          sessionId: "first-session",
+        },
+      });
+      await runNewWithPreviousSessionEntry({
+        tempDir,
+        timestamp,
+        previousSessionEntry: {
+          sessionId: "second-session",
+        },
+      });
+
+      const memoryDir = path.join(tempDir, "memory");
+      const files = await fs.readdir(memoryDir);
+      expect(files).toHaveLength(2);
+      expect(files).toContain("2026-01-01-0430.md");
+      expect(files).toContain("2026-01-01-0430-2.md");
+
+      await expect(
+        fs.readFile(path.join(memoryDir, "2026-01-01-0430.md"), "utf-8"),
+      ).resolves.toContain("- **Session ID**: first-session");
+      await expect(
+        fs.readFile(path.join(memoryDir, "2026-01-01-0430-2.md"), "utf-8"),
+      ).resolves.toContain("- **Session ID**: second-session");
     });
   });
 

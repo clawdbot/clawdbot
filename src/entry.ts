@@ -84,92 +84,94 @@ if (
 } else {
   const entryFile = fileURLToPath(import.meta.url);
   const installRoot = resolveEntryInstallRoot(entryFile);
-  respawnWithoutOpenClawCompileCacheIfNeeded({
+  const waitingForCompileCacheRespawn = respawnWithoutOpenClawCompileCacheIfNeeded({
     currentFile: entryFile,
     installRoot,
   });
-  process.title = "openclaw";
-  ensureOpenClawExecMarkerOnProcess();
-  installProcessWarningFilter();
-  normalizeEnv();
-  enableOpenClawCompileCache({
-    installRoot,
-  });
-  gatewayEntryStartupTrace.mark("bootstrap");
+  if (!waitingForCompileCacheRespawn) {
+    process.title = "openclaw";
+    ensureOpenClawExecMarkerOnProcess();
+    installProcessWarningFilter();
+    normalizeEnv();
+    enableOpenClawCompileCache({
+      installRoot,
+    });
+    gatewayEntryStartupTrace.mark("bootstrap");
 
-  if (shouldForceReadOnlyAuthStore(process.argv)) {
-    process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
-  }
-
-  if (process.argv.includes("--no-color")) {
-    process.env.NO_COLOR = "1";
-    process.env.FORCE_COLOR = "0";
-  }
-
-  function ensureCliRespawnReady(): boolean {
-    const plan = buildCliRespawnPlan();
-    if (!plan) {
-      return false;
+    if (shouldForceReadOnlyAuthStore(process.argv)) {
+      process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
     }
 
-    const child = spawn(plan.command, plan.argv, {
-      stdio: "inherit",
-      env: plan.env,
-    });
+    if (process.argv.includes("--no-color")) {
+      process.env.NO_COLOR = "1";
+      process.env.FORCE_COLOR = "0";
+    }
 
-    attachChildProcessBridge(child);
-
-    child.once("exit", (code, signal) => {
-      if (signal) {
-        process.exitCode = 1;
-        return;
+    function ensureCliRespawnReady(): boolean {
+      const plan = buildCliRespawnPlan();
+      if (!plan) {
+        return false;
       }
-      process.exit(code ?? 1);
-    });
 
-    child.once("error", (error) => {
-      console.error(
-        "[openclaw] Failed to respawn CLI:",
-        error instanceof Error ? (error.stack ?? error.message) : error,
-      );
-      process.exit(1);
-    });
+      const child = spawn(plan.command, plan.argv, {
+        stdio: "inherit",
+        env: plan.env,
+      });
 
-    // Parent must not continue running the CLI.
-    return true;
-  }
+      attachChildProcessBridge(child);
 
-  process.argv = normalizeWindowsArgv(process.argv);
+      child.once("exit", (code, signal) => {
+        if (signal) {
+          process.exitCode = 1;
+          return;
+        }
+        process.exit(code ?? 1);
+      });
 
-  if (!ensureCliRespawnReady()) {
-    const parsedContainer = parseCliContainerArgs(process.argv);
-    if (!parsedContainer.ok) {
-      console.error(`[openclaw] ${parsedContainer.error}`);
-      process.exit(2);
+      child.once("error", (error) => {
+        console.error(
+          "[openclaw] Failed to respawn CLI:",
+          error instanceof Error ? (error.stack ?? error.message) : error,
+        );
+        process.exit(1);
+      });
+
+      // Parent must not continue running the CLI.
+      return true;
     }
 
-    const parsed = parseCliProfileArgs(parsedContainer.argv);
-    if (!parsed.ok) {
-      // Keep it simple; Commander will handle rich help/errors after we strip flags.
-      console.error(`[openclaw] ${parsed.error}`);
-      process.exit(2);
-    }
+    process.argv = normalizeWindowsArgv(process.argv);
 
-    const containerTargetName = resolveCliContainerTarget(process.argv);
-    if (containerTargetName && parsed.profile) {
-      console.error("[openclaw] --container cannot be combined with --profile/--dev");
-      process.exit(2);
-    }
+    if (!ensureCliRespawnReady()) {
+      const parsedContainer = parseCliContainerArgs(process.argv);
+      if (!parsedContainer.ok) {
+        console.error(`[openclaw] ${parsedContainer.error}`);
+        process.exit(2);
+      }
 
-    if (parsed.profile) {
-      applyCliProfileEnv({ profile: parsed.profile });
-      // Keep Commander and ad-hoc argv checks consistent.
-      process.argv = parsed.argv;
-    }
-    gatewayEntryStartupTrace.mark("argv");
+      const parsed = parseCliProfileArgs(parsedContainer.argv);
+      if (!parsed.ok) {
+        // Keep it simple; Commander will handle rich help/errors after we strip flags.
+        console.error(`[openclaw] ${parsed.error}`);
+        process.exit(2);
+      }
 
-    if (!tryHandleRootVersionFastPath(process.argv)) {
-      await runMainOrRootHelp(process.argv);
+      const containerTargetName = resolveCliContainerTarget(process.argv);
+      if (containerTargetName && parsed.profile) {
+        console.error("[openclaw] --container cannot be combined with --profile/--dev");
+        process.exit(2);
+      }
+
+      if (parsed.profile) {
+        applyCliProfileEnv({ profile: parsed.profile });
+        // Keep Commander and ad-hoc argv checks consistent.
+        process.argv = parsed.argv;
+      }
+      gatewayEntryStartupTrace.mark("argv");
+
+      if (!tryHandleRootVersionFastPath(process.argv)) {
+        await runMainOrRootHelp(process.argv);
+      }
     }
   }
 }

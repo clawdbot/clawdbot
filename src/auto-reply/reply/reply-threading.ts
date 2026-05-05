@@ -4,6 +4,7 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { isSingleUseReplyToMode } from "./reply-reference.js";
@@ -107,7 +108,7 @@ export function createReplyToModeFilter(
       if (opts.allowExplicitReplyTagsWhenOff && isExplicit && !payload.isCompactionNotice) {
         return payload;
       }
-      return { ...payload, replyToId: undefined };
+      return copyReplyPayloadMetadata(payload, { ...payload, replyToId: undefined });
     }
     if (mode === "all") {
       return payload;
@@ -119,7 +120,7 @@ export function createReplyToModeFilter(
       if (payload.isCompactionNotice) {
         return payload;
       }
-      return { ...payload, replyToId: undefined };
+      return copyReplyPayloadMetadata(payload, { ...payload, replyToId: undefined });
     }
     // Compaction notices are transient status messages — they should be
     // threaded (so they appear in-context), but they must not consume the

@@ -127,6 +127,23 @@ describe("security audit sandbox docker config", () => {
           ],
         },
         {
+          name: "Windows drive-letter bind is absolute",
+          cfg: {
+            agents: {
+              defaults: {
+                sandbox: {
+                  mode: "all",
+                  docker: {
+                    binds: ["D:/data/openclaw/src:/src:ro"],
+                  },
+                },
+              },
+            },
+          } as OpenClawConfig,
+          expectedFindings: [],
+          expectedAbsent: ["sandbox.bind_mount_non_absolute"],
+        },
+        {
           name: "container namespace join network mode",
           cfg: {
             agents: {

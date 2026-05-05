@@ -31,6 +31,8 @@ const deviceIdentityState = vi.hoisted(() => ({
     scopes: ["operator.read"],
     updatedAtMs: 1,
   } as Record<string, unknown> | null,
+  identityPaths: [] as unknown[],
+  tokenParams: [] as unknown[],
 }));
 
 const eventLoopReadyState = vi.hoisted(() => ({
@@ -135,7 +137,8 @@ vi.mock("../infra/device-identity.js", () => ({
     }
     return deviceIdentityState.value;
   },
-  loadDeviceIdentityIfPresent: () => {
+  loadDeviceIdentityIfPresent: (filePath: unknown) => {
+    deviceIdentityState.identityPaths.push(filePath);
     if (deviceIdentityState.throwOnLoad) {
       throw new Error("read-only identity dir");
     }
@@ -144,7 +147,10 @@ vi.mock("../infra/device-identity.js", () => ({
 }));
 
 vi.mock("../infra/device-auth-store.js", () => ({
-  loadDeviceAuthToken: () => deviceIdentityState.cachedToken,
+  loadDeviceAuthToken: (params: unknown) => {
+    deviceIdentityState.tokenParams.push(params);
+    return deviceIdentityState.cachedToken;
+  },
 }));
 
 vi.mock("./event-loop-ready.js", () => ({
@@ -165,6 +171,8 @@ describe("probeGateway", () => {
       scopes: ["operator.read"],
       updatedAtMs: 1,
     };
+    deviceIdentityState.identityPaths = [];
+    deviceIdentityState.tokenParams = [];
     gatewayClientState.startMode = "hello";
     gatewayClientState.options = null;
     gatewayClientState.requests = [];
@@ -264,6 +272,32 @@ describe("probeGateway", () => {
       version: "2026.4.24",
       connId: "conn-test",
     });
+  });
+
+  it("loads probe identity and cached device auth from the provided env", async () => {
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: "/tmp/openclaw-probe-service-state",
+    } as NodeJS.ProcessEnv;
+
+    await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      auth: { token: "secret" },
+      timeoutMs: 1_000,
+      env,
+    });
+
+    expect(deviceIdentityState.identityPaths).toEqual([
+      "/tmp/openclaw-probe-service-state/identity/device.json",
+    ]);
+    expect(deviceIdentityState.tokenParams).toEqual([
+      {
+        deviceId: "test-device-identity",
+        role: "operator",
+        env,
+      },
+    ]);
+    expect(gatewayClientState.options).toEqual(expect.objectContaining({ env }));
   });
 
   it("keeps device identity enabled for remote probes", async () => {

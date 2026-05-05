@@ -151,6 +151,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
           },
+          stuckSessionAbortMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+            title: "Session Abort Threshold (ms)",
+            description:
+              "No-progress age threshold in milliseconds before eligible stalled active work may be abort-drained for recovery. Defaults to the safer extended embedded-run recovery window.",
+          },
           otel: {
             type: "object",
             properties: {
@@ -8331,6 +8339,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           },
                           additionalProperties: false,
                         },
+                        postCompactionGuard: {
+                          type: "object",
+                          properties: {
+                            windowSize: {
+                              type: "integer",
+                              exclusiveMinimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
                       },
                       additionalProperties: false,
                     },
@@ -10202,7 +10221,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "boolean",
                     title: "Async Media Completion Direct Send",
                     description:
-                      "Enable direct channel sends for completed async media generation tasks that support direct completion delivery. Currently this applies to video generation; music generation always stays requester-session mediated. Default off so detached media completion uses the requester session wake path.",
+                      "Deprecated compatibility flag. Async media generation completions are requester-session mediated so the agent can decide how to tell the user and use the message tool when source delivery requires it.",
                   },
                 },
                 additionalProperties: false,
@@ -18255,6 +18274,20 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 additionalProperties: false,
               },
+              postCompactionGuard: {
+                type: "object",
+                properties: {
+                  windowSize: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                    title: "Post-compaction Loop Guard Window Size",
+                    description:
+                      "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
+                  },
+                },
+                additionalProperties: false,
+              },
             },
             additionalProperties: false,
           },
@@ -24186,6 +24219,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
           },
+          bundledDiscovery: {
+            type: "string",
+            enum: ["compat", "allowlist"],
+            title: "Bundled Plugin Discovery",
+            description:
+              'Controls bundled plugin runtime discovery when plugins.allow is configured. "allowlist" (default) gates bundled provider plugins by plugins.allow like third-party plugins. "compat" preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn.',
+          },
         },
         additionalProperties: false,
         title: "Plugins",
@@ -24632,6 +24672,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "diagnostics.stuckSessionWarnMs": {
       label: "Session Liveness Threshold (ms)",
       help: "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
+      tags: ["observability", "storage"],
+    },
+    "diagnostics.stuckSessionAbortMs": {
+      label: "Session Abort Threshold (ms)",
+      help: "No-progress age threshold in milliseconds before eligible stalled active work may be abort-drained for recovery. Defaults to the safer extended embedded-run recovery window.",
       tags: ["observability", "storage"],
     },
     "diagnostics.otel.enabled": {
@@ -25343,7 +25388,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.media.asyncCompletion.directSend": {
       label: "Async Media Completion Direct Send",
-      help: "Enable direct channel sends for completed async media generation tasks that support direct completion delivery. Currently this applies to video generation; music generation always stays requester-session mediated. Default off so detached media completion uses the requester session wake path.",
+      help: "Deprecated compatibility flag. Async media generation completions are requester-session mediated so the agent can decide how to tell the user and use the message tool when source delivery requires it.",
       tags: ["storage", "media", "tools"],
     },
     "tools.media.audio.enabled": {
@@ -25607,6 +25652,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Tool-loop Global Circuit Breaker Threshold",
       help: "Global no-progress breaker threshold (default: 30).",
       tags: ["reliability", "tools"],
+    },
+    "tools.loopDetection.postCompactionGuard.windowSize": {
+      label: "Post-compaction Loop Guard Window Size",
+      help: "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
+      tags: ["tools"],
     },
     "tools.loopDetection.detectors.genericRepeat": {
       label: "Tool-loop Generic Repeat Detection",
@@ -28864,6 +28914,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Plugin Allowlist",
       help: "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
       tags: ["access"],
+    },
+    "plugins.bundledDiscovery": {
+      label: "Bundled Plugin Discovery",
+      help: 'Controls bundled plugin runtime discovery when plugins.allow is configured. "allowlist" (default) gates bundled provider plugins by plugins.allow like third-party plugins. "compat" preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn.',
+      tags: ["advanced"],
     },
     "plugins.deny": {
       label: "Plugin Denylist",

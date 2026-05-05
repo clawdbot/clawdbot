@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
+} from "../reply-payload.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 
 const baseParams = {
@@ -45,6 +49,28 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(1);
     expect(replyPayloads[0]?.text).toBe("Before\n\n\nAfter");
+  });
+
+  it("preserves internal delivery metadata through final payload normalization", async () => {
+    const payload = markReplyPayloadForSourceSuppressionDelivery({
+      text: "⚠️ API rate limit reached.\n[[reply_to_current]]",
+    });
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [payload],
+      replyToMode: "all",
+      currentMessageId: "msg-1",
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "⚠️ API rate limit reached.",
+      replyToId: "msg-1",
+    });
+    expect(getReplyPayloadMetadata(replyPayloads[0])).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
   });
 
   it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {

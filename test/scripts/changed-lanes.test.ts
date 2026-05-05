@@ -8,8 +8,10 @@ import {
   isPackageScriptOnlyChange,
 } from "../../scripts/changed-lanes.mjs";
 import {
+  buildChangedCheckTestboxArgs,
   createChangedCheckChildEnv,
   createChangedCheckPlan,
+  shouldDelegateChangedCheckToTestbox,
 } from "../../scripts/check-changed.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
@@ -213,6 +215,44 @@ describe("scripts/changed-lanes", () => {
       OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
       PATH: "/usr/bin",
     });
+  });
+
+  it("delegates local Testbox-mode changed gates before running locally", () => {
+    expect(
+      shouldDelegateChangedCheckToTestbox(["--base", "origin/main"], {
+        OPENCLAW_TESTBOX: "1",
+        PATH: "/usr/bin",
+      }),
+    ).toBe(true);
+
+    expect(buildChangedCheckTestboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
+      "testbox:run",
+      "--",
+      "OPENCLAW_TESTBOX=1",
+      "OPENCLAW_TESTBOX_REMOTE_RUN=1",
+      "pnpm",
+      "check:changed",
+      "--base",
+      "origin/main",
+      "--head",
+      "HEAD",
+    ]);
+  });
+
+  it("does not delegate dry-run, CI, or already-remote changed gates", () => {
+    expect(shouldDelegateChangedCheckToTestbox(["--dry-run"], { OPENCLAW_TESTBOX: "1" })).toBe(
+      false,
+    );
+    expect(
+      shouldDelegateChangedCheckToTestbox([], { OPENCLAW_TESTBOX: "1", GITHUB_ACTIONS: "true" }),
+    ).toBe(false);
+    expect(shouldDelegateChangedCheckToTestbox([], { OPENCLAW_TESTBOX: "1", CI: "1" })).toBe(false);
+    expect(
+      shouldDelegateChangedCheckToTestbox([], {
+        OPENCLAW_TESTBOX: "1",
+        OPENCLAW_TESTBOX_REMOTE_RUN: "1",
+      }),
+    ).toBe(false);
   });
 
   it("runs changed-check lint lanes under the parent heavy-check lock", () => {

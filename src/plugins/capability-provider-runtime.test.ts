@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 
 type MockManifestRegistry = {
@@ -302,7 +303,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
   it("resolves bundled capability ids from the current metadata snapshot", () => {
     setCurrentPluginMetadataSnapshot({
-      policyHash: "policy",
+      policyHash: resolveInstalledPluginIndexPolicyHash({}),
       workspaceDir: "/workspace",
       index: { plugins: [] },
       registryDiagnostics: [],
@@ -348,7 +349,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
   it("resolves enabled external capability ids from the current metadata snapshot", () => {
     setCurrentPluginMetadataSnapshot({
-      policyHash: "policy",
+      policyHash: resolveInstalledPluginIndexPolicyHash({}),
       workspaceDir: "/workspace",
       index: {
         plugins: [

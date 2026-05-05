@@ -772,7 +772,11 @@ export function handleToolExecutionUpdate(
     },
   });
   if (isExecToolName(toolName)) {
-    const output = extractToolResultText(sanitized);
+    const execDetails = readExecToolDetails(sanitized);
+    const output =
+      execDetails && "aggregated" in execDetails
+        ? execDetails.aggregated
+        : extractToolResultText(sanitized);
     const commandData: AgentItemEventData = {
       itemId: buildCommandItemId(toolCallId),
       phase: "update",

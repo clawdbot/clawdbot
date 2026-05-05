@@ -41,6 +41,7 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "@tloncorp/tlon-skill",
   "@zed-industries/codex-acp",
   "jiti",
+  "json5",
   "linkedom",
   "openclaw",
   "pdfjs-dist",

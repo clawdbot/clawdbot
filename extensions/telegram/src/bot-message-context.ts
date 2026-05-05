@@ -411,8 +411,8 @@ export const buildTelegramMessageContext = async ({
   });
   const baseRequireMention = resolveGroupRequireMention(chatId);
   const requireMention = firstDefined(
-    activationOverride,
     topicConfig?.requireMention,
+    activationOverride,
     telegramGroupConfig?.requireMention,
     baseRequireMention,
   );

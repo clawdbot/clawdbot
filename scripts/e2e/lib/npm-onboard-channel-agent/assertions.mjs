@@ -83,15 +83,21 @@ function configureMockModel() {
 
 function assertChannelConfig() {
   const channel = process.argv[3];
-  const token = process.argv[4];
+  const expectedTokens = process.argv.slice(4);
+  if (expectedTokens.length === 0) {
+    throw new Error("assert-channel-config requires at least one expected token");
+  }
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const cfg = readJson(configPath);
   const entry = cfg.channels?.[channel];
   if (!entry || entry.enabled === false) {
     throw new Error(`${channel} was not enabled`);
   }
-  if (!JSON.stringify(entry).includes(token)) {
-    throw new Error(`${channel} token was not persisted`);
+  const serializedEntry = JSON.stringify(entry);
+  for (const token of expectedTokens) {
+    if (!serializedEntry.includes(token)) {
+      throw new Error(`${channel} token was not persisted`);
+    }
   }
 }
 

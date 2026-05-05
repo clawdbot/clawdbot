@@ -99,6 +99,10 @@ describe("server error status classification", () => {
     expect(isServerErrorMessage("status: internal server error")).toBe(true);
   });
 
+  it("classifies provider HTTP 5xx wrapper errors as server errors", () => {
+    expect(isServerErrorMessage("provider failed (HTTP 500): upstream apiKey is empty")).toBe(true);
+  });
+
   it("does not classify prefixed plain internal server error status prose", () => {
     expect(isServerErrorMessage("Proxy notice: Status: Internal Server Error")).toBe(false);
   });

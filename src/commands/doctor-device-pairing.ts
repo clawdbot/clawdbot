@@ -474,6 +474,16 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): string[]
     if (!role) {
       continue;
     }
+    const pairedToken = findTokenSummary(paired, role);
+    if (!pairedToken) {
+      if (approvedRoles.has(role)) {
+        continue;
+      }
+      lines.push(
+        `- Local cached ${role} device auth for ${deviceLabel} no longer has a matching active gateway token, and that role is no longer approved for this device. Reconnect with shared gateway auth to refresh local auth, or remove the stale cached ${role} auth entry.`,
+      );
+      continue;
+    }
     const rotateCommand = formatCliArgs([
       "openclaw",
       "devices",
@@ -483,16 +493,6 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): string[]
       "--role",
       role,
     ]);
-    const pairedToken = findTokenSummary(paired, role);
-    if (!pairedToken) {
-      if (approvedRoles.has(role)) {
-        continue;
-      }
-      lines.push(
-        `- Local cached ${role} device auth for ${deviceLabel} no longer has a matching active gateway token. Reconnect with shared gateway auth to refresh it, or rotate with ${rotateCommand}.`,
-      );
-      continue;
-    }
     const gatewayIssuedAtMs = pairedToken.rotatedAtMs ?? pairedToken.createdAtMs;
     if (entry.updatedAtMs < gatewayIssuedAtMs) {
       lines.push(

@@ -331,12 +331,11 @@ export function codexSandboxPolicyForTurn(
     return { type: "dangerFullAccess" };
   }
   if (mode === "read-only") {
-    return { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false };
+    return { type: "readOnly", networkAccess: false };
   }
   return {
     type: "workspaceWrite",
     writableRoots: [cwd],
-    readOnlyAccess: { type: "fullAccess" },
     networkAccess: false,
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,

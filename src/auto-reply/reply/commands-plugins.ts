@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { buildNpmInstallRecordFields } from "../../cli/npm-resolution.js";
+import { resolveOfficialExternalNpmPackageTrust } from "../../cli/plugin-install-plan.js";
 import {
   createPluginInstallLogger,
   resolveFileNpmSpecToLocalPath,
@@ -20,6 +21,11 @@ import { installPluginFromClawHub } from "../../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../../plugins/git-install.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../../plugins/install.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import {
+  getOfficialExternalPluginCatalogEntryForPackage,
+  resolveOfficialExternalPluginId,
+  resolveOfficialExternalPluginInstall,
+} from "../../plugins/official-external-plugin-catalog.js";
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
   buildAllPluginInspectReports,
@@ -159,6 +165,29 @@ function looksLikeLocalPluginInstallSpec(raw: string): boolean {
   );
 }
 
+function findTrustedCatalogPackageInstall(packageName: string):
+  | {
+      pluginId: string;
+      npmSpec?: string;
+      expectedIntegrity?: string;
+    }
+  | undefined {
+  const entry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
+  if (!entry) {
+    return undefined;
+  }
+  const pluginId = resolveOfficialExternalPluginId(entry);
+  if (!pluginId) {
+    return undefined;
+  }
+  const install = resolveOfficialExternalPluginInstall(entry);
+  return {
+    pluginId,
+    ...(install?.npmSpec ? { npmSpec: install.npmSpec } : {}),
+    ...(install?.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
+  };
+}
+
 async function installPluginFromPluginsCommand(params: {
   raw: string;
   snapshot: ConfigSnapshotForInstallPersist;
@@ -254,8 +283,21 @@ async function installPluginFromPluginsCommand(params: {
     return { ok: true, pluginId: result.pluginId };
   }
 
+  const officialNpmTrust = resolveOfficialExternalNpmPackageTrust({
+    npmSpec: params.raw,
+    findOfficialExternalPackage: findTrustedCatalogPackageInstall,
+  });
   const result = await installPluginFromNpmSpec({
     spec: params.raw,
+    ...(officialNpmTrust
+      ? {
+          expectedPluginId: officialNpmTrust.pluginId,
+          ...(officialNpmTrust.expectedIntegrity
+            ? { expectedIntegrity: officialNpmTrust.expectedIntegrity }
+            : {}),
+          trustedSourceLinkedOfficialInstall: true,
+        }
+      : {}),
     logger: createPluginInstallLogger(),
   });
   if (!result.ok) {

@@ -3,6 +3,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -88,7 +89,8 @@ vi.mock("../../agents/pi-embedded-helpers.js", () => ({
   isBillingErrorMessage: () => false,
   isLikelyContextOverflowError: () => false,
   isOverloadedErrorMessage: (message: string) => /overloaded|capacity/i.test(message),
-  isRateLimitErrorMessage: () => false,
+  isRateLimitErrorMessage: (message: string) =>
+    /rate.limit|too many requests|429|usage limit/i.test(message),
   isTransientHttpError: () => false,
   sanitizeUserFacingText: (text?: string) => text ?? "",
 }));
@@ -272,6 +274,7 @@ function createMockReplyOperation(): {
       attachBackend: vi.fn(),
       detachBackend: vi.fn(),
       complete: vi.fn(),
+      completeThen: vi.fn((afterClear: () => void) => afterClear()),
       fail: failMock,
       abortByUser: vi.fn(),
       abortForRestart: vi.fn(),
@@ -1175,7 +1178,7 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("publishes Codex app-server telemetry to agent event subscribers", async () => {
+  it("leaves Codex app-server telemetry publication to the harness", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -1216,15 +1219,12 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(emitAgentEvent).toHaveBeenCalledWith({
-      runId: "run-codex",
-      stream: "codex_app_server.guardian",
-      sessionKey: "agent:main:subagent:codex-child",
-      data: {
-        phase: "blocked",
-        message: "command requires approval",
-      },
-    });
+    expect(emitAgentEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-codex",
+        stream: "codex_app_server.guardian",
+      }),
+    );
   });
 
   it("emits an embedded lifecycle terminal backstop when the runner returns without one", async () => {
@@ -2023,6 +2023,98 @@ describe("runAgentTurnWithFallback", () => {
       expect(result.payload.text).not.toContain("All models failed");
       expect(result.payload.text).not.toContain("402 (billing)");
       expect(result.payload.text).not.toContain("Rate-limited");
+    }
+  });
+
+  it("surfaces Codex usage-limit reset details for pure fallback exhaustion", async () => {
+    const codexMessage =
+      "You've reached your Codex subscription usage limit. Next reset in 42 minutes (2026-05-04T21:34:00.000Z). Run /codex account for current usage details.";
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      Object.assign(new Error(`All models failed (1): openai/gpt-5.5: ${codexMessage}`), {
+        name: "FallbackSummaryError",
+        attempts: [
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            error: codexMessage,
+            reason: "rate_limit",
+          },
+        ],
+        soonestCooldownExpiry: null,
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(`⚠️ ${codexMessage}`);
+      expect(result.payload.text).not.toContain("All models failed");
+      expect(getReplyPayloadMetadata(result.payload)).toMatchObject({
+        deliverDespiteSourceReplySuppression: true,
+      });
+    }
+  });
+
+  it("surfaces direct Codex usage-limit errors when fallback does not wrap one attempt", async () => {
+    const codexMessage =
+      "You've reached your Codex subscription usage limit. Codex did not return a reset time for this limit. Run /codex account for current usage details.";
+    state.runWithModelFallbackMock.mockRejectedValueOnce(new Error(codexMessage));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(`⚠️ ${codexMessage}`);
+      expect(getReplyPayloadMetadata(result.payload)).toMatchObject({
+        deliverDespiteSourceReplySuppression: true,
+      });
     }
   });
 

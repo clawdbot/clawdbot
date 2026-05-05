@@ -144,12 +144,17 @@ export function parseSessionsRouteArgs(argv: string[]) {
   if (!active.ok) {
     return null;
   }
+  const limit = parseOptionalFlagValue(argv, "--limit");
+  if (!limit.ok) {
+    return null;
+  }
   return {
     json: hasFlag(argv, "--json"),
     allAgents: hasFlag(argv, "--all-agents"),
     agent: agent.value,
     store: store.value,
     active: active.value,
+    limit: limit.value,
   };
 }
 

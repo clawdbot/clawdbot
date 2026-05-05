@@ -28,14 +28,16 @@ describe("mantis before/after runtime", () => {
       const outputDir = path.join(repoRootArg, outputDirArg);
       await fs.mkdir(outputDir, { recursive: true });
       const screenshotPath = path.join(outputDir, `${lane}-timeline.png`);
+      const videoPath = path.join(outputDir, `${lane}-timeline.mp4`);
       await fs.writeFile(screenshotPath, `${lane} screenshot`);
+      await fs.writeFile(videoPath, `${lane} video`);
       await fs.writeFile(
         path.join(outputDir, "discord-qa-summary.json"),
         `${JSON.stringify(
           {
             scenarios: [
               {
-                artifactPaths: { screenshot: screenshotPath },
+                artifactPaths: { screenshot: screenshotPath, video: videoPath },
                 details:
                   lane === "baseline"
                     ? "reaction timeline missing thinking/done"
@@ -94,5 +96,11 @@ describe("mantis before/after runtime", () => {
     await expect(
       fs.readFile(path.join(result.outputDir, "candidate", "candidate.png"), "utf8"),
     ).resolves.toBe("candidate screenshot");
+    await expect(
+      fs.readFile(path.join(result.outputDir, "baseline", "baseline.mp4"), "utf8"),
+    ).resolves.toBe("baseline video");
+    await expect(
+      fs.readFile(path.join(result.outputDir, "candidate", "candidate.mp4"), "utf8"),
+    ).resolves.toBe("candidate video");
   });
 });

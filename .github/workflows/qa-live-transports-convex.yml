@@ -562,6 +562,7 @@ jobs:
   run_live_slack:
     name: Run Slack live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
+    if: vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED == 'true'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared

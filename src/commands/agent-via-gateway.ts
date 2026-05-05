@@ -105,6 +105,10 @@ function isGatewayAgentTimeoutError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("gateway request timeout for agent");
 }
 
+function isGatewayAgentEmbeddedFallbackError(err: unknown): boolean {
+  return isGatewayTransportError(err);
+}
+
 function createGatewayTimeoutFallbackSessionId(): string {
   return `${GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX}${randomUUID()}`;
 }
@@ -254,6 +258,10 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
         runtime,
         deps,
       );
+    }
+
+    if (!isGatewayAgentEmbeddedFallbackError(err)) {
+      throw err;
     }
 
     runtime.error?.(

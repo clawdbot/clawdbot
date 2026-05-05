@@ -373,6 +373,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     telegramDeps?: TelegramBotDeps;
     bot?: Bot;
     replyToMode?: Parameters<typeof dispatchTelegramMessage>[0]["replyToMode"];
+    textLimit?: number;
   }) {
     const bot = params.bot ?? createBot();
     await dispatchTelegramMessage({
@@ -382,7 +383,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       runtime: createRuntime(),
       replyToMode: params.replyToMode ?? "first",
       streamMode: params.streamMode ?? "partial",
-      textLimit: 4096,
+      textLimit: params.textLimit ?? 4096,
       telegramCfg: params.telegramCfg ?? {},
       telegramDeps: params.telegramDeps ?? telegramDepsForTest,
       opts: { token: "token" },
@@ -1574,6 +1575,89 @@ describe("dispatchTelegramMessage draft streaming", () => {
       "Message B final",
       expect.any(Object),
     );
+  });
+
+  it("uses the active preview as the first chunk for long text finals", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    const finalText = `${"A".repeat(70)}${"B".repeat(70)}`;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Working preview" });
+        await dispatcherOptions.deliver({ text: finalText, replyToId: "456" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      textLimit: 80,
+    });
+
+    const editedText = editMessageTelegram.mock.calls[0]?.[2] as string;
+    const followUpText =
+      (deliverReplies.mock.calls[0]?.[0] as { replies?: Array<{ text?: string }> })?.replies?.[0]
+        ?.text ?? "";
+
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editedText.length).toBeLessThanOrEqual(80);
+    expect(followUpText.length).toBeGreaterThan(0);
+    expect(`${editedText}${followUpText}`).toBe(finalText);
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.not.objectContaining({ replyToId: expect.any(String) })],
+      }),
+    );
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("uses the active preview as the first chunk for three-chunk long text finals", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    const finalText = `${"A".repeat(70)}${"B".repeat(70)}${"C".repeat(70)}`;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Working preview" });
+        await dispatcherOptions.deliver({ text: finalText, replyToId: "456" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      textLimit: 80,
+    });
+
+    const editedText = editMessageTelegram.mock.calls[0]?.[2] as string;
+    const followUpReplies =
+      (deliverReplies.mock.calls[0]?.[0] as { replies?: Array<{ text?: string }> })?.replies ?? [];
+    const followUpText = followUpReplies.map((reply) => reply.text ?? "").join("");
+
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editedText.length).toBeLessThanOrEqual(80);
+    expect(followUpReplies).toHaveLength(1);
+    expect(followUpText.length).toBeGreaterThan(80);
+    expect(`${editedText}${followUpText}`).toBe(finalText);
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.not.objectContaining({ replyToId: expect.any(String) })],
+      }),
+    );
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
   });
 
   it("does not force new message on first assistant message start", async () => {

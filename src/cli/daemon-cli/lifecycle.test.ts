@@ -49,6 +49,7 @@ const probeGateway = vi.fn<
     configSnapshot: unknown;
   }>
 >();
+const callGatewayCli = vi.fn();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
 const recoverInstalledLaunchAgent = vi.hoisted(() => vi.fn());
@@ -75,6 +76,10 @@ vi.mock("../../gateway/probe.js", () => ({
     auth?: { token?: string; password?: string };
     timeoutMs: number;
   }) => probeGateway(opts),
+}));
+
+vi.mock("../../gateway/call.js", () => ({
+  callGatewayCli: (opts: unknown) => callGatewayCli(opts),
 }));
 
 vi.mock("../../config/commands.js", () => ({
@@ -113,7 +118,11 @@ vi.mock("./lifecycle-core.js", () => ({
 
 describe("runDaemonRestart health checks", () => {
   let runDaemonStart: (opts?: { json?: boolean }) => Promise<void>;
-  let runDaemonRestart: (opts?: { json?: boolean }) => Promise<boolean>;
+  let runDaemonRestart: (opts?: {
+    json?: boolean;
+    safe?: boolean;
+    force?: boolean;
+  }) => Promise<boolean>;
   let runDaemonStop: (opts?: { json?: boolean }) => Promise<void>;
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -162,6 +171,7 @@ describe("runDaemonRestart health checks", () => {
     signalVerifiedGatewayPidSync.mockReset();
     formatGatewayPidList.mockReset();
     probeGateway.mockReset();
+    callGatewayCli.mockReset();
     isRestartEnabled.mockReset();
     loadConfig.mockReset();
     recoverInstalledLaunchAgent.mockReset();
@@ -204,6 +214,31 @@ describe("runDaemonRestart health checks", () => {
       ok: true,
       configSnapshot: { commands: { restart: true } },
     });
+    callGatewayCli.mockResolvedValue({
+      ok: true,
+      status: "deferred",
+      preflight: {
+        safe: false,
+        counts: {
+          queueSize: 1,
+          pendingReplies: 0,
+          embeddedRuns: 0,
+          activeTasks: 0,
+          totalActive: 1,
+        },
+        blockers: [{ kind: "queue", count: 1, message: "1 queued or active operation(s)" }],
+        summary: "restart deferred: 1 queued or active operation(s)",
+      },
+      restart: {
+        ok: true,
+        pid: 123,
+        signal: "SIGUSR1",
+        delayMs: 0,
+        mode: "emit",
+        coalesced: false,
+        cooldownMsApplied: 0,
+      },
+    });
     isRestartEnabled.mockReturnValue(true);
     signalVerifiedGatewayPidSync.mockImplementation(() => {});
     formatGatewayPidList.mockImplementation((pids) => pids.join(", "));
@@ -228,6 +263,24 @@ describe("runDaemonRestart health checks", () => {
     await runDaemonStart({ json: true });
 
     expect(recoverInstalledLaunchAgent).toHaveBeenCalledWith({ result: "started" });
+  });
+
+  it("requests a safe gateway restart over RPC without touching the service manager", async () => {
+    await runDaemonRestart({ json: true, safe: true });
+
+    expect(callGatewayCli).toHaveBeenCalledWith({
+      method: "gateway.restart.request",
+      params: { reason: "gateway.restart.safe" },
+      timeoutMs: 10_000,
+    });
+    expect(runServiceRestart).not.toHaveBeenCalled();
+  });
+
+  it("keeps force restart on the existing non-safe path", async () => {
+    await runDaemonRestart({ json: true, force: true });
+
+    expect(callGatewayCli).not.toHaveBeenCalled();
+    expect(runServiceRestart).toHaveBeenCalled();
   });
 
   it("repairs stale loaded service definitions from gateway start", async () => {

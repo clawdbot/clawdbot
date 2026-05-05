@@ -118,6 +118,83 @@ describe("Codex app-server approval bridge", () => {
     );
   });
 
+  it("describes command approval permission and policy amendments", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-command-permissions", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-command-permissions",
+        decision: "allow-always",
+      });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-permissions",
+        command: "npm install",
+        additionalPermissions: {
+          network: { enabled: true },
+          fileSystem: {
+            write: ["/"],
+          },
+        },
+        proposedExecpolicyAmendment: ["npm install"],
+        proposedNetworkPolicyAmendments: [{ host: "registry.npmjs.org", action: "allow" }],
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "acceptForSession" });
+    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
+    const description = (requestPayload as { description: string }).description;
+    expect(description).toContain("Command: npm install");
+    expect(description).toContain("Additional permissions: network, fileSystem");
+    expect(description).toContain("High-risk targets: network access, filesystem root");
+    expect(description).toContain("Network enabled: true");
+    expect(description).toContain("File system write: /");
+    expect(description).toContain("Proposed exec policy: npm install");
+    expect(description).toContain("Proposed network policy: allow registry.npmjs.org");
+  });
+
+  it("keeps command approval permission details visible after long command previews", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-long-command-permissions", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-long-command-permissions",
+        decision: "allow-always",
+      });
+
+    await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-long-permissions",
+        command: `${"npm install ".repeat(500)} --unsafe-perm`,
+        additionalPermissions: {
+          network: { enabled: true },
+          fileSystem: {
+            write: ["/"],
+          },
+        },
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
+    const description = (requestPayload as { description: string }).description;
+    expect(description).toContain("[preview truncated or unsafe content omitted]");
+    expect(description).toContain("Additional permissions: network, fileSystem");
+    expect(description).toContain("High-risk targets: network access, filesystem root");
+  });
+
   it("sanitizes command previews before forwarding approval text and events", async () => {
     const params = createParams();
     mockCallGatewayTool
@@ -150,6 +227,44 @@ describe("Codex app-server approval bridge", () => {
         data: expect.objectContaining({
           status: "pending",
           command: "pnpm test --watch extensions/codex/src/app-server",
+        }),
+      }),
+    );
+  });
+
+  it("escapes command approval previews before forwarding approval text and events", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-escaped-command", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-escaped-command", decision: "allow-once" });
+
+    await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-escaped",
+        command: "printf '<@U123> [trusted](https://evil) @here'",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
+    const description = (requestPayload as { description: string }).description;
+    expect(description).toContain(
+      "printf '&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here'",
+    );
+    expect(description).not.toContain("<@U123>");
+    expect(description).not.toContain("[trusted](https://evil)");
+    expect(description).not.toContain("@here");
+    expect(params.onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "approval",
+        data: expect.objectContaining({
+          command:
+            "printf '&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here'",
         }),
       }),
     );
@@ -613,6 +728,59 @@ describe("Codex app-server approval bridge", () => {
     expect(description).toContain("/workspace/project");
     expect(description).toContain("High-risk targets:");
     expect(description).toContain("readPaths: ~/.ssh/id_rsa, /etc/hosts");
+  });
+
+  it("describes current protocol network and filesystem permission grants", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-current-permissions", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-current-permissions", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/permissions/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "perm-current",
+        permissions: {
+          network: { enabled: true },
+          fileSystem: {
+            read: ["/Users/simone/.ssh/id_rsa"],
+            write: ["/"],
+            entries: [
+              { path: "/workspace/project", access: "read" },
+              { path: "/tmp/output", access: "write" },
+              { path: "/ignored", access: "none" },
+            ],
+          },
+        },
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({
+      permissions: {
+        network: { enabled: true },
+        fileSystem: {
+          read: ["/Users/simone/.ssh/id_rsa"],
+          write: ["/"],
+          entries: [
+            { path: "/workspace/project", access: "read" },
+            { path: "/tmp/output", access: "write" },
+            { path: "/ignored", access: "none" },
+          ],
+        },
+      },
+      scope: "turn",
+    });
+    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
+    const description = (requestPayload as { description: string }).description;
+    expect(description).toContain("Network enabled: true");
+    expect(description).toContain("File system read: ~/.ssh/id_rsa; write: /");
+    expect(description).toContain("entries: read /workspace/project, write /tmp/output (+1 more)");
+    expect(description).toContain("High-risk targets: network access, filesystem root");
   });
 
   it("compacts Windows home paths in permission descriptions", async () => {

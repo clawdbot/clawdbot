@@ -265,6 +265,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
           "",
           "Tap below to browse models, or use:",
           "/model <provider/model> to switch",
+          "/model <provider/model> --runtime <runtime> to switch harnesses",
           "/model status for details",
         ]
           .filter(Boolean)

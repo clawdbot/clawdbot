@@ -4,6 +4,7 @@
 import type { AbsolutePathBuf } from "../AbsolutePathBuf.js";
 import type { ReasoningEffort } from "../ReasoningEffort.js";
 import type { ServiceTier } from "../ServiceTier.js";
+import type { ActivePermissionProfile } from "./ActivePermissionProfile.js";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer.js";
 import type { AskForApproval } from "./AskForApproval.js";
 import type { PermissionProfile } from "./PermissionProfile.js";
@@ -26,16 +27,20 @@ export type ThreadStartResponse = {
    */
   approvalsReviewer: ApprovalsReviewer;
   /**
-   * Legacy sandbox policy retained for compatibility. New clients should use
-   * `permissionProfile` when present as the canonical active permissions
-   * view.
+   * Legacy sandbox policy retained for compatibility. Experimental clients
+   * should prefer `permissionProfile` when they need exact runtime
+   * permissions.
    */
   sandbox: SandboxPolicy;
   /**
-   * Canonical active permissions view for this thread when representable.
-   * This is `null` for external sandbox policies because external
-   * enforcement cannot be round-tripped as a `PermissionProfile`.
+   * Full active permissions for this thread. `activePermissionProfile`
+   * carries display/provenance metadata for this runtime profile.
    */
   permissionProfile: PermissionProfile | null;
+  /**
+   * Named or implicit built-in profile that produced the active
+   * permissions, when known.
+   */
+  activePermissionProfile: ActivePermissionProfile | null;
   reasoningEffort: ReasoningEffort | null;
 };

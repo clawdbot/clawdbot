@@ -24,7 +24,9 @@ import { createSlackTokenCacheKey, getSlackWriteClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
+import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { parseSlackTarget } from "./targets.js";
+import { normalizeSlackThreadTsCandidate } from "./thread-ts.js";
 import { resolveSlackBotToken } from "./token.js";
 import { truncateSlackText } from "./truncate.js";
 const SLACK_UPLOAD_SSRF_POLICY = {
@@ -535,7 +537,7 @@ export async function sendMessageSlack(
     recipient,
     threadTs: opts.threadTs,
   });
-  return await runQueuedSlackSend(queueKey, () =>
+  const result = await runQueuedSlackSend(queueKey, () =>
     sendMessageSlackQueued({
       trimmedMessage,
       opts,
@@ -546,6 +548,11 @@ export async function sendMessageSlack(
       blocks,
     }),
   );
+  const threadTs = normalizeSlackThreadTsCandidate(opts.threadTs);
+  if (threadTs && result.channelId && account.accountId) {
+    recordSlackThreadParticipation(account.accountId, result.channelId, threadTs);
+  }
+  return result;
 }
 
 async function sendMessageSlackQueued(params: {

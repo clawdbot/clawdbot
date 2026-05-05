@@ -59,9 +59,11 @@ function buildPreparedCliRunContext(params: {
   sessionId?: string;
   sessionKey?: string;
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
+  resolveExecutionArgs?: PreparedCliRunContext["backendResolved"]["resolveExecutionArgs"];
   config?: PreparedCliRunContext["params"]["config"];
   mcpConfigHash?: string;
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
+  thinkLevel?: PreparedCliRunContext["params"]["thinkLevel"];
   workspaceDir?: string;
 }): PreparedCliRunContext {
   const workspaceDir = params.workspaceDir ?? "/tmp";
@@ -103,6 +105,7 @@ function buildPreparedCliRunContext(params: {
       prompt: params.prompt ?? "hi",
       provider: params.provider,
       model: params.model,
+      thinkLevel: params.thinkLevel,
       timeoutMs: 1_000,
       runId: params.runId,
       skillsSnapshot: params.skillsSnapshot,
@@ -114,6 +117,7 @@ function buildPreparedCliRunContext(params: {
       config: backend,
       bundleMcp: params.provider === "claude-cli",
       pluginId: params.provider === "claude-cli" ? "anthropic" : "openai",
+      resolveExecutionArgs: params.resolveExecutionArgs,
     },
     preparedBackend: {
       backend,
@@ -327,6 +331,35 @@ describe("runCliAgent spawn path", () => {
     expect(input.argv?.[sessionArgIndex + 1]?.trim()).toBeTruthy();
     expect(input.input).toContain("hi");
     expect(input.argv).not.toContain("hi");
+  });
+
+  it("applies backend-owned per-run args before spawning", async () => {
+    mockSuccessfulCliRun();
+    const resolveExecutionArgs = vi.fn(({ baseArgs }) => [...baseArgs, "--effort", "high"]);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-thinking-args",
+        thinkLevel: "high",
+        resolveExecutionArgs,
+      }),
+    );
+
+    expect(resolveExecutionArgs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        modelId: "sonnet",
+        thinkingLevel: "high",
+        useResume: false,
+        baseArgs: ["-p", "--output-format", "stream-json"],
+      }),
+    );
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+    const effortArgIndex = input.argv?.indexOf("--effort") ?? -1;
+    expect(effortArgIndex).toBeGreaterThanOrEqual(0);
+    expect(input.argv?.[effortArgIndex + 1]).toBe("high");
   });
 
   it("passes OpenClaw skills to Claude as a session plugin", async () => {

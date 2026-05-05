@@ -1,18 +1,16 @@
 import crypto from "node:crypto";
-import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
 } from "../../tasks/detached-task-runtime.js";
-import { sendMessage } from "../../tasks/task-registry-delivery-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
@@ -64,8 +62,6 @@ type WakeMediaGenerationTaskCompletionParams = {
   mediaUrls?: string[];
   statsLine?: string;
 };
-
-type MediaGenerationDirectCompletionDelivery = "config" | "disabled";
 
 function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
   registerAgentRunContext(handle.runId, {
@@ -228,14 +224,19 @@ function failMediaGenerationTaskRun(params: {
 function buildMediaGenerationReplyInstruction(params: {
   status: "ok" | "error";
   completionLabel: string;
+  requiresMessageToolDelivery: boolean;
 }) {
   if (params.status === "ok") {
-    return [
-      `A completed ${params.completionLabel} generation task is ready for user delivery.`,
-      `Prefer the message tool for delivery: use action="send" to the current/original chat, put your user-facing caption in message, attach each generated file with path/filePath using the exact path from the result, then reply ONLY: ${SILENT_REPLY_TOKEN}.`,
-      `If you cannot use the message tool, reply in your normal assistant voice and include the exact MEDIA: lines from the result so OpenClaw attaches the finished ${params.completionLabel}.`,
-      "Keep internal task/session details private and do not copy the internal event text verbatim.",
-    ].join(" ");
+    if (params.requiresMessageToolDelivery) {
+      return [
+        `The ${params.completionLabel} is ready for the original channel/group chat.`,
+        "This route requires message-tool delivery: the user will NOT see your normal assistant final reply.",
+        'Call the message tool with action="send" to the original/current chat, put a short caption in the message, and attach the generated media paths from the result.',
+        `After the message tool succeeds, reply only ${SILENT_REPLY_TOKEN}.`,
+        "Do not put MEDIA: lines only in your final answer; that final answer is private in this chat.",
+      ].join(" ");
+    }
+    return `Tell the user the ${params.completionLabel} is ready. If visible source delivery requires the message tool, send it there with the generated media attached.`;
   }
   return [
     `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation task failed.`,
@@ -244,52 +245,37 @@ function buildMediaGenerationReplyInstruction(params: {
   ].join(" ");
 }
 
-function isAsyncMediaDirectSendEnabled(params: {
-  config: OpenClawConfig | undefined;
-  directCompletionDelivery: MediaGenerationDirectCompletionDelivery;
-}): boolean {
-  if (params.directCompletionDelivery === "disabled") {
-    return false;
+function inferMediaGenerationCompletionChatType(
+  handle: MediaGenerationTaskHandle,
+): "direct" | "group" | "channel" | "unknown" {
+  const sessionKeyChatType = deriveSessionChatTypeFromKey(handle.requesterSessionKey);
+  if (sessionKeyChatType !== "unknown") {
+    return sessionKeyChatType;
   }
-  return params.config?.tools?.media?.asyncCompletion?.directSend === true;
+  const to = handle.requesterOrigin?.to?.trim().toLowerCase();
+  if (to?.startsWith("group:")) {
+    return "group";
+  }
+  if (to?.startsWith("channel:")) {
+    return "channel";
+  }
+  if (to?.startsWith("dm:") || to?.startsWith("direct:")) {
+    return "direct";
+  }
+  return "unknown";
 }
 
-async function maybeDeliverMediaGenerationResultDirectly(params: {
+function mediaGenerationCompletionRequiresMessageToolDelivery(params: {
+  config?: OpenClawConfig;
   handle: MediaGenerationTaskHandle;
-  status: "ok" | "error";
-  result: string;
-  idempotencyKey: string;
-}): Promise<boolean> {
-  const origin = params.handle.requesterOrigin;
-  const channel = origin?.channel?.trim();
-  const to = origin?.to?.trim();
-  if (!channel || !to) {
-    return false;
+}): boolean {
+  const chatType = inferMediaGenerationCompletionChatType(params.handle);
+  if (chatType === "group" || chatType === "channel") {
+    const configuredMode =
+      params.config?.messages?.groupChat?.visibleReplies ?? params.config?.messages?.visibleReplies;
+    return configuredMode !== "automatic";
   }
-  const parsed = parseReplyDirectives(params.result);
-  const content = parsed.text.trim();
-  const mediaUrls = parsed.mediaUrls?.filter((entry) => entry.trim().length > 0);
-  const requesterAgentId = parseAgentSessionKey(params.handle.requesterSessionKey)?.agentId;
-  await sendMessage({
-    channel,
-    to,
-    accountId: origin?.accountId,
-    threadId: origin?.threadId,
-    content:
-      content ||
-      (params.status === "ok"
-        ? `Finished ${params.handle.taskLabel}.`
-        : "Background media generation failed."),
-    ...(mediaUrls?.length ? { mediaUrls } : {}),
-    agentId: requesterAgentId,
-    idempotencyKey: params.idempotencyKey,
-    mirror: {
-      sessionKey: params.handle.requesterSessionKey,
-      agentId: requesterAgentId,
-      idempotencyKey: params.idempotencyKey,
-    },
-  });
-  return true;
+  return params.config?.messages?.visibleReplies === "message_tool";
 }
 
 async function wakeMediaGenerationTaskCompletion(params: {
@@ -304,37 +290,11 @@ async function wakeMediaGenerationTaskCompletion(params: {
   announceType: string;
   toolName: string;
   completionLabel: string;
-  directCompletionDelivery: MediaGenerationDirectCompletionDelivery;
 }) {
   if (!params.handle) {
     return;
   }
   const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
-  if (
-    isAsyncMediaDirectSendEnabled({
-      config: params.config,
-      directCompletionDelivery: params.directCompletionDelivery,
-    })
-  ) {
-    try {
-      const deliveredDirect = await maybeDeliverMediaGenerationResultDirectly({
-        handle: params.handle,
-        status: params.status,
-        result: params.result,
-        idempotencyKey: announceId,
-      });
-      if (deliveredDirect) {
-        return;
-      }
-    } catch (error) {
-      log.warn("Media generation direct completion delivery failed; falling back to announce", {
-        taskId: params.handle.taskId,
-        runId: params.handle.runId,
-        toolName: params.toolName,
-        error,
-      });
-    }
-  }
   const internalEvents: AgentInternalEvent[] = [
     {
       type: "task_completion",
@@ -351,6 +311,10 @@ async function wakeMediaGenerationTaskCompletion(params: {
       replyInstruction: buildMediaGenerationReplyInstruction({
         status: params.status,
         completionLabel: params.completionLabel,
+        requiresMessageToolDelivery: mediaGenerationCompletionRequiresMessageToolDelivery({
+          config: params.config,
+          handle: params.handle,
+        }),
       }),
     },
   ];
@@ -397,7 +361,6 @@ export function createMediaGenerationTaskLifecycle(params: {
   eventSource: AgentInternalEvent["source"];
   announceType: string;
   completionLabel: string;
-  directCompletionDelivery?: MediaGenerationDirectCompletionDelivery;
 }) {
   return {
     createTaskRun(runParams: CreateMediaGenerationTaskRunParams): MediaGenerationTaskHandle | null {
@@ -435,7 +398,6 @@ export function createMediaGenerationTaskLifecycle(params: {
         announceType: params.announceType,
         toolName: params.toolName,
         completionLabel: params.completionLabel,
-        directCompletionDelivery: params.directCompletionDelivery ?? "config",
       });
     },
   };

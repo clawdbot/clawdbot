@@ -5,6 +5,7 @@ import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
+import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
@@ -35,15 +36,16 @@ async function normalizeReplyPayloadMedia(params: {
   }
 
   try {
-    return await params.normalizeMediaPaths(params.payload);
+    const normalized = await params.normalizeMediaPaths(params.payload);
+    return copyReplyPayloadMetadata(params.payload, normalized);
   } catch (err) {
     logVerbose(`reply payload media normalization failed: ${String(err)}`);
-    return {
+    return copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
-    };
+    });
   }
 }
 
@@ -102,7 +104,7 @@ function sanitizeHeartbeatPayload(payload: ReplyPayload): ReplyPayload {
     return payload;
   }
   logVerbose("Stripped legacy tool-call block from heartbeat reply");
-  return { ...payload, text: cleaned };
+  return copyReplyPayloadMetadata(payload, { ...payload, text: cleaned });
 }
 
 export async function buildReplyPayloads(params: {
@@ -139,7 +141,7 @@ export async function buildReplyPayloads(params: {
         }
 
         if (!text || !text.includes("HEARTBEAT_OK")) {
-          return [{ ...payload, text }];
+          return [copyReplyPayloadMetadata(payload, { ...payload, text })];
         }
         const stripped = stripHeartbeatToken(text, { mode: "message" });
         if (stripped.didStrip && !didLogHeartbeatStrip) {
@@ -150,7 +152,7 @@ export async function buildReplyPayloads(params: {
         if (stripped.shouldSkip && !hasMedia) {
           return [];
         }
-        return [{ ...payload, text: stripped.text }];
+        return [copyReplyPayloadMetadata(payload, { ...payload, text: stripped.text })];
       });
 
   const replyTaggedPayloads = (
@@ -275,20 +277,20 @@ export async function buildReplyPayloads(params: {
     if (!reply.trimmedText) {
       return payload;
     }
-    const textOnlyPayload = {
+    const textOnlyPayload = copyReplyPayloadMetadata(payload, {
       ...payload,
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: undefined,
-    };
+    });
     if (!params.blockReplyPipeline?.hasSentPayload(textOnlyPayload)) {
       return payload;
     }
-    return {
+    return copyReplyPayloadMetadata(payload, {
       ...payload,
       text: undefined,
       audioAsVoice: payload.audioAsVoice || undefined,
-    };
+    });
   };
   const contentSuppressedPayloads = shouldDropFinalPayloads
     ? dedupedPayloads.flatMap((payload) => preserveUnsentMediaAfterBlockStream(payload) ?? [])

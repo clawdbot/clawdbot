@@ -5,9 +5,15 @@ import {
   areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
   isDiagnosticsEnabled,
+  type DiagnosticPhaseSnapshot,
   type DiagnosticLivenessWarningReason,
 } from "../infra/diagnostic-events.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
+import {
+  getCurrentDiagnosticPhase,
+  getRecentDiagnosticPhases,
+  resetDiagnosticPhasesForTest,
+} from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
@@ -27,6 +33,15 @@ import {
   formatCronSessionDiagnosticFields,
   resolveCronSessionDiagnosticContext,
 } from "./diagnostic-session-context.js";
+import {
+  requestStuckSessionRecovery,
+  resetDiagnosticSessionRecoveryCoordinatorForTest,
+  type RecoverStuckSession,
+} from "./diagnostic-session-recovery-coordinator.js";
+import {
+  type StuckSessionRecoveryOutcome,
+  type StuckSessionRecoveryRequest,
+} from "./diagnostic-session-recovery.js";
 import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
@@ -81,15 +96,10 @@ type DiagnosticWorkSnapshot = {
   activeCount: number;
   waitingCount: number;
   queuedCount: number;
+  activeLabels: string[];
+  waitingLabels: string[];
+  queuedLabels: string[];
 };
-
-type RecoverStuckSession = (params: {
-  sessionId?: string;
-  sessionKey?: string;
-  ageMs: number;
-  queueDepth?: number;
-  allowActiveAbort?: boolean;
-}) => void | Promise<void>;
 
 type DiagnosticLivenessSample = {
   reasons: DiagnosticLivenessWarningReason[];
@@ -127,36 +137,75 @@ function loadCommandPollBackoffRuntime() {
   return commandPollBackoffRuntimePromise;
 }
 
-function recoverStuckSession(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  ageMs: number;
-  queueDepth?: number;
-  allowActiveAbort?: boolean;
-}) {
+async function recoverStuckSession(
+  params: StuckSessionRecoveryRequest,
+): Promise<StuckSessionRecoveryOutcome> {
   stuckSessionRecoveryRuntimePromise ??= import("./diagnostic-stuck-session-recovery.runtime.js");
-  void stuckSessionRecoveryRuntimePromise
+  return stuckSessionRecoveryRuntimePromise
     .then(({ recoverStuckDiagnosticSession }) => recoverStuckDiagnosticSession(params))
     .catch((err) => {
       diag.warn(`stuck session recovery unavailable: ${String(err)}`);
+      return {
+        status: "failed",
+        action: "none",
+        reason: "exception",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        error: String(err),
+      };
     });
 }
 
-function getDiagnosticWorkSnapshot(): DiagnosticWorkSnapshot {
+function formatDiagnosticWorkLabel(
+  state: {
+    sessionId?: string;
+    sessionKey?: string;
+    state: SessionStateValue;
+    queueDepth: number;
+    lastActivity: number;
+  },
+  now: number,
+): string {
+  const label = state.sessionKey ?? state.sessionId ?? "unknown";
+  const ageSeconds = Math.round(Math.max(0, now - state.lastActivity) / 1000);
+  const activity = getDiagnosticSessionActivitySnapshot(
+    { sessionId: state.sessionId, sessionKey: state.sessionKey },
+    now,
+  );
+  const workKind = activity.activeWorkKind ? `/${activity.activeWorkKind}` : "";
+  const lastProgress = activity.lastProgressReason ? ` last=${activity.lastProgressReason}` : "";
+  return `${label}(${state.state}${workKind},q=${state.queueDepth},age=${ageSeconds}s${lastProgress})`;
+}
+
+function pushLimitedDiagnosticLabel(labels: string[], label: string, limit = 5): void {
+  if (labels.length < limit) {
+    labels.push(label);
+  }
+}
+
+function getDiagnosticWorkSnapshot(now = Date.now()): DiagnosticWorkSnapshot {
   let activeCount = 0;
   let waitingCount = 0;
   let queuedCount = 0;
+  const activeLabels: string[] = [];
+  const waitingLabels: string[] = [];
+  const queuedLabels: string[] = [];
 
   for (const state of diagnosticSessionStates.values()) {
     if (state.state === "processing") {
       activeCount += 1;
+      pushLimitedDiagnosticLabel(activeLabels, formatDiagnosticWorkLabel(state, now));
     } else if (state.state === "waiting") {
       waitingCount += 1;
+      pushLimitedDiagnosticLabel(waitingLabels, formatDiagnosticWorkLabel(state, now));
+    }
+    if (state.queueDepth > 0) {
+      pushLimitedDiagnosticLabel(queuedLabels, formatDiagnosticWorkLabel(state, now));
     }
     queuedCount += state.queueDepth;
   }
 
-  return { activeCount, waitingCount, queuedCount };
+  return { activeCount, waitingCount, queuedCount, activeLabels, waitingLabels, queuedLabels };
 }
 
 function hasOpenDiagnosticWork(snapshot: DiagnosticWorkSnapshot): boolean {
@@ -306,6 +355,10 @@ function emitDiagnosticLivenessWarning(
   sample: DiagnosticLivenessSample,
   work: DiagnosticWorkSnapshot,
 ): void {
+  const phase = getCurrentDiagnosticPhase();
+  const recentPhases = getRecentDiagnosticPhases(6);
+  const recentPhaseSummary = formatRecentDiagnosticPhases(recentPhases);
+  const workLabelSummary = formatDiagnosticWorkLabels(work);
   const message = `liveness warning: reasons=${sample.reasons.join(",")} interval=${Math.round(
     sample.intervalMs / 1000,
   )}s eventLoopDelayP99Ms=${formatOptionalDiagnosticMetric(
@@ -316,7 +369,11 @@ function emitDiagnosticLivenessWarning(
     sample.eventLoopUtilization,
   )} cpuCoreRatio=${formatOptionalDiagnosticMetric(sample.cpuCoreRatio)} active=${
     work.activeCount
-  } waiting=${work.waitingCount} queued=${work.queuedCount}`;
+  } waiting=${work.waitingCount} queued=${work.queuedCount}${
+    phase ? ` phase=${phase}` : ""
+  }${recentPhaseSummary ? ` recentPhases=${recentPhaseSummary}` : ""}${
+    workLabelSummary ? ` work=[${workLabelSummary}]` : ""
+  }`;
   const hasBlockingWork = work.waitingCount > 0 || work.queuedCount > 0;
   const hasSustainedEventLoopDelay =
     (sample.eventLoopDelayP99Ms ?? 0) >= DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS;
@@ -339,8 +396,26 @@ function emitDiagnosticLivenessWarning(
     active: work.activeCount,
     waiting: work.waitingCount,
     queued: work.queuedCount,
+    phase,
+    recentPhases,
+    activeWorkLabels: work.activeLabels,
+    waitingWorkLabels: work.waitingLabels,
+    queuedWorkLabels: work.queuedLabels,
   });
   markActivity();
+}
+
+function formatRecentDiagnosticPhases(phases: DiagnosticPhaseSnapshot[]): string {
+  return phases.map((phase) => `${phase.name}:${Math.round(phase.durationMs ?? 0)}ms`).join(",");
+}
+
+function formatDiagnosticWorkLabels(work: DiagnosticWorkSnapshot): string {
+  const parts = [
+    work.activeLabels.length > 0 ? `active=${work.activeLabels.join("|")}` : "",
+    work.waitingLabels.length > 0 ? `waiting=${work.waitingLabels.join("|")}` : "",
+    work.queuedLabels.length > 0 ? `queued=${work.queuedLabels.join("|")}` : "",
+  ].filter(Boolean);
+  return parts.join(" ");
 }
 
 export function resolveStuckSessionWarnMs(config?: OpenClawConfig): number {
@@ -355,6 +430,21 @@ export function resolveStuckSessionWarnMs(config?: OpenClawConfig): number {
   return rounded;
 }
 
+export function resolveStuckSessionAbortMs(
+  config: OpenClawConfig | undefined,
+  stuckSessionWarnMs: number,
+): number {
+  const raw = config?.diagnostics?.stuckSessionAbortMs;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs);
+  }
+  const rounded = Math.floor(raw);
+  if (rounded <= 0) {
+    return resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs);
+  }
+  return Math.max(stuckSessionWarnMs, rounded);
+}
+
 function resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs: number): number {
   return Math.max(
     MIN_STALLED_EMBEDDED_RUN_ABORT_MS,
@@ -365,13 +455,13 @@ function resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs: number): number {
 function isStalledEmbeddedRunRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
   ageMs: number;
-  stuckSessionWarnMs: number;
+  stuckSessionAbortMs: number;
 }): boolean {
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "embedded_run" &&
-    params.ageMs >= resolveStalledEmbeddedRunAbortMs(params.stuckSessionWarnMs)
+    params.ageMs >= params.stuckSessionAbortMs
   );
 }
 
@@ -467,6 +557,7 @@ export function logMessageQueued(params: {
   const state = getDiagnosticSessionState(params);
   state.queueDepth += 1;
   state.lastActivity = Date.now();
+  state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
   if (diag.isEnabled("debug")) {
@@ -547,6 +638,7 @@ export function logSessionStateChange(
   const prevState = state.state;
   state.state = params.state;
   state.lastActivity = Date.now();
+  state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
   if (params.state === "idle") {
@@ -579,6 +671,7 @@ export function markDiagnosticSessionProgress(params: SessionRef) {
   }
   const state = getDiagnosticSessionState(params);
   state.lastActivity = Date.now();
+  state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
   markActivity();
@@ -588,6 +681,9 @@ function sessionAttentionFields(params: {
   classification: SessionAttentionClassification;
   activity: DiagnosticSessionActivitySnapshot;
 }) {
+  const terminalProgressStale = isTerminalDiagnosticProgressReason(
+    params.activity.lastProgressReason,
+  );
   return {
     ...(params.classification.activeWorkKind
       ? { activeWorkKind: params.classification.activeWorkKind }
@@ -605,7 +701,22 @@ function sessionAttentionFields(params: {
     ...(params.activity.activeToolAgeMs !== undefined
       ? { activeToolAgeMs: params.activity.activeToolAgeMs }
       : {}),
+    ...(terminalProgressStale ? { terminalProgressStale: true } : {}),
   };
+}
+
+function isTerminalDiagnosticProgressReason(reason: string | undefined): boolean {
+  if (!reason) {
+    return false;
+  }
+  return (
+    reason === "run:completed" ||
+    reason === "embedded_run:ended" ||
+    reason.includes("response.completed") ||
+    reason.includes("rawResponseItem/completed") ||
+    reason.includes("raw_response_item.completed") ||
+    reason.includes("output_item.done")
+  );
 }
 
 function formatSessionActivityLogFields(activity: DiagnosticSessionActivitySnapshot): string {
@@ -625,6 +736,9 @@ function formatSessionActivityLogFields(activity: DiagnosticSessionActivitySnaps
   if (activity.activeToolAgeMs !== undefined) {
     fields.push(`activeToolAge=${Math.round(activity.activeToolAgeMs / 1000)}s`);
   }
+  if (isTerminalDiagnosticProgressReason(activity.lastProgressReason)) {
+    fields.push("terminalProgressStale=true");
+  }
   return fields.join(" ");
 }
 
@@ -633,6 +747,7 @@ export function logSessionAttention(
     state: SessionStateValue;
     ageMs: number;
     thresholdMs: number;
+    abortThresholdMs?: number;
   },
 ): SessionAttentionClassification | undefined {
   if (!areDiagnosticsEnabledForProcess()) {
@@ -653,7 +768,8 @@ export function logSessionAttention(
     isStalledEmbeddedRunRecoveryEligible({
       classification,
       ageMs: params.ageMs,
-      stuckSessionWarnMs: params.thresholdMs,
+      stuckSessionAbortMs:
+        params.abortThresholdMs ?? resolveStalledEmbeddedRunAbortMs(params.thresholdMs),
     });
   if (classification.eventType === "session.stuck") {
     const nextWarnAgeMs =
@@ -833,9 +949,10 @@ export function startDiagnosticHeartbeat(
       }
     }
     const stuckSessionWarnMs = resolveStuckSessionWarnMs(heartbeatConfig);
+    const stuckSessionAbortMs = resolveStuckSessionAbortMs(heartbeatConfig, stuckSessionWarnMs);
     const now = Date.now();
     pruneDiagnosticSessionStates(now, true);
-    const work = getDiagnosticWorkSnapshot();
+    const work = getDiagnosticWorkSnapshot(now);
     const livenessSample = (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
     const shouldEmitLivenessEvent =
       livenessSample !== null && shouldEmitDiagnosticLivenessEvent(now);
@@ -890,27 +1007,39 @@ export function startDiagnosticHeartbeat(
           state: state.state,
           ageMs,
           thresholdMs: stuckSessionWarnMs,
+          abortThresholdMs: stuckSessionAbortMs,
         });
         if (classification?.recoveryEligible) {
-          void (opts?.recoverStuckSession ?? recoverStuckSession)({
-            sessionId: state.sessionId,
-            sessionKey: state.sessionKey,
-            ageMs,
-            queueDepth: state.queueDepth,
+          requestStuckSessionRecovery({
+            recover: opts?.recoverStuckSession ?? recoverStuckSession,
+            classification,
+            request: {
+              sessionId: state.sessionId,
+              sessionKey: state.sessionKey,
+              ageMs,
+              queueDepth: state.queueDepth,
+              stateGeneration: state.generation,
+            },
           });
         } else if (
+          classification &&
           isStalledEmbeddedRunRecoveryEligible({
             classification,
             ageMs,
-            stuckSessionWarnMs,
+            stuckSessionAbortMs,
           })
         ) {
-          void (opts?.recoverStuckSession ?? recoverStuckSession)({
-            sessionId: state.sessionId,
-            sessionKey: state.sessionKey,
-            ageMs,
-            queueDepth: state.queueDepth,
-            allowActiveAbort: true,
+          requestStuckSessionRecovery({
+            recover: opts?.recoverStuckSession ?? recoverStuckSession,
+            classification,
+            request: {
+              sessionId: state.sessionId,
+              sessionKey: state.sessionKey,
+              ageMs,
+              queueDepth: state.queueDepth,
+              allowActiveAbort: true,
+              stateGeneration: state.generation,
+            },
           });
         }
       }
@@ -934,6 +1063,7 @@ export function getDiagnosticSessionStateCountForTest(): number {
 }
 
 export function resetDiagnosticStateForTest(): void {
+  resetDiagnosticSessionRecoveryCoordinatorForTest();
   resetDiagnosticSessionStateForTest();
   resetDiagnosticActivityForTest();
   resetDiagnosticRunActivityForTest();
@@ -943,6 +1073,7 @@ export function resetDiagnosticStateForTest(): void {
   webhookStats.lastReceived = 0;
   stopDiagnosticHeartbeat();
   resetDiagnosticMemoryForTest();
+  resetDiagnosticPhasesForTest();
   resetDiagnosticStabilityRecorderForTest();
   resetDiagnosticStabilityBundleForTest();
 }

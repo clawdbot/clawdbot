@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import net from "node:net";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -94,6 +95,7 @@ export async function runGatewayLoop(params: {
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
+  const processInstanceId = randomUUID();
   const waitForHealthyChild = params.waitForHealthyChild ?? waitForHealthyGatewayChild;
 
   const cleanupSignals = () => {
@@ -140,6 +142,7 @@ export async function runGatewayLoop(params: {
       markUpdateRestartSentinelFailure,
       respawnGatewayProcessForUpdate,
       restartGatewayProcessWithFreshPid,
+      writeGatewayRestartHandoffSync,
     } = await loadGatewayLifecycleRuntimeModule();
 
     if (isUpdateRestart) {
@@ -176,8 +179,15 @@ export async function runGatewayLoop(params: {
         return;
       }
       if (respawn.mode === "supervised") {
+        const supervisorMode = detectRespawnSupervisor(process.env, process.platform);
+        writeGatewayRestartHandoffSync({
+          restartKind: "update-process",
+          reason: restartReason,
+          processInstanceId,
+          supervisorMode: supervisorMode ?? "external",
+        });
         gatewayLog.info("restart mode: update process respawn (supervisor restart)");
-        if (detectRespawnSupervisor(process.env, process.platform) === "launchd") {
+        if (supervisorMode === "launchd") {
           await new Promise((resolve) => {
             setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
           });
@@ -208,15 +218,24 @@ export async function runGatewayLoop(params: {
     // Release the lock BEFORE spawning so the child can acquire it immediately.
     const respawn = restartGatewayProcessWithFreshPid();
     if (respawn.mode === "spawned" || respawn.mode === "supervised") {
+      const supervisorMode =
+        respawn.mode === "supervised"
+          ? detectRespawnSupervisor(process.env, process.platform)
+          : null;
       const modeLabel =
         respawn.mode === "spawned"
           ? `spawned pid ${respawn.pid ?? "unknown"}`
           : "supervisor restart";
+      if (respawn.mode === "supervised") {
+        writeGatewayRestartHandoffSync({
+          restartKind: "full-process",
+          reason: restartReason,
+          processInstanceId,
+          supervisorMode: supervisorMode ?? "external",
+        });
+      }
       gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
-      if (
-        respawn.mode === "supervised" &&
-        detectRespawnSupervisor(process.env, process.platform) === "launchd"
-      ) {
+      if (supervisorMode === "launchd") {
         // A short clean-exit pause keeps rapid SIGUSR1/config restarts from
         // tripping launchd crash-loop throttling before KeepAlive relaunches.
         await new Promise((resolve) => {
@@ -392,7 +411,7 @@ export async function runGatewayLoop(params: {
               `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart ${formatRestartDrainBudget()}`,
             );
             if (taskBlockers) {
-              gatewayLog.warn(`restart blocked by active task run(s): ${taskBlockers}`);
+              gatewayLog.warn(`restart blocked by active background task run(s): ${taskBlockers}`);
             }
             if (restartIntent?.force) {
               gatewayLog.warn("forced restart requested; skipping active work drain");

@@ -54,8 +54,10 @@ describe("mantis Slack desktop smoke runtime", () => {
             await fs.writeFile(path.join(outputDir as string, "slack-qa-report.md"), "# Slack\n");
           } else {
             await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
+            await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.mp4"), "mp4");
             await fs.writeFile(path.join(outputDir as string, "remote-metadata.json"), "{}\n");
             await fs.writeFile(path.join(outputDir as string, "chrome.log"), "chrome\n");
+            await fs.writeFile(path.join(outputDir as string, "ffmpeg.log"), "ffmpeg\n");
             await fs.writeFile(path.join(outputDir as string, "slack-desktop-command.log"), "qa\n");
           }
           return { stdout: "", stderr: "" };
@@ -97,6 +99,10 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain("${CHROME_BIN:-}");
     expect(remoteScript).toContain("pnpm install --frozen-lockfile");
     expect(remoteScript).toContain("pnpm build");
+    expect(remoteScript).toContain("ffmpeg");
+    expect(remoteScript).toContain('sudo apt-get update -y >>"$out/apt.log" 2>&1 || true');
+    expect(remoteScript).toContain("slack-desktop-smoke.mp4");
+    expect(remoteScript).not.toContain("-video_size");
     expect(remoteScript).toContain("openclaw qa slack");
     expect(remoteScript).toContain("--scenario 'slack-canary'");
     expect(remoteScript).toContain("OPENCLAW_MANTIS_SLACK_BROWSER_PROFILE_DIR");
@@ -106,11 +112,12 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(rsyncArgs).not.toContain("--delete");
     expect(rsyncArgs).toEqual(
       expect.arrayContaining([
-        "crabbox@203.0.113.10:/tmp/openclaw-mantis-slack-desktop-2026-05-04T13-00-00-000Z/slack-desktop-smoke.png",
+        "crabbox@203.0.113.10:/tmp/openclaw-mantis-slack-desktop-2026-05-04T13-00-00-000Z/",
         "crabbox@203.0.113.10:/tmp/openclaw-mantis-slack-desktop-2026-05-04T13-00-00-000Z/slack-qa/",
       ]),
     );
     await expect(fs.readFile(result.screenshotPath ?? "", "utf8")).resolves.toBe("png");
+    await expect(fs.readFile(result.videoPath ?? "", "utf8")).resolves.toBe("mp4");
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
       crabbox: { id: string; vncCommand: string };
       status: string;
@@ -146,8 +153,10 @@ describe("mantis Slack desktop smoke runtime", () => {
         const outputDir = args.at(-1);
         await fs.mkdir(outputDir as string, { recursive: true });
         await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
+        await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.mp4"), "mp4");
         await fs.writeFile(path.join(outputDir as string, "remote-metadata.json"), "{}\n");
         await fs.writeFile(path.join(outputDir as string, "chrome.log"), "chrome\n");
+        await fs.writeFile(path.join(outputDir as string, "ffmpeg.log"), "ffmpeg\n");
         await fs.writeFile(path.join(outputDir as string, "slack-desktop-command.log"), "qa\n");
       }
       return { stdout: "", stderr: "" };
@@ -163,17 +172,19 @@ describe("mantis Slack desktop smoke runtime", () => {
 
     expect(result.status).toBe("fail");
     expect(result.screenshotPath).toBe(path.join(result.outputDir, "slack-desktop-smoke.png"));
+    expect(result.videoPath).toBe(path.join(result.outputDir, "slack-desktop-smoke.mp4"));
     await expect(
       fs.readFile(path.join(result.outputDir, "slack-desktop-smoke.png"), "utf8"),
     ).resolves.toBe("png");
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
-      artifacts: { screenshotPath?: string };
+      artifacts: { screenshotPath?: string; videoPath?: string };
       error?: string;
       status: string;
     };
     expect(summary.status).toBe("fail");
     expect(summary.error).toContain("remote Slack QA failed");
     expect(summary.artifacts.screenshotPath).toContain("slack-desktop-smoke.png");
+    expect(summary.artifacts.videoPath).toContain("slack-desktop-smoke.mp4");
   });
 
   it("accepts Blacksmith Testbox lease ids from Crabbox warmup", async () => {
@@ -204,8 +215,10 @@ describe("mantis Slack desktop smoke runtime", () => {
           await fs.writeFile(path.join(outputDir as string, "slack-qa-report.md"), "# Slack\n");
         } else {
           await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
+          await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.mp4"), "mp4");
           await fs.writeFile(path.join(outputDir as string, "remote-metadata.json"), "{}\n");
           await fs.writeFile(path.join(outputDir as string, "chrome.log"), "chrome\n");
+          await fs.writeFile(path.join(outputDir as string, "ffmpeg.log"), "ffmpeg\n");
           await fs.writeFile(path.join(outputDir as string, "slack-desktop-command.log"), "qa\n");
         }
       }

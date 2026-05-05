@@ -508,9 +508,9 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(extraParams).toMatchObject({
-      transport: "auto",
-      openaiWsWarmup: true,
+      transport: "sse",
     });
+    expect(extraParams?.openaiWsWarmup).toBeUndefined();
     expect(result.payload.store).toBe(true);
     expect(result.payload.context_management).toEqual([
       { type: "compaction", compact_threshold: 140_000 },

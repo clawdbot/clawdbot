@@ -37,6 +37,7 @@ import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
+import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import {
@@ -355,7 +356,7 @@ function createGatewayStartupTrace() {
         timelineOptions(),
       );
       try {
-        const result = await run();
+        const result = await withDiagnosticPhase(mapTimelineName(name), run, { traceName: name });
         const now = performance.now();
         emitDiagnosticsTimelineEvent(
           {
@@ -735,9 +736,13 @@ export async function startGatewayServer(
         env: process.env,
         tailscaleMode,
       }),
+      config.gateway?.trustedProxies,
     );
   const resolveCurrentSharedGatewaySessionGeneration = () =>
-    resolveSharedGatewaySessionGeneration(getResolvedAuth());
+    resolveSharedGatewaySessionGeneration(
+      getResolvedAuth(),
+      getRuntimeConfig().gateway?.trustedProxies,
+    );
   const resolveSharedGatewaySessionGenerationForRuntimeSnapshot = () =>
     resolveSharedGatewaySessionGeneration(
       resolveGatewayAuth({
@@ -746,6 +751,7 @@ export async function startGatewayServer(
         env: process.env,
         tailscaleMode,
       }),
+      getRuntimeConfig().gateway?.trustedProxies,
     );
   const sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState = {
     current: resolveCurrentSharedGatewaySessionGeneration(),

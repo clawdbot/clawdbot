@@ -2,6 +2,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { formatCodexDisplayText } from "../command-formatters.js";
 import {
   approvalRequestExplicitlyUnavailable,
   mapExecDecisionToOutcome,
@@ -283,7 +284,8 @@ function sanitizeDisplayText(value: string): string {
     .replace(CONTROL_CHARACTER_RE, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return clipped ? `${sanitized}...` : sanitized;
+  const escaped = sanitized ? formatCodexDisplayText(sanitized) : "";
+  return clipped && escaped ? `${escaped}...` : escaped;
 }
 
 function truncateDisplayText(value: string, maxLength: number): string {

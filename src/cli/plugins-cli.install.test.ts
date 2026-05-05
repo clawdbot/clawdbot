@@ -734,7 +734,7 @@ describe("plugins cli install", () => {
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
   });
 
-  it("passes official external catalog integrity to npm installs", async () => {
+  it("passes third-party external catalog integrity with catalog install trust", async () => {
     const cfg = createEmptyPluginConfig();
     const enabledCfg = createEnabledPluginConfig("wecom-openclaw-plugin");
     loadConfig.mockReturnValue(cfg);
@@ -796,7 +796,7 @@ describe("plugins cli install", () => {
     },
   );
 
-  it("passes official external catalog integrity to hook-pack fallback", async () => {
+  it("passes third-party external catalog integrity to hook-pack fallback", async () => {
     loadConfig.mockReturnValue(createEmptyPluginConfig());
     findBundledPluginSourceMock.mockReturnValue(undefined);
     installPluginFromNpmSpec.mockResolvedValue({
@@ -992,6 +992,40 @@ describe("plugins cli install", () => {
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
   });
 
+  it("marks catalog npm package installs with alternate selectors as trusted", async () => {
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("wecom-openclaw-plugin");
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromNpmSpec.mockResolvedValue(
+      createNpmPluginInstallResult("wecom-openclaw-plugin"),
+    );
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "@wecom/wecom-openclaw-plugin@latest"]);
+
+    // Alternate selectors stay trusted by catalog package name, but must not
+    // inherit catalog integrity unless the install spec matches exactly.
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@wecom/wecom-openclaw-plugin@latest",
+        expectedPluginId: "wecom-openclaw-plugin",
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        expectedIntegrity: expect.any(String),
+      }),
+    );
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+  });
+
   it("passes the active profile extensions dir to npm installs", async () => {
     const extensionsDir = useProfileExtensionsDir();
     const cfg = createEmptyPluginConfig();
@@ -1060,6 +1094,34 @@ describe("plugins cli install", () => {
 
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain("npm install failed");
+  });
+
+  it("adds a Git PATH hint when npm plugin dependency install cannot spawn git", async () => {
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: [
+        "npm install failed:",
+        "npm error code ENOENT",
+        "npm error syscall spawn git",
+        "npm error path git",
+      ].join("\n"),
+    });
+    installHooksFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "package.json missing openclaw.hooks",
+    });
+
+    await expect(
+      runPluginsCommand(["plugins", "install", "npm:@openclaw/whatsapp"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain(
+      "one of this plugin's npm dependencies is fetched from a git URL",
+    );
+    expect(runtimeErrors.at(-1)).toContain("winget install --id Git.Git -e");
+    expect(runtimeErrors.at(-1)).toContain("Also not a valid hook pack");
   });
 
   it("does not resolve npm: prefixed bundled plugin ids through bundled installs", async () => {

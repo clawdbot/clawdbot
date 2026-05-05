@@ -6,7 +6,7 @@ on:
   issue_comment:
     types: [created]
   pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned label automation; trusted base checkout only, no untrusted PR code execution
-    types: [opened, edited, synchronize, reopened, labeled]
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

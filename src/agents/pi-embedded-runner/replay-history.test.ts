@@ -58,12 +58,15 @@ function openclawTranscriptAssistant(model: "delivery-mirror" | "gateway-injecte
 }
 
 describe("normalizeAssistantReplayContent", () => {
-  it("converts assistant content: [] to a non-empty sentinel text block when stopReason is error", () => {
-    const messages = [userMessage("hello"), bedrockAssistant([], "error")];
+  it("converts mid-turn assistant content: [] to a non-empty sentinel text block when stopReason is error", () => {
+    const messages = [userMessage("hello"), bedrockAssistant([], "error"), userMessage("retry")];
     const out = normalizeAssistantReplayContent(messages);
     expect(out).not.toBe(messages);
     const repaired = out[1] as AgentMessage & { content: { type: string; text: string }[] };
     expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
+    // Trailing user is preserved so request still ends with user.
+    expect(out).toHaveLength(3);
+    expect((out[2] as { role: string }).role).toBe("user");
   });
 
   it("drops blank user text messages from replay", () => {
@@ -108,9 +111,9 @@ describe("normalizeAssistantReplayContent", () => {
     expect(out[1]).toBe(silentStop);
   });
 
-  it("converts zero-usage empty stop turns to a replay sentinel", () => {
+  it("converts mid-turn zero-usage empty stop turns to a replay sentinel", () => {
     const falseSuccessStop = bedrockAssistant([], "stop");
-    const messages = [userMessage("hello"), falseSuccessStop];
+    const messages = [userMessage("hello"), falseSuccessStop, userMessage("retry")];
     const out = normalizeAssistantReplayContent(messages);
     expect(out).not.toBe(messages);
     const repaired = out[1] as AgentMessage & { content: { type: string; text: string }[] };
@@ -182,5 +185,118 @@ describe("normalizeAssistantReplayContent", () => {
     const messages = [userMessage("hello"), bedrockAssistant([{ type: "text", text: "fine" }])];
     const out = normalizeAssistantReplayContent(messages);
     expect(out).toBe(messages);
+  });
+
+  it("drops a trailing assistant turn whose content: [] would have been rewritten to the sentinel (#77228)", () => {
+    // The sentinel was synthesized to satisfy Bedrock's non-empty-content
+    // rule for *non-trailing* error turns. As the trailing message it would
+    // make prefill-strict providers (e.g. github-copilot/claude-opus-4.6)
+    // 400 with "conversation must end with a user message". The original
+    // turn carried content:[] and zero usage — drop is lossless.
+    const messages = [userMessage("hello"), bedrockAssistant([], "error")];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).not.toBe(messages);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toBe(messages[0]);
+  });
+
+  it("drops a trailing zero-usage empty stop assistant turn (#77228)", () => {
+    const falseSuccessStop = bedrockAssistant([], "stop");
+    const messages = [userMessage("hello"), falseSuccessStop];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toBe(messages[0]);
+  });
+
+  it("drops a trailing assistant turn that already carries the persisted sentinel content (#77228)", () => {
+    // Covers the case where session-file-repair persisted the sentinel to
+    // disk; on the next turn the loaded transcript ends with a non-empty
+    // assistant turn whose only content is the sentinel text. Provider
+    // request must still end with user.
+    const persistedSentinel = bedrockAssistant([{ type: "text", text: FALLBACK_TEXT }], "error");
+    const messages = [userMessage("hello"), persistedSentinel];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toBe(messages[0]);
+  });
+
+  it("drops several consecutive trailing sentinel/empty-error turns at the tail", () => {
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant([{ type: "text", text: "real" }]),
+      userMessage("again"),
+      bedrockAssistant([], "error"),
+      bedrockAssistant([{ type: "text", text: FALLBACK_TEXT }], "error"),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toHaveLength(3);
+    expect((out.at(-1) as { role: string }).role).toBe("user");
+  });
+
+  it("does not drop a trailing assistant turn that has real content", () => {
+    const realReply = bedrockAssistant([{ type: "text", text: "hello back" }], "stop", {
+      input: 1,
+      output: 1,
+      totalTokens: 2,
+    });
+    const messages = [userMessage("hi"), realReply];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toBe(messages);
+    expect(out).toHaveLength(2);
+  });
+
+  it("does not drop a trailing assistant turn with non-error empty content (toolUse / length)", () => {
+    // Boundary lock: only error/zero-usage-empty-stop and the sentinel
+    // shape are droppable. toolUse/length empty turns are real provider
+    // states and must be preserved on the wire.
+    const toolUse = bedrockAssistant([], "toolUse");
+    const messages = [userMessage("hi"), toolUse];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toBe(messages);
+    expect(out).toHaveLength(2);
+  });
+
+  it("preserves a trailing real model reply whose only content happens to be the sentinel text (clawsweeper review on #77287)", () => {
+    // Defensive boundary: even if a model legitimately replies with the
+    // exact sentinel string, the trim must require synthetic provenance
+    // (stopReason: "error" or zero-usage stop) before dropping. Without
+    // this guard the trim would silently delete a real reply on next
+    // replay.
+    const realReplyAsStop = bedrockAssistant([{ type: "text", text: FALLBACK_TEXT }], "stop", {
+      input: 1,
+      output: 1,
+      totalTokens: 2,
+    });
+    const messages = [userMessage("hi"), realReplyAsStop];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toBe(messages);
+    expect(out).toHaveLength(2);
+    expect((out[1] as { content: unknown[] }).content).toEqual([
+      { type: "text", text: FALLBACK_TEXT },
+    ]);
+  });
+
+  it("preserves a trailing turn whose sentinel content is paired with stopReason: toolUse (real provider state, not synthetic)", () => {
+    const toolUseSentinel = bedrockAssistant([{ type: "text", text: FALLBACK_TEXT }], "toolUse");
+    const messages = [userMessage("hi"), toolUseSentinel];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toBe(messages);
+    expect(out).toHaveLength(2);
+  });
+
+  it("still drops a trailing zero-usage stop turn whose content was already lifted to the sentinel block (post-rewrite shape)", () => {
+    // Confirms the sentinel-content branch still recognizes the post-rewrite
+    // shape produced by the in-memory rewrite earlier in the same loop:
+    // stopReason: "stop" + zero usage + sentinel content. Only the synthetic
+    // provenance (zero usage + stop) makes this droppable; a non-zero-usage
+    // version is preserved by the regression test above.
+    const persistedZeroUsageSentinel = bedrockAssistant(
+      [{ type: "text", text: FALLBACK_TEXT }],
+      "stop",
+    );
+    const messages = [userMessage("hi"), persistedZeroUsageSentinel];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toBe(messages[0]);
   });
 });

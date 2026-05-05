@@ -623,4 +623,16 @@ describe("scripts/docker/setup.sh", () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
     expect(compose.match(/TZ: \$\{OPENCLAW_TZ:-UTC\}/g)).toHaveLength(2);
   });
+
+  it("pins container-side workspace and config dirs on both services so host .env paths cannot leak (#77436)", async () => {
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    // Both gateway and CLI services must override the env_file values with the
+    // canonical container paths so a host-style OPENCLAW_WORKSPACE_DIR like
+    // `/Users/<you>/.openclaw/workspace` written to `.env` by docker-setup.sh
+    // cannot reach runtime code inside Linux Docker.
+    expect(compose.match(/OPENCLAW_CONFIG_DIR: \/home\/node\/\.openclaw$/gm)).toHaveLength(2);
+    expect(
+      compose.match(/OPENCLAW_WORKSPACE_DIR: \/home\/node\/\.openclaw\/workspace$/gm),
+    ).toHaveLength(2);
+  });
 });

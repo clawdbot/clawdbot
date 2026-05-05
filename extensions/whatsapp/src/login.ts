@@ -21,7 +21,7 @@ export async function loginWeb(
   const socketTiming = resolveWhatsAppSocketTiming(cfg);
   const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir);
   const onQr = (qr: string) => {
-    runtime.log("Scan this QR in WhatsApp (Linked Devices):");
+    runtime.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
     void renderQrTerminal(qr, { small: true })
       .then((output) => {
         runtime.log(output.endsWith("\n") ? output.slice(0, -1) : output);

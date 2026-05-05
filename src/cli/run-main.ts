@@ -207,6 +207,18 @@ async function closeCliMemoryManagers(): Promise<void> {
   }
 }
 
+function pauseNonTtyStdinForCliExit(): void {
+  const stdin = process.stdin;
+  if (stdin.isTTY) {
+    return;
+  }
+  try {
+    stdin.pause();
+  } catch {
+    // Best-effort cleanup for command paths that only inspected stdin.
+  }
+}
+
 export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
@@ -680,6 +692,7 @@ export async function runCli(argv: string[] = process.argv) {
     }
     await stopStartedProxy();
     await closeCliMemoryManagers();
+    pauseNonTtyStdinForCliExit();
   }
 }
 

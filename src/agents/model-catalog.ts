@@ -123,7 +123,9 @@ export function loadManifestModelCatalog(params: {
 }): ModelCatalogEntry[] {
   const snapshot = getCurrentPluginMetadataSnapshot({
     config: params.config,
+    env: params.env,
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
   });
   const resolvedSnapshot =
     snapshot ??

@@ -100,6 +100,12 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("invalid", "^1.2.0")).toBe(false);
   });
 
+  it("treats OpenClaw CalVer correction versions as stable plugin API hosts", () => {
+    expect(satisfiesPluginApiRange("2026.5.3-1", ">=2026.5.3")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.5.3-2", ">=2026.5.3")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.5.3-beta.1", ">=2026.5.3")).toBe(false);
+  });
+
   it("accepts legacy bare major.minor plugin api ranges as lower bounds", () => {
     expect(satisfiesPluginApiRange("2026.5.2", "2026.4")).toBe(true);
     expect(satisfiesPluginApiRange("2026.4.0", "2026.4")).toBe(true);

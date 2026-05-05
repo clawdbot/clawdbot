@@ -35,6 +35,18 @@ If this PR fixes a plugin beta-release blocker, title it `fix(<plugin-id>): beta
 - Related #
 - [ ] This PR fixes a bug or regression
 
+## Real behavior proof (required for external PRs)
+
+External contributors must show after-fix evidence from a real OpenClaw setup. Unit tests, mocks, lint, typechecks, snapshots, and CI are supplemental only. Screenshots are encouraged even for CLI, console, text, or log changes; terminal screenshots and copied live output count.
+
+- Behavior or issue addressed:
+- Real environment tested:
+- Exact steps or command run after this patch:
+- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output):
+- Observed result after fix:
+- What was not tested:
+- Before evidence (optional but encouraged):
+
 ## Root Cause (if applicable)
 
 For bug fixes or regressions, explain why this happened, not just what changed. Otherwise write `N/A`. If the cause is unclear, write `Unknown`.

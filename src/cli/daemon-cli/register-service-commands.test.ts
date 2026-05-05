@@ -71,6 +71,17 @@ describe("addGatewayServiceCommands", () => {
       },
     },
     {
+      name: "forwards restart safe control",
+      argv: ["restart", "--safe"],
+      assert: () => {
+        expect(runDaemonRestart).toHaveBeenCalledWith(
+          expect.objectContaining({
+            safe: true,
+          }),
+        );
+      },
+    },
+    {
       name: "forwards restart force control",
       argv: ["restart", "--force"],
       assert: () => {

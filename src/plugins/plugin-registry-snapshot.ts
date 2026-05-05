@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { fileSignatureMatches } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
@@ -167,6 +168,29 @@ function hasStalePersistedPluginMetadata(index: InstalledPluginIndex): boolean {
   });
 }
 
+function loadSnapshotInstallRecords(params: LoadPluginRegistryParams, env: NodeJS.ProcessEnv) {
+  return loadInstalledPluginIndexInstallRecordsSync({
+    env,
+    ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+    ...(params.filePath
+      ? { filePath: params.filePath }
+      : params.pluginIndexFilePath
+        ? { filePath: params.pluginIndexFilePath }
+        : {}),
+  });
+}
+
+function hasRecoveredInstallRecordsMissingFromPersistedIndex(
+  index: InstalledPluginIndex,
+  installRecords: ReturnType<typeof loadInstalledPluginIndexInstallRecordsSync>,
+): boolean {
+  const persistedRecords = extractPluginInstallRecordsFromInstalledPluginIndex(index);
+  const persistedPluginIds = new Set(index.plugins.map((plugin) => plugin.pluginId));
+  return Object.keys(installRecords).some(
+    (pluginId) => !persistedRecords[pluginId] || !persistedPluginIds.has(pluginId),
+  );
+}
+
 export function loadPluginRegistrySnapshotWithMetadata(
   params: LoadPluginRegistryParams = {},
 ): PluginRegistrySnapshotResult {
@@ -219,6 +243,18 @@ export function loadPluginRegistrySnapshotWithMetadata(
           message:
             "Persisted plugin registry metadata no longer matches plugin manifest or package files; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
+      } else if (
+        hasRecoveredInstallRecordsMissingFromPersistedIndex(
+          persistedIndex,
+          loadSnapshotInstallRecords(params, env),
+        )
+      ) {
+        diagnostics.push({
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message:
+            "Persisted plugin registry is missing recoverable managed npm plugins; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        });
       } else {
         return {
           snapshot: persistedIndex,
@@ -246,9 +282,9 @@ export function loadPluginRegistrySnapshotWithMetadata(
   return {
     snapshot: loadInstalledPluginIndex({
       ...params,
-      installRecords:
-        params.installRecords ??
-        extractPluginInstallRecordsFromInstalledPluginIndex(persistedIndex),
+      ...(persistedInstallRecordReadsEnabled
+        ? {}
+        : { installRecords: params.installRecords ?? {} }),
     }),
     source: "derived",
     diagnostics,

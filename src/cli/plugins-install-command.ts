@@ -64,15 +64,18 @@ function resolveInstallSafetyOverrides(overrides: InstallSafetyOverrides): Insta
   };
 }
 
-function findTrustedOfficialExternalPackageInstall(packageName: string):
+function findTrustedCatalogPackageInstall(packageName: string):
   | {
       pluginId: string;
       npmSpec?: string;
       expectedIntegrity?: string;
     }
   | undefined {
+  // The catalog is the trust list. Raw npm selectors such as
+  // @scope/pkg@latest inherit install-scan trust when their package name is
+  // cataloged; integrity remains tied to exact catalog specs in the planner.
   const entry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
-  if (entry?.source !== "official") {
+  if (!entry) {
     return undefined;
   }
   const pluginId = resolveOfficialExternalPluginId(entry);
@@ -723,7 +726,7 @@ export async function runPluginInstallCommand(params: {
     }
     const officialNpmTrust = resolveOfficialExternalNpmPackageTrust({
       npmSpec: npmPrefixSpec,
-      findOfficialExternalPackage: findTrustedOfficialExternalPackageInstall,
+      findOfficialExternalPackage: findTrustedCatalogPackageInstall,
     });
     const npmPrefixResult = await tryInstallPluginOrHookPackFromNpmSpec({
       snapshot,
@@ -870,7 +873,7 @@ export async function runPluginInstallCommand(params: {
 
   const officialNpmTrust = resolveOfficialExternalNpmPackageTrust({
     npmSpec: raw,
-    findOfficialExternalPackage: findTrustedOfficialExternalPackageInstall,
+    findOfficialExternalPackage: findTrustedCatalogPackageInstall,
   });
   const npmResult = await tryInstallPluginOrHookPackFromNpmSpec({
     snapshot,

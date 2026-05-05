@@ -11,12 +11,89 @@ import {
 import {
   getBrowserControlServerTestState,
   getPwMocks,
+  setBrowserControlServerSsrFPolicy,
+  setBrowserControlServerTabUrl,
 } from "./server.control-server.test-harness.js";
 import { getBrowserTestFetch, type BrowserTestFetch } from "./test-support/fetch.js";
 
 const state = getBrowserControlServerTestState();
 const pwMocks = getPwMocks();
 const realFetch: BrowserTestFetch = (input, init) => getBrowserTestFetch()(input, init);
+
+type GuardedCurrentTabRouteCase = {
+  method: "GET" | "POST";
+  path: string;
+  body?: Record<string, unknown>;
+  mockName:
+    | "cookiesGetViaPlaywright"
+    | "pdfViaPlaywright"
+    | "getConsoleMessagesViaPlaywright"
+    | "getPageErrorsViaPlaywright"
+    | "getNetworkRequestsViaPlaywright"
+    | "responseBodyViaPlaywright"
+    | "storageGetViaPlaywright"
+    | "takeScreenshotViaPlaywright"
+    | "traceStartViaPlaywright"
+    | "traceStopViaPlaywright";
+};
+
+const guardedCurrentTabRouteCases: readonly GuardedCurrentTabRouteCase[] = [
+  {
+    method: "GET",
+    path: "/console?targetId=abcd1234",
+    mockName: "getConsoleMessagesViaPlaywright",
+  },
+  {
+    method: "GET",
+    path: "/errors?targetId=abcd1234",
+    mockName: "getPageErrorsViaPlaywright",
+  },
+  {
+    method: "GET",
+    path: "/requests?targetId=abcd1234",
+    mockName: "getNetworkRequestsViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/pdf",
+    body: { targetId: "abcd1234" },
+    mockName: "pdfViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/screenshot",
+    body: { targetId: "abcd1234" },
+    mockName: "takeScreenshotViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/response/body",
+    body: { targetId: "abcd1234", url: "**/api/data" },
+    mockName: "responseBodyViaPlaywright",
+  },
+  {
+    method: "GET",
+    path: "/cookies?targetId=abcd1234",
+    mockName: "cookiesGetViaPlaywright",
+  },
+  {
+    method: "GET",
+    path: "/storage/local?targetId=abcd1234",
+    mockName: "storageGetViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/trace/start",
+    body: { targetId: "abcd1234" },
+    mockName: "traceStartViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/trace/stop",
+    body: { targetId: "abcd1234" },
+    mockName: "traceStopViaPlaywright",
+  },
+] as const;
 
 async function withSymlinkPathEscape<T>(params: {
   rootDir: string;
@@ -438,6 +515,25 @@ describe("browser control server", () => {
       }),
     );
   });
+
+  it.each(guardedCurrentTabRouteCases)(
+    "blocks $method $path on disallowed current tab URLs",
+    async (routeCase) => {
+      setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
+      setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
+      const base = await startServerAndBase();
+
+      const res = await realFetch(`${base}${routeCase.path}`, {
+        method: routeCase.method,
+        headers: routeCase.body ? { "Content-Type": "application/json" } : undefined,
+        body: routeCase.body ? JSON.stringify(routeCase.body) : undefined,
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: unknown };
+      expect(body.error).toEqual(expect.stringMatching(/(blocked|denied|not allowed|policy)/i));
+      expect(pwMocks[routeCase.mockName]).not.toHaveBeenCalled();
+    },
+  );
 
   it("wait/download rejects traversal path outside downloads dir", async () => {
     const base = await startServerAndBase();

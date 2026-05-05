@@ -5,7 +5,6 @@
 export type FileSystemSpecialPath =
   | { kind: "root" }
   | { kind: "minimal" }
-  | { kind: "current_working_directory" }
   | { kind: "project_roots"; subpath: string | null }
   | { kind: "tmpdir" }
   | { kind: "slash_tmp" }

@@ -8,6 +8,7 @@ const SCENARIOS = new Set([
   "bootstrap-persona",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
+  "stale-source-plugin-shadow",
   "tilde-log-path",
   "versioned-runtime-deps",
 ]);
@@ -354,6 +355,13 @@ function assertStateSurvived() {
       const actual = fs.readFileSync(path.join(workspace, fileName), "utf8");
       assert(actual === contents, `${fileName} was changed during update/doctor`);
     }
+  }
+  if (scenario === "stale-source-plugin-shadow") {
+    const staleRoot = path.join(stateDir, "extensions", "opik-openclaw");
+    assert(
+      fs.existsSync(path.join(staleRoot, "src", "index.ts")),
+      "source-only plugin shadow fixture missing",
+    );
   }
   if (scenario === "versioned-runtime-deps") {
     if (stage === "baseline") {

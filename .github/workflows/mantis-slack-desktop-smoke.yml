@@ -1,0 +1,329 @@
+name: Mantis Slack Desktop Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Ref, tag, or SHA to run inside the VNC desktop
+        required: true
+        default: main
+        type: string
+      pr_number:
+        description: Optional PR number to receive the QA evidence comment
+        required: false
+        type: string
+      scenario_id:
+        description: Slack QA scenario id
+        required: true
+        default: slack-canary
+        type: string
+      keep_vm:
+        description: Keep the desktop lease open after a passing run
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: mantis-slack-desktop-smoke-${{ inputs.pr_number || inputs.candidate_ref || github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.33.0"
+  OPENCLAW_BUILD_PRIVATE_QA: "1"
+  OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+
+jobs:
+  authorize_actor:
+    name: Authorize workflow actor
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    steps:
+      - name: Require maintainer-level repository access
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            const permission = data.permission;
+            core.info(`Actor ${context.actor} permission: ${permission}`);
+            if (!allowed.has(permission)) {
+              core.setFailed(
+                `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
+              );
+            }
+
+  validate_ref:
+    name: Validate candidate ref
+    needs: authorize_actor
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
+    steps:
+      - name: Checkout harness ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Validate ref is trusted
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+          revision="$(git rev-parse "${CANDIDATE_REF}^{commit}")"
+          reason=""
+          if git merge-base --is-ancestor "$revision" refs/remotes/origin/main; then
+            reason="main-ancestor"
+          elif git tag --points-at "$revision" | grep -Eq '^v'; then
+            reason="release-tag"
+          else
+            pr_head_count="$(
+              gh api \
+                -H "Accept: application/vnd.github+json" \
+                "repos/${GITHUB_REPOSITORY}/commits/${revision}/pulls" \
+                --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${revision}"'")] | length'
+            )"
+            if [[ "$pr_head_count" != "0" ]]; then
+              reason="open-pr-head"
+            fi
+          fi
+
+          if [[ -z "$reason" ]]; then
+            echo "Candidate ref '${CANDIDATE_REF}' resolved to ${revision}, which is not trusted for this secret-bearing Mantis run." >&2
+            exit 1
+          fi
+
+          echo "candidate_revision=${revision}" >> "$GITHUB_OUTPUT"
+          {
+            echo "candidate: \`${CANDIDATE_REF}\`"
+            echo "candidate SHA: \`${revision}\`"
+            echo "candidate trust reason: \`${reason}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  run_slack_desktop:
+    name: Run Slack desktop smoke
+    needs: validate_ref
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 180
+    environment: qa-live-shared
+    steps:
+      - name: Checkout harness ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Build Mantis harness
+        run: pnpm build
+
+      - name: Setup Go for Crabbox CLI
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: false
+
+      - name: Install Crabbox CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/crabbox"
+          mkdir -p "$install_dir" "$HOME/.local/bin"
+          git clone --depth 1 https://github.com/openclaw/crabbox.git "$install_dir/src"
+          go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/crabbox" --version
+          "$HOME/.local/bin/crabbox" warmup --help 2>&1 | grep -q -- "-desktop"
+          "$HOME/.local/bin/crabbox" media preview --help >/dev/null
+
+      - name: Prepare candidate worktree
+        env:
+          CANDIDATE_SHA: ${{ needs.validate_ref.outputs.candidate_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          worktree_root=".artifacts/qa-e2e/mantis/slack-desktop-smoke-worktrees"
+          mkdir -p "$worktree_root"
+          git worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
+          pnpm --dir "$worktree_root/candidate" install --frozen-lockfile
+          pnpm --dir "$worktree_root/candidate" build
+
+      - name: Run Slack desktop scenario
+        id: run_mantis
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_LIVE_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR }}
+          CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN }}
+          OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
+          OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
+          CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
+          CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
+          KEEP_VM: ${{ inputs.keep_vm }}
+          SCENARIO_ID: ${{ inputs.scenario_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_var() {
+            local key="$1"
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required ${key}." >&2
+              exit 1
+            fi
+          }
+
+          CRABBOX_COORDINATOR="${CRABBOX_COORDINATOR:-${OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR:-}}"
+          CRABBOX_COORDINATOR_TOKEN="${CRABBOX_COORDINATOR_TOKEN:-${OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN:-}}"
+          export CRABBOX_COORDINATOR CRABBOX_COORDINATOR_TOKEN
+
+          require_var OPENCLAW_LIVE_OPENAI_KEY
+          require_var OPENCLAW_QA_CONVEX_SITE_URL
+          require_var OPENCLAW_QA_CONVEX_SECRET_CI
+          require_var CRABBOX_COORDINATOR_TOKEN
+
+          candidate_repo="$(pwd)/.artifacts/qa-e2e/mantis/slack-desktop-smoke-worktrees/candidate"
+          output_rel=".artifacts/qa-e2e/mantis/slack-desktop-smoke"
+          root="$candidate_repo/$output_rel"
+          echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
+          keep_args=()
+          if [[ "$KEEP_VM" == "true" ]]; then
+            keep_args=(--keep-lease)
+          fi
+
+          pnpm openclaw qa mantis slack-desktop-smoke \
+            --repo-root "$candidate_repo" \
+            --output-dir "$output_rel" \
+            --provider hetzner \
+            --class standard \
+            --idle-timeout 45m \
+            --ttl 120m \
+            --gateway-setup \
+            --credential-source convex \
+            --credential-role ci \
+            --provider-mode live-frontier \
+            --model openai/gpt-5.4 \
+            --alt-model openai/gpt-5.4 \
+            --fast \
+            --scenario "$SCENARIO_ID" \
+            "${keep_args[@]}"
+
+          if [[ -f "$root/slack-desktop-smoke.mp4" ]]; then
+            if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+              sudo apt-get update && sudo apt-get install -y ffmpeg || true
+            fi
+            if ! crabbox media preview \
+              --input "$root/slack-desktop-smoke.mp4" \
+              --output "$root/slack-desktop-smoke-preview.gif" \
+              --trimmed-video-output "$root/slack-desktop-smoke-change.mp4" \
+              --json > "$root/slack-desktop-smoke-preview.json"; then
+              rm -f "$root/slack-desktop-smoke-preview.gif"
+              rm -f "$root/slack-desktop-smoke-change.mp4"
+              rm -f "$root/slack-desktop-smoke-preview.json"
+              echo "::warning::Could not generate Slack motion-trimmed desktop preview."
+            fi
+          fi
+
+          status="$(jq -r '.status' "$root/mantis-slack-desktop-smoke-summary.json")"
+          jq -n \
+            --arg status "$status" \
+            --arg candidate_sha "${{ needs.validate_ref.outputs.candidate_revision }}" \
+            --arg scenario "$SCENARIO_ID" \
+            '{
+              schemaVersion: 1,
+              id: "slack-desktop-smoke",
+              title: "Mantis Slack Desktop Smoke QA",
+              summary: "Mantis ran Slack QA inside a Crabbox Linux VNC desktop, started an OpenClaw Slack gateway in that VM, opened Slack Web in the visible browser, and captured screenshot/video evidence.",
+              scenario: $scenario,
+              comparison: {
+                candidate: { sha: $candidate_sha, expected: "Slack QA and VM gateway setup pass", status: $status, fixed: ($status == "pass") },
+                pass: ($status == "pass")
+              },
+              artifacts: [
+                { kind: "desktopScreenshot", lane: "candidate", label: "Slack desktop/VNC browser", path: "slack-desktop-smoke.png", targetPath: "slack-desktop.png", alt: "Slack Web desktop screenshot from the Mantis VM", width: 720, inline: true },
+                { kind: "motionPreview", lane: "candidate", label: "Slack motion preview", path: "slack-desktop-smoke-preview.gif", targetPath: "slack-desktop-preview.gif", alt: "Animated Slack desktop preview", width: 720, inline: true, required: false },
+                { kind: "motionClip", lane: "candidate", label: "Slack change MP4", path: "slack-desktop-smoke-change.mp4", targetPath: "slack-desktop-change.mp4", required: false },
+                { kind: "fullVideo", lane: "candidate", label: "Slack desktop MP4", path: "slack-desktop-smoke.mp4", targetPath: "slack-desktop.mp4", required: false },
+                { kind: "metadata", lane: "run", label: "Slack desktop summary", path: "mantis-slack-desktop-smoke-summary.json", targetPath: "summary.json" },
+                { kind: "report", lane: "run", label: "Slack desktop report", path: "mantis-slack-desktop-smoke-report.md", targetPath: "report.md" },
+                { kind: "metadata", lane: "run", label: "Slack command log", path: "slack-desktop-command.log", targetPath: "slack-desktop-command.log", required: false },
+                { kind: "metadata", lane: "run", label: "Slack preview metadata", path: "slack-desktop-smoke-preview.json", targetPath: "slack-desktop-preview.json", required: false },
+                { kind: "metadata", lane: "run", label: "Slack error", path: "error.txt", targetPath: "error.txt", required: false }
+              ]
+            }' > "$root/mantis-evidence.json"
+
+          cat "$root/mantis-slack-desktop-smoke-report.md" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$status" != "pass" ]]; then
+            echo "Slack desktop smoke failed." >&2
+            exit 1
+          fi
+
+      - name: Upload Mantis Slack desktop artifacts
+        id: upload_artifact
+        if: ${{ always() && steps.run_mantis.outputs.output_dir != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mantis-slack-desktop-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.run_mantis.outputs.output_dir }}
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Create Mantis GitHub App token
+        id: mantis_app_token
+        if: ${{ always() && inputs.pr_number != '' }}
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Comment PR with inline QA evidence
+        if: ${{ always() && inputs.pr_number != '' && steps.run_mantis.outputs.output_dir != '' }}
+        env:
+          GH_TOKEN: ${{ steps.mantis_app_token.outputs.token }}
+          TARGET_PR: ${{ inputs.pr_number }}
+          ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
+          REQUEST_SOURCE: workflow_dispatch
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${{ steps.run_mantis.outputs.output_dir }}"
+          node scripts/mantis/publish-pr-evidence.mjs \
+            --manifest "$root/mantis-evidence.json" \
+            --target-pr "$TARGET_PR" \
+            --artifact-root "mantis/slack-desktop-smoke/pr-${TARGET_PR}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --marker "<!-- mantis-slack-desktop-smoke -->" \
+            --artifact-url "$ARTIFACT_URL" \
+            --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --request-source "$REQUEST_SOURCE"

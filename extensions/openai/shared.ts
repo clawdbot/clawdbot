@@ -50,10 +50,11 @@ function hasSupportedOpenAIResponsesTransport(
 
 function defaultOpenAIResponsesExtraParams(
   extraParams: Record<string, unknown> | undefined,
-  options?: { openaiWsWarmup?: boolean },
+  options?: { openaiWsWarmup?: boolean; transport?: "auto" | "sse" | "websocket" },
 ): Record<string, unknown> | undefined {
   const hasSupportedTransport = hasSupportedOpenAIResponsesTransport(extraParams?.transport);
   const hasExplicitWarmup = typeof extraParams?.openaiWsWarmup === "boolean";
+  const defaultTransport = options?.transport ?? "auto";
   const shouldDefaultWarmup = options?.openaiWsWarmup === true;
   if (hasSupportedTransport && (!shouldDefaultWarmup || hasExplicitWarmup)) {
     return extraParams;
@@ -61,7 +62,7 @@ function defaultOpenAIResponsesExtraParams(
 
   return {
     ...extraParams,
-    ...(hasSupportedTransport ? {} : { transport: "auto" }),
+    ...(hasSupportedTransport ? {} : { transport: defaultTransport }),
     ...(shouldDefaultWarmup && !hasExplicitWarmup ? { openaiWsWarmup: true } : {}),
   };
 }
@@ -93,6 +94,7 @@ const wrapOpenAIResponsesProviderStreamFn: NonNullable<
 
 export function buildOpenAIResponsesProviderHooks(options?: {
   openaiWsWarmup?: boolean;
+  transport?: "auto" | "sse" | "websocket";
 }): OpenAIResponsesProviderHooks {
   return {
     buildReplayPolicy: buildOpenAIReplayPolicy,

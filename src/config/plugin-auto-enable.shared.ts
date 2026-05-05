@@ -15,6 +15,7 @@ import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.j
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { isChannelConfigured } from "./channel-configured.js";
+import { collectConfiguredModelRefs } from "./model-refs.js";
 import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
 import type {
   PluginAutoEnableCandidate,
@@ -45,61 +46,6 @@ function resolveAutoEnableProviderPluginIds(
     }
   }
   return Object.fromEntries(entries);
-}
-
-function collectModelRefs(cfg: OpenClawConfig): string[] {
-  const refs: string[] = [];
-  const pushModelRef = (value: unknown) => {
-    if (typeof value === "string" && value.trim()) {
-      refs.push(value.trim());
-    }
-  };
-  const collectModelConfig = (value: unknown) => {
-    if (typeof value === "string") {
-      pushModelRef(value);
-      return;
-    }
-    if (!isRecord(value)) {
-      return;
-    }
-    pushModelRef(value.primary);
-    const fallbacks = value.fallbacks;
-    if (Array.isArray(fallbacks)) {
-      for (const entry of fallbacks) {
-        pushModelRef(entry);
-      }
-    }
-  };
-  const collectFromAgent = (agent: Record<string, unknown> | null | undefined) => {
-    if (!agent) {
-      return;
-    }
-    for (const key of [
-      "model",
-      "imageGenerationModel",
-      "videoGenerationModel",
-      "musicGenerationModel",
-    ]) {
-      collectModelConfig(agent[key]);
-    }
-    const models = agent.models;
-    if (isRecord(models)) {
-      for (const key of Object.keys(models)) {
-        pushModelRef(key);
-      }
-    }
-  };
-
-  collectFromAgent(cfg.agents?.defaults as Record<string, unknown> | undefined);
-  const list = cfg.agents?.list;
-  if (Array.isArray(list)) {
-    for (const entry of list) {
-      if (isRecord(entry)) {
-        collectFromAgent(entry);
-      }
-    }
-  }
-  return refs;
 }
 
 function extractProviderFromModelRef(value: string): string | null {
@@ -157,7 +103,9 @@ function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean 
     }
   }
 
-  for (const ref of collectModelRefs(cfg)) {
+  for (const { value: ref } of collectConfiguredModelRefs(cfg, {
+    includeChannelModelOverrides: false,
+  })) {
     const provider = extractProviderFromModelRef(ref);
     if (provider && provider === normalized) {
       return true;
@@ -303,7 +251,7 @@ function collectPluginIdsForConfiguredChannel(
   if (preferredIds.size > 0) {
     return [...preferredIds].toSorted((left, right) => left.localeCompare(right));
   }
-  return [builtInId ?? claims[0]?.plugin.id ?? normalizedChannelId];
+  return [claims[0]?.plugin.id ?? builtInId ?? normalizedChannelId];
 }
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
@@ -493,7 +441,7 @@ function hasConfiguredProviderModelOrHarness(cfg: OpenClawConfig, env: NodeJS.Pr
   if (cfg.models?.providers && Object.keys(cfg.models.providers).length > 0) {
     return true;
   }
-  if (collectModelRefs(cfg).length > 0) {
+  if (collectConfiguredModelRefs(cfg, { includeChannelModelOverrides: false }).length > 0) {
     return true;
   }
   return hasConfiguredEmbeddedHarnessRuntime(cfg, env);
@@ -618,7 +566,9 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     }
   }
 
-  for (const modelRef of collectModelRefs(params.config)) {
+  for (const { value: modelRef } of collectConfiguredModelRefs(params.config, {
+    includeChannelModelOverrides: false,
+  })) {
     const owningPluginIds = resolveOwningPluginIdsForModelRef({
       model: modelRef,
       config: params.config,

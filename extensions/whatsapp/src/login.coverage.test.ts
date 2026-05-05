@@ -142,7 +142,9 @@ describe("loginWeb coverage", () => {
     restartOpts?.onQr?.("restart-qr");
     await flushTasks();
 
-    expect(runtime.log).toHaveBeenCalledWith("Scan this QR in WhatsApp (Linked Devices):");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Open the WhatsApp app, go to Linked Devices, then scan this QR:",
+    );
     expect(runtime.log).toHaveBeenCalledWith("terminal:initial-qr");
     expect(runtime.log).toHaveBeenCalledWith("terminal:restart-qr");
     expect(renderQrTerminalMock).toHaveBeenCalledWith("initial-qr", { small: true });

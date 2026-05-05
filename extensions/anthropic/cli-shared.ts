@@ -1,6 +1,7 @@
 import type {
   CliBackendConfig,
   CliBackendNormalizeConfigContext,
+  CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
@@ -60,8 +61,11 @@ export const CLAUDE_CLI_CLEAR_ENV = [
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
 const CLAUDE_SETTING_SOURCES_ARG = "--setting-sources";
+const CLAUDE_EFFORT_ARG = "--effort";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
 const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
+
+type ClaudeCliEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
@@ -166,6 +170,60 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
     normalized.push(CLAUDE_SETTING_SOURCES_ARG, CLAUDE_SAFE_SETTING_SOURCES);
   }
   return normalized;
+}
+
+export function mapClaudeCliThinkingLevelToEffort(
+  thinkingLevel?: string | null,
+): ClaudeCliEffort | undefined {
+  switch (normalizeOptionalLowercaseString(thinkingLevel)) {
+    case "minimal":
+    case "low":
+      return "low";
+    case "adaptive":
+    case "medium":
+      return "medium";
+    case "high":
+      return "high";
+    case "xhigh":
+      return "xhigh";
+    case "max":
+      return "max";
+    default:
+      return undefined;
+  }
+}
+
+function stripClaudeEffortArgs(args: readonly string[]): string[] {
+  const normalized: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] ?? "";
+    if (arg === CLAUDE_EFFORT_ARG) {
+      const maybeValue = args[i + 1];
+      if (
+        typeof maybeValue === "string" &&
+        maybeValue.trim().length > 0 &&
+        !maybeValue.startsWith("-")
+      ) {
+        i += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith(`${CLAUDE_EFFORT_ARG}=`)) {
+      continue;
+    }
+    normalized.push(arg);
+  }
+  return normalized;
+}
+
+export function resolveClaudeCliExecutionArgs(
+  context: CliBackendResolveExecutionArgsContext,
+): string[] {
+  const effort = mapClaudeCliThinkingLevelToEffort(context.thinkingLevel);
+  if (!effort) {
+    return [...context.baseArgs];
+  }
+  return [...stripClaudeEffortArgs(context.baseArgs), CLAUDE_EFFORT_ARG, effort];
 }
 
 export function normalizeClaudeBackendConfig(

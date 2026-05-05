@@ -81,6 +81,8 @@ type CreateLaneTextDelivererParams = {
   retainPreviewOnCleanupByLane: Record<LaneName, boolean>;
   draftMaxChars: number;
   applyTextToPayload: (payload: ReplyPayload, text: string) => ReplyPayload;
+  applyTextToFollowUpPayload?: (payload: ReplyPayload, text: string) => ReplyPayload;
+  splitFinalTextForPreview?: (text: string) => readonly string[];
   sendPayload: (payload: ReplyPayload) => Promise<boolean>;
   flushDraftLane: (lane: DraftLaneState) => Promise<void>;
   stopDraftLane: (lane: DraftLaneState) => Promise<void>;
@@ -117,7 +119,7 @@ type TryUpdatePreviewParams = {
   previewButtons?: TelegramInlineButtons;
   stopBeforeEdit?: boolean;
   updateLaneSnapshot?: boolean;
-  skipRegressive: "always" | "existingOnly";
+  skipRegressive: RegressiveSkipMode;
   context: "final" | "update";
   previewMessageId?: number;
   previewTextSnapshot?: string;
@@ -134,7 +136,7 @@ type ConsumeArchivedAnswerPreviewParams = {
 };
 
 type PreviewUpdateContext = "final" | "update";
-type RegressiveSkipMode = "always" | "existingOnly";
+type RegressiveSkipMode = "always" | "existingOnly" | "never";
 
 type ResolvePreviewTargetParams = {
   lane: DraftLaneState;
@@ -169,6 +171,9 @@ function shouldSkipRegressivePreviewUpdate(args: {
   if (currentPreviewText === undefined) {
     return false;
   }
+  if (args.skipRegressive === "never") {
+    return false;
+  }
   return (
     currentPreviewText.startsWith(args.text) &&
     args.text.length < currentPreviewText.length &&
@@ -182,6 +187,26 @@ function isLongLivedPreview(visibleSinceMs: number | undefined, nowMs: number): 
     Number.isFinite(visibleSinceMs) &&
     nowMs - visibleSinceMs >= LONG_LIVED_PREVIEW_FRESH_FINAL_AFTER_MS
   );
+}
+
+function compactPreviewFinalChunks(chunks: readonly string[]): string[] {
+  const result: string[] = [];
+  let pendingWhitespace = "";
+  for (const chunk of chunks) {
+    if (!chunk) {
+      continue;
+    }
+    if (chunk.trim().length === 0) {
+      pendingWhitespace += chunk;
+      continue;
+    }
+    result.push(`${pendingWhitespace}${chunk}`);
+    pendingWhitespace = "";
+  }
+  if (pendingWhitespace && result.length > 0) {
+    result[result.length - 1] = `${result[result.length - 1]}${pendingWhitespace}`;
+  }
+  return result;
 }
 
 function resolvePreviewTarget(params: ResolvePreviewTargetParams): PreviewTargetResolution {
@@ -227,6 +252,10 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   const shouldUseFreshFinalForPreview = (lane: DraftLaneState, visibleSinceMs?: number) =>
     isMessagePreviewLane(lane) &&
     (isLongLivedPreview(visibleSinceMs, readNow()) || wasVisiblyOverwrittenSince(visibleSinceMs));
+  const buildFollowUpPayload = (payload: ReplyPayload, text: string) =>
+    params.applyTextToFollowUpPayload
+      ? params.applyTextToFollowUpPayload(payload, text)
+      : params.applyTextToPayload(payload, text);
   const clearActivePreviewAfterFreshFinal = async (lane: DraftLaneState, laneName: LaneName) => {
     try {
       await lane.stream?.clear();
@@ -329,6 +358,56 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       );
       return "fallback";
     }
+  };
+  const tryDeliverLongFinalThroughPreview = async (args: {
+    lane: DraftLaneState;
+    laneName: LaneName;
+    text: string;
+    payload: ReplyPayload;
+    previewButtons?: TelegramInlineButtons;
+  }): Promise<LaneDeliveryResult | undefined> => {
+    if (
+      !args.lane.stream ||
+      args.previewButtons !== undefined ||
+      params.activePreviewLifecycleByLane[args.laneName] !== "transient"
+    ) {
+      return undefined;
+    }
+    const chunks = compactPreviewFinalChunks(params.splitFinalTextForPreview?.(args.text) ?? []);
+    const [firstChunk, ...remainingChunks] = chunks;
+    if (!firstChunk || remainingChunks.length === 0 || firstChunk.length > params.draftMaxChars) {
+      return undefined;
+    }
+    await params.flushDraftLane(args.lane);
+    const previewMessageId = args.lane.stream.messageId();
+    if (typeof previewMessageId !== "number") {
+      return undefined;
+    }
+    const finalized = await tryUpdatePreviewForLane({
+      lane: args.lane,
+      laneName: args.laneName,
+      text: firstChunk,
+      stopBeforeEdit: true,
+      updateLaneSnapshot: true,
+      skipRegressive: "never",
+      context: "final",
+    });
+    if (finalized === "fallback") {
+      return undefined;
+    }
+    if (finalized === "retained") {
+      markActivePreviewComplete(args.laneName);
+      return result("preview-retained");
+    }
+    markActivePreviewComplete(args.laneName);
+    const remainingText = remainingChunks.join("");
+    if (remainingText.trim().length > 0) {
+      await params.sendPayload(buildFollowUpPayload(args.payload, remainingText));
+    }
+    return result("preview-finalized", {
+      content: args.text,
+      messageId: previewMessageId,
+    });
   };
 
   const tryUpdatePreviewForLane = async ({
@@ -596,6 +675,16 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           return result("preview-retained");
         }
       } else if (!hasMedia && !payload.isError && text.length > params.draftMaxChars) {
+        const longFinalResult = await tryDeliverLongFinalThroughPreview({
+          lane,
+          laneName,
+          text,
+          payload,
+          previewButtons,
+        });
+        if (longFinalResult) {
+          return longFinalResult;
+        }
         params.log(
           `telegram: preview final too long for edit (${text.length} > ${params.draftMaxChars}); falling back to standard send`,
         );

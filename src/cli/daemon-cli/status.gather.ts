@@ -29,6 +29,10 @@ import {
   type PortListener,
   type PortUsageStatus,
 } from "../../infra/ports.js";
+import {
+  readGatewayRestartHandoffSync,
+  type GatewayRestartHandoff,
+} from "../../infra/restart-handoff.js";
 import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
@@ -247,6 +251,7 @@ export type DaemonStatus = {
     } | null;
     runtime?: GatewayServiceRuntime;
     configAudit?: ServiceConfigAudit;
+    restartHandoff?: GatewayRestartHandoff;
   };
   config?: {
     cli: ConfigSummary;
@@ -437,6 +442,7 @@ export async function gatherDaemonStatus(
     service.isLoaded({ env: serviceEnv }).catch(() => false),
     service.readRuntime(serviceEnv).catch((err) => ({ status: "unknown", detail: String(err) })),
   ]);
+  const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
   const configAudit = command
     ? await loadServiceAuditModule().then(({ auditGatewayServiceConfig }) =>
         auditGatewayServiceConfig({
@@ -556,6 +562,7 @@ export async function gatherDaemonStatus(
       command,
       runtime,
       configAudit,
+      ...(restartHandoff ? { restartHandoff } : {}),
     },
     config: {
       cli: cliConfigSummary,

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { detectBinary } from "./detect-binary.js";
+import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import { isWSL } from "./wsl.js";
 
 type BrowserOpenCommand = {
@@ -23,7 +24,7 @@ function shouldSkipBrowserOpenInTests(): boolean {
 }
 
 function resolveWindowsRundll32Path(): string {
-  const systemRoot = process.env.SystemRoot?.trim() || process.env.windir?.trim() || "C:\\Windows";
+  const { systemRoot } = getWindowsInstallRoots();
   return path.win32.join(systemRoot, "System32", "rundll32.exe");
 }
 

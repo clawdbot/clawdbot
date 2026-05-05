@@ -611,6 +611,22 @@ describe("/model chat UX", () => {
     expect(resolved.errorText).toContain("Browse: /models or /models <provider>");
   });
 
+  it("includes additive allowlist repair when a runtime switch targets a blocked model", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model openai/gpt-5.5 --runtime codex",
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.modelSelection).toBeUndefined();
+    expect(resolved.errorText).toContain('Model "openai/gpt-5.5" is not allowed.');
+    expect(resolved.errorText).toContain(
+      `openclaw config set agents.defaults.models '{"openai/gpt-5.5":{}}' --strict-json --merge`,
+    );
+    expect(resolved.errorText).toContain("Then retry: /model openai/gpt-5.5 --runtime codex");
+    expect(resolved.errorText).toContain("openclaw plugins enable codex");
+  });
+
   it("treats explicit default /model selection as resettable default", () => {
     const resolved = resolveModelSelectionForCommand({
       command: "/model anthropic/claude-opus-4-6",

@@ -107,6 +107,11 @@ type RouteWithTabParams<T> = {
   res: BrowserResponse;
   ctx: BrowserRouteContext;
   targetId?: string;
+  /**
+   * Set for routes that read from or return data scoped to the selected tab.
+   * Leave false only for routes that navigate, activate, close, or otherwise manage the tab.
+   */
+  enforceCurrentUrlAllowed?: boolean;
   run: (ctx: RouteTabContext) => Promise<T>;
 };
 
@@ -119,6 +124,17 @@ export async function withRouteTabContext<T>(
   }
   try {
     const tab = await profileCtx.ensureTabAvailable(params.targetId);
+    if (params.enforceCurrentUrlAllowed) {
+      await assertBrowserNavigationResultAllowed({
+        url: tab.url,
+        ...withBrowserNavigationPolicy(params.ctx.state().resolved.ssrfPolicy, {
+          browserProxyMode: resolveBrowserNavigationProxyMode({
+            resolved: params.ctx.state().resolved,
+            profile: profileCtx.profile,
+          }),
+        }),
+      });
+    }
     return await params.run({
       profileCtx,
       tab,
@@ -137,6 +153,10 @@ export async function withRouteTabContext<T>(
   }
 }
 
+/**
+ * Response-only URL redaction. This swallows policy failures and must not be used as
+ * an execution gate; use enforceCurrentUrlAllowed on the route helper instead.
+ */
 export async function resolveSafeRouteTabUrl(params: {
   ctx: BrowserRouteContext;
   profileCtx: ProfileContext;
@@ -171,6 +191,11 @@ type RouteWithPwParams<T> = {
   ctx: BrowserRouteContext;
   targetId?: string;
   feature: string;
+  /**
+   * Set for routes that read from or return data scoped to the selected tab.
+   * Leave false only for routes that navigate, activate, close, or otherwise manage the tab.
+   */
+  enforceCurrentUrlAllowed?: boolean;
   run: (ctx: RouteTabPwContext) => Promise<T>;
 };
 
@@ -182,6 +207,7 @@ export async function withPlaywrightRouteContext<T>(
     res: params.res,
     ctx: params.ctx,
     targetId: params.targetId,
+    enforceCurrentUrlAllowed: params.enforceCurrentUrlAllowed,
     run: async ({ profileCtx, tab, cdpUrl, resolveTabUrl }) => {
       const pw = await requirePwAi(params.res, params.feature);
       if (!pw) {

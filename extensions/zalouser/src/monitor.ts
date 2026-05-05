@@ -828,8 +828,9 @@ export async function monitorZalouserProvider(
     const groupAllowFromEntries = (account.config.groupAllowFrom ?? [])
       .map((entry) => normalizeZalouserEntry(String(entry)))
       .filter((entry) => entry && entry !== "*");
+    const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
 
-    if (allowFromEntries.length > 0 || groupAllowFromEntries.length > 0) {
+    if (allowNameMatching && (allowFromEntries.length > 0 || groupAllowFromEntries.length > 0)) {
       const friends = await listZaloFriends(profile);
       const byName = buildNameIndex(friends, (friend) => friend.displayName);
       if (allowFromEntries.length > 0) {
@@ -869,7 +870,7 @@ export async function monitorZalouserProvider(
 
     const groupsConfig = account.config.groups ?? {};
     const groupKeys = Object.keys(groupsConfig).filter((key) => key !== "*");
-    if (groupKeys.length > 0) {
+    if (allowNameMatching && groupKeys.length > 0) {
       const groups = await listZaloGroups(profile);
       const byName = buildNameIndex(groups, (group) => group.name);
       const mapping: string[] = [];

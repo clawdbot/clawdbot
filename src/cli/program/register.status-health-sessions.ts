@@ -132,6 +132,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
     .option("--all-agents", "Aggregate sessions across all configured agents", false)
     .option("--active <minutes>", "Only show sessions updated within the past N minutes")
+    .option("--limit <count>", 'Max sessions to show (default: 100; use "all" for full output)')
     .addHelpText(
       "after",
       () =>
@@ -140,6 +141,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw sessions --agent work", "List sessions for one agent."],
           ["openclaw sessions --all-agents", "Aggregate sessions across agents."],
           ["openclaw sessions --active 120", "Only last 2 hours."],
+          ["openclaw sessions --limit 25", "Show the newest 25 sessions."],
           ["openclaw sessions --json", "Machine-readable output."],
           ["openclaw sessions --store ./tmp/sessions.json", "Use a specific session store."],
         ])}\n\n${theme.muted(
@@ -160,6 +162,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           agent: opts.agent as string | undefined,
           allAgents: Boolean(opts.allAgents),
           active: opts.active as string | undefined,
+          limit: opts.limit as string | undefined,
         },
         defaultRuntime,
       );

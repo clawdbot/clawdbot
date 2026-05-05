@@ -92,6 +92,25 @@ describe("slack outbound shared hook wiring", () => {
     expect(sendMessageSlackMock).toHaveBeenCalledTimes(1);
   });
 
+  it("passes replyToId as Slack threadTs for threaded outbound delivery", async () => {
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "slack",
+      to: "C123",
+      payloads: [{ text: "hello" }],
+      accountId: "default",
+      replyToId: "1712000000.000001",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({
+        threadTs: "1712000000.000001",
+      }),
+    );
+  });
+
   it("respects cancel from the shared hook without a second adapter pass", async () => {
     const hookRegistry = createEmptyPluginRegistry();
     const handler = vi.fn().mockResolvedValue({ cancel: true });

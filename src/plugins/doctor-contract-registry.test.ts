@@ -14,6 +14,7 @@ const mocks = getRegistryJitiMocks();
 let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-registry.js").clearPluginDoctorContractRegistryCache;
 let collectRelevantDoctorPluginIdsForTouchedPaths: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIdsForTouchedPaths;
 let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
+let listPluginDoctorSessionRouteStateOwners: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionRouteStateOwners;
 
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-doctor-contract-registry", tempDirs);
@@ -31,6 +32,7 @@ describe("doctor-contract-registry module loader", () => {
       clearPluginDoctorContractRegistryCache,
       collectRelevantDoctorPluginIdsForTouchedPaths,
       listPluginDoctorLegacyConfigRules,
+      listPluginDoctorSessionRouteStateOwners,
     } = await import("./doctor-contract-registry.js"));
     clearPluginDoctorContractRegistryCache();
   });
@@ -181,6 +183,35 @@ describe("doctor-contract-registry module loader", () => {
     } finally {
       platformSpy.mockRestore();
     }
+  });
+
+  it("loads session route-state owners from doctor contract modules", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.cjs"),
+      "module.exports = { sessionRouteStateOwners: [{ id: 'demo', label: 'Demo', providerIds: ['demo'], runtimeIds: ['demo-cli'], cliSessionKeys: ['demo-cli'], authProfilePrefixes: ['demo:'] }] };\n",
+      "utf-8",
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
+      diagnostics: [],
+    });
+
+    expect(
+      listPluginDoctorSessionRouteStateOwners({
+        workspaceDir: pluginRoot,
+        env: {},
+      }),
+    ).toEqual([
+      {
+        id: "demo",
+        label: "Demo",
+        providerIds: ["demo"],
+        runtimeIds: ["demo-cli"],
+        cliSessionKeys: ["demo-cli"],
+        authProfilePrefixes: ["demo:"],
+      },
+    ]);
   });
 
   it("reads doctor contracts from the current manifest registry on each call", () => {

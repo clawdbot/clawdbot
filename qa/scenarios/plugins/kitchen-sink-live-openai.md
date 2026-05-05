@@ -49,12 +49,44 @@ execution:
       - kitchen_sink_text
       - kitchen_sink_search
       - kitchen_sink_image_job
+    expectedSurfaceIds:
+      speechProviderIds:
+        - kitchen-sink-speech
+        - kitchen-sink-speech-provider
+      realtimeTranscriptionProviderIds:
+        - kitchen-sink-realtime-transcription
+        - kitchen-sink-realtime-transcription-provider
+      realtimeVoiceProviderIds:
+        - kitchen-sink-realtime-voice
+        - kitchen-sink-realtime-voice-provider
+      mediaUnderstandingProviderIds:
+        - kitchen-sink-media
+        - kitchen-sink-media-understanding-provider
+      imageGenerationProviderIds:
+        - kitchen-sink-image
+        - kitchen-sink-image-generation-provider
+      videoGenerationProviderIds:
+        - kitchen-sink-video
+        - kitchen-sink-video-generation-provider
+      musicGenerationProviderIds:
+        - kitchen-sink-music
+        - kitchen-sink-music-generation-provider
+      webFetchProviderIds:
+        - kitchen-sink-fetch
+        - kitchen-sink-web-fetch-provider
+      webSearchProviderIds:
+        - kitchen-sink-search
+        - kitchen-sink-web-search-provider
+      migrationProviderIds:
+        - kitchen-sink-migration-providers
+        - kitchen-sink-migration-provider
     maxGatewayCpuCoreRatio: 1.5
     maxGatewayRssMiB: 2048
     agentTurnTimeoutMs: 120000
     outboundTimeoutMs: 60000
     livePrompt: "Kitchen Sink OpenAI marker. Reply exactly: KITCHEN-SINK-OPENAI-OK"
     expectedAdversarialDiagnostics:
+      - agent event subscription registration requires id and handle
       - only bundled plugins can register agent tool result middleware
       - agent harness "kitchen-sink-agent-harness" registration missing required runtime methods
       - channel "kitchen-sink-channel-probe" registration missing required config helpers
@@ -62,9 +94,16 @@ execution:
       - only bundled plugins can register Codex app-server extension factories
       - compaction provider "kitchen-sink-compaction-provider" registration missing summarize
       - context engine registration missing id
-      - http route registration missing or invalid auth: /kitchen-sink/http-route
+      - control UI descriptor registration requires id, surface, label, and valid optional fields
+      - "http route registration missing or invalid auth: /kitchen-sink/http-route"
       - "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider"
       - memory prompt supplement registration missing builder
+      - node invoke policy registration missing commands
+      - session extension registration requires namespace and description
+      - session scheduler job registration requires unique id, sessionKey, and kind
+      - "plugin must declare contracts.tools for: kitchen-sink-tool"
+      - tool metadata registration missing toolName
+      - only bundled plugins can register trusted tool policies
 ```
 
 ```yaml qa-flow
@@ -110,6 +149,10 @@ steps:
                 ...(cfg.channels || {}),
                 [config.channelId]: { enabled: true, token: "kitchen-sink-qa" },
               };
+              cfg.tools = {
+                ...(cfg.tools || {}),
+                alsoAllow: [...new Set([...(cfg.tools?.alsoAllow || []), ...config.expectedToolAny])],
+              };
               await fs.writeFile(env.gateway.configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
               return env.gateway.configPath;
             })()
@@ -129,6 +172,7 @@ steps:
           - - plugins
             - inspect
             - expr: config.pluginId
+            - --runtime
             - --json
           - json: true
             timeoutMs: 60000
@@ -148,9 +192,22 @@ steps:
                 channels: [...new Set([...(plugin.channelIds ?? []), ...(plugin.channels ?? [])])],
                 providers: [...new Set([...(plugin.providerIds ?? []), ...(plugin.providers ?? [])])],
                 tools: [...new Set([...namesFromTools, ...(contracts.tools ?? [])])],
+                commands: inspect.commands ?? [],
+                services: inspect.services ?? [],
+                typedHookCount: Array.isArray(inspect.typedHooks) ? inspect.typedHooks.length : 0,
+                hookCount: plugin.hookCount ?? 0,
+                surfaceIds: Object.fromEntries(
+                  Object.keys(config.expectedSurfaceIds ?? {})
+                    .map((field) => [field, Array.isArray(plugin[field]) ? plugin[field] : []])
+                ),
+                agentHarnessIds: plugin.agentHarnessIds ?? [],
                 diagnostics: [...(pluginList.diagnostics ?? []), ...(inspect.diagnostics ?? [])]
                   .filter((entry) => entry?.level === "error")
                   .map((entry) => String(entry.message ?? "")),
+                unexpectedDiagnostics: [...new Set([...(pluginList.diagnostics ?? []), ...(inspect.diagnostics ?? [])]
+                  .filter((entry) => entry?.level === "error")
+                  .map((entry) => String(entry.message ?? ""))
+                  .filter((message) => !config.expectedAdversarialDiagnostics.includes(message)))],
               };
             })()
       - assert:
@@ -170,9 +227,25 @@ steps:
           message:
             expr: "`Kitchen Sink tools missing from inspect output: ${JSON.stringify(inspectFacts.tools)}`"
       - assert:
-          expr: "inspectFacts.diagnostics.length === 0"
+          expr: "Object.entries(config.expectedSurfaceIds).every(([field, expected]) => expected.some((id) => (inspectFacts.surfaceIds[field] ?? []).includes(id)))"
           message:
-            expr: "`Kitchen Sink conformance personality emitted diagnostics: ${JSON.stringify(inspectFacts.diagnostics)}`"
+            expr: "`Kitchen Sink SDK provider surface missing from inspect output: ${JSON.stringify(inspectFacts.surfaceIds)}`"
+      - assert:
+          expr: "inspectFacts.commands.includes('kitchen') && inspectFacts.services.includes('kitchen-sink-service')"
+          message:
+            expr: "`Kitchen Sink command/service surfaces missing: ${JSON.stringify({ commands: inspectFacts.commands, services: inspectFacts.services })}`"
+      - assert:
+          expr: "inspectFacts.hookCount >= 30 && inspectFacts.typedHookCount >= 30"
+          message:
+            expr: "`Kitchen Sink hook surfaces missing: ${JSON.stringify({ hookCount: inspectFacts.hookCount, typedHookCount: inspectFacts.typedHookCount })}`"
+      - assert:
+          expr: "!inspectFacts.agentHarnessIds.includes('kitchen-sink-agent-harness')"
+          message:
+            expr: "`External Kitchen Sink plugin unexpectedly registered bundled-only agent harness: ${JSON.stringify(inspectFacts.agentHarnessIds)}`"
+      - assert:
+          expr: "inspectFacts.unexpectedDiagnostics.length === 0"
+          message:
+            expr: "`Kitchen Sink conformance personality emitted unexpected diagnostics: ${JSON.stringify(inspectFacts.unexpectedDiagnostics)}`"
     detailsExpr: inspectFacts
 
   - name: restarts gateway with Kitchen Sink configured
@@ -208,12 +281,32 @@ steps:
                     ...(cfg.channels || {}),
                     [config.channelId]: { enabled: true, token: "kitchen-sink-qa" },
                   };
+                  cfg.tools = {
+                    ...(cfg.tools || {}),
+                    alsoAllow: [...new Set([...(cfg.tools?.alsoAllow || []), ...config.expectedToolAny])],
+                  };
                   await fs.writeFile(ctx.configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
                 })()
       - call: waitForGatewayHealthy
         args:
           - ref: env
           - 120000
+      - call: fetchJson
+        saveAs: healthz
+        args:
+          - expr: "`${env.gateway.baseUrl}/healthz`"
+      - call: fetchJson
+        saveAs: readyz
+        args:
+          - expr: "`${env.gateway.baseUrl}/readyz`"
+      - assert:
+          expr: "healthz?.ok === true && healthz?.status === 'live'"
+          message:
+            expr: "`/healthz did not report live: ${JSON.stringify(healthz)}`"
+      - assert:
+          expr: "readyz?.ready === true"
+          message:
+            expr: "`/readyz did not report ready: ${JSON.stringify(readyz)}`"
       - call: waitForQaChannelReady
         args:
           - ref: env
@@ -241,7 +334,7 @@ steps:
           expr: "kitchenChannelAccount?.running === true && kitchenChannelAccount?.configured === true"
           message:
             expr: "`Kitchen Sink channel did not report running+configured: ${JSON.stringify(kitchenChannelAccount)}`"
-    detailsExpr: kitchenChannelAccount
+    detailsExpr: "{ healthz, readyz, kitchenChannelAccount }"
 
   - name: exercises command inventory and MCP tool surfaces
     actions:
@@ -390,6 +483,7 @@ steps:
           - - plugins
             - inspect
             - expr: config.pluginId
+            - --runtime
             - --json
           - json: true
             timeoutMs: 60000

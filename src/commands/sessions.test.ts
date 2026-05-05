@@ -154,6 +154,106 @@ describe("sessionsCommand", () => {
     expect(payload.sessions?.map((row) => row.key)).toEqual(["recent"]);
   });
 
+  it("limits JSON output to the newest 100 sessions by default", async () => {
+    const entries: Record<string, { sessionId: string; updatedAt: number; model: string }> = {};
+    for (let i = 0; i < 105; i += 1) {
+      entries[`session-${String(i).padStart(3, "0")}`] = {
+        sessionId: `session-${i}`,
+        updatedAt: Date.now() - i * 60_000,
+        model: "pi:opus",
+      };
+    }
+    const store = writeStore(entries, "sessions-default-limit");
+
+    const payload = await runSessionsJson<{
+      count?: number;
+      totalCount?: number;
+      limitApplied?: number | null;
+      hasMore?: boolean;
+      sessions?: Array<{ key: string }>;
+    }>(sessionsCommand, store);
+
+    expect(payload.count).toBe(100);
+    expect(payload.totalCount).toBe(105);
+    expect(payload.limitApplied).toBe(100);
+    expect(payload.hasMore).toBe(true);
+    expect(payload.sessions?.at(0)?.key).toBe("session-000");
+    expect(payload.sessions?.some((row) => row.key === "session-104")).toBe(false);
+  });
+
+  it("honors explicit JSON output limits", async () => {
+    const store = writeStore(
+      {
+        newest: { sessionId: "newest", updatedAt: Date.now(), model: "pi:opus" },
+        middle: { sessionId: "middle", updatedAt: Date.now() - 60_000, model: "pi:opus" },
+        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "pi:opus" },
+      },
+      "sessions-explicit-limit",
+    );
+
+    const payload = await runSessionsJson<{
+      count?: number;
+      totalCount?: number;
+      limitApplied?: number | null;
+      hasMore?: boolean;
+      sessions?: Array<{ key: string }>;
+    }>(sessionsCommand, store, { limit: "2" });
+
+    expect(payload.count).toBe(2);
+    expect(payload.totalCount).toBe(3);
+    expect(payload.limitApplied).toBe(2);
+    expect(payload.hasMore).toBe(true);
+    expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "middle"]);
+  });
+
+  it("allows full JSON output with --limit all", async () => {
+    const store = writeStore(
+      {
+        newest: { sessionId: "newest", updatedAt: Date.now(), model: "pi:opus" },
+        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "pi:opus" },
+      },
+      "sessions-limit-all",
+    );
+
+    const payload = await runSessionsJson<{
+      count?: number;
+      totalCount?: number;
+      limitApplied?: number | null;
+      hasMore?: boolean;
+      sessions?: Array<{ key: string }>;
+    }>(sessionsCommand, store, { limit: "all" });
+
+    expect(payload.count).toBe(2);
+    expect(payload.totalCount).toBe(2);
+    expect(payload.limitApplied).toBeNull();
+    expect(payload.hasMore).toBe(false);
+    expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "oldest"]);
+  });
+
+  it("sorts and slices large explicit limits instead of using top-N insertion", async () => {
+    const store = writeStore(
+      {
+        newest: { sessionId: "newest", updatedAt: Date.now(), model: "pi:opus" },
+        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "pi:opus" },
+      },
+      "sessions-large-limit",
+    );
+
+    const payload = await runSessionsJson<{
+      count?: number;
+      totalCount?: number;
+      limitApplied?: number | null;
+      hasMore?: boolean;
+      sessions?: Array<{ key: string }>;
+    }>(sessionsCommand, store, { limit: "100000" });
+
+    expect(payload.count).toBe(2);
+    expect(payload.totalCount).toBe(2);
+    expect(payload.limitApplied).toBe(100000);
+    expect(payload.hasMore).toBe(false);
+    expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "oldest"]);
+  });
+
   it("rejects invalid --active values", async () => {
     const store = writeStore(
       {
@@ -168,6 +268,24 @@ describe("sessionsCommand", () => {
 
     await expect(sessionsCommand({ store, active: "0" }, runtime)).rejects.toThrow("exit 1");
     expect(errors[0]).toContain("--active must be a positive integer");
+
+    fs.rmSync(store);
+  });
+
+  it("rejects invalid --limit values", async () => {
+    const store = writeStore(
+      {
+        demo: {
+          sessionId: "demo",
+          updatedAt: Date.now() - 5 * 60_000,
+        },
+      },
+      "sessions-limit-invalid",
+    );
+    const { runtime, errors } = makeRuntime();
+
+    await expect(sessionsCommand({ store, limit: "0" }, runtime)).rejects.toThrow("exit 1");
+    expect(errors[0]).toContain('--limit must be a positive integer or "all"');
 
     fs.rmSync(store);
   });

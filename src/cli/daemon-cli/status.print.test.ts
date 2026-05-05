@@ -157,6 +157,41 @@ describe("printDaemonStatus", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Capability: write-capable"));
   });
 
+  it("prints restart handoff diagnostics when deep status gathered one", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "stopped" },
+          restartHandoff: {
+            kind: "gateway-supervisor-restart-handoff",
+            version: 1,
+            intentId: "intent-1",
+            pid: 12_345,
+            createdAt: 10_000,
+            expiresAt: 70_000,
+            reason: "plugin source changed",
+            source: "plugin-change",
+            restartKind: "full-process",
+            supervisorMode: "launchd",
+          },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Recent restart handoff: full-process via launchd"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("reason=plugin source changed"),
+    );
+  });
+
   it("passes daemon TLS state to dashboard link rendering", () => {
     printDaemonStatus(
       {

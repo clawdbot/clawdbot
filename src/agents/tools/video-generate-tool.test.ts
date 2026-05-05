@@ -1073,17 +1073,22 @@ describe("createVideoGenerateTool", () => {
     expect(generateSpy).toHaveBeenCalledWith(expect.objectContaining({ aspectRatio: "adaptive" }));
   });
 
-  it("rejects unsupported aspectRatio values", async () => {
+  it("accepts provider-specific aspectRatio and resolution values and forwards them to the runtime", async () => {
     mockVideoPluginProvider();
+    const generateSpy = mockSavedVideoResult();
     const tool = createVideoPluginTool();
 
-    await expect(
-      tool.execute("call-1", {
-        prompt: "lobster",
+    await tool.execute("call-1", {
+      prompt: "lobster",
+      aspectRatio: "17:9",
+      resolution: "draft-large",
+    });
+
+    expect(generateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
         aspectRatio: "17:9",
+        resolution: "draft-large",
       }),
-    ).rejects.toThrow(
-      "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, or adaptive",
     );
   });
 });

@@ -1,6 +1,6 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
-import { normalizeConfig } from "./provider-policy-api.js";
+import { normalizeConfig, resolveThinkingProfile } from "./provider-policy-api.js";
 import { OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
 
 function createModel(id: string, name: string): ModelDefinitionConfig {
@@ -57,5 +57,16 @@ describe("ollama provider policy public artifact", () => {
         providerConfig: {},
       }),
     ).toEqual({});
+  });
+
+  it("exposes max thinking for reasoning-capable models without full plugin activation", () => {
+    expect(resolveThinkingProfile({ reasoning: true })).toEqual({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
+      defaultLevel: "off",
+    });
+    expect(resolveThinkingProfile({ reasoning: false })).toEqual({
+      levels: [{ id: "off" }],
+      defaultLevel: "off",
+    });
   });
 });

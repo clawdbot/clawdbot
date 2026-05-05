@@ -158,8 +158,11 @@ function resolveGatewayLiveSuiteTimeoutMs(maxModels: number): number {
   if (maxModels <= 0) {
     return GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS;
   }
-  // Gateway live runs multiple probes per model; scale timeout by model cap.
-  const estimated = 5 * 60 * 1000 + maxModels * 90 * 1000;
+  // Gateway live runs multiple probes per model and may retry with another
+  // profile key before moving on, so the suite budget has to scale with the
+  // model timeout rather than only the first prompt.
+  const perModelBudgetMs = Math.max(3 * 60 * 1000, GATEWAY_LIVE_MODEL_TIMEOUT_MS * 3);
+  const estimated = 10 * 60 * 1000 + maxModels * perModelBudgetMs;
   return Math.max(
     GATEWAY_LIVE_DEFAULT_TIMEOUT_MS,
     Math.min(GATEWAY_LIVE_MAX_TIMEOUT_MS, estimated),
@@ -530,6 +533,20 @@ describe("resolveGatewayLiveModelTimeoutMs", () => {
 
   it("never goes below the probe timeout", () => {
     expect(resolveGatewayLiveModelTimeoutMs("45000", undefined, 90_000)).toBe(90_000);
+  });
+});
+
+describe("resolveGatewayLiveSuiteTimeoutMs", () => {
+  it("leaves uncapped explicit sweeps bounded by the unbounded live timeout", () => {
+    expect(resolveGatewayLiveSuiteTimeoutMs(0)).toBe(GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS);
+  });
+
+  it("scales model-capped sweeps for multi-probe retries", () => {
+    expect(resolveGatewayLiveSuiteTimeoutMs(3)).toBeGreaterThan(GATEWAY_LIVE_DEFAULT_TIMEOUT_MS);
+  });
+
+  it("caps very large model sweeps", () => {
+    expect(resolveGatewayLiveSuiteTimeoutMs(999)).toBe(GATEWAY_LIVE_MAX_TIMEOUT_MS);
   });
 });
 

@@ -1,4 +1,9 @@
 import { vi } from "vitest";
+import {
+  assertBrowserNavigationResultAllowed,
+  withBrowserNavigationPolicy,
+} from "../navigation-guard.js";
+import type { BrowserRouteContext } from "../server-context.js";
 import type { BrowserRequest } from "./types.js";
 
 export const existingSessionRouteState = {
@@ -37,14 +42,33 @@ export function createExistingSessionAgentSharedModule() {
       typeof body.targetId === "string" ? body.targetId : undefined,
     ),
     withPlaywrightRouteContext: vi.fn(),
-    withRouteTabContext: vi.fn(async ({ run }: { run: (args: unknown) => Promise<void> }) => {
-      await run({
-        profileCtx: existingSessionRouteState.profileCtx,
-        cdpUrl: "http://127.0.0.1:18800",
-        tab: existingSessionRouteState.tab,
-        resolveTabUrl: vi.fn(async (fallbackUrl?: string) => fallbackUrl ?? routeStateUrl()),
-      });
-    }),
+    withRouteTabContext: vi.fn(
+      async ({
+        ctx,
+        enforceCurrentUrlAllowed,
+        run,
+      }: {
+        ctx: BrowserRouteContext;
+        enforceCurrentUrlAllowed?: boolean;
+        run: (args: unknown) => Promise<void>;
+      }) => {
+        if (enforceCurrentUrlAllowed) {
+          const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
+          if (ssrfPolicyOpts.ssrfPolicy) {
+            await assertBrowserNavigationResultAllowed({
+              url: existingSessionRouteState.tab.url,
+              ...ssrfPolicyOpts,
+            });
+          }
+        }
+        await run({
+          profileCtx: existingSessionRouteState.profileCtx,
+          cdpUrl: "http://127.0.0.1:18800",
+          tab: existingSessionRouteState.tab,
+          resolveTabUrl: vi.fn(async (fallbackUrl?: string) => fallbackUrl ?? routeStateUrl()),
+        });
+      },
+    ),
   };
 }
 

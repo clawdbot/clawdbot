@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
@@ -199,6 +200,26 @@ describe("runReplyAgent runtime config", () => {
         runtimePolicySessionKey,
       }),
     );
+  });
+
+  it("surfaces known pre-run Codex usage-limit failures instead of dropping the reply", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    const codexMessage =
+      "You've reached your Codex subscription usage limit. Codex did not return a reset time for this limit. Run /codex account for current usage details.";
+    runPreflightCompactionIfNeededMock.mockRejectedValue(new Error(codexMessage));
+    runMemoryFlushIfNeededMock.mockResolvedValue(undefined);
+
+    const result = await runReplyAgent(replyParams);
+
+    expect(result).toMatchObject({
+      text: `⚠️ ${codexMessage}`,
+    });
+    expect(result ? getReplyPayloadMetadata(result) : undefined).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
   });
 
   it("does not resolve secrets before the enqueue-followup queue path", async () => {

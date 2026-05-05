@@ -4,7 +4,7 @@
 
 export type LoginAccountParams =
   | { type: "apiKey"; apiKey: string }
-  | { type: "chatgpt" }
+  | { type: "chatgpt"; codexStreamlinedLogin?: boolean }
   | { type: "chatgptDeviceCode" }
   | {
       type: "chatgptAuthTokens";

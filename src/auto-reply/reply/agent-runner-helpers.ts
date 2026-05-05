@@ -6,7 +6,6 @@ import { loadSessionStore } from "../../config/sessions.js";
 import { isAudioFileName } from "../../media/mime.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import { scheduleFollowupDrain } from "./queue.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 const hasAudioMedia = (urls?: string[]): boolean =>
@@ -76,15 +75,6 @@ export const createShouldEmitToolResult = (params: VerboseGateParams): (() => bo
 
 export const createShouldEmitToolOutput = (params: VerboseGateParams): (() => boolean) => {
   return createVerboseGate(params, (level) => level === "full");
-};
-
-export const finalizeWithFollowup = <T>(
-  value: T,
-  queueKey: string,
-  runFollowupTurn: Parameters<typeof scheduleFollowupDrain>[1],
-): T => {
-  scheduleFollowupDrain(queueKey, runFollowupTurn);
-  return value;
 };
 
 export const signalTypingIfNeeded = async (

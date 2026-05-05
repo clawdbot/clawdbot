@@ -277,6 +277,9 @@ export async function runWatchMain(params = {}) {
   // The watcher owns process restarts; keep SIGUSR1/config reloads in-process
   // so inherited launchd/systemd markers do not make the child exit and stall.
   childEnv.OPENCLAW_NO_RESPAWN = "1";
+  if (isGatewayWatchCommand(deps.args) && childEnv.OPENCLAW_TRACE_SYNC_IO === undefined) {
+    childEnv.OPENCLAW_TRACE_SYNC_IO = "1";
+  }
   if (deps.args.length > 0) {
     childEnv.OPENCLAW_WATCH_COMMAND = deps.args.join(" ");
   }

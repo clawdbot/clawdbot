@@ -31,6 +31,11 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     new Set(["apache-arrow"]),
   ],
   [
+    "extensions/memory-core",
+    // Packaged memory tools run through generated OpenClaw runtime chunks that parse JSON5 config.
+    new Set(["json5"]),
+  ],
+  [
     "extensions/tlon",
     // The Tlon plugin manifest exposes the bundled skill from this package path.
     new Set(["@tloncorp/tlon-skill"]),
@@ -215,6 +220,12 @@ describe("Discord dependency ownership", () => {
 });
 
 describe("extension runtime dependency manifests", () => {
+  it("keeps json5 in memory-core for packaged runtime config parsing", () => {
+    const manifest = readPackageManifest("extensions/memory-core/package.json");
+
+    expect(manifest.dependencies?.json5).toBeDefined();
+  });
+
   for (const manifestPath of listPackageManifests(EXTENSION_ROOT)) {
     const extensionDir = toPosixPath(path.dirname(manifestPath));
 

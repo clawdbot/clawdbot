@@ -88,7 +88,7 @@ export function createGoogleVideoGenerationProviderMetadata(): Omit<
         supportsAspectRatio: true,
         supportsResolution: true,
         supportsSize: true,
-        supportsAudio: true,
+        supportsAudio: false,
       },
       imageToVideo: {
         enabled: true,
@@ -101,7 +101,7 @@ export function createGoogleVideoGenerationProviderMetadata(): Omit<
         supportsAspectRatio: true,
         supportsResolution: true,
         supportsSize: true,
-        supportsAudio: true,
+        supportsAudio: false,
       },
       videoToVideo: {
         enabled: true,
@@ -114,7 +114,7 @@ export function createGoogleVideoGenerationProviderMetadata(): Omit<
         supportsAspectRatio: true,
         supportsResolution: true,
         supportsSize: true,
-        supportsAudio: true,
+        supportsAudio: false,
       },
     },
   };

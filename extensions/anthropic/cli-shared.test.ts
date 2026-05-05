@@ -6,6 +6,7 @@ import {
   normalizeClaudePermissionArgs,
   normalizeClaudeSettingSourcesArgs,
   resolveClaudePermissionMode,
+  resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
 describe("normalizeClaudePermissionArgs", () => {
@@ -72,6 +73,67 @@ describe("normalizeClaudeSettingSourcesArgs", () => {
         "stream-json",
       ]),
     ).toEqual(["-p", "--output-format", "stream-json", "--setting-sources", "user"]);
+  });
+});
+
+describe("resolveClaudeCliExecutionArgs", () => {
+  it("omits effort args when thinking is off", () => {
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-sonnet-4-6",
+        thinkingLevel: "off",
+        useResume: false,
+        baseArgs: ["-p", "--output-format", "stream-json"],
+      }),
+    ).toEqual(["-p", "--output-format", "stream-json"]);
+  });
+
+  it("maps OpenClaw thinking levels to Claude effort args", () => {
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-7",
+        thinkingLevel: "minimal",
+        useResume: false,
+        baseArgs: ["-p"],
+      }),
+    ).toEqual(["-p", "--effort", "low"]);
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-7",
+        thinkingLevel: "adaptive",
+        useResume: false,
+        baseArgs: ["-p"],
+      }),
+    ).toEqual(["-p", "--effort", "medium"]);
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-7",
+        thinkingLevel: "xhigh",
+        useResume: true,
+        baseArgs: ["-p", "--resume", "{sessionId}"],
+      }),
+    ).toEqual(["-p", "--resume", "{sessionId}", "--effort", "xhigh"]);
+  });
+
+  it("replaces static effort args when a session thinking level is active", () => {
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-7",
+        thinkingLevel: "max",
+        useResume: false,
+        baseArgs: ["-p", "--effort", "low", "--effort=high"],
+      }),
+    ).toEqual(["-p", "--effort", "max"]);
   });
 });
 
@@ -196,6 +258,7 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(normalized?.resumeArgs).toContain("--permission-mode");
     expect(normalized?.resumeArgs).toContain("bypassPermissions");
     expect(normalized?.liveSession).toBe("claude-stdio");
+    expect(backend.resolveExecutionArgs).toBe(resolveClaudeCliExecutionArgs);
   });
 
   it("leaves claude cli subscription-managed, restricts setting sources, and clears inherited env overrides", () => {

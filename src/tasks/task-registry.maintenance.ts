@@ -839,7 +839,7 @@ configureTaskAuditTaskProvider(reconcileInspectableTasks);
 
 export type ActiveTaskRestartBlocker = {
   taskId: string;
-  status: Extract<TaskStatus, "queued" | "running">;
+  status: Extract<TaskStatus, "running">;
   runtime: TaskRecord["runtime"];
   runId?: string;
   label?: string;
@@ -849,13 +849,23 @@ export type ActiveTaskRestartBlocker = {
 function isActiveTaskRestartBlockerStatus(
   status: TaskStatus,
 ): status is ActiveTaskRestartBlocker["status"] {
-  return status === "queued" || status === "running";
+  return status === "running";
+}
+
+function isTaskRestartBlocker(task: TaskRecord): task is TaskRecord & {
+  status: ActiveTaskRestartBlocker["status"];
+} {
+  // A task that is merely queued has not started user work yet; durable queued
+  // work can survive a gateway restart and should not indefinitely block one.
+  // Likewise, stale records that still say "running" but already have endedAt
+  // are registry inconsistencies, not live restart blockers.
+  return isActiveTaskRestartBlockerStatus(task.status) && !task.endedAt;
 }
 
 export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBlocker[] {
   const blockers: ActiveTaskRestartBlocker[] = [];
   for (const task of reconcileInspectableTasks()) {
-    if (!isActiveTaskRestartBlockerStatus(task.status)) {
+    if (!isTaskRestartBlocker(task)) {
       continue;
     }
     const blocker: ActiveTaskRestartBlocker = {

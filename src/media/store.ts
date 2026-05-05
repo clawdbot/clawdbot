@@ -349,7 +349,7 @@ async function writeSavedMediaBuffer(params: {
     const tempDest = path.join(params.dir, `.${params.id}.${crypto.randomUUID()}.tmp`);
     try {
       await fs.writeFile(tempDest, params.buffer, { mode: MEDIA_FILE_MODE });
-      const handle = await fs.open(tempDest, "r");
+      const handle = await fs.open(tempDest, "r+");
       try {
         await syncSavedMediaHandle(handle);
       } finally {

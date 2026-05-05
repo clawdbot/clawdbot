@@ -82,6 +82,44 @@ function formatAudioTranscriptForAgent(transcript: string): string {
   return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
 }
 
+type TelegramSavedMediaKind = "audio" | "document" | "image" | "video";
+
+function resolveSavedMediaKind(contentType: string | undefined): TelegramSavedMediaKind {
+  const normalized = contentType?.split(";")[0]?.trim().toLowerCase();
+  if (normalized?.startsWith("audio/")) {
+    return "audio";
+  }
+  if (normalized?.startsWith("image/")) {
+    return "image";
+  }
+  if (normalized?.startsWith("video/")) {
+    return "video";
+  }
+  return "document";
+}
+
+function formatSavedMediaPlaceholder(allMedia: TelegramMediaRef[]): string | undefined {
+  if (allMedia.length === 0) {
+    return undefined;
+  }
+  const kinds = allMedia.map((media) => resolveSavedMediaKind(media.contentType));
+  const firstKind = kinds[0] ?? "document";
+  const kind = kinds.every((candidate) => candidate === firstKind) ? firstKind : "document";
+  if (allMedia.length === 1) {
+    return `<media:${kind}>`;
+  }
+  if (kind === "image") {
+    return `<media:image> (${allMedia.length} images)`;
+  }
+  if (kind === "video") {
+    return `<media:video> (${allMedia.length} videos)`;
+  }
+  if (kind === "audio") {
+    return `<media:audio> (${allMedia.length} audio attachments)`;
+  }
+  return `<media:document> (${allMedia.length} attachments)`;
+}
+
 async function resolveStickerVisionSupport(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -248,13 +286,17 @@ export async function resolveTelegramInboundBody(params: {
     bodyText = formatAudioTranscriptForAgent(preflightTranscript);
   }
 
+  const savedMediaPlaceholder = formatSavedMediaPlaceholder(allMedia);
+  if (!hasAudio && savedMediaPlaceholder && placeholder && bodyText === placeholder) {
+    bodyText = savedMediaPlaceholder;
+  }
   if (!bodyText && allMedia.length > 0) {
     if (hasAudio) {
       bodyText = preflightTranscript
         ? formatAudioTranscriptForAgent(preflightTranscript)
         : "<media:audio>";
     } else {
-      bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
+      bodyText = savedMediaPlaceholder ?? "<media:document>";
     }
   }
 

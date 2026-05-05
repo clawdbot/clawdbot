@@ -407,6 +407,44 @@ describe("buildQaRuntimeEnv", () => {
     });
   });
 
+  it("stages live env API-key profiles for isolated QA workers", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-live-api-key-state-"));
+    cleanups.push(async () => {
+      await rm(stateDir, { recursive: true, force: true });
+    });
+
+    const cfg = await __testing.stageQaLiveApiKeyProfiles({
+      cfg: {},
+      stateDir,
+      providerIds: ["openai"],
+      env: {
+        OPENAI_API_KEY: "qa-live-not-a-real-key",
+      },
+    });
+
+    expect(cfg.auth?.profiles?.["qa-live-openai-env"]).toMatchObject({
+      provider: "openai",
+      mode: "api_key",
+      displayName: "QA live openai env credential",
+    });
+
+    for (const agentId of ["main", "qa"]) {
+      const storeRaw = await readFile(
+        path.join(stateDir, "agents", agentId, "agent", "auth-profiles.json"),
+        "utf8",
+      );
+      expect(JSON.parse(storeRaw)).toMatchObject({
+        profiles: {
+          "qa-live-openai-env": {
+            type: "api_key",
+            provider: "openai",
+            key: "qa-live-not-a-real-key",
+          },
+        },
+      });
+    }
+  });
+
   it("stages placeholder mock auth profiles per agent dir so mock-openai runs can resolve credentials", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-mock-auth-"));
     cleanups.push(async () => {

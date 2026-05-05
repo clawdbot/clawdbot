@@ -27,7 +27,10 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
+import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import { attachCodexMirrorIdentity } from "./transcript-mirror.js";
 
 export type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
@@ -99,6 +102,7 @@ export class CodexAppServerEventProjector {
   private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
+  private latestRateLimits: JsonValue | undefined;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -109,6 +113,11 @@ export class CodexAppServerEventProjector {
   async handleNotification(notification: CodexServerNotification): Promise<void> {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
+      return;
+    }
+    if (notification.method === "account/rateLimits/updated") {
+      this.latestRateLimits = params;
+      rememberCodexRateLimits(params);
       return;
     }
     if (isHookNotificationMethod(notification.method)) {
@@ -166,7 +175,7 @@ export class CodexAppServerEventProjector {
         if (readBooleanAlias(params, ["willRetry", "will_retry"]) === true) {
           break;
         }
-        this.promptError = readCodexErrorNotificationMessage(params) ?? "codex app-server error";
+        this.promptError = this.formatCodexErrorMessage(params) ?? "codex app-server error";
         this.promptErrorSource = "prompt";
         break;
       default:
@@ -185,23 +194,47 @@ export class CodexAppServerEventProjector {
       assistantTexts.length > 0
         ? this.createAssistantMessage(assistantTexts.join("\n\n"))
         : undefined;
+    // Each snapshot entry is tagged with a stable mirror identity of the
+    // shape `${turnId}:${kind}`. The mirror's idempotency key is derived
+    // from this identity rather than from snapshot position or content
+    // hash, so:
+    //   - Re-mirror of the same turn (retry) → same identity → no-op.
+    //   - Re-emit of a prior turn's entry into a later turn's snapshot
+    //     (the cross-turn drift mode named in #77012) → original identity
+    //     is preserved → on-disk key still matches → also a no-op.
+    //   - Two distinct turns where the user repeats verbatim content →
+    //     distinct turnIds → distinct identities → both kept.
+    const turnId = this.turnId;
     const messagesSnapshot: AgentMessage[] = [
-      {
-        role: "user",
-        content: this.params.prompt,
-        timestamp: Date.now(),
-      },
+      attachCodexMirrorIdentity(
+        {
+          role: "user",
+          content: this.params.prompt,
+          timestamp: Date.now(),
+        },
+        `${turnId}:prompt`,
+      ),
     ];
     // Codex owns the canonical thread. These mirror records keep enough local
     // context for OpenClaw history, search, and future harness switching.
     if (reasoningText) {
-      messagesSnapshot.push(this.createAssistantMirrorMessage("Codex reasoning", reasoningText));
+      messagesSnapshot.push(
+        attachCodexMirrorIdentity(
+          this.createAssistantMirrorMessage("Codex reasoning", reasoningText),
+          `${turnId}:reasoning`,
+        ),
+      );
     }
     if (planText) {
-      messagesSnapshot.push(this.createAssistantMirrorMessage("Codex plan", planText));
+      messagesSnapshot.push(
+        attachCodexMirrorIdentity(
+          this.createAssistantMirrorMessage("Codex plan", planText),
+          `${turnId}:plan`,
+        ),
+      );
     }
     if (lastAssistant) {
-      messagesSnapshot.push(lastAssistant);
+      messagesSnapshot.push(attachCodexMirrorIdentity(lastAssistant, `${turnId}:assistant`));
     }
     const turnFailed = this.completedTurn?.status === "failed";
     const turnInterrupted = this.completedTurn?.status === "interrupted";
@@ -498,7 +531,14 @@ export class CodexAppServerEventProjector {
       this.aborted = true;
     }
     if (turn.status === "failed") {
-      this.promptError = turn.error?.message ?? "codex app-server turn failed";
+      this.promptError =
+        formatCodexUsageLimitErrorMessage({
+          message: turn.error?.message,
+          codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
+          rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
+        }) ??
+        turn.error?.message ??
+        "codex app-server turn failed";
       this.promptErrorSource = "prompt";
     }
     for (const item of turn.items ?? []) {
@@ -719,6 +759,17 @@ export class CodexAppServerEventProjector {
       toolName,
       ...(meta ? { meta } : {}),
     });
+  }
+
+  private formatCodexErrorMessage(params: JsonObject): string | undefined {
+    const error = isJsonObject(params.error) ? params.error : undefined;
+    return (
+      formatCodexUsageLimitErrorMessage({
+        message: error ? readString(error, "message") : undefined,
+        codexErrorInfo: error?.codexErrorInfo,
+        rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
+      }) ?? readCodexErrorNotificationMessage(params)
+    );
   }
 
   private emitAgentEvent(

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  hasBootstrapFileContent,
   resolveBootstrapContextTargets,
   resolveAttemptWorkspaceBootstrapRouting,
 } from "./attempt-bootstrap-routing.js";
@@ -44,6 +45,67 @@ describe("runEmbeddedAttempt bootstrap routing", () => {
     expect(routing.bootstrapMode).toBe("limited");
     expect(routing.includeBootstrapInSystemContext).toBe(false);
     expect(routing.includeBootstrapInRuntimeContext).toBe(false);
+  });
+
+  it("treats hook-provided BOOTSTRAP.md content as pending bootstrap context", async () => {
+    const routing = await resolveAttemptWorkspaceBootstrapRouting({
+      isWorkspaceBootstrapPending: vi.fn(async () => false),
+      bootstrapFiles: [
+        {
+          name: "BOOTSTRAP.md",
+          path: "/tmp/openclaw-workspace/BOOTSTRAP.md",
+          content: "Ask who I am before continuing.",
+          missing: false,
+        },
+      ],
+      trigger: "user",
+      isPrimaryRun: true,
+      isCanonicalWorkspace: true,
+      effectiveWorkspace: "/tmp/openclaw-workspace",
+      resolvedWorkspace: "/tmp/openclaw-workspace",
+      hasBootstrapFileAccess: true,
+    });
+
+    expect(routing.bootstrapMode).toBe("full");
+    expect(routing.includeBootstrapInSystemContext).toBe(true);
+    expect(routing.includeBootstrapInRuntimeContext).toBe(false);
+  });
+
+  it("uses hook-provided BOOTSTRAP.md content even when normal file reads are unavailable", async () => {
+    const routing = await resolveAttemptWorkspaceBootstrapRouting({
+      isWorkspaceBootstrapPending: vi.fn(async () => false),
+      bootstrapFiles: [
+        {
+          name: "BOOTSTRAP.md",
+          path: "/tmp/openclaw-workspace/BOOTSTRAP.md",
+          content: "Ask who I am before continuing.",
+          missing: false,
+        },
+      ],
+      trigger: "user",
+      isPrimaryRun: true,
+      isCanonicalWorkspace: true,
+      effectiveWorkspace: "/tmp/openclaw-workspace",
+      resolvedWorkspace: "/tmp/openclaw-workspace",
+      hasBootstrapFileAccess: false,
+    });
+
+    expect(routing.bootstrapMode).toBe("full");
+    expect(routing.includeBootstrapInSystemContext).toBe(true);
+    expect(routing.includeBootstrapInRuntimeContext).toBe(false);
+  });
+
+  it("does not treat empty hook-provided BOOTSTRAP.md as pending bootstrap context", () => {
+    expect(
+      hasBootstrapFileContent([
+        {
+          name: "BOOTSTRAP.md",
+          path: "/tmp/openclaw-workspace/BOOTSTRAP.md",
+          content: "   ",
+          missing: false,
+        },
+      ]),
+    ).toBe(false);
   });
 
   it("keeps BOOTSTRAP.md in Project Context for full bootstrap turns", () => {

@@ -822,6 +822,39 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("loads stored device auth from the provided env", () => {
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "stored-device-token",
+      scopes: ["operator.read"],
+    });
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: "/tmp/openclaw-client-service-state",
+    } as NodeJS.ProcessEnv;
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      env,
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(loadDeviceAuthTokenMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceId: expect.any(String),
+        role: "operator",
+        env,
+      }),
+    );
+    expect(connectFrameFrom(ws)).toMatchObject({
+      token: "stored-device-token",
+      deviceToken: "stored-device-token",
+    });
+    client.stop();
+  });
+
   it("uses bootstrap token when no shared or device token is available", () => {
     loadDeviceAuthTokenMock.mockReturnValue(undefined);
     const client = new GatewayClient({

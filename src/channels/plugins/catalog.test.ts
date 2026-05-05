@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getChannelPluginCatalogEntry } from "./catalog.js";
 
 describe("channel plugin catalog", () => {
-  it("keeps third-party official channel ids mapped to their published plugin ids", () => {
+  it("keeps third-party channel ids mapped with catalog install trust", () => {
     const options = {
       workspaceDir: "/tmp/openclaw-channel-catalog-empty-workspace",
       env: {},

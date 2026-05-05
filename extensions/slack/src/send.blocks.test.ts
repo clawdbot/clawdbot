@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+import {
+  clearSlackThreadParticipationCache,
+  hasSlackThreadParticipation,
+} from "./sent-thread-cache.js";
 
 installSlackBlockTestMocks();
 const { sendMessageSlack } = await import("./send.js");
@@ -64,6 +68,49 @@ describe("sendMessageSlack NO_REPLY guard", () => {
 
     expect(client.chat.postMessage).toHaveBeenCalled();
     expect(result.messageId).toBe("171234.567");
+  });
+});
+
+describe("sendMessageSlack thread participation", () => {
+  it("records participation after a successful threaded send", async () => {
+    clearSlackThreadParticipationCache();
+    const client = createSlackSendTestClient();
+
+    await sendMessageSlack("channel:C123", "hello thread", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      threadTs: "1712345678.123456",
+    });
+
+    expect(hasSlackThreadParticipation("default", "C123", "1712345678.123456")).toBe(true);
+  });
+
+  it("does not record participation for unthreaded sends", async () => {
+    clearSlackThreadParticipationCache();
+    const client = createSlackSendTestClient();
+
+    await sendMessageSlack("channel:C123", "hello channel", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+    });
+
+    expect(hasSlackThreadParticipation("default", "C123", "1712345678.123456")).toBe(false);
+  });
+
+  it("does not record participation for invalid thread ids", async () => {
+    clearSlackThreadParticipationCache();
+    const client = createSlackSendTestClient();
+
+    await sendMessageSlack("channel:C123", "hello invalid thread", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      threadTs: "not-a-slack-thread",
+    });
+
+    expect(hasSlackThreadParticipation("default", "C123", "not-a-slack-thread")).toBe(false);
   });
 });
 

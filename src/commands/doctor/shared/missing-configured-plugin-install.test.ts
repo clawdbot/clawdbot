@@ -917,7 +917,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     );
     expect(result).toEqual({
       changes: [
-        'Deferred missing configured plugin "discord" install repair until post-update doctor.',
+        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
       ],
       warnings: [],
     });
@@ -969,7 +969,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     );
     expect(result).toEqual({
       changes: [
-        'Deferred missing configured plugin "discord" install repair until post-update doctor.',
+        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
       ],
       warnings: [],
     });
@@ -2012,6 +2012,93 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     );
     expect(result.changes).toEqual([
       'Installed missing configured plugin "brave" from @openclaw/brave-plugin.',
+    ]);
+  });
+
+  it("installs configured external web search plugins from beta on the beta channel", async () => {
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "brave",
+        label: "Brave",
+        install: {
+          npmSpec: "@openclaw/brave-plugin",
+          defaultChoice: "npm",
+        },
+        openclaw: {
+          plugin: { id: "brave", label: "Brave" },
+          webSearchProviders: [
+            {
+              id: "brave",
+              label: "Brave Search",
+              hint: "Brave Search",
+              envVars: ["BRAVE_API_KEY"],
+              placeholder: "BSA...",
+              signupUrl: "https://example.test/brave",
+              credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
+            },
+          ],
+          install: {
+            npmSpec: "@openclaw/brave-plugin",
+            defaultChoice: "npm",
+          },
+        },
+      },
+    ]);
+    mocks.resolveOfficialExternalPluginId.mockImplementation(
+      (entry: { id?: string; openclaw?: { plugin?: { id?: string } } }) =>
+        entry.openclaw?.plugin?.id ?? entry.id,
+    );
+    mocks.resolveOfficialExternalPluginInstall.mockImplementation(
+      (entry: { install?: unknown; openclaw?: { install?: unknown } }) =>
+        entry.openclaw?.install ?? entry.install ?? null,
+    );
+    mocks.resolveOfficialExternalPluginLabel.mockImplementation(
+      (entry: { label?: string; openclaw?: { plugin?: { label?: string } } }) =>
+        entry.openclaw?.plugin?.label ?? entry.label ?? "plugin",
+    );
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "brave",
+      targetDir: "/tmp/openclaw-plugins/brave",
+      version: "2026.5.4-beta.1",
+      npmResolution: {
+        name: "@openclaw/brave-plugin",
+        version: "2026.5.4-beta.1",
+        resolvedSpec: "@openclaw/brave-plugin@2026.5.4-beta.1",
+      },
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        update: { channel: "beta" },
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/brave-plugin@beta",
+        expectedPluginId: "brave",
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      expect.objectContaining({
+        brave: expect.objectContaining({ spec: "@openclaw/brave-plugin" }),
+      }),
+      { env: {} },
+    );
+    expect(result.changes).toEqual([
+      'Installed missing configured plugin "brave" from @openclaw/brave-plugin@beta.',
     ]);
   });
 

@@ -14,9 +14,9 @@ PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
 CHANNEL="${OPENCLAW_NPM_ONBOARD_CHANNEL:-telegram}"
 
 case "$CHANNEL" in
-telegram | discord) ;;
+telegram | discord | slack) ;;
 *)
-  echo "OPENCLAW_NPM_ONBOARD_CHANNEL must be telegram or discord, got: $CHANNEL" >&2
+  echo "OPENCLAW_NPM_ONBOARD_CHANNEL must be telegram, discord, or slack, got: $CHANNEL" >&2
   exit 1
   ;;
 esac
@@ -69,10 +69,21 @@ case "$CHANNEL" in
   telegram)
     CHANNEL_TOKEN="123456:openclaw-npm-onboard-token"
     DEP_SENTINEL="grammy"
+    CHANNEL_ADD_ARGS=(--token "$CHANNEL_TOKEN")
+    CHANNEL_CONFIG_TOKENS=("$CHANNEL_TOKEN")
     ;;
   discord)
     CHANNEL_TOKEN="openclaw-npm-onboard-discord-token"
     DEP_SENTINEL="discord-api-types"
+    CHANNEL_ADD_ARGS=(--token "$CHANNEL_TOKEN")
+    CHANNEL_CONFIG_TOKENS=("$CHANNEL_TOKEN")
+    ;;
+  slack)
+    SLACK_BOT_TOKEN="xoxb-openclaw-npm-onboard-slack-token"
+    SLACK_APP_TOKEN="xapp-openclaw-npm-onboard-slack-token"
+    DEP_SENTINEL="@slack/bolt"
+    CHANNEL_ADD_ARGS=(--bot-token "$SLACK_BOT_TOKEN" --app-token "$SLACK_APP_TOKEN")
+    CHANNEL_CONFIG_TOKENS=("$SLACK_BOT_TOKEN" "$SLACK_APP_TOKEN")
     ;;
   *)
     echo "unsupported channel: $CHANNEL" >&2
@@ -138,8 +149,8 @@ node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs configure-mock-mod
 openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
 
 echo "Configuring $CHANNEL..."
-openclaw channels add --channel "$CHANNEL" --token "$CHANNEL_TOKEN" >/tmp/openclaw-channel-add.log 2>&1
-node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-channel-config "$CHANNEL" "$CHANNEL_TOKEN"
+openclaw channels add --channel "$CHANNEL" "${CHANNEL_ADD_ARGS[@]}" >/tmp/openclaw-channel-add.log 2>&1
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-channel-config "$CHANNEL" "${CHANNEL_CONFIG_TOKENS[@]}"
 
 echo "Checking status surfaces for $CHANNEL..."
 openclaw channels status --json >/tmp/openclaw-channels-status.json 2>/tmp/openclaw-channels-status.err

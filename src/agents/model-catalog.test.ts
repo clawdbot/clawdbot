@@ -662,6 +662,38 @@ describe("loadModelCatalog", () => {
     ]);
   });
 
+  it("lets read-only manifest catalog reuse the current workspace-scoped snapshot", () => {
+    loadManifestModelCatalog({
+      config: {} as OpenClawConfig,
+      fallbackToMetadataScan: false,
+    });
+
+    expect(currentPluginMetadataSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowWorkspaceScopedSnapshot: true,
+      }),
+    );
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("passes explicit env when checking current manifest catalog snapshot compatibility", () => {
+    const env = { HOME: "/tmp/openclaw-model-catalog-env" } as NodeJS.ProcessEnv;
+
+    loadManifestModelCatalog({
+      config: {} as OpenClawConfig,
+      env,
+      fallbackToMetadataScan: false,
+    });
+
+    expect(currentPluginMetadataSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env,
+        allowWorkspaceScopedSnapshot: true,
+      }),
+    );
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
   it("dedupes supplemental models against registry entries", async () => {
     mockSingleOpenAiCatalogModel();
     augmentCatalogMock.mockResolvedValueOnce([

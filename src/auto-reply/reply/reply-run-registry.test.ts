@@ -66,6 +66,23 @@ describe("reply run registry", () => {
     expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
   });
 
+  it("runs completeThen callbacks after active state clears", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-complete",
+      resetTriggered: false,
+    });
+    const afterClear = vi.fn(() => {
+      expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+      expect(isReplyRunActiveForSessionId("session-complete")).toBe(false);
+    });
+
+    operation.completeThen(afterClear);
+
+    expect(operation.result).toEqual({ kind: "completed" });
+    expect(afterClear).toHaveBeenCalledTimes(1);
+  });
+
   it("force-clears a running operation after abort without backend cleanup", async () => {
     vi.useFakeTimers();
     try {

@@ -143,6 +143,7 @@ describe("watch-node script", () => {
             OPENCLAW_WATCH_MODE: "1",
             OPENCLAW_WATCH_SESSION: "1700000000000-4242",
             OPENCLAW_NO_RESPAWN: "1",
+            OPENCLAW_TRACE_SYNC_IO: "1",
             OPENCLAW_WATCH_COMMAND: "gateway --force",
           }),
         }),
@@ -152,6 +153,35 @@ describe("watch-node script", () => {
       expect(exitCode).toBe(130);
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
       expect(watcher.close).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("preserves explicit sync I/O trace overrides for gateway watch", async () => {
+    const { child, spawn, createWatcher, fakeProcess } = createWatchHarness();
+    await withTempDir({ prefix: "openclaw-watch-node-" }, async (cwd) => {
+      const runPromise = runWatch({
+        args: ["gateway", "--force"],
+        cwd,
+        createWatcher,
+        env: { OPENCLAW_TRACE_SYNC_IO: "0" },
+        lockDisabled: true,
+        process: fakeProcess,
+        spawn,
+      });
+
+      expect(spawn).toHaveBeenCalledWith(
+        "/usr/local/bin/node",
+        ["scripts/run-node.mjs", "gateway", "--force"],
+        expect.objectContaining({
+          env: expect.objectContaining({
+            OPENCLAW_TRACE_SYNC_IO: "0",
+          }),
+        }),
+      );
+
+      fakeProcess.emit("SIGINT");
+      await runPromise;
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     });
   });
 

@@ -439,6 +439,109 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send starts the next WebChat turn after the prior internal run finishes", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      dispatchInboundMessageMock.mockResolvedValue(undefined);
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const callSend = (id: string, message: string, idempotencyKey: string) =>
+        chatHandlers["chat.send"]({
+          req: {
+            type: "req",
+            id,
+            method: "chat.send",
+            params: {
+              sessionKey: "main",
+              message,
+              idempotencyKey,
+            },
+          },
+          params: {
+            sessionKey: "main",
+            message,
+            idempotencyKey,
+          },
+          client: {
+            connect: {
+              client: {
+                id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+                mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              },
+              scopes: ["operator.write"],
+            },
+          } as never,
+          isWebchatConnect: () => true,
+          respond: ((ok, payload, error) => {
+            responses.push({ id, ok, payload, error });
+          }) as RespondFn,
+          context,
+        });
+
+      await callSend("first", "first message", "idem-sequential-a");
+      await vi.waitFor(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+
+      await callSend("second", "second message", "idem-sequential-b");
+      await vi.waitFor(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(2);
+      }, FAST_WAIT_OPTS);
+
+      expect(responses).toContainEqual({
+        id: "first",
+        ok: true,
+        payload: { runId: "idem-sequential-a", status: "started" },
+        error: undefined,
+      });
+      expect(responses).toContainEqual({
+        id: "second",
+        ok: true,
+        payload: { runId: "idem-sequential-b", status: "started" },
+        error: undefined,
+      });
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(context.addChatRun).toHaveBeenCalledTimes(2);
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
   test("chat.history backfills claude-cli sessions from Claude project files", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);

@@ -103,19 +103,36 @@ function finalizeDispatchResult(
   dispatcher: ReplyDispatcher,
 ): DispatchFromConfigResult {
   const cancelledCounts = dispatcher.getCancelledCounts?.();
-  if (!cancelledCounts) {
+  const failedCounts = dispatcher.getFailedCounts?.();
+  if (!cancelledCounts && !failedCounts) {
     return result;
   }
 
-  const counts = {
-    tool: Math.max(0, result.counts.tool - cancelledCounts.tool),
-    block: Math.max(0, result.counts.block - cancelledCounts.block),
-    final: Math.max(0, result.counts.final - cancelledCounts.final),
+  const resultCounts = {
+    tool: result.counts?.tool ?? 0,
+    block: result.counts?.block ?? 0,
+    final: result.counts?.final ?? 0,
   };
+  const counts = {
+    tool: Math.max(0, resultCounts.tool - (cancelledCounts?.tool ?? 0) - (failedCounts?.tool ?? 0)),
+    block: Math.max(
+      0,
+      resultCounts.block - (cancelledCounts?.block ?? 0) - (failedCounts?.block ?? 0),
+    ),
+    final: Math.max(
+      0,
+      resultCounts.final - (cancelledCounts?.final ?? 0) - (failedCounts?.final ?? 0),
+    ),
+  };
+  const hasFailedCounts =
+    (failedCounts?.tool ?? 0) > 0 ||
+    (failedCounts?.block ?? 0) > 0 ||
+    (failedCounts?.final ?? 0) > 0;
   return {
     ...result,
     queuedFinal: result.queuedFinal && counts.final > 0,
     counts,
+    ...(hasFailedCounts ? { failedCounts } : {}),
   };
 }
 

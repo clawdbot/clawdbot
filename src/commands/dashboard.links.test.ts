@@ -166,6 +166,27 @@ describe("dashboardCommand", () => {
     }
   });
 
+  it("guides user to manual auth when delivery channels both fail (CVE-safe)", async () => {
+    const secretToken = "super-secret-bearer-token";
+    mockSnapshot(secretToken);
+    copyToClipboardMock.mockResolvedValue(false);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: false, reason: "ssh" });
+    formatControlUiSshHintMock.mockReturnValue("ssh hint without token");
+
+    await dashboardCommand(runtime);
+
+    const allLogs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
+
+    // CVE: token value and fragment marker must not appear in logs.
+    expect(allLogs).not.toContain(secretToken);
+    expect(allLogs).not.toContain("#token=");
+
+    // UX: user must be pointed to where their token lives so they can self-recover.
+    expect(allLogs).toMatch(/OPENCLAW_GATEWAY_TOKEN/);
+    // UX: hint must name the URL fragment key so the user knows the syntax.
+    expect(allLogs).toContain("key `token`");
+  });
+
   it("respects --no-open and tells user token URL is in clipboard", async () => {
     mockSnapshot("abc");
     copyToClipboardMock.mockResolvedValue(true);
@@ -179,8 +200,21 @@ describe("dashboardCommand", () => {
     );
   });
 
-  it("respects --no-open with plain URL hint when clipboard fails", async () => {
+  it("respects --no-open and falls through to manual-auth hint when clipboard fails (token configured)", async () => {
     mockSnapshot("abc");
+    copyToClipboardMock.mockResolvedValue(false);
+
+    await dashboardCommand(runtime, { noOpen: true });
+
+    // Redundant fallback hint is suppressed when the manual-auth hint speaks.
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      "Browser launch disabled (--no-open). Use the URL above.",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("OPENCLAW_GATEWAY_TOKEN"));
+  });
+
+  it("respects --no-open with plain URL hint when clipboard fails and no token is configured", async () => {
+    mockSnapshot("");
     copyToClipboardMock.mockResolvedValue(false);
 
     await dashboardCommand(runtime, { noOpen: true });

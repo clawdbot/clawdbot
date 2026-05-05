@@ -56,6 +56,7 @@ On shutdown, OpenClaw restores the previous proxy environment and resets cached 
 - `proxy.enabled` / `proxy.proxyUrl`: outbound forward-proxy routing for OpenClaw runtime egress. This page documents that feature.
 - `gateway.auth.mode: "trusted-proxy"`: inbound identity-aware reverse-proxy authentication for Gateway access. See [Trusted proxy auth](/gateway/trusted-proxy-auth).
 - `openclaw proxy`: local debug proxy and capture inspector for development and support. See [openclaw proxy](/cli/proxy).
+- `tools.web.fetch.useTrustedEnvProxy`: opt-in for `web_fetch` to let an operator-controlled HTTP(S) env proxy resolve DNS while keeping default strict DNS pinning and hostname policy. See [Web fetch](/tools/web-fetch#trusted-env-proxy).
 - Channel or provider-specific proxy settings: owner-specific overrides for a particular transport. Prefer the managed network proxy when the goal is central egress control across the runtime.
 
 ## Configuration

@@ -172,6 +172,23 @@ describe("whatsapp setup wizard", () => {
     expectWhatsAppOwnerAllowlistSetup(result.cfg, harness);
   });
 
+  it("rejects invalid owner numbers during prompt validation", async () => {
+    const harness = createWhatsAppOwnerAllowlistHarness(createQueuedWizardPrompter);
+
+    await runConfigureWithHarness({
+      harness,
+      forceAllowFrom: true,
+    });
+
+    const prompt = harness.text.mock.calls[0]?.[0] as
+      | { validate?: (value: string) => string | undefined }
+      | undefined;
+    expect(prompt?.validate).toEqual(expect.any(Function));
+    expect(prompt?.validate?.("abc")).toBe("Invalid number: abc");
+    expect(prompt?.validate?.("whatsapp:")).toBe("Invalid number: whatsapp:");
+    expect(prompt?.validate?.("+1 (555) 555-0123")).toBeUndefined();
+  });
+
   it("supports disabled DM policy for separate-phone setup", async () => {
     const { harness, result } = await runSeparatePhoneFlow({
       selectValues: ["separate", "disabled"],

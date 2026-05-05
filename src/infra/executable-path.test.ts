@@ -1,12 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   isExecutableFile,
+  resolveExecutable,
   resolveExecutableFromPathEnv,
   resolveExecutablePath,
 } from "./executable-path.js";
+
+function restoreEnvValue(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
 
 describe("executable path helpers", () => {
   it("detects executable files and rejects directories or non-executables", async () => {
@@ -93,5 +102,97 @@ describe("executable path helpers", () => {
         cwd: String.raw`C:\Users\demo\AI\system\openclaw`,
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("resolveExecutable", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns cmd unchanged on non-Windows platforms", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    expect(resolveExecutable("gcloud")).toBe("gcloud");
+    platformSpy.mockRestore();
+  });
+
+  it("returns cmd unchanged when it already carries a known PATHEXT extension on Windows", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    expect(resolveExecutable("gcloud.cmd")).toBe("gcloud.cmd");
+    expect(resolveExecutable("gcloud.exe")).toBe("gcloud.exe");
+    expect(resolveExecutable("gcloud.bat")).toBe("gcloud.bat");
+    expect(resolveExecutable("gcloud.com")).toBe("gcloud.com");
+    platformSpy.mockRestore();
+  });
+
+  it("resolves to the first .cmd result from PATH on Windows without executing where.exe", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      const binDir = path.join(base, "bin");
+      await fs.mkdir(binDir, { recursive: true });
+      const cmdPath = path.join(binDir, "gcloud.cmd");
+      const exePath = path.join(binDir, "gcloud.exe");
+      await fs.writeFile(cmdPath, "@echo off\n", "utf8");
+      await fs.writeFile(exePath, "exe\n", "utf8");
+
+      const originalPath = process.env.PATH;
+      const originalPathext = process.env.PATHEXT;
+      process.env.PATH = binDir;
+      process.env.PATHEXT = ".EXE;.CMD;.BAT;.COM";
+      try {
+        expect(resolveExecutable("gcloud")).toBe(cmdPath);
+      } finally {
+        restoreEnvValue("PATH", originalPath);
+        restoreEnvValue("PATHEXT", originalPathext);
+      }
+    });
+    platformSpy.mockRestore();
+  });
+
+  it("falls back to .exe when no .cmd match exists on Windows", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      const binDir = path.join(base, "bin");
+      await fs.mkdir(binDir, { recursive: true });
+      const exePath = path.join(binDir, "tailscale.exe");
+      await fs.writeFile(exePath, "exe\n", "utf8");
+
+      const originalPath = process.env.PATH;
+      process.env.PATH = binDir;
+      try {
+        expect(resolveExecutable("tailscale")).toBe(exePath);
+      } finally {
+        restoreEnvValue("PATH", originalPath);
+      }
+    });
+    platformSpy.mockRestore();
+  });
+
+  it("falls back to first PATH result when no .cmd or .exe match exists on Windows", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      const binDir = path.join(base, "bin");
+      await fs.mkdir(binDir, { recursive: true });
+      const ps1Path = path.join(binDir, "gcloud.ps1");
+      await fs.writeFile(ps1Path, "Write-Output ok\n", "utf8");
+
+      const originalPath = process.env.PATH;
+      const originalPathext = process.env.PATHEXT;
+      process.env.PATH = binDir;
+      process.env.PATHEXT = ".PS1";
+      try {
+        expect(resolveExecutable("gcloud")).toBe(ps1Path);
+      } finally {
+        restoreEnvValue("PATH", originalPath);
+        restoreEnvValue("PATHEXT", originalPathext);
+      }
+    });
+    platformSpy.mockRestore();
+  });
+
+  it("returns original cmd when no PATH match exists on Windows", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    expect(resolveExecutable("gog")).toBe("gog");
+    platformSpy.mockRestore();
   });
 });

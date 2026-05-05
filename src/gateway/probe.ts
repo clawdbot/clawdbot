@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
@@ -149,6 +151,7 @@ export async function probeGateway(opts: {
   includeDetails?: boolean;
   detailLevel?: "none" | "presence" | "full";
   tlsFingerprint?: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<GatewayProbeResult> {
   const startedAt = Date.now();
   const instanceId = randomUUID();
@@ -168,7 +171,8 @@ export async function probeGateway(opts: {
         return null;
       }
       const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
-      const identity = loadDeviceIdentityIfPresent();
+      const stateDir = resolveStateDir(opts.env);
+      const identity = loadDeviceIdentityIfPresent(path.join(stateDir, "identity", "device.json"));
       if (!identity) {
         return null;
       }
@@ -178,6 +182,7 @@ export async function probeGateway(opts: {
       const cachedOperatorToken = loadDeviceAuthToken({
         deviceId: identity.deviceId,
         role: "operator",
+        env: opts.env,
       });
       return cachedOperatorToken ? identity : null;
     } catch {
@@ -261,6 +266,7 @@ export async function probeGateway(opts: {
       password: opts.auth?.password,
       tlsFingerprint: opts.tlsFingerprint,
       preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
+      env: opts.env,
       scopes: [READ_SCOPE],
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientVersion: "dev",

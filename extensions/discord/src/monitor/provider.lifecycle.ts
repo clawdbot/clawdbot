@@ -25,6 +25,7 @@ const MAX_DISCORD_GATEWAY_READY_TIMEOUT_MS = 120_000;
 const DISCORD_GATEWAY_READY_TIMEOUT_ENV = "OPENCLAW_DISCORD_READY_TIMEOUT_MS";
 const DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_ENV = "OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS";
 const DISCORD_GATEWAY_READY_POLL_MS = 250;
+const DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS = 2_000;
 const DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS = 5_000;
 const DISCORD_GATEWAY_STARTUP_TERMINATE_CLOSE_TIMEOUT_MS = 1_000;
 const DISCORD_GATEWAY_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS = 30_000;
@@ -355,41 +356,50 @@ async function waitForGatewayReady(params: {
     return "stopped";
   };
 
-  const firstAttempt = await waitUntilReady();
-  if (firstAttempt !== "timeout") {
-    return;
-  }
   if (!params.gateway) {
-    throw new Error(`discord gateway did not reach READY within ${params.readyTimeoutMs}ms`);
-  }
-
-  const restartAt = Date.now();
-  params.runtime.error?.(
-    danger(`discord: gateway was not ready after ${params.readyTimeoutMs}ms; restarting gateway`),
-  );
-  params.pushStatus?.({
-    connected: false,
-    lastEventAt: restartAt,
-    lastDisconnect: {
-      at: restartAt,
-      error: "startup-not-ready",
-    },
-    lastError: "startup-not-ready",
-  });
-  if (params.abortSignal?.aborted) {
+    const attempt = await waitUntilReady();
+    if (attempt === "timeout") {
+      throw new Error(`discord gateway did not reach READY within ${params.readyTimeoutMs}ms`);
+    }
     return;
   }
-  await params.beforeRestart?.();
-  await restartGatewayAfterReadyTimeout({
-    gateway: params.gateway,
-    abortSignal: params.abortSignal,
-    runtime: params.runtime,
-  });
 
-  if ((await waitUntilReady()) === "timeout") {
-    throw new Error(
-      `discord gateway did not reach READY within ${params.readyTimeoutMs}ms after restart`,
+  let attempt = 0;
+  while (!params.abortSignal?.aborted) {
+    const result = await waitUntilReady();
+    if (result !== "timeout") {
+      return;
+    }
+
+    attempt += 1;
+    const restartAt = Date.now();
+    params.runtime.error?.(
+      danger(
+        `discord: gateway READY wait timed out after ${params.readyTimeoutMs}ms; reconnecting with backoff (attempt ${attempt})`,
+      ),
     );
+    params.pushStatus?.({
+      connected: false,
+      lastEventAt: restartAt,
+      lastDisconnect: {
+        at: restartAt,
+        error: "startup-not-ready",
+      },
+      lastError: "startup-not-ready",
+    });
+    await params.beforeRestart?.();
+    await restartGatewayAfterReadyTimeout({
+      gateway: params.gateway,
+      abortSignal: params.abortSignal,
+      runtime: params.runtime,
+    });
+    if (params.abortSignal?.aborted) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(resolve, DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS);
+      timeout.unref?.();
+    });
   }
 }
 

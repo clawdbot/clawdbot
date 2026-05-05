@@ -3,6 +3,8 @@ import type {
   PluginCommandContext,
   PluginCommandResult,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { describeControlFailure } from "./app-server/capabilities.js";
+import { formatCodexDisplayText } from "./command-formatters.js";
 import type { CodexCommandDeps } from "./command-handlers.js";
 
 export function createCodexCommand(options: {
@@ -28,5 +30,11 @@ export async function handleCodexCommand(
   options: { pluginConfig?: unknown; deps?: Partial<CodexCommandDeps> } = {},
 ): Promise<PluginCommandResult> {
   const { handleCodexSubcommand } = await import("./command-handlers.js");
-  return await handleCodexSubcommand(ctx, options);
+  try {
+    return await handleCodexSubcommand(ctx, options);
+  } catch (error) {
+    return {
+      text: `Codex command failed: ${formatCodexDisplayText(describeControlFailure(error))}`,
+    };
+  }
 }

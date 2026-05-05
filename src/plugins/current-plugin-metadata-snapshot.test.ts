@@ -87,6 +87,19 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
   });
 
+  it("can opt into reusing the stored workspace scope for unscoped control-plane readers", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const snapshot = createSnapshot({ config, workspaceDir: "/workspace/a" });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        config,
+        allowWorkspaceScopedSnapshot: true,
+      }),
+    ).toBe(snapshot);
+  });
+
   it("rejects a current snapshot when plugin load paths change", () => {
     const config = { plugins: { load: { paths: ["/plugins/one"] } } };
     const snapshot = createSnapshot({ config });

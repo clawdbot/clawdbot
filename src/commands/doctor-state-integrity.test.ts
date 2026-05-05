@@ -10,6 +10,7 @@ import {
 import { noteStateIntegrity } from "./doctor-state-integrity.js";
 
 vi.mock("../channels/plugins/bundled-ids.js", () => ({
+  listBundledChannelIds: () => ["matrix", "whatsapp"],
   listBundledChannelPluginIds: () => ["matrix", "whatsapp"],
 }));
 

@@ -101,11 +101,30 @@ export function normalizeWhatsAppMessagingTarget(raw: string): string | undefine
 }
 
 export function normalizeWhatsAppAllowFromEntries(allowFrom: Array<string | number>): string[] {
-  return allowFrom
+  const seen = new Set<string>();
+  const normalized = allowFrom
     .map((entry) => String(entry).trim())
     .filter((entry): entry is string => Boolean(entry))
-    .map((entry) => (entry === "*" ? entry : normalizeWhatsAppTarget(entry)))
+    .map(normalizeWhatsAppAllowFromEntry)
     .filter((entry): entry is string => Boolean(entry));
+  return normalized.filter((entry) => {
+    if (seen.has(entry)) {
+      return false;
+    }
+    seen.add(entry);
+    return true;
+  });
+}
+
+export function normalizeWhatsAppAllowFromEntry(entry: string): string | null {
+  if (entry === "*") {
+    return entry;
+  }
+  const normalized = normalizeWhatsAppTarget(entry);
+  if (!normalized) {
+    return null;
+  }
+  return normalized.startsWith("+") ? normalized.slice(1) : normalized;
 }
 
 export function looksLikeWhatsAppTargetId(raw: string): boolean {

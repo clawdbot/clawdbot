@@ -30,6 +30,7 @@ import {
   isWhatsAppGroupJid,
   isWhatsAppNewsletterJid,
   looksLikeWhatsAppTargetId,
+  normalizeWhatsAppAllowFromEntry,
   normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
 } from "./normalize.js";
@@ -69,6 +70,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
   createChatChannelPlugin<ResolvedWhatsAppAccount>({
     pairing: {
       idLabel: "whatsappSenderId",
+      normalizeAllowEntry: (entry) => normalizeWhatsAppAllowFromEntry(entry) ?? "",
     },
     outbound: whatsappChannelOutbound,
     threading: {

@@ -56,6 +56,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Formatting: use `oxfmt`, not Prettier. Prefer `pnpm format:check` / `pnpm format`; for targeted files use `pnpm exec oxfmt --check --threads=1 <files...>` or `pnpm exec oxfmt --write --threads=1 <files...>`.
 - Linting: use repo wrappers (`pnpm lint:*`, `scripts/run-oxlint.mjs`); do not invoke generic JS formatters/lints unless a repo script uses them.
 - Heavy checks: `OPENCLAW_LOCAL_CHECK=1`, mode `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`; CI/shared use `OPENCLAW_LOCAL_CHECK=0`.
+- Crabbox: preferred live scenario runner when available. It has Linux, Windows, and macOS workers/targets; pick the OS that matches the bug. If unavailable, use the local system, Docker, Parallels, or CI live lane that proves the same behavior.
 - Blacksmith/Testbox: on maintainer machines with Blacksmith access, broad/shared validation defaults to Testbox. This includes `pnpm check`, `pnpm check:changed`, `pnpm test`, `pnpm test:changed`, Docker/E2E/live/package/build gates, and any command likely to fan out across many Vitest projects. Do not start those broad gates locally unless the user explicitly asks for local proof or sets `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`.
 - Local validation: targeted edit loops only, such as `pnpm test <specific-file>`, targeted formatter checks, and small lint/type probes. If a local command expands beyond targeted proof, stop it and move the broad gate to Testbox.
 - Testbox use: run from repo root, pre-warm early with `blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90`, reuse the returned `tbx_...` id for all `run`/`download` commands, and stop boxes you created before handoff. Timeout bins: `90` minutes default, `240` multi-hour, `720` all-day, `1440` overnight; anything above `1440` needs explicit approval and cleanup.
@@ -107,7 +108,8 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
   full checks only if conflict resolution, upstream overlap, generated drift,
   dependency/config changes, or touched-file content changes make the prior
   result stale.
-- Landing on `main`: verify touched surface near landing. Default feasible bar: `pnpm check` + `pnpm test`.
+- Before shipping commits or landing PRs to `main`: live-prove the reported issue when feasible. Prefer a Crabbox scenario that reproduces the failure on the right OS, then proves the candidate fix. If Crabbox is unavailable, use the closest real system, Docker, Parallels, CI live lane, or maintained E2E smoke; if blocked, say what proof is missing and why.
+- Landing on `main`: verify touched surface near landing. Default feasible bar: issue live proof + `pnpm check` + `pnpm test`.
 - Hard build gate: `pnpm build` before push if build output, packaging, lazy/module boundaries, or published surfaces can change.
 - Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
 - Generated/API drift: `pnpm check:architecture`, `pnpm config:docs:gen/check`, `pnpm plugin-sdk:api:gen/check`. Track `docs/.generated/*.sha256`; full JSON ignored.

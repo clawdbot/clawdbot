@@ -168,8 +168,9 @@ manually.
 
 On the beta update channel, tracked npm and ClawHub plugin installs that follow
 the default/latest line try a plugin `@beta` release first. If the plugin has no
-beta release, OpenClaw falls back to the recorded default/latest spec. Exact
-versions and explicit tags are not rewritten.
+beta release, OpenClaw falls back to the recorded default/latest spec. For npm
+plugins, OpenClaw also falls back when the beta package exists but fails install
+validation. Exact versions and explicit tags are not rewritten.
 
 <Warning>
 If an exact pinned npm plugin update resolves to an artifact whose integrity differs from the stored install record, `openclaw update` aborts that plugin artifact update instead of installing it. Reinstall or update the plugin explicitly only after verifying that you trust the new artifact.

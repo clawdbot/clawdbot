@@ -749,16 +749,24 @@ async function resolveActiveModelEntry(params: {
   if (!hasAuth) {
     return null;
   }
-  const model =
-    params.capability === "image"
-      ? await resolveAutoImageModelId({
-          cfg: params.cfg,
-          providerId,
-          providerRegistry: params.providerRegistry,
-          explicitModel: params.activeModel?.model,
-        })
-      : params.activeModel?.model;
-  if (params.capability === "image" && !model) {
+  let model: string | undefined;
+  if (params.capability === "image") {
+    model = await resolveAutoImageModelId({
+      cfg: params.cfg,
+      providerId,
+      providerRegistry: params.providerRegistry,
+      explicitModel: params.activeModel?.model,
+    });
+  } else if (params.capability === "audio") {
+    model = resolveDefaultMediaModelFromRegistry({
+      providerId,
+      capability: "audio",
+      providerRegistry: params.providerRegistry,
+    });
+  } else {
+    model = params.activeModel?.model;
+  }
+  if ((params.capability === "image" || params.capability === "audio") && !model) {
     return null;
   }
   return {

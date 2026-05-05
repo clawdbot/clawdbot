@@ -126,7 +126,9 @@ describe("gateway restart deferral preflight", () => {
       );
 
       expect(logReload.warn).toHaveBeenCalledWith(
-        expect.stringContaining("restart blocked by active task run(s): taskId=task-nightly"),
+        expect.stringContaining(
+          "restart blocked by active background task run(s): taskId=task-nightly",
+        ),
       );
       expect(logReload.warn).toHaveBeenCalledWith(expect.stringContaining("runId=run-nightly"));
 

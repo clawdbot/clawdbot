@@ -115,6 +115,49 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
     });
   });
 
+  it("resolves last-stable baselines to the latest stable published package versions", () => {
+    const releases = (
+      [
+        ["v2026.5.4-beta.1", "2026-05-05T00:00:00Z", true],
+        ["v2026.5.3-1", "2026-05-04T00:00:00Z"],
+        ["v2026.5.3", "2026-05-03T00:00:00Z"],
+        ["v2026.5.2", "2026-05-02T00:00:00Z"],
+        ["v2026.4.29", "2026-04-30T00:00:00Z"],
+        ["v2026.4.27", "2026-04-28T00:00:00Z"],
+        ["v2026.4.15", "2026-04-16T00:00:00Z"],
+      ] as const
+    ).map(([tagName, publishedAt, isPrerelease = false]) => ({
+      isPrerelease,
+      publishedAt,
+      tagName,
+    }));
+
+    withReleaseFixture(releases, (releasesFile) => {
+      withJsonFixture(
+        "versions.json",
+        ["2026.5.3-1", "2026.5.3", "2026.5.2", "2026.4.29", "2026.4.27", "2026.4.15"],
+        (versionsFile) => {
+          expect(
+            resolveBaselines(
+              new Map([
+                ["requested", "last-stable-4 2026.4.23 2026.5.2 2026.4.15"],
+                ["releases-json", releasesFile],
+                ["npm-versions-json", versionsFile],
+              ]),
+            ),
+          ).toEqual([
+            "openclaw@2026.5.3-1",
+            "openclaw@2026.5.3",
+            "openclaw@2026.5.2",
+            "openclaw@2026.4.29",
+            "openclaw@2026.4.23",
+            "openclaw@2026.4.15",
+          ]);
+        },
+      );
+    });
+  });
+
   it("maps release-history anchors to npm-published package versions when GitHub tags have republish suffixes", () => {
     const releases = (
       [

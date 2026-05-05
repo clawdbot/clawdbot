@@ -448,6 +448,59 @@ describe("run-node script", () => {
     });
   });
 
+  it("routes sync I/O trace stderr blocks to the output log without flooding stderr", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp);
+      const outputPath = path.join(tmp, ".artifacts", "gateway-watch-profiles", "output.log");
+      const childStderr = [
+        "normal before\n",
+        "(node:12345) WARNING: Detected use of sync API\n",
+        "    at statSync (node:fs:1739:25)\n",
+        "    at loadConfig (/repo/src/config.ts:1:1)\n",
+        "\n",
+        "normal after\n",
+      ].join("");
+      const spawn = (_cmd: string, args: string[]) =>
+        createPipedExitedProcess({
+          stderr: args[0] === "openclaw.mjs" ? childStderr : "",
+        });
+      const stderrChunks: string[] = [];
+      const stderr = {
+        write: (chunk: string | Buffer) => {
+          stderrChunks.push(String(chunk));
+          return true;
+        },
+      } as unknown as NodeJS.WriteStream;
+      const stdout = {
+        write: () => true,
+      } as unknown as NodeJS.WriteStream;
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+          OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR: "1",
+          OPENCLAW_RUN_NODE_OUTPUT_LOG: outputPath,
+        },
+        spawn,
+        stderr,
+        stdout,
+        execPath: process.execPath,
+        platform: process.platform,
+      } as Parameters<typeof runNodeMain>[0] & { stdout: NodeJS.WriteStream });
+
+      expect(exitCode).toBe(0);
+      const terminalStderr = stderrChunks.join("");
+      expect(terminalStderr).toContain("normal before\n");
+      expect(terminalStderr).toContain("normal after\n");
+      expect(terminalStderr).not.toContain("Detected use of sync API");
+      expect(terminalStderr).not.toContain("statSync");
+      await expect(fs.readFile(outputPath, "utf-8")).resolves.toContain(childStderr);
+    });
+  });
+
   it("adds Node CPU profiling flags to the launched OpenClaw child when requested", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
@@ -494,6 +547,44 @@ describe("run-node script", () => {
       expect(childArgs.slice(3)).toEqual(["openclaw.mjs", "status"]);
       expect(spawnCalls.at(-1)?.env.OPENCLAW_RUN_NODE_CPU_PROF_DIR).toBe(profileDir);
       expect(fsSync.existsSync(profileDir)).toBe(true);
+    });
+  });
+
+  it("adds Node sync I/O tracing flag to the launched OpenClaw child when requested", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+      const spawnCalls: string[][] = [];
+      const spawn = (_cmd: string, args: string[]) => {
+        spawnCalls.push(args);
+        return createExitedProcess(0);
+      };
+      const { spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["gateway", "--force"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+          OPENCLAW_TRACE_SYNC_IO: "1",
+        },
+        spawn,
+        spawnSync,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls.at(-1)).toEqual(["--trace-sync-io", "openclaw.mjs", "gateway", "--force"]);
     });
   });
 
@@ -829,6 +920,46 @@ describe("run-node script", () => {
           ".artifacts/qa-e2e/gpt54/qa-suite-summary.json",
           "--baseline-summary",
           ".artifacts/qa-e2e/opus46/qa-suite-summary.json",
+        ],
+      ]);
+    });
+  });
+
+  it("runs QA coverage report from source without rebuilding private QA dist", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          "extensions/qa-lab/src/cli.runtime.ts": "export {};\n",
+        },
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const spawnCalls: string[][] = [];
+      const spawn = (cmd: string, args: string[]) => {
+        spawnCalls.push([cmd, ...args]);
+        return createExitedProcess(0);
+      };
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["qa", "coverage", "--json"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([
+        [
+          process.execPath,
+          "--import",
+          "tsx",
+          path.join(tmp, "scripts", "qa-coverage-report.ts"),
+          "--json",
         ],
       ]);
     });

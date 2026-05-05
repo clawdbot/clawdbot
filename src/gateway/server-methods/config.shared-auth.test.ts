@@ -168,6 +168,123 @@ describe("config shared auth disconnects", () => {
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 
+  it("disconnects gateway-auth clients when active trusted-proxy policy changes", async () => {
+    const prevConfig: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            allowUsers: ["alice@example.com"],
+          },
+        },
+        trustedProxies: ["127.0.0.1"],
+      },
+    };
+    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
+
+    const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
+      method: "config.patch",
+      params: {
+        baseHash: "base-hash",
+        raw: JSON.stringify({
+          gateway: {
+            auth: {
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+                allowUsers: ["bob@example.com"],
+              },
+            },
+          },
+        }),
+        restartDelayMs: 1_000,
+      },
+    });
+
+    await configHandlers["config.patch"](options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it("disconnects gateway-auth clients when trusted-proxy source list changes", async () => {
+    const prevConfig: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+          },
+        },
+        trustedProxies: ["127.0.0.1"],
+      },
+    };
+    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
+
+    const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
+      method: "config.patch",
+      params: {
+        baseHash: "base-hash",
+        raw: JSON.stringify({
+          gateway: {
+            trustedProxies: ["10.0.0.10"],
+          },
+        }),
+        restartDelayMs: 1_000,
+      },
+    });
+
+    await configHandlers["config.patch"](options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not disconnect gateway-auth clients when trusted-proxy lists are reordered", async () => {
+    const prevConfig: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
+            allowUsers: ["alice@example.com", "bob@example.com"],
+          },
+        },
+        trustedProxies: ["127.0.0.1", "10.0.0.10"],
+      },
+    };
+    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
+
+    const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
+      method: "config.patch",
+      params: {
+        baseHash: "base-hash",
+        raw: JSON.stringify({
+          gateway: {
+            auth: {
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+                requiredHeaders: ["x-forwarded-host", "x-forwarded-proto"],
+                allowUsers: ["bob@example.com", "alice@example.com"],
+              },
+            },
+            trustedProxies: ["10.0.0.10", "127.0.0.1"],
+          },
+        }),
+        restartDelayMs: 1_000,
+      },
+    });
+
+    await configHandlers["config.patch"](options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
+  });
+
   it("still schedules a direct restart for hot mode when the reloader cannot apply the change", async () => {
     const prevConfig: OpenClawConfig = {
       gateway: {

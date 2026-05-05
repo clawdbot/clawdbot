@@ -28,7 +28,7 @@ describe("live cache regression runner", () => {
     ]);
   });
 
-  it("keeps hard cache floors blocking for required OpenAI lanes", () => {
+  it("keeps OpenAI text cache floor misses advisory", () => {
     const regressions: string[] = [];
     const warnings: string[] = [];
 
@@ -47,11 +47,11 @@ describe("live cache regression runner", () => {
       warnings,
     });
 
-    expect(regressions).toEqual([
+    expect(regressions).toEqual([]);
+    expect(warnings).toEqual([
       "openai:stable cacheRead=0 < min=4608",
       "openai:stable hitRate=0.000 < min=0.900",
     ]);
-    expect(warnings).toEqual([]);
   });
 
   it("retries hard cache baseline misses once", () => {
@@ -84,7 +84,7 @@ describe("live cache regression runner", () => {
     ).toBe(false);
   });
 
-  it("retries a cache probe once when provider text misses the sentinel", () => {
+  it("retries a cache probe twice when provider text misses the sentinel", () => {
     expect(
       __testing.shouldRetryCacheProbeText({
         attempt: 1,
@@ -95,6 +95,13 @@ describe("live cache regression runner", () => {
     expect(
       __testing.shouldRetryCacheProbeText({
         attempt: 2,
+        suffix: "openai-stable-hit-a",
+        text: "",
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldRetryCacheProbeText({
+        attempt: 3,
         suffix: "openai-stable-hit-a",
         text: "",
       }),
@@ -111,6 +118,65 @@ describe("live cache regression runner", () => {
         attempt: 1,
         suffix: "openai-stable-hit-a",
         text: "CACHE-OK openai-stable-hit-a",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps OpenAI cache probes above the reasoning output floor", () => {
+    expect(
+      __testing.resolveCacheProbeMaxTokens({
+        maxTokens: 32,
+        providerTag: "openai",
+      }),
+    ).toBe(256);
+    expect(
+      __testing.resolveCacheProbeMaxTokens({
+        maxTokens: 512,
+        providerTag: "openai",
+      }),
+    ).toBe(512);
+    expect(
+      __testing.resolveCacheProbeMaxTokens({
+        maxTokens: 32,
+        providerTag: "anthropic",
+      }),
+    ).toBe(32);
+  });
+
+  it("accepts empty OpenAI cache probe text only when usage is observable", () => {
+    expect(
+      __testing.shouldAcceptEmptyOpenAICacheProbe({
+        providerTag: "openai",
+        text: "",
+        usage: { input: 5_000 },
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldAcceptEmptyOpenAICacheProbe({
+        providerTag: "openai",
+        text: "",
+        usage: { cacheRead: 4_608 },
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldAcceptEmptyOpenAICacheProbe({
+        providerTag: "openai",
+        text: "wrong",
+        usage: { input: 5_000 },
+      }),
+    ).toBe(false);
+    expect(
+      __testing.shouldAcceptEmptyOpenAICacheProbe({
+        providerTag: "anthropic",
+        text: "",
+        usage: { input: 5_000 },
+      }),
+    ).toBe(false);
+    expect(
+      __testing.shouldAcceptEmptyOpenAICacheProbe({
+        providerTag: "openai",
+        text: "",
+        usage: {},
       }),
     ).toBe(false);
   });

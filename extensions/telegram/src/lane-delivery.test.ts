@@ -22,6 +22,7 @@ function createHarness(params?: {
   answerHasStreamedMessage?: boolean;
   answerLastPartialText?: string;
   answerPreviewVisibleSinceMs?: number;
+  splitFinalTextForPreview?: (text: string) => readonly string[];
   nowMs?: number;
 }) {
   const answer =
@@ -70,6 +71,7 @@ function createHarness(params?: {
     retainPreviewOnCleanupByLane: { ...retainPreviewOnCleanupByLane },
     draftMaxChars: params?.draftMaxChars ?? 4_096,
     applyTextToPayload: (payload: ReplyPayload, text: string) => ({ ...payload, text }),
+    splitFinalTextForPreview: params?.splitFinalTextForPreview,
     sendPayload,
     flushDraftLane,
     stopDraftLane,
@@ -381,6 +383,36 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.editPreview).not.toHaveBeenCalled();
     expect(harness.sendPayload).toHaveBeenCalledWith(expect.objectContaining({ text: longText }));
     expect(harness.log).toHaveBeenCalledWith(expect.stringContaining("preview final too long"));
+  });
+
+  it("forces a long final preview back to the first chunk before sending the rest", async () => {
+    const firstChunk = "First chunk boundary.";
+    const remainingText = " Follow-up body after the boundary.";
+    const finalText = `${firstChunk}${remainingText}`;
+    const harness = createHarness({
+      answerMessageId: 999,
+      answerHasStreamedMessage: true,
+      answerLastPartialText: `${firstChunk} overlap already visible`,
+      draftMaxChars: 24,
+      splitFinalTextForPreview: () => [firstChunk, remainingText],
+    });
+
+    const result = await deliverFinalAnswer(harness, finalText);
+
+    expect(expectPreviewFinalized(result)).toEqual({
+      content: finalText,
+      messageId: 999,
+    });
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 999,
+        text: firstChunk,
+      }),
+    );
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: remainingText }),
+    );
+    expect(harness.lanes.answer.lastPartialText).toBe(firstChunk);
   });
 
   it("sends a fresh final when a message preview is long lived", async () => {

@@ -845,6 +845,10 @@ Common forms:
 - `/codex mcp` lists Codex app-server MCP server status.
 - `/codex skills` lists Codex app-server skills.
 
+When Codex reports a usage-limit failure, OpenClaw includes the next
+app-server reset time when Codex provided one. Use `/codex account` in the same
+conversation to inspect the current account and rate-limit windows.
+
 ### Common debugging workflow
 
 When a Codex-backed agent does something surprising in Telegram, Discord, Slack,

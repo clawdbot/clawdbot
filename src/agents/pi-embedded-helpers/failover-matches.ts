@@ -53,6 +53,7 @@ const ZAI_AUTH_CODE_1113_RE = /"code"\s*:\s*1113\b/;
 const STATUS_INTERNAL_SERVER_ERROR_RE = /\bstatus:\s*internal server error\b/i;
 const STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE =
   /^(?=[\s\S]*\bstatus:\s*internal server error\b)(?=[\s\S]*\bcode["']?\s*[:=]\s*500\b)/i;
+const HTTP_5XX_STATUS_RE = /\bHTTP\s+5\d\d\b/i;
 
 const ZAI_AUTH_ERROR_PATTERNS = [
   // Z.ai: error 1113 = wrong endpoint or invalid credentials (#48988)
@@ -305,7 +306,7 @@ export function isServerErrorMessage(raw: string): boolean {
   if (!value) {
     return false;
   }
-  if (STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE.test(value)) {
+  if (STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE.test(value) || HTTP_5XX_STATUS_RE.test(value)) {
     return true;
   }
   const scrubbed = value.replace(STATUS_INTERNAL_SERVER_ERROR_RE, "").trim();

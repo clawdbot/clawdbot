@@ -1,8 +1,6 @@
 import path from "node:path";
 import {
   DEFAULT_ACCOUNT_ID,
-  normalizeAllowFromEntries,
-  normalizeE164,
   pathExists,
   splitSetupEntries,
   type DmPolicy,
@@ -15,6 +13,10 @@ import {
   resolveWhatsAppAccount,
   resolveWhatsAppAuthDir,
 } from "./accounts.js";
+import {
+  normalizeWhatsAppAllowFromEntries,
+  normalizeWhatsAppAllowFromEntry,
+} from "./normalize-target.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 
 type SetupPrompter = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
@@ -177,7 +179,7 @@ async function promptWhatsAppOwnerAllowFrom(params: {
       if (!raw) {
         return "Required";
       }
-      const normalized = normalizeE164(raw);
+      const normalized = normalizeWhatsAppAllowFromEntry(raw);
       if (!normalized) {
         return `Invalid number: ${raw}`;
       }
@@ -185,14 +187,14 @@ async function promptWhatsAppOwnerAllowFrom(params: {
     },
   });
 
-  const normalized = normalizeE164(trimPromptText(entry));
+  const normalized = normalizeWhatsAppAllowFromEntry(trimPromptText(entry));
   if (!normalized) {
     throw new Error("Invalid WhatsApp owner number (expected E.164 after validation).");
   }
-  const allowFrom = normalizeAllowFromEntries(
-    [...existingAllowFrom.filter((item) => item !== "*"), normalized],
-    normalizeE164,
-  );
+  const allowFrom = normalizeWhatsAppAllowFromEntries([
+    ...existingAllowFrom.filter((item) => item !== "*"),
+    normalized,
+  ]);
   return { normalized, allowFrom };
 }
 
@@ -229,13 +231,13 @@ function parseWhatsAppAllowFromEntries(raw: string): { entries: string[]; invali
       entries.push("*");
       continue;
     }
-    const normalized = normalizeE164(part);
+    const normalized = normalizeWhatsAppAllowFromEntry(part);
     if (!normalized) {
       return { entries: [], invalidEntry: part };
     }
     entries.push(normalized);
   }
-  return { entries: normalizeAllowFromEntries(entries, normalizeE164) };
+  return { entries: normalizeWhatsAppAllowFromEntries(entries) };
 }
 
 async function promptWhatsAppDmAccess(params: {
@@ -313,7 +315,7 @@ async function promptWhatsAppDmAccess(params: {
   let next = setWhatsAppSelfChatMode(params.cfg, accountId, false);
   next = setWhatsAppDmPolicy(next, accountId, policy);
   if (policy === "open") {
-    const allowFrom = normalizeAllowFromEntries(["*", ...existingAllowFrom], normalizeE164);
+    const allowFrom = normalizeWhatsAppAllowFromEntries(["*", ...existingAllowFrom]);
     next = setWhatsAppAllowFrom(next, accountId, allowFrom.length > 0 ? allowFrom : ["*"]);
     return next;
   }

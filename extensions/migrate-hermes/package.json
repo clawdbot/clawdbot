@@ -5,7 +5,7 @@
   "description": "Hermes to OpenClaw migration provider",
   "type": "module",
   "dependencies": {
-    "yaml": "^2.8.3"
+    "yaml": "^2.8.4"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

@@ -94,14 +94,17 @@ export function isNonRecoverableSlackAuthError(error: unknown): boolean {
 }
 
 export function formatUnknownError(error: unknown): string {
+  if (error === undefined || error === null) {
+    return "unknown error";
+  }
   if (error instanceof Error) {
-    return error.message;
+    return error.message || error.name || "unknown error";
   }
   if (typeof error === "string") {
-    return error;
+    return error || "unknown error";
   }
   try {
-    return JSON.stringify(error);
+    return JSON.stringify(error) ?? "unknown error";
   } catch {
     return "unknown error";
   }

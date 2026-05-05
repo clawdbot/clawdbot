@@ -119,6 +119,13 @@ describe("embedded acpx plugin config", () => {
     expect(server.args?.length).toBeGreaterThan(0);
   });
 
+  it("resolves the plugin root from shared dist chunk paths", () => {
+    const moduleUrl = new URL("../../../dist/extensions/acpx/service-shared.js", import.meta.url)
+      .href;
+
+    expect(resolveAcpxPluginRoot(moduleUrl)).toBe(path.resolve("extensions/acpx"));
+  });
+
   it("keeps the runtime json schema in sync with the manifest config schema", () => {
     const pluginRoot = resolveAcpxPluginRoot();
     const manifest = JSON.parse(

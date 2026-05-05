@@ -10,6 +10,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { TuiAgentsList, TuiBackend } from "./tui-backend.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 type SessionActionBtwPresenter = {
@@ -234,6 +235,8 @@ export function createSessionActions(context: SessionActionContext) {
       };
       const listAgentId = resolveListAgentId();
       const result = await client.listSessions({
+        limit: TUI_SESSION_LOOKUP_LIMIT,
+        search: state.currentSessionKey,
         includeGlobal: false,
         includeUnknown: false,
         agentId: listAgentId,

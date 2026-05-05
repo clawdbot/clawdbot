@@ -690,6 +690,91 @@ describe("video-generation runtime", () => {
     ]);
   });
 
+  it("normalizes video resolutions against provider-supported values", async () => {
+    let seenResolution: string | undefined;
+    providers = [
+      {
+        id: "minimax",
+        capabilities: {
+          generate: {
+            supportsResolution: true,
+            resolutions: ["768P", "1080P"],
+          },
+        },
+        generateVideo: async (req) => {
+          seenResolution = req.resolution;
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: "MiniMax-Hailuo-2.3",
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "minimax/MiniMax-Hailuo-2.3" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a lobster",
+      resolution: "720P",
+    });
+
+    expect(seenResolution).toBe("768P");
+    expect(result.ignoredOverrides).toEqual([]);
+    expect(result.normalization).toMatchObject({
+      resolution: {
+        requested: "720P",
+        applied: "768P",
+      },
+    });
+    expect(result.metadata).toMatchObject({
+      requestedResolution: "720P",
+      normalizedResolution: "768P",
+    });
+  });
+
+  it("ignores unparseable video resolutions instead of sending them to providers", async () => {
+    let seenResolution: string | undefined;
+    providers = [
+      {
+        id: "minimax",
+        capabilities: {
+          generate: {
+            supportsResolution: true,
+            resolutions: ["768P", "1080P"],
+          },
+        },
+        generateVideo: async (req) => {
+          seenResolution = req.resolution;
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: "MiniMax-Hailuo-2.3",
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "minimax/MiniMax-Hailuo-2.3" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a lobster",
+      resolution: "4K",
+    });
+
+    expect(seenResolution).toBeUndefined();
+    expect(result.ignoredOverrides).toEqual([{ key: "resolution", value: "4K" }]);
+    expect(result.normalization).toBeUndefined();
+  });
+
   it("uses mode-specific capabilities for image-to-video requests", async () => {
     let seenRequest:
       | {

@@ -29,6 +29,7 @@ export function registerBrowserAgentDebugRoutes(
         ctx,
         targetId,
         feature: "console messages",
+        enforceCurrentUrlAllowed: true,
         run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
           const messages = await pw.getConsoleMessagesViaPlaywright({
             cdpUrl,
@@ -54,6 +55,7 @@ export function registerBrowserAgentDebugRoutes(
         ctx,
         targetId,
         feature: "page errors",
+        enforceCurrentUrlAllowed: true,
         run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
           const result = await pw.getPageErrorsViaPlaywright({
             cdpUrl,
@@ -80,6 +82,7 @@ export function registerBrowserAgentDebugRoutes(
         ctx,
         targetId,
         feature: "network requests",
+        enforceCurrentUrlAllowed: true,
         run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
           const result = await pw.getNetworkRequestsViaPlaywright({
             cdpUrl,
@@ -109,6 +112,7 @@ export function registerBrowserAgentDebugRoutes(
         ctx,
         targetId,
         feature: "trace start",
+        enforceCurrentUrlAllowed: true,
         run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
           await pw.traceStartViaPlaywright({
             cdpUrl,
@@ -137,6 +141,7 @@ export function registerBrowserAgentDebugRoutes(
         ctx,
         targetId,
         feature: "trace stop",
+        enforceCurrentUrlAllowed: true,
         run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
           const id = crypto.randomUUID();
           const tracePath = await resolveWritableOutputPathOrRespond({

@@ -623,6 +623,33 @@ describe("update-cli", () => {
     expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
+  it("finishes package updates when the post-core process writes a result but keeps handles open", async () => {
+    setupUpdatedRootRefresh();
+    const kill = vi.fn();
+    spawn.mockImplementationOnce((_command: unknown, _argv: unknown, options: unknown) => {
+      const resultPath = (options as { env?: NodeJS.ProcessEnv }).env
+        ?.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
+      if (!resultPath) {
+        throw new Error("missing post-core result path");
+      }
+      queueMicrotask(() => {
+        void fs.writeFile(resultPath, `${JSON.stringify({ status: "ok" })}\n`, "utf-8");
+      });
+      const child = new EventEmitter() as EventEmitter & {
+        kill: typeof kill;
+        once: EventEmitter["once"];
+      };
+      child.kill = kill;
+      return child;
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
   it("does not carry gateway service markers into the post-core update process", async () => {
     setupUpdatedRootRefresh();
 
@@ -750,8 +777,34 @@ describe("update-cli", () => {
       ["npm", "i", "-g", expect.any(String)],
       expect.anything(),
     );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("post-core resume children exit after writing a plugin update result", async () => {
+    const resultDir = createCaseDir("openclaw-post-core-result");
+    const resultPath = path.join(resultDir, "plugins.json");
+    await fs.mkdir(resultDir, { recursive: true });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: resultPath,
+      },
+      async () => {
+        await updateCommand({ restart: false });
+      },
+    );
+
+    const result = JSON.parse(await fs.readFile(resultPath, "utf-8")) as {
+      status?: string;
+    };
+    expect(result.status).toBe("ok");
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
   });
 

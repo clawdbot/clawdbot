@@ -145,9 +145,8 @@ export type MediaToolsConfig = {
   concurrency?: number;
   asyncCompletion?: {
     /**
-     * Enable direct channel sends for async media generation tasks that support
-     * direct completion delivery. Music generation stays requester-session mediated.
-     * Default: false.
+     * Deprecated compatibility flag. Async media generation completions stay
+     * requester-session mediated so source delivery policy remains agent-owned.
      */
     directSend?: boolean;
   };
@@ -167,6 +166,11 @@ export type ToolLoopDetectionDetectorConfig = {
   pingPong?: boolean;
 };
 
+export type ToolLoopPostCompactionGuardConfig = {
+  /** How many attempts post-compaction the guard remains armed (default: 3). */
+  windowSize?: number;
+};
+
 export type ToolLoopDetectionConfig = {
   /** Enable tool-loop protection (default: false). */
   enabled?: boolean;
@@ -182,6 +186,8 @@ export type ToolLoopDetectionConfig = {
   globalCircuitBreakerThreshold?: number;
   /** Detector toggles. */
   detectors?: ToolLoopDetectionDetectorConfig;
+  /** Post-compaction loop guard: aborts when the agent repeats the same (tool, args, result) immediately after auto-compaction-retry. */
+  postCompactionGuard?: ToolLoopPostCompactionGuardConfig;
 };
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";

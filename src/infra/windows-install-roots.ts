@@ -92,29 +92,12 @@ function getEnvValueCaseInsensitive(
   return actualKey ? env[actualKey] : undefined;
 }
 
-function getWindowsRegExeCandidates(env: Record<string, string | undefined>): readonly string[] {
-  const seen = new Set<string>();
-  const candidates: string[] = [];
-  for (const root of [
-    normalizeWindowsInstallRoot(getEnvValueCaseInsensitive(env, "SystemRoot")),
-    normalizeWindowsInstallRoot(getEnvValueCaseInsensitive(env, "WINDIR")),
-    DEFAULT_WINDOWS_SYSTEM_ROOT,
-  ]) {
-    if (!root) {
-      continue;
-    }
-    const key = normalizeLowercaseStringOrEmpty(root);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    candidates.push(path.win32.join(root, "System32", "reg.exe"));
-  }
-  return candidates;
+function getWindowsRegExeCandidates(): readonly string[] {
+  return [path.win32.join(DEFAULT_WINDOWS_SYSTEM_ROOT, "System32", "reg.exe")];
 }
 
-function locateWindowsRegExe(env: Record<string, string | undefined> = process.env): string | null {
-  for (const candidate of getWindowsRegExeCandidates(env)) {
+function locateWindowsRegExe(): string | null {
+  for (const candidate of getWindowsRegExeCandidates()) {
     if (isReadableFileFn(candidate)) {
       return candidate;
     }
@@ -151,7 +134,7 @@ function runRegQuery(
 }
 
 function defaultQueryRegistryValue(key: string, valueName: string): string | null {
-  const regExe = locateWindowsRegExe(process.env);
+  const regExe = locateWindowsRegExe();
   if (!regExe) {
     return null;
   }

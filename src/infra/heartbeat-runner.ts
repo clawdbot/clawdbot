@@ -1208,6 +1208,24 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY };
   }
 
+  // Phase 2: Stronger heartbeat deferral while a final delivery replay is pending.
+  // Plain `updatedAt` changes are normal for heartbeat sessions and should not
+  // suppress heartbeat runs; only defer when final delivery recovery is active.
+  const { entry: recentSessionEntry } = resolveHeartbeatSession(
+    cfg,
+    agentId,
+    heartbeat,
+    opts.sessionKey,
+  );
+  const HEARTBEAT_DEFER_WINDOW_MS = 30_000;
+  if (
+    recentSessionEntry?.pendingFinalDelivery === true &&
+    recentSessionEntry?.updatedAt &&
+    startedAt - recentSessionEntry.updatedAt < HEARTBEAT_DEFER_WINDOW_MS
+  ) {
+    return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
+  }
+
   // Preflight centralizes trigger classification, event inspection, and HEARTBEAT.md gating.
   const preflight = await resolveHeartbeatPreflight({
     cfg,

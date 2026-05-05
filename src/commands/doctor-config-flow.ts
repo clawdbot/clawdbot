@@ -161,12 +161,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
-  const { collectPluginToolAllowlistWarnings } =
+  const { collectBundledProviderAllowlistPolicyWarnings, collectPluginToolAllowlistWarnings } =
     await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
-  const pluginToolAllowlistWarnings = collectPluginToolAllowlistWarnings({
-    cfg: candidate,
-    env: process.env,
-  });
+  const pluginToolAllowlistWarnings = [
+    ...collectPluginToolAllowlistWarnings({
+      cfg: candidate,
+      env: process.env,
+    }),
+    ...collectBundledProviderAllowlistPolicyWarnings({ cfg: candidate }),
+  ];
   if (pluginToolAllowlistWarnings.length > 0) {
     note(sanitizeDoctorNote(pluginToolAllowlistWarnings.join("\n")), "Doctor warnings");
   }
@@ -257,9 +260,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
   });
   ({ cfg, candidate, pendingChanges, fixHints } = unknownStep.state);
-  if (unknownStep.removed.length > 0) {
-    const lines = unknownStep.removed.map((path) => `- ${path}`).join("\n");
+  if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {
+    const lines = [
+      ...unknownStep.removed.map((path) => `- ${path}`),
+      ...unknownStep.repairs.map((change) => `- ${change}`),
+    ].join("\n");
     note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
+  }
+  if (unknownStep.warnings.length > 0) {
+    note(unknownStep.warnings.join("\n"), "Doctor warnings");
   }
 
   const finalized = await finalizeDoctorConfigFlow({

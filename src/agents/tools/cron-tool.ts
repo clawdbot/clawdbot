@@ -307,6 +307,7 @@ export const CronToolSchema = Type.Object(
     contextMessages: Type.Optional(
       Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
     ),
+    agentId: Type.Optional(Type.String({ description: "Filter by agent id (list action)" })),
   },
   { additionalProperties: true },
 );
@@ -570,7 +571,7 @@ Main-session cron jobs enqueue system events for heartbeat handling. Isolated cr
 
 ACTIONS:
 - status: Check cron scheduler status
-- list: List jobs (use includeDisabled:true to include disabled)
+- list: List jobs (use includeDisabled:true to include disabled; agentId filters by agent, auto-filled from session)
 - add: Create job (requires job object, see schema below)
 - update: Modify job (requires jobId + patch object)
 - remove: Delete job (requires jobId)
@@ -653,12 +654,21 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
       switch (action) {
         case "status":
           return jsonResult(await callGateway("cron.status", gatewayOpts, {}));
-        case "list":
+        case "list": {
+          const cfg = getRuntimeConfig();
+          const listAgentId =
+            typeof params.agentId === "string" && params.agentId.trim()
+              ? params.agentId.trim()
+              : opts?.agentSessionKey
+                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+                : undefined;
           return jsonResult(
             await callGateway("cron.list", gatewayOpts, {
               includeDisabled: Boolean(params.includeDisabled),
+              agentId: listAgentId,
             }),
           );
+        }
         case "add": {
           // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
           // job properties to the top level alongside `action` instead of nesting

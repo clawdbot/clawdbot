@@ -111,9 +111,11 @@ describe("cron protocol validators", () => {
         enabled: "all",
         sortBy: "nextRunAtMs",
         sortDir: "asc",
+        agentId: "ops",
       }),
     ).toBe(true);
     expect(validateCronListParams({ offset: -1 })).toBe(false);
+    expect(validateCronListParams({ agentId: "" })).toBe(false);
   });
 
   it("enforces runs limit minimum for id and jobId selectors", () => {

@@ -1,4 +1,4 @@
-import { readFileSync as readFileSyncOriginal } from "node:fs";
+import { existsSync as existsSyncOriginal, readFileSync as readFileSyncOriginal } from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -51,6 +51,13 @@ async function writePluginPackage(
 }
 
 describe("bundled plugin postinstall", () => {
+  function existsSyncWithoutGlobalCompileCache(value: string) {
+    if (path.resolve(value) === path.join(tmpdir(), "node-compile-cache")) {
+      return false;
+    }
+    return existsSyncOriginal(value);
+  }
+
   it("recognizes direct invocation through symlinked temp prefixes", () => {
     const realpathSync = vi.fn((value: string) =>
       value.replace(/^\/var\/folders\//u, "/private/var/folders/"),
@@ -448,6 +455,7 @@ describe("bundled plugin postinstall", () => {
         STATE_DIRECTORY: systemState,
       },
       packageRoot,
+      existsSync: existsSyncWithoutGlobalCompileCache,
       log,
     });
 

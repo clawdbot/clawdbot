@@ -92,7 +92,7 @@ vi.mock("./presence.js", () => ({
   resolveDiscordPresenceUpdate: vi.fn(() => undefined),
 }));
 
-import { createDiscordRequestClient, DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
+import { DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
 import { registerDiscordListener } from "./listeners.js";
 import {
   createDiscordMonitorClient,
@@ -104,7 +104,6 @@ describe("createDiscordMonitorClient", () => {
   beforeEach(() => {
     registerVoiceClientSpy.mockReset();
     waitForDiscordGatewayPluginRegistrationMock.mockReset().mockReturnValue(undefined);
-    vi.mocked(createDiscordRequestClient).mockClear();
     vi.mocked(registerDiscordListener).mockClear();
   });
 
@@ -253,33 +252,40 @@ describe("createDiscordMonitorClient", () => {
     );
   });
 
-  it("passes REST timeout options to proxied Discord fetch", async () => {
-    const proxyFetch = vi.fn();
+  it("passes REST timeout options and fetch to internal Discord REST", async () => {
+    const restFetch = vi.fn();
+    const createClient = vi.fn(createClientWithPlugins);
 
     await createDiscordMonitorClient({
       accountId: "default",
       applicationId: "app-1",
       token: "token-1",
-      proxyFetch,
+      restFetch,
       commands: [],
       components: [],
       modals: [],
       voiceEnabled: false,
       discordConfig: {},
       runtime: createRuntime(),
-      createClient: createClientWithPlugins,
+      createClient,
       createGatewayPlugin: () => ({ id: "gateway" }) as never,
       createGatewaySupervisor: () => ({ shutdown: vi.fn(), handleError: vi.fn() }) as never,
       createAutoPresenceController: () => createAutoPresenceController() as never,
       isDisallowedIntentsError: () => false,
     });
 
-    expect(createDiscordRequestClient).toHaveBeenCalledWith("token-1", {
-      fetch: proxyFetch,
-      timeout: DISCORD_REST_TIMEOUT_MS,
-      runtimeProfile: "persistent",
-      maxQueueSize: 1000,
-    });
+    expect(createClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestOptions: {
+          timeout: DISCORD_REST_TIMEOUT_MS,
+          runtimeProfile: "persistent",
+          maxQueueSize: 1000,
+          fetch: restFetch,
+        },
+      }),
+      expect.any(Object),
+      expect.any(Array),
+    );
   });
 
   it("propagates gateway registration failures before supervisor startup", async () => {

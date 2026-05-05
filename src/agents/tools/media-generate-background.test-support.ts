@@ -191,7 +191,7 @@ export function expectFallbackMediaAnnouncement({
           status: "ok",
           result: expect.stringContaining(resultMediaPath),
           mediaUrls,
-          replyInstruction: expect.stringContaining("Prefer the message tool for delivery"),
+          replyInstruction: expect.stringContaining("Tell the user"),
         }),
       ]),
     }),

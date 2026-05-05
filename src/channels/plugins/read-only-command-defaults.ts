@@ -74,12 +74,6 @@ export function resolveReadOnlyChannelCommandDefaults(
     if (!record.channels.includes(normalizedChannelId)) {
       continue;
     }
-    if (
-      record.id !== normalizedChannelId &&
-      record.channelCatalogMeta?.id !== normalizedChannelId
-    ) {
-      continue;
-    }
     if (!isInstalledPluginEnabled(snapshot.index, record.id, options.config)) {
       continue;
     }
@@ -92,9 +86,11 @@ export function resolveReadOnlyChannelCommandDefaults(
       !Array.isArray(channelConfigValue)
         ? (channelConfigValue as ManifestChannelConfigRecord)
         : undefined;
-    const commands = normalizeChannelCommandDefaults(
-      channelConfig?.commands ?? record.channelCatalogMeta?.commands,
-    );
+    const catalogCommands =
+      record.channelCatalogMeta?.id === normalizedChannelId
+        ? record.channelCatalogMeta.commands
+        : undefined;
+    const commands = normalizeChannelCommandDefaults(channelConfig?.commands ?? catalogCommands);
     if (commands) {
       return commands;
     }

@@ -97,8 +97,8 @@ describe("opencode-go provider plugin", () => {
       maxTokens: 65_536,
     });
     expect(models.get("minimax-m2.7")).toMatchObject({
-      api: "anthropic-messages",
-      baseUrl: "https://opencode.ai/zen/go",
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/go/v1",
       reasoning: true,
       contextWindow: 204_800,
       maxTokens: 131_072,

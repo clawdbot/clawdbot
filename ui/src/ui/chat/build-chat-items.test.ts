@@ -50,15 +50,105 @@ describe("buildChatItems", () => {
   it("collapses consecutive duplicate text messages into one rendered item with a count", () => {
     const groups = messageGroups({
       messages: [
-        { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }], timestamp: 1 },
-        { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }], timestamp: 2 },
-        { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }], timestamp: 3 },
+        { role: "assistant", content: [{ type: "text", text: "Same update" }], timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "Same update" }], timestamp: 2 },
+        { role: "assistant", content: [{ type: "text", text: "Same update" }], timestamp: 3 },
       ],
     });
 
     expect(groups).toHaveLength(1);
     expect(groups[0].messages).toHaveLength(1);
     expect(groups[0].messages[0]).toMatchObject({ duplicateCount: 3 });
+  });
+
+  it("suppresses assistant HEARTBEAT_OK acknowledgements before rendering history", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }], timestamp: 1 },
+        { role: "assistant", content: "HEARTBEAT_OK", timestamp: 2 },
+        { role: "user", content: [{ type: "text", text: "HEARTBEAT_OK" }], timestamp: 3 },
+        { role: "assistant", content: [{ type: "text", text: "Visible reply" }], timestamp: 4 },
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0].role).toBe("user");
+    expect(groups[1].role).toBe("assistant");
+    expect(groups[1].messages[0].message).toMatchObject({
+      content: [{ type: "text", text: "Visible reply" }],
+    });
+  });
+
+  it("suppresses assistant HEARTBEAT_OK acknowledgements that carry hidden thinking blocks", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "Checking scheduled work." },
+            {
+              type: "text",
+              text: "HEARTBEAT_OK",
+              textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+            },
+          ],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [
+            { id: "rs_1", type: "reasoning" },
+            { type: "text", text: "HEARTBEAT_OK" },
+          ],
+          timestamp: 2,
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "Useful hidden reasoning." },
+            { type: "text", text: "Visible reply" },
+          ],
+          timestamp: 3,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(1);
+    expect(groups[0].messages[0].message).toMatchObject({
+      content: [
+        { type: "thinking", thinking: "Useful hidden reasoning." },
+        { type: "text", text: "Visible reply" },
+      ],
+    });
+  });
+
+  it("keeps HEARTBEAT_OK turns that carry visible non-text content", () => {
+    const canvasBlock = createAssistantCanvasBlock({ suffix: "heartbeat_visible_content" });
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "HEARTBEAT_OK" }, canvasBlock],
+          timestamp: 1,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(1);
+    expect(firstMessageContent(groups[0]).some((block) => isCanvasBlock(block))).toBe(true);
+  });
+
+  it("suppresses active HEARTBEAT_OK streams before rendering", () => {
+    const items = buildChatItems(
+      createProps({
+        stream: "HEARTBEAT_OK",
+        streamStartedAt: 1,
+      }),
+    );
+
+    expect(items).toEqual([]);
   });
 
   it("does not collapse duplicate text messages separated by another message", () => {

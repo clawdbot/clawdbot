@@ -245,8 +245,40 @@ Full guide: [Getting Started](/start/getting-started)
 
 ## Windows companion app
 
-We do not have a Windows companion app yet. Contributions are welcome if you want
-contributions to make it happen.
+We do not have a Windows companion app yet. Contributions are welcome if you want to
+help make it happen.
+
+## Git and GitHub connectivity (contributors)
+
+Some networks block or throttle HTTPS to GitHub. If `git clone` fails with timeouts
+or connection resets, try another network, a VPN, or an HTTP/HTTPS proxy your
+organization provides.
+
+If `gh auth login` fails during the browser device flow (for example a timeout
+reaching `github.com:443`), authenticate with a personal access token instead:
+
+1. Create a token with at least the `repo` scope (classic PAT) or equivalent
+   fine-grained access.
+2. In PowerShell for the current session:
+
+```powershell
+$env:GH_TOKEN="<your-token>"
+gh auth status
+gh auth setup-git
+```
+
+3. If `gh auth status` warns about missing `read:org`, mint a token that includes
+   that scope and re-assign the variable:
+
+```powershell
+$env:GH_TOKEN="<your-token-with-repo-and-read:org>"
+gh auth status
+```
+
+`gh auth refresh -s read:org` only applies when you authenticated via `gh auth login`
+and have stored credentials to refresh (not when using `GH_TOKEN`).
+
+Never commit tokens or paste them into issues or pull requests.
 
 ## Related
 

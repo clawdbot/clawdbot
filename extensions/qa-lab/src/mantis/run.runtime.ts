@@ -24,6 +24,7 @@ export type MantisBeforeAfterOptions = {
 
 export type MantisBeforeAfterResult = {
   comparisonPath: string;
+  manifestPath: string;
   outputDir: string;
   reportPath: string;
   status: "pass" | "fail";
@@ -51,6 +52,7 @@ type LaneResult = {
   screenshotPath?: string;
   status: string;
   summaryPath: string;
+  videoPath?: string;
 };
 
 type Comparison = {
@@ -60,6 +62,7 @@ type Comparison = {
     reproduced: boolean;
     screenshotPath?: string;
     status: string;
+    videoPath?: string;
   };
   candidate: {
     expected: "queued -> thinking -> done";
@@ -67,6 +70,7 @@ type Comparison = {
     ref: string;
     screenshotPath?: string;
     status: string;
+    videoPath?: string;
   };
   pass: boolean;
   scenario: string;
@@ -157,12 +161,14 @@ async function readLaneResult(params: {
     summary.scenarios?.find((entry) => entry.id === params.scenario) ?? summary.scenarios?.[0];
   const status = scenarioSummary?.status ?? "fail";
   const screenshotPath = scenarioSummary?.artifactPaths?.screenshot;
+  const videoPath = scenarioSummary?.artifactPaths?.video;
   return {
     outputDir: params.publishedLaneDir,
     scenarioDetails: scenarioSummary?.details,
     screenshotPath,
     status,
     summaryPath,
+    videoPath,
   } satisfies LaneResult;
 }
 
@@ -189,6 +195,9 @@ function renderReport(params: {
     params.baseline.screenshotPath
       ? `- Screenshot: \`${path.join("baseline", path.basename(params.baseline.screenshotPath))}\``
       : "- Screenshot: missing",
+    params.baseline.videoPath
+      ? `- Video: \`${path.join("baseline", path.basename(params.baseline.videoPath))}\``
+      : "- Video: missing",
     params.baseline.scenarioDetails ? `- Details: ${params.baseline.scenarioDetails}` : undefined,
     "",
     "## Candidate",
@@ -200,10 +209,113 @@ function renderReport(params: {
     params.candidate.screenshotPath
       ? `- Screenshot: \`${path.join("candidate", path.basename(params.candidate.screenshotPath))}\``
       : "- Screenshot: missing",
+    params.candidate.videoPath
+      ? `- Video: \`${path.join("candidate", path.basename(params.candidate.videoPath))}\``
+      : "- Video: missing",
     params.candidate.scenarioDetails ? `- Details: ${params.candidate.scenarioDetails}` : undefined,
     "",
   ].filter((line) => line !== undefined);
   return `${lines.join("\n")}\n`;
+}
+
+function relativeArtifactPath(outputDir: string, artifactPath: string | undefined) {
+  if (!artifactPath) {
+    return undefined;
+  }
+  return path.isAbsolute(artifactPath) ? path.relative(outputDir, artifactPath) : artifactPath;
+}
+
+function buildEvidenceManifest(params: {
+  baseline: LaneResult;
+  candidate: LaneResult;
+  comparison: Comparison;
+  outputDir: string;
+}) {
+  const artifacts: {
+    alt?: string;
+    kind: string;
+    label: string;
+    lane: "baseline" | "candidate" | "run";
+    path: string;
+    required?: boolean;
+    targetPath: string;
+    width?: number;
+  }[] = [
+    {
+      kind: "metadata",
+      label: "Comparison JSON",
+      lane: "run",
+      path: "comparison.json",
+      targetPath: "comparison.json",
+    },
+    {
+      kind: "report",
+      label: "Mantis report",
+      lane: "run",
+      path: "mantis-report.md",
+      targetPath: "mantis-report.md",
+    },
+  ];
+  const baselineScreenshot = relativeArtifactPath(params.outputDir, params.baseline.screenshotPath);
+  if (baselineScreenshot) {
+    artifacts.push({
+      alt: "Baseline Discord status reaction timeline",
+      kind: "timeline",
+      label: "Baseline queued-only",
+      lane: "baseline",
+      path: baselineScreenshot,
+      targetPath: "baseline.png",
+      width: 420,
+    });
+  }
+  const candidateScreenshot = relativeArtifactPath(
+    params.outputDir,
+    params.candidate.screenshotPath,
+  );
+  if (candidateScreenshot) {
+    artifacts.push({
+      alt: "Candidate Discord status reaction timeline",
+      kind: "timeline",
+      label: "Candidate queued -> thinking -> done",
+      lane: "candidate",
+      path: candidateScreenshot,
+      targetPath: "candidate.png",
+      width: 420,
+    });
+  }
+  const baselineVideo = relativeArtifactPath(params.outputDir, params.baseline.videoPath);
+  if (baselineVideo) {
+    artifacts.push({
+      kind: "fullVideo",
+      label: "Baseline MP4",
+      lane: "baseline",
+      path: baselineVideo,
+      targetPath: "baseline.mp4",
+      required: false,
+    });
+  }
+  const candidateVideo = relativeArtifactPath(params.outputDir, params.candidate.videoPath);
+  if (candidateVideo) {
+    artifacts.push({
+      kind: "fullVideo",
+      label: "Candidate MP4",
+      lane: "candidate",
+      path: candidateVideo,
+      targetPath: "candidate.mp4",
+      required: false,
+    });
+  }
+
+  return {
+    artifacts,
+    comparison: params.comparison,
+    id: params.comparison.scenario,
+    scenario: params.comparison.scenario,
+    schemaVersion: 1,
+    summary:
+      "Mantis ran the before/after scenario, captured baseline and candidate evidence, and compared the expected bug reproduction against the candidate fix.",
+    title: "Mantis Before/After QA",
+  };
 }
 
 async function copyScreenshot(params: { lane: "baseline" | "candidate"; result: LaneResult }) {
@@ -214,6 +326,18 @@ async function copyScreenshot(params: { lane: "baseline" | "candidate"; result: 
     ? params.result.screenshotPath
     : path.join(params.result.outputDir, params.result.screenshotPath);
   const target = path.join(params.result.outputDir, `${params.lane}.png`);
+  await fs.copyFile(source, target);
+  return target;
+}
+
+async function copyVideo(params: { lane: "baseline" | "candidate"; result: LaneResult }) {
+  if (!params.result.videoPath) {
+    return undefined;
+  }
+  const source = path.isAbsolute(params.result.videoPath)
+    ? params.result.videoPath
+    : path.join(params.result.outputDir, params.result.videoPath);
+  const target = path.join(params.result.outputDir, `${params.lane}.mp4`);
   await fs.copyFile(source, target);
   return target;
 }
@@ -300,9 +424,11 @@ async function runLane(params: {
     scenario: params.scenario,
   });
   const copiedScreenshot = await copyScreenshot({ lane: params.lane, result });
+  const copiedVideo = await copyVideo({ lane: params.lane, result });
   return {
     ...result,
     screenshotPath: copiedScreenshot ?? result.screenshotPath,
+    videoPath: copiedVideo ?? result.videoPath,
   } satisfies LaneResult;
 }
 
@@ -334,6 +460,7 @@ export async function runMantisBeforeAfter(
   const runner = opts.commandRunner ?? defaultCommandRunner;
   const worktreeRoot = path.join(outputDir, "worktrees");
   const comparisonPath = path.join(outputDir, "comparison.json");
+  const manifestPath = path.join(outputDir, "mantis-evidence.json");
   const reportPath = path.join(outputDir, "mantis-report.md");
   await fs.mkdir(worktreeRoot, { recursive: true });
 
@@ -373,6 +500,7 @@ export async function runMantisBeforeAfter(
         reproduced: baselineResult.status === "fail",
         screenshotPath: baselineResult.screenshotPath,
         status: baselineResult.status,
+        videoPath: baselineResult.videoPath,
       },
       candidate: {
         expected: "queued -> thinking -> done",
@@ -380,6 +508,7 @@ export async function runMantisBeforeAfter(
         ref: candidate,
         screenshotPath: candidateResult.screenshotPath,
         status: candidateResult.status,
+        videoPath: candidateResult.videoPath,
       },
       pass: baselineResult.status === "fail" && candidateResult.status === "pass",
       scenario,
@@ -396,8 +525,23 @@ export async function runMantisBeforeAfter(
       }),
       "utf8",
     );
+    await fs.writeFile(
+      manifestPath,
+      `${JSON.stringify(
+        buildEvidenceManifest({
+          baseline: baselineResult,
+          candidate: candidateResult,
+          comparison,
+          outputDir,
+        }),
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
     return {
       comparisonPath,
+      manifestPath,
       outputDir,
       reportPath,
       status: comparison.pass ? "pass" : "fail",

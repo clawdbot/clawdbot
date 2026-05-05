@@ -19,6 +19,7 @@ const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-
 const ROOT_STABLE_RUNTIME_ALIAS_PATTERN = /^.+\.(?:runtime|contract)\.js$/u;
 const ROOT_RUNTIME_IMPORT_SPECIFIER_PATTERN =
   /(["'])\.\/([^"']+\.(?:runtime|contract)-[A-Za-z0-9_-]+\.js)\1/gu;
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 const LEGACY_ROOT_RUNTIME_COMPAT_ALIASES = [
   // v2026.4.29 dispatch lazy chunks. Package updates used to replace the
   // dist tree before the live gateway had restarted, so an already-loaded old
@@ -45,6 +46,77 @@ const LEGACY_ROOT_RUNTIME_COMPAT_ALIASES = [
   ["provider-dispatcher-BpL2E92x.js", "provider-dispatcher.runtime.js"],
   ["provider-dispatcher-JG96SkLX.js", "provider-dispatcher.runtime.js"],
 ];
+const LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS = [
+  "scanPackageInstallSource",
+  "scanFileInstallSource",
+  "scanInstalledPackageDependencyTree",
+  "scanBundleInstallSource",
+];
+const PLUGIN_INSTALL_RUNTIME_ALIAS = {
+  aliasFileName: "install.runtime.js",
+  sourceIncludes: LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS,
+};
+const LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES = [
+  // Published releases from v2026.3.22 onward. Older updaters could
+  // overlay package dist instead of swapping it, leaving old install chunks
+  // that still import these hashed plugin install runtime files.
+  "install.runtime-D7SL02B2.js",
+  "install.runtime-Deq6Beal.js",
+  "install.runtime-Eoq8y3HE.js",
+  "install.runtime-DDmlaKdG.js",
+  "install.runtime-ADTafpVD.js",
+  "install.runtime-v8X-j3Tm.js",
+  "install.runtime-BLcZ-44g.js",
+  "install.runtime-vS4aFJvO.js",
+  "install.runtime-Dm_c092A.js",
+  "install.runtime-D_7OUvuY.js",
+  "install.runtime-BLEE0OIk.js",
+  "install.runtime-3LpjZbr8.js",
+  "install.runtime-BrsB9OnV.js",
+  "install.runtime-BEOb-kNW.js",
+  "install.runtime-Cx_xphd1.js",
+  "install.runtime-B-MtEMSR.js",
+  "install.runtime-C-Y4HAqX.js",
+  "install.runtime-j1SedTZh.js",
+  "install.runtime-4zsL_8wt.js",
+  "install.runtime-BhCKlLSJ.js",
+  "install.runtime-tGJ0KhMF.js",
+  "install.runtime-DtmATpak.js",
+  "install.runtime-BzZ38ePb.js",
+  "install.runtime-DwQr7nEE.js",
+  "install.runtime-CEIURnUz.js",
+  "install.runtime-D3EPlM0r.js",
+  "install.runtime-DIlN5H3O.js",
+  "install.runtime-DjcOwVH_.js",
+  "install.runtime-B13jZink.js",
+  "install.runtime-O8MXNrwm.js",
+  "install.runtime-Bkf_VMnk.js",
+  "install.runtime-QOfEzAcZ.js",
+  "install.runtime-BRVACueI.js",
+  "install.runtime-DX8jy7tN.js",
+  "install.runtime-BdfsTamp.js",
+  "install.runtime-B6OA2_P8.js",
+  "install.runtime-D9cTH-C0.js",
+  "install.runtime-OCJULXQo.js",
+  "install.runtime-9ZXBhZSk.js",
+  "install.runtime-DlL3C3t_.js",
+  "install.runtime-TU-jP-TN.js",
+  "install.runtime-a2FlfOSp.js",
+  "install.runtime-BwuRABU1.js",
+  "install.runtime-B3mZL_R2.js",
+  "install.runtime-CWUzypNQ.js",
+  "install.runtime-D6FSd9v2.js",
+  "install.runtime-DQ-ui3nL.js",
+  "install.runtime-CNHwKOIb.js",
+  "install.runtime-Dzuj9tSw.js",
+  "install.runtime-BuF-YAfQ.js",
+  "install.runtime-Xom5hOHq.js",
+  "install.runtime-tnhNR9WW.js",
+].map((legacyFileName) => ({
+  legacyFileName,
+  aliasFileName: PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName,
+  sourceIncludes: LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS,
+}));
 const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
   {
     dest: "dist/memory-state-CcqRgDZU.js",
@@ -82,9 +154,17 @@ export function writeStableRootRuntimeAliases(params = {}) {
     candidatesByAlias.set(aliasFileName, candidates);
   }
 
-  const resolveAliasCandidate = (candidates) => {
+  const resolveAliasCandidate = (aliasFileName, candidates) => {
     if (candidates.length === 1) {
       return candidates[0];
+    }
+    if (aliasFileName === PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName) {
+      return resolveRootRuntimeCandidateByMarkers({
+        distDir,
+        fsImpl,
+        aliasFileName,
+        sourceIncludes: PLUGIN_INSTALL_RUNTIME_ALIAS.sourceIncludes,
+      });
     }
     const candidateSet = new Set(candidates);
     const wrappers = candidates.filter((candidate) => {
@@ -108,7 +188,7 @@ export function writeStableRootRuntimeAliases(params = {}) {
 
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const aliasPath = path.join(distDir, aliasFileName);
-    const candidate = resolveAliasCandidate(candidates);
+    const candidate = resolveAliasCandidate(aliasFileName, candidates);
     if (!candidate) {
       fsImpl.rmSync?.(aliasPath, { force: true });
       continue;
@@ -143,10 +223,21 @@ export function rewriteRootRuntimeImportsToStableAliases(params = {}) {
   }
   const runtimeAliasFiles = new Map();
   for (const [aliasFileName, candidates] of candidatesByAlias) {
-    if (candidates.length !== 1) {
+    if (candidates.length === 1) {
+      runtimeAliasFiles.set(candidates[0], aliasFileName);
       continue;
     }
-    runtimeAliasFiles.set(candidates[0], aliasFileName);
+    if (aliasFileName === PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName) {
+      const candidate = resolveRootRuntimeCandidateByMarkers({
+        distDir,
+        fsImpl,
+        aliasFileName,
+        sourceIncludes: PLUGIN_INSTALL_RUNTIME_ALIAS.sourceIncludes,
+      });
+      if (candidate) {
+        runtimeAliasFiles.set(candidate, aliasFileName);
+      }
+    }
   }
   if (runtimeAliasFiles.size === 0) {
     return;
@@ -179,19 +270,87 @@ export function rewriteRootRuntimeImportsToStableAliases(params = {}) {
   }
 }
 
+function resolveRootRuntimeCandidateByMarkers(params) {
+  if (!params.sourceIncludes?.length) {
+    return null;
+  }
+  const match = params.aliasFileName.match(ROOT_STABLE_RUNTIME_ALIAS_PATTERN);
+  if (!match) {
+    return null;
+  }
+  const aliasBaseFileName = params.aliasFileName.replace(/\.js$/u, "");
+  const hashedPattern = new RegExp(`^${escapeRegExp(aliasBaseFileName)}-[A-Za-z0-9_-]+\\.js$`, "u");
+  let entries = [];
+  try {
+    entries = params.fsImpl.readdirSync(params.distDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const candidates = [];
+  for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isFile() || !hashedPattern.test(entry.name)) {
+      continue;
+    }
+    const candidatePath = path.join(params.distDir, entry.name);
+    let source;
+    try {
+      source = params.fsImpl.readFileSync(candidatePath, "utf8");
+    } catch {
+      continue;
+    }
+    if (params.sourceIncludes.every((marker) => source.includes(marker))) {
+      candidates.push(entry.name);
+    }
+  }
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+function resolveLegacyRootRuntimeCompatTarget(params) {
+  if (
+    params.aliasFileName &&
+    params.fsImpl.existsSync(path.join(params.distDir, params.aliasFileName))
+  ) {
+    return params.aliasFileName;
+  }
+  const match = params.legacyFileName.match(ROOT_RUNTIME_ALIAS_PATTERN);
+  if (!match?.groups?.base) {
+    return null;
+  }
+  return resolveRootRuntimeCandidateByMarkers({
+    distDir: params.distDir,
+    fsImpl: params.fsImpl,
+    aliasFileName: `${match.groups.base}.js`,
+    sourceIncludes: params.sourceIncludes,
+  });
+}
+
 export function writeLegacyRootRuntimeCompatAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
-  for (const [legacyFileName, aliasFileName] of LEGACY_ROOT_RUNTIME_COMPAT_ALIASES) {
+  for (const entry of [
+    ...LEGACY_ROOT_RUNTIME_COMPAT_ALIASES.map(([legacyFileName, aliasFileName]) => ({
+      legacyFileName,
+      aliasFileName,
+    })),
+    ...LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES,
+  ]) {
+    const { legacyFileName } = entry;
     const legacyPath = path.join(distDir, legacyFileName);
     if (fsImpl.existsSync(legacyPath)) {
       continue;
     }
-    if (!fsImpl.existsSync(path.join(distDir, aliasFileName))) {
+    const targetFileName = resolveLegacyRootRuntimeCompatTarget({
+      distDir,
+      fsImpl,
+      legacyFileName,
+      aliasFileName: entry.aliasFileName,
+      sourceIncludes: entry.sourceIncludes,
+    });
+    if (!targetFileName) {
       continue;
     }
-    writeTextFileIfChanged(legacyPath, `export * from "./${aliasFileName}";\n`);
+    writeTextFileIfChanged(legacyPath, `export * from "./${targetFileName}";\n`);
   }
 }
 

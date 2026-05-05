@@ -534,6 +534,89 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.origin).toBe("global");
   });
 
+  it("marks official installed npm globals as trusted official installs", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "diagnostics-prometheus", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {
+        "diagnostics-prometheus": {
+          source: "npm",
+          installPath: dir,
+          resolvedName: "@openclaw/diagnostics-prometheus",
+          resolvedVersion: "2026.5.3",
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "diagnostics-prometheus",
+          rootDir: dir,
+          packageName: "@openclaw/diagnostics-prometheus",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBe(true);
+  });
+
+  it("preserves trusted official installs when a config path selects the installed package", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "diagnostics-prometheus", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {
+        "diagnostics-prometheus": {
+          source: "npm",
+          installPath: dir,
+          resolvedName: "@openclaw/diagnostics-prometheus",
+          resolvedVersion: "2026.5.3",
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "diagnostics-prometheus",
+          rootDir: dir,
+          packageName: "@openclaw/diagnostics-prometheus",
+          origin: "global",
+        }),
+        createPluginCandidate({
+          idHint: "diagnostics-prometheus",
+          rootDir: dir,
+          packageName: "@openclaw/diagnostics-prometheus",
+          origin: "config",
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]).toEqual(
+      expect.objectContaining({
+        origin: "config",
+        trustedOfficialInstall: true,
+      }),
+    );
+  });
+
+  it("does not trust unrecorded globals that spoof official ids", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "diagnostics-prometheus", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {},
+      candidates: [
+        createPluginCandidate({
+          idHint: "diagnostics-prometheus",
+          rootDir: dir,
+          packageName: "@openclaw/diagnostics-prometheus",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
+  });
+
   it("preserves provider auth env metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

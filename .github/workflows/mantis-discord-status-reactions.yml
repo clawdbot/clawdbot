@@ -401,10 +401,37 @@ jobs:
             )
             pnpm "${args[@]}"
             cp "$desktop_dir/desktop-browser-smoke.png" "$root/$lane/discord-status-reactions-tool-only-desktop.png"
+            cp "$desktop_dir/desktop-browser-smoke.mp4" "$root/$lane/discord-status-reactions-tool-only-desktop.mp4"
           }
 
           capture_desktop_lane baseline
           capture_desktop_lane candidate
+
+          make_desktop_preview() {
+            local lane="$1"
+            local input="$root/$lane/discord-status-reactions-tool-only-desktop.mp4"
+            local output="$root/$lane/discord-status-reactions-tool-only-desktop-preview.gif"
+            local clip="$root/$lane/discord-status-reactions-tool-only-desktop-change.mp4"
+            local metadata="$root/$lane/discord-status-reactions-tool-only-desktop-preview.json"
+            crabbox media preview \
+              --input "$input" \
+              --output "$output" \
+              --trimmed-video-output "$clip" \
+              --json > "$metadata"
+          }
+
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y ffmpeg || true
+          fi
+          if ! make_desktop_preview baseline || ! make_desktop_preview candidate; then
+            rm -f "$root/baseline/discord-status-reactions-tool-only-desktop-preview.gif"
+            rm -f "$root/candidate/discord-status-reactions-tool-only-desktop-preview.gif"
+            rm -f "$root/baseline/discord-status-reactions-tool-only-desktop-change.mp4"
+            rm -f "$root/candidate/discord-status-reactions-tool-only-desktop-change.mp4"
+            rm -f "$root/baseline/discord-status-reactions-tool-only-desktop-preview.json"
+            rm -f "$root/candidate/discord-status-reactions-tool-only-desktop-preview.json"
+            echo "::warning::Could not generate motion-trimmed desktop previews; continuing with screenshots and full MP4 links."
+          fi
 
           baseline_status="$(jq -r '.scenarios[0].status' "$root/baseline/discord-qa-summary.json")"
           candidate_status="$(jq -r '.scenarios[0].status' "$root/candidate/discord-qa-summary.json")"
@@ -431,7 +458,55 @@ jobs:
             echo "- Candidate screenshot: \`candidate/discord-status-reactions-tool-only-timeline.png\`"
             echo "- Baseline desktop screenshot: \`baseline/discord-status-reactions-tool-only-desktop.png\`"
             echo "- Candidate desktop screenshot: \`candidate/discord-status-reactions-tool-only-desktop.png\`"
+            if [[ -f "$root/baseline/discord-status-reactions-tool-only-desktop-preview.gif" ]]; then
+              echo "- Baseline desktop preview: \`baseline/discord-status-reactions-tool-only-desktop-preview.gif\`"
+            fi
+            if [[ -f "$root/candidate/discord-status-reactions-tool-only-desktop-preview.gif" ]]; then
+              echo "- Candidate desktop preview: \`candidate/discord-status-reactions-tool-only-desktop-preview.gif\`"
+            fi
+            if [[ -f "$root/baseline/discord-status-reactions-tool-only-desktop-change.mp4" ]]; then
+              echo "- Baseline desktop change clip: \`baseline/discord-status-reactions-tool-only-desktop-change.mp4\`"
+            fi
+            if [[ -f "$root/candidate/discord-status-reactions-tool-only-desktop-change.mp4" ]]; then
+              echo "- Candidate desktop change clip: \`candidate/discord-status-reactions-tool-only-desktop-change.mp4\`"
+            fi
+            echo "- Baseline desktop video: \`baseline/discord-status-reactions-tool-only-desktop.mp4\`"
+            echo "- Candidate desktop video: \`candidate/discord-status-reactions-tool-only-desktop.mp4\`"
           } > "$root/mantis-report.md"
+
+          jq -n \
+            --arg baseline_status "$baseline_status" \
+            --arg candidate_status "$candidate_status" \
+            --arg baseline_sha "${{ needs.validate_refs.outputs.baseline_revision }}" \
+            --arg candidate_sha "${{ needs.validate_refs.outputs.candidate_revision }}" \
+            '{
+              schemaVersion: 1,
+              id: "discord-status-reactions",
+              title: "Mantis Discord Status Reactions QA",
+              summary: "Mantis reran Discord status reactions against the known queued-only baseline and the candidate ref. The baseline reproduced the bug, while the candidate showed the expected queued -> thinking -> done reaction sequence.",
+              scenario: "discord-status-reactions-tool-only",
+              comparison: {
+                baseline: { sha: $baseline_sha, expected: "queued-only", status: $baseline_status, reproduced: ($baseline_status == "fail") },
+                candidate: { sha: $candidate_sha, expected: "queued -> thinking -> done", status: $candidate_status, fixed: ($candidate_status == "pass") },
+                pass: (($baseline_status == "fail") and ($candidate_status == "pass"))
+              },
+              artifacts: [
+                { kind: "timeline", lane: "baseline", label: "Baseline queued-only", path: "baseline/discord-status-reactions-tool-only-timeline.png", targetPath: "baseline.png", alt: "Baseline Discord status reaction timeline", width: 420 },
+                { kind: "timeline", lane: "candidate", label: "Candidate queued -> thinking -> done", path: "candidate/discord-status-reactions-tool-only-timeline.png", targetPath: "candidate.png", alt: "Candidate Discord status reaction timeline", width: 420 },
+                { kind: "desktopScreenshot", lane: "baseline", label: "Baseline desktop/VNC browser", path: "baseline/discord-status-reactions-tool-only-desktop.png", targetPath: "baseline-desktop.png", alt: "Baseline Mantis desktop browser screenshot", width: 420 },
+                { kind: "desktopScreenshot", lane: "candidate", label: "Candidate desktop/VNC browser", path: "candidate/discord-status-reactions-tool-only-desktop.png", targetPath: "candidate-desktop.png", alt: "Candidate Mantis desktop browser screenshot", width: 420 },
+                { kind: "motionPreview", lane: "baseline", label: "Baseline motion preview", path: "baseline/discord-status-reactions-tool-only-desktop-preview.gif", targetPath: "baseline-desktop-preview.gif", alt: "Animated baseline desktop preview", width: 420, required: false },
+                { kind: "motionPreview", lane: "candidate", label: "Candidate motion preview", path: "candidate/discord-status-reactions-tool-only-desktop-preview.gif", targetPath: "candidate-desktop-preview.gif", alt: "Animated candidate desktop preview", width: 420, required: false },
+                { kind: "motionClip", lane: "baseline", label: "Baseline change MP4", path: "baseline/discord-status-reactions-tool-only-desktop-change.mp4", targetPath: "baseline-desktop-change.mp4", required: false },
+                { kind: "motionClip", lane: "candidate", label: "Candidate change MP4", path: "candidate/discord-status-reactions-tool-only-desktop-change.mp4", targetPath: "candidate-desktop-change.mp4", required: false },
+                { kind: "fullVideo", lane: "baseline", label: "Baseline desktop MP4", path: "baseline/discord-status-reactions-tool-only-desktop.mp4", targetPath: "baseline-desktop.mp4" },
+                { kind: "fullVideo", lane: "candidate", label: "Candidate desktop MP4", path: "candidate/discord-status-reactions-tool-only-desktop.mp4", targetPath: "candidate-desktop.mp4" },
+                { kind: "metadata", lane: "baseline", label: "Baseline preview metadata", path: "baseline/discord-status-reactions-tool-only-desktop-preview.json", targetPath: "baseline-desktop-preview.json", required: false },
+                { kind: "metadata", lane: "candidate", label: "Candidate preview metadata", path: "candidate/discord-status-reactions-tool-only-desktop-preview.json", targetPath: "candidate-desktop-preview.json", required: false },
+                { kind: "metadata", lane: "run", label: "Comparison JSON", path: "comparison.json", targetPath: "comparison.json" },
+                { kind: "report", lane: "run", label: "Mantis report", path: "mantis-report.md", targetPath: "mantis-report.md" }
+              ]
+            }' > "$root/mantis-evidence.json"
 
           cat "$root/mantis-report.md" >> "$GITHUB_STEP_SUMMARY"
 
@@ -467,117 +542,23 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
 
-      - name: Comment PR with inline QA screenshots
+      - name: Comment PR with inline QA evidence
         if: ${{ always() && needs.resolve_request.outputs.pr_number != '' && steps.run_mantis.outputs.output_dir != '' }}
         env:
           GH_TOKEN: ${{ steps.mantis_app_token.outputs.token }}
           TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
           ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
-          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
-          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
           REQUEST_SOURCE: ${{ needs.resolve_request.outputs.request_source }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if [[ ! "$TARGET_PR" =~ ^[0-9]+$ ]]; then
-            echo "pr_number must be numeric, got '${TARGET_PR}'." >&2
-            exit 1
-          fi
-
           root=".artifacts/qa-e2e/mantis/discord-status-reactions"
-          for required in \
-            "$root/comparison.json" \
-            "$root/baseline/discord-status-reactions-tool-only-timeline.png" \
-            "$root/candidate/discord-status-reactions-tool-only-timeline.png" \
-            "$root/baseline/discord-status-reactions-tool-only-desktop.png" \
-            "$root/candidate/discord-status-reactions-tool-only-desktop.png"
-          do
-            if [[ ! -f "$required" ]]; then
-              echo "Missing required QA evidence file: $required" >&2
-              exit 1
-            fi
-          done
-
-          gh api "repos/${GITHUB_REPOSITORY}/pulls/${TARGET_PR}" --jq '.number' >/dev/null
-
-          artifact_root="mantis/discord-status-reactions/pr-${TARGET_PR}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          artifacts_worktree="$(mktemp -d)"
-          git init --quiet "$artifacts_worktree"
-          git -C "$artifacts_worktree" config user.name "github-actions[bot]"
-          git -C "$artifacts_worktree" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git -C "$artifacts_worktree" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-
-          if git -C "$artifacts_worktree" fetch --quiet origin qa-artifacts; then
-            git -C "$artifacts_worktree" checkout --quiet -B qa-artifacts FETCH_HEAD
-          else
-            git -C "$artifacts_worktree" checkout --quiet --orphan qa-artifacts
-          fi
-
-          mkdir -p "$artifacts_worktree/$artifact_root"
-          cp "$root/baseline/discord-status-reactions-tool-only-timeline.png" "$artifacts_worktree/$artifact_root/baseline.png"
-          cp "$root/candidate/discord-status-reactions-tool-only-timeline.png" "$artifacts_worktree/$artifact_root/candidate.png"
-          cp "$root/baseline/discord-status-reactions-tool-only-desktop.png" "$artifacts_worktree/$artifact_root/baseline-desktop.png"
-          cp "$root/candidate/discord-status-reactions-tool-only-desktop.png" "$artifacts_worktree/$artifact_root/candidate-desktop.png"
-          cp "$root/comparison.json" "$artifacts_worktree/$artifact_root/comparison.json"
-          cp "$root/mantis-report.md" "$artifacts_worktree/$artifact_root/mantis-report.md"
-
-          git -C "$artifacts_worktree" add "$artifact_root"
-          if git -C "$artifacts_worktree" diff --cached --quiet; then
-            echo "No QA screenshot artifact changes to publish."
-          else
-            git -C "$artifacts_worktree" commit --quiet -m "qa: publish Mantis Discord screenshots for PR ${TARGET_PR}"
-            git -C "$artifacts_worktree" push --quiet origin HEAD:qa-artifacts
-          fi
-
-          encoded_artifact_root="${artifact_root// /%20}"
-          raw_base="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/qa-artifacts/${encoded_artifact_root}"
-          baseline_status="$(jq -r '.baseline.status' "$root/comparison.json")"
-          candidate_status="$(jq -r '.candidate.status' "$root/comparison.json")"
-          pass="$(jq -r '.pass' "$root/comparison.json")"
-          comment_file="$(mktemp)"
-          cat > "$comment_file" <<EOF
-          <!-- mantis-discord-status-reactions -->
-          ## Mantis Discord Status Reactions QA
-
-          Summary: Mantis reran Discord status reactions against the known queued-only baseline and the candidate ref. The baseline reproduced the bug, while the candidate showed the expected queued -> thinking -> done reaction sequence.
-
-          - Scenario: \`discord-status-reactions-tool-only\`
-          - Trigger: \`${REQUEST_SOURCE}\`
-          - Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-          - Artifact: ${ARTIFACT_URL}
-          - Baseline: \`${baseline_status}\` at \`${BASELINE_SHA}\`
-          - Candidate: \`${candidate_status}\` at \`${CANDIDATE_SHA}\`
-          - Overall: \`${pass}\`
-
-          | Baseline queued-only | Candidate queued -> thinking -> done |
-          | --- | --- |
-          | <img src="${raw_base}/baseline.png" width="420" alt="Baseline Discord status reaction timeline"> | <img src="${raw_base}/candidate.png" width="420" alt="Candidate Discord status reaction timeline"> |
-
-          | Baseline desktop/VNC browser | Candidate desktop/VNC browser |
-          | --- | --- |
-          | <img src="${raw_base}/baseline-desktop.png" width="420" alt="Baseline Mantis desktop browser screenshot"> | <img src="${raw_base}/candidate-desktop.png" width="420" alt="Candidate Mantis desktop browser screenshot"> |
-
-          Raw QA files: https://github.com/${GITHUB_REPOSITORY}/tree/qa-artifacts/${artifact_root}
-          EOF
-
-          comment_id="$(
-            gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${TARGET_PR}/comments" \
-              --jq '.[] | select(.body | contains("<!-- mantis-discord-status-reactions -->")) | .id' \
-              | tail -n 1
-          )"
-
-          if [[ -n "$comment_id" ]]; then
-            comment_payload="$(mktemp)"
-            jq -n --rawfile body "$comment_file" '{ body: $body }' > "$comment_payload"
-            if gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" --input "$comment_payload" >/dev/null; then
-              echo "Updated Mantis QA screenshot comment on PR #${TARGET_PR}."
-            else
-              echo "::warning::Could not update existing Mantis QA screenshot comment ${comment_id}; creating a new one."
-              gh pr comment "$TARGET_PR" --body-file "$comment_file"
-              echo "Created Mantis QA screenshot comment on PR #${TARGET_PR}."
-            fi
-          else
-            gh pr comment "$TARGET_PR" --body-file "$comment_file"
-            echo "Created Mantis QA screenshot comment on PR #${TARGET_PR}."
-          fi
+          node scripts/mantis/publish-pr-evidence.mjs \
+            --manifest "$root/mantis-evidence.json" \
+            --target-pr "$TARGET_PR" \
+            --artifact-root "mantis/discord-status-reactions/pr-${TARGET_PR}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --marker "<!-- mantis-discord-status-reactions -->" \
+            --artifact-url "$ARTIFACT_URL" \
+            --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --request-source "$REQUEST_SOURCE"

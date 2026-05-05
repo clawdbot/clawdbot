@@ -221,6 +221,48 @@ describe("qa mock openai server", () => {
     expect(partialBody).toContain('"type":"response.output_text.delta"');
     expect(partialBody).toContain("QA_PARTIAL_OK");
 
+    const telegramLongResponse = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          makeUserInput("Telegram long final QA check. Use the scripted long final response."),
+        ],
+      }),
+    });
+    expect(telegramLongResponse.status).toBe(200);
+    const telegramLongBody = await telegramLongResponse.text();
+    expect(telegramLongBody).toContain('"type":"response.output_text.delta"');
+    expect(telegramLongBody).toContain('"phase":"final_answer"');
+    expect(telegramLongBody).toContain("TELEGRAM-LONG-FINAL-BEGIN");
+    expect(telegramLongBody).toContain("TELEGRAM-LONG-FINAL-END");
+    expect(telegramLongBody.length).toBeGreaterThan(4_500);
+
+    const telegramThreeChunkLongResponse = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          makeUserInput(
+            "Telegram long final three chunk QA check. Use the scripted three chunk final response.",
+          ),
+        ],
+      }),
+    });
+    expect(telegramThreeChunkLongResponse.status).toBe(200);
+    const telegramThreeChunkLongBody = await telegramThreeChunkLongResponse.text();
+    expect(telegramThreeChunkLongBody).toContain('"type":"response.output_text.delta"');
+    expect(telegramThreeChunkLongBody).toContain('"phase":"final_answer"');
+    expect(telegramThreeChunkLongBody).toContain("TELEGRAM-LONG-FINAL-3CHUNK-BEGIN");
+    expect(telegramThreeChunkLongBody).toContain("TELEGRAM-LONG-FINAL-3CHUNK-END");
+    expect(telegramThreeChunkLongBody.length).toBeGreaterThan(8_000);
+
     const blockResponse = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {

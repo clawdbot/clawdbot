@@ -169,32 +169,39 @@ type AgentCommandCall = Record<string, unknown>;
 type AgentIdentityGetHandlerArgs = Parameters<(typeof agentHandlers)["agent.identity.get"]>[0];
 type AgentIdentityGetParams = AgentIdentityGetHandlerArgs["params"];
 
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+let dateOnlyFakeClockActive = false;
+
+function waitForRealTimer(ms: number) {
+  return new Promise<void>((resolve) => realSetTimeout(resolve, ms));
+}
+
 async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
-  vi.useFakeTimers();
-  try {
-    let lastError: unknown;
-    for (let elapsed = 0; elapsed <= timeoutMs; elapsed += stepMs) {
-      try {
-        assertion();
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(stepMs);
+  let lastError: unknown;
+  for (let elapsed = 0; elapsed <= timeoutMs; elapsed += stepMs) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
     }
-    throw lastError ?? new Error("assertion did not pass in time");
-  } finally {
-    vi.useRealTimers();
+
+    await Promise.resolve();
+    if (vi.isFakeTimers() && !dateOnlyFakeClockActive) {
+      await vi.advanceTimersByTimeAsync(stepMs);
+    } else {
+      await waitForRealTimer(stepMs);
+    }
   }
+  throw lastError ?? new Error("assertion did not pass in time");
 }
 
 async function flushScheduledDispatchStep() {
   await Promise.resolve();
-  if (vi.isFakeTimers()) {
+  if (vi.isFakeTimers() && !dateOnlyFakeClockActive) {
     await vi.runOnlyPendingTimersAsync();
   } else {
-    await new Promise<void>((resolve) => setTimeout(resolve, 15));
+    await waitForRealTimer(15);
   }
   await Promise.resolve();
 }
@@ -242,7 +249,8 @@ function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
 }
 
 function setupNewYorkTimeConfig(isoDate: string) {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  dateOnlyFakeClockActive = true;
   vi.setSystemTime(new Date(isoDate)); // Wed Jan 28, 8:30 PM EST
   mocks.agentCommand.mockClear();
   mocks.loadConfigReturn = {
@@ -256,6 +264,7 @@ function setupNewYorkTimeConfig(isoDate: string) {
 
 function resetTimeConfig() {
   mocks.loadConfigReturn = {};
+  dateOnlyFakeClockActive = false;
   vi.useRealTimers();
 }
 
@@ -413,6 +422,8 @@ describe("gateway agent handler", () => {
     mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
     mocks.resolveSendPolicy.mockReset().mockReturnValue("allow");
+    dateOnlyFakeClockActive = false;
+    vi.useRealTimers();
   });
 
   it("preserves ACP metadata from the current stored session entry", async () => {

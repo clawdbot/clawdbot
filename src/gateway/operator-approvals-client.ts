@@ -118,7 +118,11 @@ export async function withOperatorApprovalsGatewayClient<T>(
       clientOptions: { preauthHandshakeTimeoutMs: params.config.gateway?.handshakeTimeoutMs },
     });
     if (!readiness.ready) {
-      throw new Error("gateway event loop readiness timeout");
+      throw new Error(
+        readiness.aborted
+          ? "gateway approval client start aborted before readiness"
+          : "gateway readiness unavailable before approval client start",
+      );
     }
     await ready;
     return await run(gatewayClient);

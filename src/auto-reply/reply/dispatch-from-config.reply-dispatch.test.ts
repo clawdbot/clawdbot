@@ -62,6 +62,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
     sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
     sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
+    sessionStoreMocks.updateSessionStoreEntry.mockClear();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
     acpManagerRuntimeMocks.getAcpSessionManager.mockImplementation(() => ({
       resolveSession: () => ({ kind: "none" as const }),
@@ -148,5 +149,68 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
     });
+  });
+
+  it("clears pending final delivery after final dispatch succeeds", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    sessionStoreMocks.currentEntry = {
+      sessionKey: "agent:test:session",
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "durable reply",
+      pendingFinalDeliveryCreatedAt: 1,
+      pendingFinalDeliveryLastAttemptAt: 2,
+      pendingFinalDeliveryAttemptCount: 3,
+      pendingFinalDeliveryLastError: "previous failure",
+      pendingFinalDeliveryContext: { source: "heartbeat" },
+    };
+    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+      existing: sessionStoreMocks.currentEntry,
+    });
+    mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async () => ({ text: "durable reply" }),
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toBeUndefined();
+  });
+
+  it("preserves pending final delivery when final dispatch fails", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    sessionStoreMocks.currentEntry = {
+      sessionKey: "agent:test:session",
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "durable reply",
+      pendingFinalDeliveryCreatedAt: 1,
+    };
+    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+      existing: sessionStoreMocks.currentEntry,
+    });
+    const dispatcher = createDispatcher();
+    vi.mocked(dispatcher.sendFinalReply).mockReturnValue(false);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "durable reply" }),
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(sessionStoreMocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);
   });
 });

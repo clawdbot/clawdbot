@@ -6,6 +6,9 @@ export type {
   CliBackendPlugin,
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,
+  CliBackendResolveExecutionArgs,
+  CliBackendResolveExecutionArgsContext,
+  CliBackendThinkingLevel,
 } from "../plugins/types.js";
 export {
   CLI_FRESH_WATCHDOG_DEFAULTS,

@@ -57,6 +57,8 @@ describe("Mattermost model picker", () => {
     expect(view.text).toContain("Current: openai/gpt-5");
     expect(view.text).toContain("Tap below to browse models");
     expect(view.text).toContain("/oc_model <provider/model> to switch");
+    expect(view.text).toContain("Browse keeps the current runtime");
+    expect(view.text).toContain("/oc_model <provider/model> --runtime <runtime>");
     expect(view.buttons[0]?.[0]?.text).toBe("Browse providers");
   });
 

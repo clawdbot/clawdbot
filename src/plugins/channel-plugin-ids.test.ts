@@ -164,6 +164,10 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         enabledByDefault: true,
         providers: ["openai", "openai-codex"],
         cliBackends: ["codex-cli"],
+        contracts: {
+          imageGenerationProviders: ["openai"],
+          videoGenerationProviders: ["openai"],
+        },
       },
       {
         id: "google",
@@ -172,6 +176,11 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         enabledByDefault: true,
         providers: ["google", "google-gemini-cli"],
         cliBackends: ["google-gemini-cli"],
+        contracts: {
+          imageGenerationProviders: ["google"],
+          videoGenerationProviders: ["google"],
+          musicGenerationProviders: ["google"],
+        },
       },
       {
         id: "codex",
@@ -753,6 +762,53 @@ describe("resolveGatewayStartupPluginIds", () => {
         plugins: { entries: { microsoft: { enabled: false } } },
       } as OpenClawConfig,
       ["browser", "memory-core"],
+    ],
+    [
+      "includes bundled generation providers configured by media defaults at startup",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "openai/gpt-image-2",
+              fallbacks: ["google/gemini-3-pro-image-preview"],
+            },
+            videoGenerationModel: {
+              primary: "google/veo-3.1-fast-generate-preview",
+            },
+            musicGenerationModel: {
+              primary: "google/lyria-3-clip-preview",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "openai", "google", "memory-core"],
+    ],
+    [
+      "honors explicit plugin disablement for configured generation providers",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" },
+          },
+        },
+        plugins: { entries: { google: { enabled: false } } },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
+      "keeps configured generation providers behind restrictive allowlists",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" },
+          },
+        },
+        plugins: { allow: ["browser"] },
+      } as OpenClawConfig,
+      ["browser"],
     ],
     [
       "includes explicitly enabled non-channel sidecars in startup scope",

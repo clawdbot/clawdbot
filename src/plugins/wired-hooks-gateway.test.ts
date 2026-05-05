@@ -61,8 +61,12 @@ describe("gateway hook runner methods", () => {
       action: "updated",
       jobId: "job-1",
       nextRunAtMs: 123,
+      sessionTarget: "main",
+      agentId: "main",
       job: {
         id: "job-1",
+        agentId: "main",
+        sessionTarget: "main",
         state: { nextRunAtMs: 123 },
       },
     };
@@ -78,6 +82,8 @@ describe("gateway hook runner methods", () => {
     const event: PluginHookCronChangedEvent = {
       action: "finished",
       jobId: "job-2",
+      sessionTarget: "session:ops",
+      agentId: "reporter",
       status: "error",
       error: "timeout",
       summary: "Job timed out",
@@ -91,6 +97,8 @@ describe("gateway hook runner methods", () => {
       provider: "openai",
       job: {
         id: "job-2",
+        agentId: "reporter",
+        sessionTarget: "session:ops",
         state: { lastRunStatus: "error", lastError: "timeout" },
       },
     };
@@ -106,13 +114,18 @@ describe("gateway hook runner methods", () => {
     const event: PluginHookCronChangedEvent = {
       action: "removed",
       jobId: "job-3",
-      job: { id: "job-3", name: "deleted-job" },
+      sessionTarget: "isolated",
+      job: { id: "job-3", name: "deleted-job", sessionTarget: "isolated" },
     };
 
     await runner.runCronChanged(event, gatewayCtx);
 
     expect(handler).toHaveBeenCalledWith(event, gatewayCtx);
-    expect(handler.mock.calls[0][0].job).toEqual({ id: "job-3", name: "deleted-job" });
+    expect(handler.mock.calls[0][0].job).toEqual({
+      id: "job-3",
+      name: "deleted-job",
+      sessionTarget: "isolated",
+    });
   });
 
   it("hasHooks returns true for registered gateway hooks", () => {

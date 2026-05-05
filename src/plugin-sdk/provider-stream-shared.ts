@@ -244,13 +244,16 @@ export function isOpenAICompatibleThinkingEnabled(params: {
 }
 
 export type DeepSeekV4ThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
+export type DeepSeekV4ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 function isDisabledDeepSeekV4ThinkingLevel(thinkingLevel: DeepSeekV4ThinkingLevel): boolean {
   const normalized = typeof thinkingLevel === "string" ? thinkingLevel.toLowerCase() : "";
   return normalized === "off" || normalized === "none";
 }
 
-function resolveDeepSeekV4ReasoningEffort(thinkingLevel: DeepSeekV4ThinkingLevel): "high" | "max" {
+function resolveDeepSeekV4ReasoningEffort(
+  thinkingLevel: DeepSeekV4ThinkingLevel,
+): DeepSeekV4ReasoningEffort {
   return thinkingLevel === "xhigh" || thinkingLevel === "max" ? "max" : "high";
 }
 
@@ -288,11 +291,13 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
   baseStreamFn: StreamFn | undefined;
   thinkingLevel: DeepSeekV4ThinkingLevel;
   shouldPatchModel: (model: Parameters<StreamFn>[0]) => boolean;
+  resolveReasoningEffort?: (thinkingLevel: DeepSeekV4ThinkingLevel) => DeepSeekV4ReasoningEffort;
 }): StreamFn | undefined {
   if (!params.baseStreamFn) {
     return undefined;
   }
   const underlying = params.baseStreamFn;
+  const resolveReasoningEffort = params.resolveReasoningEffort ?? resolveDeepSeekV4ReasoningEffort;
   return (model, context, options) => {
     if (!params.shouldPatchModel(model)) {
       return underlying(model, context, options);
@@ -308,7 +313,7 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
       }
 
       payload.thinking = { type: "enabled" };
-      payload.reasoning_effort = resolveDeepSeekV4ReasoningEffort(params.thinkingLevel);
+      payload.reasoning_effort = resolveReasoningEffort(params.thinkingLevel);
       ensureDeepSeekV4AssistantReasoningContent(payload);
     });
   };

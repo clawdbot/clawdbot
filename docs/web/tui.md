@@ -82,7 +82,7 @@ Notes:
 
 - Model picker: list available models and set the session override.
 - Agent picker: choose a different agent.
-- Session picker: shows only sessions for the current agent.
+- Session picker: shows up to 50 sessions for the current agent updated in the last 7 days. Use `/session <key>` to jump to an older known session.
 - Settings: toggle deliver, tool output expansion, and thinking visibility.
 
 ## Keyboard shortcuts

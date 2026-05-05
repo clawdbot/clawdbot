@@ -4,8 +4,7 @@ import type { TypingSignaler } from "./typing-mode.js";
 
 const hoisted = vi.hoisted(() => {
   const loadSessionStoreMock = vi.fn();
-  const scheduleFollowupDrainMock = vi.fn();
-  return { loadSessionStoreMock, scheduleFollowupDrainMock };
+  return { loadSessionStoreMock };
 });
 
 vi.mock("../../config/sessions.js", async () => {
@@ -18,18 +17,9 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
-vi.mock("./queue.js", async () => {
-  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
-  return {
-    ...actual,
-    scheduleFollowupDrain: (...args: unknown[]) => hoisted.scheduleFollowupDrainMock(...args),
-  };
-});
-
 const {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
-  finalizeWithFollowup,
   isAudioPayload,
   signalTypingIfNeeded,
 } = await import("./agent-runner-helpers.js");
@@ -38,7 +28,6 @@ describe("agent runner helpers", () => {
   beforeEach(() => {
     vi.useRealTimers();
     hoisted.loadSessionStoreMock.mockReset();
-    hoisted.scheduleFollowupDrainMock.mockReset();
   });
 
   it("detects audio payloads from mediaUrl/mediaUrls", () => {
@@ -117,13 +106,6 @@ describe("agent runner helpers", () => {
       resolvedVerboseLevel: "full",
     });
     expect(fallbackFull()).toBe(true);
-  });
-
-  it("schedules followup drain and returns the original value", () => {
-    const runFollowupTurn = vi.fn();
-    const value = { ok: true };
-    expect(finalizeWithFollowup(value, "queue-key", runFollowupTurn)).toBe(value);
-    expect(hoisted.scheduleFollowupDrainMock).toHaveBeenCalledWith("queue-key", runFollowupTurn);
   });
 
   it("signals typing only when any payload has text or media", async () => {

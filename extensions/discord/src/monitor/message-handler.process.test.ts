@@ -139,9 +139,11 @@ type DispatchInboundParams = {
 };
 const dispatchInboundMessage = vi.hoisted(() =>
   vi.fn<
-    (
-      params?: DispatchInboundParams,
-    ) => Promise<{ queuedFinal: boolean; counts: { final: number; tool: number; block: number } }>
+    (params?: DispatchInboundParams) => Promise<{
+      queuedFinal: boolean;
+      counts: { final: number; tool: number; block: number };
+      failedCounts?: { final?: number; tool?: number; block?: number };
+    }>
   >(async (_params?: DispatchInboundParams) => ({
     queuedFinal: false,
     counts: { final: 0, tool: 0, block: 0 },
@@ -619,6 +621,22 @@ describe("processDiscordMessage ack reactions", () => {
     expect(emojis).toContain(DEFAULT_EMOJIS.done);
     expect(emojis).not.toContain(DEFAULT_EMOJIS.thinking);
     expect(emojis).not.toContain(DEFAULT_EMOJIS.coding);
+  });
+
+  it("marks automatic visible replies as failed when final Discord delivery fails", async () => {
+    dispatchInboundMessage.mockResolvedValueOnce({
+      queuedFinal: false,
+      counts: { final: 0, tool: 0, block: 0 },
+      failedCounts: { final: 1 },
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext();
+
+    await runProcessDiscordMessage(ctx);
+
+    const emojis = getReactionEmojis();
+    expect(emojis).toContain(DEFAULT_EMOJIS.error);
+    expect(emojis).not.toContain(DEFAULT_EMOJIS.done);
   });
 
   it("can bind status reactions to an explicitly tracked reaction target", async () => {

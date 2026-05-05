@@ -5,7 +5,7 @@ import type { JsonValue } from "../serde_json/JsonValue.js";
 import type { ServiceTier } from "../ServiceTier.js";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer.js";
 import type { AskForApproval } from "./AskForApproval.js";
-import type { PermissionProfile } from "./PermissionProfile.js";
+import type { PermissionProfileSelectionParams } from "./PermissionProfileSelectionParams.js";
 import type { SandboxMode } from "./SandboxMode.js";
 
 /**
@@ -18,38 +18,46 @@ import type { SandboxMode } from "./SandboxMode.js";
  * Prefer using thread_id whenever possible.
  */
 export type ThreadForkParams = {
-  threadId: string /**
+  threadId: string;
+  /**
    * [UNSTABLE] Specify the rollout path to fork from.
    * If specified, the thread_id param will be ignored.
-   */;
-  path?: string | null /**
+   */
+  path?: string | null;
+  /**
    * Configuration overrides for the forked thread, if any.
-   */;
+   */
   model?: string | null;
   modelProvider?: string | null;
   serviceTier?: ServiceTier | null;
   cwd?: string | null;
-  approvalPolicy?: AskForApproval | null /**
+  approvalPolicy?: AskForApproval | null;
+  /**
    * Override where approval requests are routed for review on this thread
    * and subsequent turns.
-   */;
+   */
   approvalsReviewer?: ApprovalsReviewer | null;
-  sandbox?: SandboxMode | null /**
-   * Full permissions override for the forked thread. Cannot be combined
-   * with `sandbox`.
-   */;
-  permissionProfile?: PermissionProfile | null;
+  sandbox?: SandboxMode | null;
+  /**
+   * Named profile selection for the forked thread. Cannot be combined with
+   * `sandbox`. Use bounded `modifications` for supported thread
+   * adjustments instead of replacing the full permissions profile.
+   */
+  permissions?: PermissionProfileSelectionParams | null;
   config?: { [key in string]?: JsonValue } | null;
   baseInstructions?: string | null;
   developerInstructions?: string | null;
-  ephemeral?: boolean /**
+  ephemeral?: boolean;
+  /**
    * When true, return only thread metadata and live fork state without
    * populating `thread.turns`. This is useful when the client plans to call
    * `thread/turns/list` immediately after forking.
-   */;
-  excludeTurns?: boolean /**
-   * If true, persist additional rollout EventMsg variants required to
-   * reconstruct a richer thread history on subsequent resume/fork/read.
-   */;
+   */
+  excludeTurns?: boolean;
+  /**
+   * If true, persist additional EventMsg variants to the rollout file.
+   * However, `thread/read`, `thread/resume`, and `thread/fork` still only
+   * return the limited form of thread history for scalability reasons.
+   */
   persistExtendedHistory: boolean;
 };

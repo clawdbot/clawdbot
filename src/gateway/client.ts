@@ -151,6 +151,7 @@ export type GatewayClientOptions = {
   commands?: string[];
   permissions?: Record<string, boolean>;
   pathEnv?: string;
+  env?: NodeJS.ProcessEnv;
   deviceIdentity?: DeviceIdentity | null;
   minProtocol?: number;
   maxProtocol?: number;
@@ -369,7 +370,7 @@ export class GatewayClient {
         const deviceId = this.opts.deviceIdentity.deviceId;
         const role = this.opts.role ?? "operator";
         try {
-          clearDeviceAuthToken({ deviceId, role });
+          clearDeviceAuthToken({ deviceId, role, env: this.opts.env });
           logDebug(`cleared stale device-auth token for device ${deviceId}`);
         } catch (err) {
           logDebug(
@@ -592,6 +593,7 @@ export class GatewayClient {
             role: authInfo.role ?? role,
             token: authInfo.deviceToken,
             scopes: authInfo.scopes ?? [],
+            env: this.opts.env,
           });
         }
         this.backoffMs = 1000;
@@ -675,6 +677,7 @@ export class GatewayClient {
     const storedAuth = loadDeviceAuthToken({
       deviceId: this.opts.deviceIdentity.deviceId,
       role,
+      env: this.opts.env,
     });
     if (!storedAuth) {
       return null;

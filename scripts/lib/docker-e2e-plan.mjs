@@ -75,6 +75,7 @@ const UPGRADE_SURVIVOR_SCENARIOS = [
   "bootstrap-persona",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
+  "stale-source-plugin-shadow",
   "tilde-log-path",
   "versioned-runtime-deps",
 ];

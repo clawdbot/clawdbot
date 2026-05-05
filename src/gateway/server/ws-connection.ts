@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Socket } from "node:net";
 import type { RawData, WebSocket, WebSocketServer } from "ws";
+import { getRuntimeConfig } from "../../config/io.js";
 import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
 import { removeRemoteNodeInfo } from "../../infra/skills-remote.js";
 import { upsertPresence } from "../../infra/system-presence.js";
@@ -205,7 +206,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     resolvedAuth,
     getResolvedAuth = () => resolvedAuth,
     getRequiredSharedGatewaySessionGeneration = () =>
-      resolveSharedGatewaySessionGeneration(getResolvedAuth()),
+      resolveSharedGatewaySessionGeneration(
+        getResolvedAuth(),
+        getRuntimeConfig().gateway?.trustedProxies,
+      ),
     rateLimiter,
     browserRateLimiter,
     isStartupPending,

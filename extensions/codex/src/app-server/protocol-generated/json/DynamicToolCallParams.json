@@ -1,5 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DynamicToolCallParams",
+  "type": "object",
+  "required": ["arguments", "callId", "threadId", "tool", "turnId"],
   "properties": {
     "arguments": true,
     "callId": {
@@ -17,8 +20,5 @@
     "turnId": {
       "type": "string"
     }
-  },
-  "required": ["arguments", "callId", "threadId", "tool", "turnId"],
-  "title": "DynamicToolCallParams",
-  "type": "object"
+  }
 }

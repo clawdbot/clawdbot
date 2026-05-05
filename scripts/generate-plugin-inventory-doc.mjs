@@ -28,6 +28,20 @@ const PLUGIN_DOC_ALIASES = new Map([
   ["tavily", "/tools/tavily"],
   ["tokenjuice", "/tools/tokenjuice"],
 ]);
+const PLUGIN_REFERENCE_EXTRA_SECTIONS = new Map([
+  [
+    "whatsapp",
+    `## Windows install note
+
+On Windows, the WhatsApp plugin needs Git on \`PATH\` during npm install because one of its Baileys/libsignal dependencies is fetched from a git URL. Install Git for Windows, then restart the shell and rerun the install:
+
+\`\`\`powershell
+winget install --id Git.Git -e
+\`\`\`
+
+Portable Git also works if its \`bin\` directory is on \`PATH\`.`,
+  ],
+]);
 
 function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(path.join(ROOT, relativePath), "utf8"));
@@ -376,6 +390,7 @@ ${record.docs.map((link) => `- ${docLink(link)}`).join("\n")}`;
 
 function renderReferencePage(record) {
   const relatedDocs = renderRelatedDocs(record);
+  const extraSections = PLUGIN_REFERENCE_EXTRA_SECTIONS.get(record.id);
   return `---
 summary: "${record.description.replaceAll('"', '\\"')}"
 read_when:
@@ -394,7 +409,7 @@ ${record.description}
 
 ## Surface
 
-${record.surface}${relatedDocs ? `\n\n${relatedDocs}` : ""}
+${record.surface}${extraSections ? `\n\n${extraSections}` : ""}${relatedDocs ? `\n\n${relatedDocs}` : ""}
 `;
 }
 

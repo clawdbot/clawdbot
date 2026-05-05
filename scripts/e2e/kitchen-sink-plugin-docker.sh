@@ -7,14 +7,14 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-kitchen-sink-plugin-e2e" OPENCL
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" kitchen-sink-plugin
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 kitchen-sink-plugin empty)"
-KITCHEN_SINK_NPM_SPEC="${OPENCLAW_KITCHEN_SINK_NPM_SPEC:-npm:@openclaw/kitchen-sink@0.1.5}"
+KITCHEN_SINK_NPM_SPEC="${OPENCLAW_KITCHEN_SINK_NPM_SPEC:-npm:@openclaw/kitchen-sink@latest}"
 KITCHEN_SINK_NPM_MISSING_SPEC="${OPENCLAW_KITCHEN_SINK_NPM_MISSING_SPEC:-npm:@openclaw/kitchen-sink@beta}"
 
 DEFAULT_KITCHEN_SINK_SCENARIOS="$(
   cat <<SCENARIOS
-npm-pinned-full|${KITCHEN_SINK_NPM_SPEC}|openclaw-kitchen-sink-fixture|npm|success|full
-npm-pinned-conformance|${KITCHEN_SINK_NPM_SPEC}|openclaw-kitchen-sink-fixture|npm|success|conformance|conformance
-npm-pinned-adversarial|${KITCHEN_SINK_NPM_SPEC}|openclaw-kitchen-sink-fixture|npm|success|adversarial|adversarial
+npm-latest-full|${KITCHEN_SINK_NPM_SPEC}|openclaw-kitchen-sink-fixture|npm|success|full
+npm-latest-conformance|${KITCHEN_SINK_NPM_SPEC}|openclaw-kitchen-sink-fixture|npm|success|conformance|conformance
+npm-latest-adversarial|${KITCHEN_SINK_NPM_SPEC}|openclaw-kitchen-sink-fixture|npm|success|adversarial|adversarial
 npm-beta|${KITCHEN_SINK_NPM_MISSING_SPEC}|openclaw-kitchen-sink-fixture|npm|failure|none
 clawhub-latest|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic
 clawhub-beta|clawhub:@openclaw/kitchen-sink@beta|openclaw-kitchen-sink-fixture|clawhub|failure|none

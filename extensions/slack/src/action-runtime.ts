@@ -12,7 +12,6 @@ import {
   type OpenClawConfig,
   withNormalizedTimestamp,
 } from "./runtime-api.js";
-import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
 
 const messagingActions = new Set([
@@ -78,7 +77,6 @@ export const slackActionRuntime = {
   pinSlackMessage: createLazySlackAction("pinSlackMessage"),
   reactSlackMessage: createLazySlackAction("reactSlackMessage"),
   readSlackMessages: createLazySlackAction("readSlackMessages"),
-  recordSlackThreadParticipation,
   removeOwnSlackReactions: createLazySlackAction("removeOwnSlackReactions"),
   removeSlackReaction: createLazySlackAction("removeSlackReaction"),
   sendSlackMessage: createLazySlackAction("sendSlackMessage"),
@@ -273,14 +271,6 @@ export async function handleSlackAction(
                 blocks,
               });
 
-        if (threadTs && result.channelId && account.accountId) {
-          slackActionRuntime.recordSlackThreadParticipation(
-            account.accountId,
-            result.channelId,
-            threadTs,
-          );
-        }
-
         // Keep "first" mode consistent even when the agent explicitly provided
         // threadTs: once we send a message to the current channel, consider the
         // first reply "used" so later tool calls don't auto-thread again.
@@ -317,14 +307,6 @@ export async function handleSlackAction(
           ...(filename ? { uploadFileName: filename } : {}),
           ...(title ? { uploadTitle: title } : {}),
         });
-
-        if (threadTs && result.channelId && account.accountId) {
-          slackActionRuntime.recordSlackThreadParticipation(
-            account.accountId,
-            result.channelId,
-            threadTs,
-          );
-        }
 
         if (context?.hasRepliedRef && context.currentChannelId) {
           if (sameSlackChannelTarget(to, context.currentChannelId)) {

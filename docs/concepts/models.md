@@ -119,7 +119,8 @@ openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json
 If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and for session overrides. When a user selects a model that isn't in that allowlist, OpenClaw returns:
 
 ```
-Model "provider/model" is not allowed. Use /model to list available models.
+Model "provider/model" is not allowed. Use /models to list providers, or /models <provider> to list models.
+Add it with: openclaw config set agents.defaults.models '{"provider/model":{}}' --strict-json --merge
 ```
 
 <Warning>
@@ -130,6 +131,8 @@ This happens **before** a normal reply is generated, so the message can feel lik
 - Pick a model from `/model list`.
 
 </Warning>
+
+When the rejected command included a runtime override such as `/model openai/gpt-5.5 --runtime codex`, fix the allowlist first, then retry the same `/model ... --runtime ...` command. For native Codex execution, the selected model is still `openai/gpt-5.5`; the `codex` runtime selects the harness and uses Codex auth separately.
 
 For local/GGUF models, store the full provider-prefixed ref in the allowlist,
 for example `ollama/gemma4:26b`, `lmstudio/Gemma4-26b-a4-it-gguf`, or the

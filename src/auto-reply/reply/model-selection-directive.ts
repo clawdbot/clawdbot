@@ -20,6 +20,29 @@ export type ModelDirectiveSelection = {
   alias?: string;
 };
 
+function formatAddModelCommand(modelRef: string): string {
+  return `openclaw config set agents.defaults.models '${JSON.stringify({ [modelRef]: {} })}' --strict-json --merge`;
+}
+
+function formatNotAllowedError(params: {
+  modelRef: string;
+  rawRuntime?: string | undefined;
+}): string {
+  const rawRuntime = params.rawRuntime?.trim();
+  const retryCommand = rawRuntime
+    ? `/model ${params.modelRef} --runtime ${rawRuntime}`
+    : `/model ${params.modelRef}`;
+  const lines = [
+    `Model "${params.modelRef}" is not allowed. Use /models to list providers, or /models <provider> to list models.`,
+    `Add it with: ${formatAddModelCommand(params.modelRef)}`,
+    `Then retry: ${retryCommand}`,
+  ];
+  if (rawRuntime && normalizeProviderId(rawRuntime) === "codex") {
+    lines.push("If the Codex runtime is missing, run: openclaw plugins enable codex");
+  }
+  return lines.join("\n");
+}
+
 const FUZZY_VARIANT_TOKENS = [
   "lightning",
   "preview",
@@ -238,6 +261,7 @@ export function resolveModelDirectiveSelection(params: {
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
+  rawRuntime?: string | undefined;
 }): { selection?: ModelDirectiveSelection; error?: string } {
   const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys } = params;
 
@@ -401,6 +425,9 @@ export function resolveModelDirectiveSelection(params: {
   }
 
   return {
-    error: `Model "${resolved.ref.provider}/${resolved.ref.model}" is not allowed. Use /models to list providers, or /models <provider> to list models.`,
+    error: formatNotAllowedError({
+      modelRef: `${resolved.ref.provider}/${resolved.ref.model}`,
+      rawRuntime: params.rawRuntime,
+    }),
   };
 }

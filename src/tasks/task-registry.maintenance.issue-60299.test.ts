@@ -10,6 +10,7 @@ import {
   getDetachedTaskLifecycleRuntime,
 } from "./detached-task-runtime.js";
 import {
+  getInspectableActiveTaskRestartBlockers,
   previewTaskRegistryMaintenance,
   reconcileInspectableTasks,
   resetTaskRegistryMaintenanceRuntimeForTests,
@@ -248,6 +249,44 @@ describe("task-registry maintenance issue #60299", () => {
 
     expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+  });
+
+  it("only treats started non-ended running tasks as restart blockers", () => {
+    const now = Date.now();
+    const activeRunning = makeStaleTask({
+      taskId: "task-running-live",
+      runtime: "cli",
+      status: "running",
+      createdAt: now,
+      startedAt: now,
+      lastEventAt: now,
+      runId: "run-running-live",
+    });
+    const queued = makeStaleTask({
+      taskId: "task-queued-durable",
+      runtime: "acp",
+      status: "queued",
+      createdAt: now,
+      startedAt: undefined,
+      lastEventAt: now,
+    });
+    const staleInconsistent = makeStaleTask({
+      taskId: "task-running-ended",
+      runtime: "subagent",
+      status: "running",
+      endedAt: now - 1_000,
+    });
+
+    createTaskRegistryMaintenanceHarness({ tasks: [activeRunning, queued, staleInconsistent] });
+
+    expect(getInspectableActiveTaskRestartBlockers()).toEqual([
+      expect.objectContaining({
+        taskId: "task-running-live",
+        status: "running",
+        runtime: "cli",
+        runId: "run-running-live",
+      }),
+    ]);
   });
 
   it("marks subagent tasks lost when their child session recovery is tombstoned", async () => {

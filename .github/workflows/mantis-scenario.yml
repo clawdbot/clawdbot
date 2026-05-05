@@ -1,0 +1,83 @@
+name: Mantis Scenario
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario_id:
+        description: Mantis scenario id to run
+        required: true
+        default: discord-status-reactions-tool-only
+        type: choice
+        options:
+          - discord-status-reactions-tool-only
+          - slack-desktop-smoke
+      baseline_ref:
+        description: Optional baseline ref for before/after scenarios
+        required: false
+        default: 0bf06e953fdda290799fc9fb9244a8f67fdae593
+        type: string
+      candidate_ref:
+        description: Candidate ref, tag, or SHA
+        required: true
+        default: main
+        type: string
+      pr_number:
+        description: Optional PR number to receive QA evidence
+        required: false
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: mantis-scenario-${{ inputs.scenario_id }}-${{ inputs.pr_number || inputs.candidate_ref || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Dispatch selected Mantis workflow
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    steps:
+      - name: Dispatch scenario
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SCENARIO_ID: ${{ inputs.scenario_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$SCENARIO_ID" in
+            discord-status-reactions-tool-only)
+              args=(
+                workflow run mantis-discord-status-reactions.yml
+                --repo "$GITHUB_REPOSITORY"
+                --ref main
+                -f "baseline_ref=${BASELINE_REF}"
+                -f "candidate_ref=${CANDIDATE_REF}"
+              )
+              if [[ -n "${PR_NUMBER:-}" ]]; then
+                args+=(-f "pr_number=${PR_NUMBER}")
+              fi
+              gh "${args[@]}"
+              ;;
+            slack-desktop-smoke)
+              args=(
+                workflow run mantis-slack-desktop-smoke.yml
+                --repo "$GITHUB_REPOSITORY"
+                --ref main
+                -f "candidate_ref=${CANDIDATE_REF}"
+              )
+              if [[ -n "${PR_NUMBER:-}" ]]; then
+                args+=(-f "pr_number=${PR_NUMBER}")
+              fi
+              gh "${args[@]}"
+              ;;
+            *)
+              echo "Unsupported Mantis scenario: ${SCENARIO_ID}" >&2
+              exit 1
+              ;;
+          esac

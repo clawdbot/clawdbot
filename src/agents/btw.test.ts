@@ -417,6 +417,13 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Final answer." });
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      DEFAULT_AGENT_DIR,
+      {
+        workspaceDir: "/tmp/workspace",
+      },
+    );
   });
 
   it("applies provider runtime auth before streaming github-copilot BTW questions", async () => {

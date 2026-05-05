@@ -13,7 +13,7 @@
     "https-proxy-agent": "^9.0.0",
     "opusscript": "^0.1.1",
     "typebox": "1.1.37",
-    "undici": "8.1.0",
+    "undici": "8.2.0",
     "ws": "^8.20.0"
   },
   "devDependencies": {

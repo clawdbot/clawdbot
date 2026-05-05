@@ -314,7 +314,7 @@ describe("createCodexDynamicToolBridge", () => {
       details: { status: "failed", exitCode: 1 },
     });
 
-    await bridge.handleToolCall({
+    const result = await bridge.handleToolCall({
       threadId: "thread-1",
       turnId: "turn-1",
       callId: "call-1",
@@ -323,6 +323,10 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { command: "false" },
     });
 
+    expect(result).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "failed output" }],
+    });
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({ isError: true }),
       expect.objectContaining({ runtime: "codex" }),
@@ -641,7 +645,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual({
-      success: true,
+      success: false,
       contentItems: [{ type: "inputText", text: "blocked by policy" }],
     });
     expect(execute).not.toHaveBeenCalled();

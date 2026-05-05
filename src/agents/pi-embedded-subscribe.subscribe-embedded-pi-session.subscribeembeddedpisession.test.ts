@@ -424,6 +424,83 @@ describe("subscribeEmbeddedPiSession", () => {
     );
   });
 
+  it("does not attach generated image media to an early streamed chunk before explicit MEDIA", async () => {
+    const onToolResult = vi.fn();
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onToolResult,
+      onBlockReply,
+      verboseLevel: "full",
+      blockReplyBreak: "text_end",
+      blockReplyChunking: { minChars: 5, maxChars: 200, breakPreference: "newline" },
+      builtinToolNames: new Set(["image_generate"]),
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "image_generate",
+      toolCallId: "tool-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.\nMEDIA:/tmp/generated.png",
+          },
+        ],
+        details: {
+          media: {
+            mediaUrls: ["/tmp/generated.png"],
+          },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(onToolResult).toHaveBeenCalled();
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "Generated 1 image.\n");
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Generated 1 image.",
+      }),
+    );
+    expect(onBlockReply.mock.calls.some(([payload]) => payload.mediaUrls?.length)).toBe(false);
+
+    emitAssistantTextDelta(emit, "MEDIA:/tmp/generated.png");
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_end",
+        content: "Generated 1 image.\nMEDIA:/tmp/generated.png",
+      },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Generated 1 image.\nMEDIA:/tmp/generated.png",
+          },
+        ],
+      },
+    });
+    emit({ type: "agent_end" });
+    await flushBlockReplyCallbacks();
+
+    const mediaPayloads = onBlockReply.mock.calls
+      .map(([payload]) => payload)
+      .filter((payload) => payload.mediaUrls?.includes("/tmp/generated.png"));
+    expect(mediaPayloads).toHaveLength(1);
+  });
+
   it("attaches media from internal completion events even when assistant omits MEDIA lines", async () => {
     const onBlockReply = vi.fn();
     const { emit } = createSubscribedHarness({
@@ -468,6 +545,104 @@ describe("subscribeEmbeddedPiSession", () => {
       }),
     );
   });
+
+  it.each([
+    {
+      label: "music",
+      source: "music_generation" as const,
+      childSessionKey: "music_generate:task-123",
+      announceType: "music generation task",
+      taskLabel: "launch anthem",
+      result: "Generated 1 track.\nMEDIA:/tmp/launch-anthem.mp3",
+      mediaUrl: "/tmp/launch-anthem.mp3",
+      firstChunk: "Generated 1 track.\n",
+      finalText: "Generated 1 track.\nMEDIA:/tmp/launch-anthem.mp3",
+    },
+    {
+      label: "video",
+      source: "video_generation" as const,
+      childSessionKey: "video_generate:task-123",
+      announceType: "video generation task",
+      taskLabel: "launch reel",
+      result: "Generated 1 video.\nMEDIA:/tmp/launch-reel.mp4",
+      mediaUrl: "/tmp/launch-reel.mp4",
+      firstChunk: "Generated 1 video.\n",
+      finalText: "Generated 1 video.\nMEDIA:/tmp/launch-reel.mp4",
+    },
+  ])(
+    "does not attach $label internal completion media to an early streamed chunk before explicit MEDIA",
+    async ({
+      source,
+      childSessionKey,
+      announceType,
+      taskLabel,
+      result,
+      mediaUrl,
+      firstChunk,
+      finalText,
+    }) => {
+      const onBlockReply = vi.fn();
+      const { emit } = createSubscribedHarness({
+        runId: "run",
+        onBlockReply,
+        blockReplyBreak: "text_end",
+        blockReplyChunking: { minChars: 5, maxChars: 200, breakPreference: "newline" },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source,
+            childSessionKey,
+            announceType,
+            taskLabel,
+            status: "ok",
+            statusLabel: "completed successfully",
+            result,
+            mediaUrls: [mediaUrl],
+            replyInstruction: "Reply normally.",
+          },
+        ],
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta(emit, firstChunk);
+
+      expect(onBlockReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: firstChunk.trim(),
+        }),
+      );
+      expect(onBlockReply.mock.calls.some(([payload]) => payload.mediaUrls?.length)).toBe(false);
+
+      emitAssistantTextDelta(emit, `MEDIA:${mediaUrl}`);
+      emit({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: {
+          type: "text_end",
+          content: finalText,
+        },
+      });
+      emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: finalText,
+            },
+          ],
+        },
+      });
+      emit({ type: "agent_end" });
+      await flushBlockReplyCallbacks();
+
+      const mediaPayloads = onBlockReply.mock.calls
+        .map(([payload]) => payload)
+        .filter((payload) => payload.mediaUrls?.includes(mediaUrl));
+      expect(mediaPayloads).toHaveLength(1);
+    },
+  );
 
   it("keeps orphaned tool media available for non-block final payload assembly", () => {
     const { emit, subscription } = createSubscribedSessionHarness({

@@ -447,17 +447,27 @@ export function buildChildCompletionFindings(
 
   const sections: string[] = [];
   for (const [index, child] of sorted.entries()) {
+    const resultText = child.frozenResultText?.trim();
+    const outcome = describeSubagentOutcome(child.outcome);
+    if (
+      child.outcome?.status === "ok" &&
+      resultText &&
+      (isAnnounceSkip(resultText) || isSilentReplyText(resultText, SILENT_REPLY_TOKEN))
+    ) {
+      continue;
+    }
     const title =
       child.label?.trim() ||
       child.task.trim() ||
       child.childSessionKey.trim() ||
       `child ${index + 1}`;
-    const resultText = child.frozenResultText?.trim();
-    const outcome = describeSubagentOutcome(child.outcome);
+    const displayIndex = sections.length + 1;
     sections.push(
-      [`${index + 1}. ${title}`, `status: ${outcome}`, formatUntrustedChildResult(resultText)].join(
-        "\n",
-      ),
+      [
+        `${displayIndex}. ${title}`,
+        `status: ${outcome}`,
+        formatUntrustedChildResult(resultText),
+      ].join("\n"),
     );
   }
 

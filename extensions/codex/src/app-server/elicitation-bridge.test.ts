@@ -243,6 +243,67 @@ describe("Codex app-server elicitation bridge", () => {
     expect(approvalRequest.description).not.toContain("\u202e");
   });
 
+  it("escapes approval display text before forwarding approval prompts", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-escaped", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-escaped", decision: "allow-once" });
+
+    await handleCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildCurrentCodexApprovalElicitation(),
+        message: "Approve <@U123>",
+        serverName: "server @here",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          connector_name: "GitHub [trusted](https://evil)",
+          tool_title: "Create <@U123>",
+          tool_description: "Use @here",
+          tool_params_display: [
+            {
+              name: "repo",
+              display_name: "Repository [trusted](https://evil)",
+              value: "<@U123>",
+            },
+          ],
+        },
+        requestedSchema: {
+          type: "object",
+          properties: {
+            approve: {
+              type: "boolean",
+              title: "Approve <@U123>",
+              description: "Confirm @here",
+            },
+          },
+          required: ["approve"],
+        },
+      },
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+      title: string;
+      description: string;
+    };
+    expect(approvalRequest.title).toBe("Approve &lt;\uff20U123&gt;");
+    expect(approvalRequest.description).toContain(
+      "GitHub \uff3btrusted\uff3d\uff08https://evil\uff09",
+    );
+    expect(approvalRequest.description).toContain("Tool: Create &lt;\uff20U123&gt;");
+    expect(approvalRequest.description).toContain("MCP server: server \uff20here");
+    expect(approvalRequest.description).toContain(
+      "Repository \uff3btrusted\uff3d\uff08https://evil\uff09: &lt;\uff20U123&gt;",
+    );
+    expect(approvalRequest.description).toContain(
+      "- Approve &lt;\uff20U123&gt;: Confirm \uff20here",
+    );
+    expect(approvalRequest.description).not.toContain("<@U123>");
+    expect(approvalRequest.description).not.toContain("[trusted](https://evil)");
+    expect(approvalRequest.description).not.toContain("@here");
+  });
+
   it("falls back to stable names when display labels sanitize to empty", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-label-fallback", status: "accepted" })

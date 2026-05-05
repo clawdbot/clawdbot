@@ -222,6 +222,37 @@ describe("collectMissingPluginInstallPayloads", () => {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("skips disabled tracked records when requested", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
+    const missingDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "missing");
+    try {
+      await expect(
+        collectMissingPluginInstallPayloads({
+          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
+          skipDisabledPlugins: true,
+          config: {
+            plugins: {
+              entries: {
+                missing: {
+                  enabled: false,
+                },
+              },
+            },
+          },
+          records: {
+            missing: {
+              source: "npm",
+              spec: "@openclaw/missing@beta",
+              installPath: missingDir,
+            },
+          },
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("shouldUseLegacyProcessRestartAfterUpdate", () => {

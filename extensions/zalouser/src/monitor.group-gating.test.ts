@@ -3,7 +3,7 @@ import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import "./monitor.send-mocks.js";
 import "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
-import { __testing } from "./monitor.js";
+import { __testing, monitorZalouserProvider } from "./monitor.js";
 import {
   sendDeliveredZalouserMock,
   sendMessageZalouserMock,
@@ -13,6 +13,11 @@ import {
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
+import {
+  listZaloFriendsMock,
+  listZaloGroupsMock,
+  startZaloListenerMock,
+} from "./zalo-js.test-mocks.js";
 
 function createAccount(): ResolvedZalouserAccount {
   return {
@@ -341,6 +346,12 @@ describe("zalouser monitor group mention gating", () => {
     sendTypingZalouserMock.mockClear();
     sendDeliveredZalouserMock.mockClear();
     sendSeenZalouserMock.mockClear();
+    listZaloFriendsMock.mockReset();
+    listZaloFriendsMock.mockResolvedValue([]);
+    listZaloGroupsMock.mockReset();
+    listZaloGroupsMock.mockResolvedValue([]);
+    startZaloListenerMock.mockReset();
+    startZaloListenerMock.mockResolvedValue({ stop: vi.fn() });
   });
 
   async function processMessageWithDefaults(params: {
@@ -372,6 +383,23 @@ describe("zalouser monitor group mention gating", () => {
     });
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     expect(sendTypingZalouserMock).not.toHaveBeenCalled();
+  }
+
+  async function startMonitorForStartupResolution(
+    accountConfig: ResolvedZalouserAccount["config"],
+  ) {
+    installRuntime({ commandAuthorized: false });
+    const abortController = new AbortController();
+    abortController.abort();
+    await monitorZalouserProvider({
+      account: {
+        ...createAccount(),
+        config: accountConfig,
+      },
+      config: createConfig(),
+      runtime: createRuntimeEnv(),
+      abortSignal: abortController.signal,
+    });
   }
 
   async function expectGroupCommandAuthorizers(params: {
@@ -667,6 +695,45 @@ describe("zalouser monitor group mention gating", () => {
     });
     const callArg = dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0];
     expect(callArg?.ctx?.To).toBe("zalouser:group:g-attacker-001");
+  });
+
+  it("does not resolve mutable allowlist or group names at startup by default", async () => {
+    listZaloFriendsMock.mockResolvedValue([{ userId: "999", displayName: "Alice" }]);
+    listZaloGroupsMock.mockResolvedValue([{ groupId: "g-other", name: "Trusted Team" }]);
+
+    await startMonitorForStartupResolution({
+      ...createAccount().config,
+      dmPolicy: "allowlist",
+      allowFrom: ["Alice"],
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["Alice"],
+      groups: {
+        "Trusted Team": { enabled: true },
+      },
+    });
+
+    expect(listZaloFriendsMock).not.toHaveBeenCalled();
+    expect(listZaloGroupsMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves mutable allowlist and group names at startup when enabled", async () => {
+    listZaloFriendsMock.mockResolvedValue([{ userId: "123", displayName: "Alice" }]);
+    listZaloGroupsMock.mockResolvedValue([{ groupId: "g-trusted", name: "Trusted Team" }]);
+
+    await startMonitorForStartupResolution({
+      ...createAccount().config,
+      dangerouslyAllowNameMatching: true,
+      dmPolicy: "allowlist",
+      allowFrom: ["Alice"],
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["Alice"],
+      groups: {
+        "Trusted Team": { enabled: true },
+      },
+    });
+
+    expect(listZaloFriendsMock).toHaveBeenCalledWith("default");
+    expect(listZaloGroupsMock).toHaveBeenCalledWith("default");
   });
 
   it("allows group control commands when sender is in groupAllowFrom", async () => {

@@ -182,6 +182,27 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
   };
 }
 
+function createWebSearchManifestRecord(params: {
+  id: string;
+  providerId: string;
+}): PluginManifestRegistry["plugins"][number] {
+  return {
+    id: params.id,
+    origin: "bundled",
+    rootDir: `/tmp/${params.id}`,
+    source: `/tmp/${params.id}/index.js`,
+    manifestPath: `/tmp/${params.id}/openclaw.plugin.json`,
+    channels: [],
+    providers: [],
+    cliBackends: [],
+    syntheticAuthRefs: [],
+    nonSecretAuthMarkers: [],
+    skills: [],
+    hooks: [],
+    contracts: { webSearchProviders: [params.providerId] },
+  };
+}
+
 function expectLoaderCallCount(count: number) {
   expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(count);
 }
@@ -424,7 +445,7 @@ describe("resolvePluginWebSearchProviders", () => {
     const providers = resolvePluginWebSearchProviders({
       config: {
         plugins: {
-          allow: ["perplexity"],
+          allow: ["brave"],
         },
       },
       mode: "setup",
@@ -459,6 +480,42 @@ describe("resolvePluginWebSearchProviders", () => {
     resolvePluginWebSearchProviders({});
 
     expectScopedWebSearchCandidates(["brave"]);
+  });
+
+  it("keeps allowlist web-search provider discovery scoped to the configured allowlist", () => {
+    loadInstalledPluginManifestRegistryMock.mockReturnValueOnce({
+      plugins: [
+        createWebSearchManifestRecord({ id: "brave", providerId: "brave" }),
+        createWebSearchManifestRecord({ id: "google", providerId: "gemini" }),
+      ],
+      diagnostics: [],
+    });
+
+    const providers = resolvePluginWebSearchProviders({
+      config: {
+        plugins: {
+          allow: ["brave"],
+          bundledDiscovery: "allowlist",
+        },
+      },
+      bundledAllowlistCompat: true,
+      env: createWebSearchEnv(),
+      workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
+    });
+
+    expect(toRuntimeProviderKeys(providers)).toEqual(["brave:brave"]);
+    expectScopedWebSearchCandidates(["brave"]);
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["brave"],
+            bundledDiscovery: "allowlist",
+            entries: { brave: { enabled: true } },
+          }),
+        }),
+      }),
+    );
   });
 
   it("uses the active registry workspace for candidate discovery and snapshot loads when workspaceDir is omitted", () => {

@@ -153,6 +153,8 @@ const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check
 const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
   /qa group message unavailable fallback check/i;
 const QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE = /telegram current session_status qa check/i;
+const QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE = /telegram long final three chunk qa check/i;
+const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
@@ -1034,6 +1036,23 @@ function splitMockStreamingText(text: string, parts = 3) {
   return chunks.length > 1 ? chunks : [text.slice(0, 1), text.slice(1)];
 }
 
+function buildTelegramLongFinalText({
+  endMarker = "TELEGRAM-LONG-FINAL-END",
+  segmentCount = 54,
+  startMarker = "TELEGRAM-LONG-FINAL-BEGIN",
+}: {
+  endMarker?: string;
+  segmentCount?: number;
+  startMarker?: string;
+} = {}) {
+  const body = Array.from(
+    { length: segmentCount },
+    (_, index) =>
+      `telegram-long-final-segment-${String(index + 1).padStart(3, "0")} ${"x".repeat(54)}`,
+  ).join("\n");
+  return `${startMarker}\n${body}\n${endMarker}`;
+}
+
 function buildAssistantOutputItem(spec: MockAssistantMessageSpec) {
   return {
     type: "message",
@@ -1309,6 +1328,32 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
     }
     return buildAssistantEvents("");
+  }
+  if (QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE.test(allInputText)) {
+    const text = buildTelegramLongFinalText({
+      endMarker: "TELEGRAM-LONG-FINAL-3CHUNK-END",
+      segmentCount: 96,
+      startMarker: "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
+    });
+    return buildAssistantEvents([
+      {
+        id: "msg_mock_telegram_long_final_three_chunk",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText(text),
+        text,
+      },
+    ]);
+  }
+  if (QA_TELEGRAM_LONG_FINAL_PROMPT_RE.test(allInputText)) {
+    const text = buildTelegramLongFinalText();
+    return buildAssistantEvents([
+      {
+        id: "msg_mock_telegram_long_final",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText(text),
+        text,
+      },
+    ]);
   }
   if (QA_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
     return buildAssistantEvents([

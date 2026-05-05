@@ -837,9 +837,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           rejectUnauthorized(authResult);
           return;
         }
-        if (authMethod === "token" || authMethod === "password") {
-          const sharedGatewaySessionGeneration =
-            resolveSharedGatewaySessionGeneration(resolvedAuth);
+        if (authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy") {
+          const sharedGatewaySessionGeneration = resolveSharedGatewaySessionGeneration(
+            resolvedAuth,
+            trustedProxies,
+          );
           const requiredSharedGatewaySessionGeneration =
             getRequiredSharedGatewaySessionGeneration?.();
           if (
@@ -874,6 +876,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           resolvedAuth.mode,
           authMethod,
         );
+        let hasServerApprovedDeviceTokenBaseline = false;
         if (device && devicePublicKey) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
@@ -1133,8 +1136,17 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               if (!ok) {
                 return;
               }
+              hasServerApprovedDeviceTokenBaseline = true;
+            } else if (trustedProxyAuthOk) {
+              clearUnboundScopes();
+            } else if (
+              skipControlUiPairingForDevice ||
+              (skipLocalBackendSelfPairing && authMethod !== "device-token")
+            ) {
+              hasServerApprovedDeviceTokenBaseline = true;
             }
           } else {
+            hasServerApprovedDeviceTokenBaseline = true;
             const claimedPlatform = connectParams.client.platform;
             const pairedPlatform = paired.platform;
             const claimedDeviceFamily = connectParams.client.deviceFamily;
@@ -1222,9 +1234,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           }
         }
 
-        const deviceToken = device
-          ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
-          : null;
+        const deviceToken =
+          device && hasServerApprovedDeviceTokenBaseline
+            ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
+            : null;
         const bootstrapDeviceTokens: Array<{
           deviceToken: string;
           role: string;
@@ -1303,9 +1316,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         const canvasCapabilityExpiresAtMs = canvasCapability
           ? Date.now() + CANVAS_CAPABILITY_TTL_MS
           : undefined;
-        const usesSharedGatewayAuth = authMethod === "token" || authMethod === "password";
+        const usesSharedGatewayAuth =
+          authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
         const sharedGatewaySessionGeneration = usesSharedGatewayAuth
-          ? resolveSharedGatewaySessionGeneration(resolvedAuth)
+          ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
           : undefined;
         const scopedCanvasHostUrl =
           canvasHostUrl && canvasCapability

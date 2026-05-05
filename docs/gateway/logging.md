@@ -15,6 +15,17 @@ OpenClaw has two log “surfaces”:
 - **Console output** (what you see in the terminal / Debug UI).
 - **File logs** (JSON lines) written by the gateway logger.
 
+At startup, the Gateway logs the resolved default agent model together with the
+mode defaults that affect new sessions, for example:
+
+```text
+agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)
+```
+
+`thinking` comes from the default agent, model params, or global agent default;
+when it is unset, the startup summary shows `medium`. `fast` comes from the
+default agent or model `fastMode` params.
+
 ## File-based logger
 
 - Default rolling log file is under `/tmp/openclaw/` (one file per day): `openclaw-YYYY-MM-DD.log`

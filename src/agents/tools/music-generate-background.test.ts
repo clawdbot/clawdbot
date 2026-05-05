@@ -95,6 +95,50 @@ describe("music generate background helpers", () => {
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalled();
   });
 
+  it("warns channel completion agents that normal final replies are private", async () => {
+    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+      delivered: true,
+      path: "direct",
+    });
+    const completion = createMediaCompletionFixture({
+      runId: "tool:music_generate:abc",
+      taskLabel: "night-drive synthwave",
+      result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+      mediaUrls: ["/tmp/generated-night-drive.mp3"],
+    });
+
+    await wakeMusicGenerationTaskCompletion({
+      ...completion,
+      handle: {
+        ...completion.handle,
+        requesterSessionKey: "agent:main:discord:channel:C123",
+      },
+    });
+
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        internalEvents: expect.arrayContaining([
+          expect.objectContaining({
+            replyInstruction: expect.stringContaining(
+              "the user will NOT see your normal assistant final reply",
+            ),
+          }),
+        ]),
+      }),
+    );
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        internalEvents: expect.arrayContaining([
+          expect.objectContaining({
+            replyInstruction: expect.stringContaining(
+              "Do not put MEDIA: lines only in your final answer",
+            ),
+          }),
+        ]),
+      }),
+    );
+  });
+
   it("queues a completion event when direct send is enabled globally", async () => {
     taskDeliveryRuntimeMocks.sendMessage.mockResolvedValue({
       channel: "discord",

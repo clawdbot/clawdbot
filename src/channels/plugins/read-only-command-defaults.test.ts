@@ -65,4 +65,43 @@ describe("resolveReadOnlyChannelCommandDefaults", () => {
       workspaceDir: "/workspace",
     });
   });
+
+  it("resolves command defaults for manifest channel aliases", () => {
+    loadPluginMetadataSnapshot.mockReturnValue({
+      index: {
+        plugins: [
+          {
+            pluginId: "vendor-demo-plugin",
+            origin: "global",
+            enabled: true,
+            enabledByDefault: true,
+          },
+        ],
+      },
+      plugins: [
+        {
+          id: "vendor-demo-plugin",
+          origin: "global",
+          channels: ["demo"],
+          channelConfigs: {
+            demo: {
+              commands: {
+                nativeCommandsAutoEnabled: true,
+                nativeSkillsAutoEnabled: false,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(
+      resolveReadOnlyChannelCommandDefaults("demo", {
+        config: {},
+      }),
+    ).toEqual({
+      nativeCommandsAutoEnabled: true,
+      nativeSkillsAutoEnabled: false,
+    });
+  });
 });

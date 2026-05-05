@@ -26,6 +26,7 @@ function createAllowlistCompatConfig(pluginIds: string[]) {
     config: {
       plugins: {
         allow: [demoAllowEntry],
+        bundledDiscovery: "compat",
       },
     },
     pluginIds,
@@ -51,6 +52,7 @@ describe("plugin loader contract", () => {
       config: {
         plugins: {
           allow: [demoAllowEntry],
+          bundledDiscovery: "compat",
         },
       },
     });
