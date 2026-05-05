@@ -6,6 +6,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { OpenClawPluginAuthContext } from "./tool-types.js";
 
 type MockRegistryToolEntry = {
   pluginId: string;
@@ -2080,6 +2081,81 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps mixed plugin descriptor caches auth-sensitive when any entry receives factory auth", () => {
+    const delegatedAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: true,
+        token: "delegated-token",
+      })),
+    };
+    const authFactory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { auth?: OpenClawPluginAuthContext };
+      return ctx.auth ? makeTool("auth_sensitive_tool") : undefined;
+    });
+    const passiveFactory = vi.fn(() => makeTool("passive_tool"));
+    const registry = createToolRegistry([
+      {
+        pluginId: "mixed-auth",
+        optional: false,
+        source: "/tmp/mixed-auth.js",
+        names: ["auth_sensitive_tool"],
+        factory: authFactory,
+      },
+      {
+        pluginId: "mixed-auth",
+        optional: true,
+        source: "/tmp/mixed-auth.js",
+        names: [],
+        factory: passiveFactory,
+      },
+    ]);
+    setActivePluginRegistry(registry as never, "test-tool-registry", "gateway-bindable", "/tmp");
+    const base = createContext();
+    const config = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["mixed-auth"],
+        entries: {
+          "mixed-auth": {
+            auth: { delegatedAccess: { enabled: true } },
+          },
+        },
+      },
+    };
+    installToolManifestSnapshot({
+      config: config as never,
+      plugin: {
+        id: "mixed-auth",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["auth_sensitive_tool", "passive_tool"] },
+        toolMetadata: {
+          passive_tool: {
+            optional: true,
+          },
+        },
+      },
+    });
+    const toolAllowlist = [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, "passive_tool"];
+    const context = {
+      ...createContext(),
+      auth: delegatedAuth,
+      config,
+    } as never;
+
+    const first = resolvePluginTools({ context, toolAllowlist });
+    const second = resolvePluginTools({ context, toolAllowlist });
+
+    expectResolvedToolNames(first, ["auth_sensitive_tool", "passive_tool"]);
+    expectResolvedToolNames(second, ["auth_sensitive_tool", "passive_tool"]);
+    expect(authFactory).toHaveBeenCalledTimes(1);
+    expect(passiveFactory).toHaveBeenCalledTimes(1);
   });
 
   it("caches plugin tool descriptors and uses the runtime only on execution", async () => {
