@@ -69,25 +69,45 @@ function resolveActionThreadId(params: {
   explicitReplyTo: string | undefined;
   inboundThreadId: string | undefined;
   currentChannelId: string | undefined;
+  currentMessageId: string | number | undefined;
   replyToMode: string | undefined;
+  hasRepliedRef: { value: boolean } | undefined;
 }) {
+  const markFirstReply = () => {
+    if (params.replyToMode === "first" && params.hasRepliedRef) {
+      params.hasRepliedRef.value = true;
+    }
+  };
   const explicitTarget = params.explicitThreadId ?? params.explicitReplyTo;
   if (isGoogleChatThreadResourceName(explicitTarget)) {
+    markFirstReply();
     return explicitTarget;
   }
   if (isGoogleChatMessageResourceName(explicitTarget)) {
-    return params.inboundThreadId;
+    if (explicitTarget === params.currentMessageId) {
+      markFirstReply();
+      return params.inboundThreadId;
+    }
+    return undefined;
   }
   if (explicitTarget) {
+    markFirstReply();
     return explicitTarget;
   }
-  return allowsImplicitToolThread(params.replyToMode) &&
-    isCurrentGoogleChatTarget({
+  if (
+    !allowsImplicitToolThread(params.replyToMode) ||
+    !isCurrentGoogleChatTarget({
       to: params.to,
       currentChannelId: params.currentChannelId,
     })
-    ? params.inboundThreadId
-    : undefined;
+  ) {
+    return undefined;
+  }
+  if (params.replyToMode === "first" && params.hasRepliedRef?.value) {
+    return undefined;
+  }
+  markFirstReply();
+  return params.inboundThreadId;
 }
 
 async function loadGoogleChatActionMedia(params: {
@@ -183,7 +203,9 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
           typeof toolContext?.currentChannelId === "string"
             ? toolContext.currentChannelId
             : undefined,
+        currentMessageId: toolContext?.currentMessageId,
         replyToMode: toolContext?.replyToMode,
+        hasRepliedRef: toolContext?.hasRepliedRef,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
 

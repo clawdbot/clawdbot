@@ -17,6 +17,7 @@ import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-type
 
 function resolveOutboundThread(
   payloadReplyToId: string | undefined,
+  inboundMessageId: string | undefined,
   inboundThreadId: string | undefined,
 ): string | undefined {
   if (isGoogleChatThreadResourceName(payloadReplyToId)) {
@@ -24,6 +25,7 @@ function resolveOutboundThread(
   }
   if (
     isGoogleChatMessageResourceName(payloadReplyToId) &&
+    payloadReplyToId === inboundMessageId &&
     isGoogleChatThreadResourceName(inboundThreadId)
   ) {
     return inboundThreadId;
@@ -45,10 +47,15 @@ export async function deliverGoogleChatReply(params: {
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
+  inboundMessageId: string | undefined;
   inboundThreadId: string | undefined;
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink } = params;
-  const outboundThread = resolveOutboundThread(payload.replyToId, params.inboundThreadId);
+  const outboundThread = resolveOutboundThread(
+    payload.replyToId,
+    params.inboundMessageId,
+    params.inboundThreadId,
+  );
   // Clear this whenever the typing message is deleted or unavailable; otherwise
   // text delivery can keep retrying a dead message and drop content.
   let typingMessageName = params.typingMessageName;

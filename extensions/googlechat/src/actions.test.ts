@@ -391,7 +391,11 @@ describe("googlechat message actions", () => {
       },
       cfg: {},
       accountId: "default",
-      toolContext: { currentThreadTs: "spaces/AAA/threads/xyz", replyToMode: "all" },
+      toolContext: {
+        currentMessageId: "spaces/AAA/messages/current",
+        currentThreadTs: "spaces/AAA/threads/xyz",
+        replyToMode: "all",
+      },
     } as never);
 
     expect(sendGoogleChatMessage).toHaveBeenCalledWith(
@@ -401,6 +405,96 @@ describe("googlechat message actions", () => {
         thread: "spaces/AAA/threads/xyz",
       }),
     );
+  });
+
+  it("does not map an arbitrary Google Chat message-resource replyTo onto the inbound thread", async () => {
+    resolveGoogleChatAccount.mockReturnValue({
+      credentialSource: "service-account",
+      config: {},
+    });
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    sendGoogleChatMessage.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-3",
+    });
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await googlechatMessageActions.handleAction({
+      action: "send",
+      params: {
+        to: "spaces/AAA",
+        message: "follow up",
+        replyTo: "spaces/AAA/messages/other",
+      },
+      cfg: {},
+      accountId: "default",
+      toolContext: {
+        currentMessageId: "spaces/AAA/messages/current",
+        currentThreadTs: "spaces/AAA/threads/xyz",
+        replyToMode: "all",
+      },
+    } as never);
+
+    expect(sendGoogleChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        space: "spaces/AAA",
+        text: "follow up",
+        thread: undefined,
+      }),
+    );
+  });
+
+  it("threads only the first implicit Google Chat tool send when replyToMode is first", async () => {
+    resolveGoogleChatAccount.mockReturnValue({
+      credentialSource: "service-account",
+      config: {},
+    });
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    sendGoogleChatMessage.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-3",
+    });
+    const hasRepliedRef = { value: false };
+    const toolContext = {
+      currentChannelId: "spaces/AAA",
+      currentThreadTs: "spaces/AAA/threads/xyz",
+      replyToMode: "first",
+      hasRepliedRef,
+    };
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await googlechatMessageActions.handleAction({
+      action: "send",
+      params: {
+        to: "spaces/AAA",
+        message: "first",
+      },
+      cfg: {},
+      accountId: "default",
+      toolContext,
+    } as never);
+    await googlechatMessageActions.handleAction({
+      action: "send",
+      params: {
+        to: "spaces/AAA",
+        message: "second",
+      },
+      cfg: {},
+      accountId: "default",
+      toolContext,
+    } as never);
+
+    expect(sendGoogleChatMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "first", thread: "spaces/AAA/threads/xyz" }),
+    );
+    expect(sendGoogleChatMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "second", thread: undefined }),
+    );
+    expect(hasRepliedRef.value).toBe(true);
   });
 
   it("prefers an explicit threadId over the inbound thread id", async () => {
