@@ -1967,6 +1967,54 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Context: 25k/200k");
   });
 
+  it("does not let agent contextTokens inflate status above the model window", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("openai/gpt-5.5", 272_000);
+
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.5",
+        contextTokens: 1_000_000,
+      },
+      sessionEntry: {
+        sessionId: "sess-openai-codex-cap-context",
+        updatedAt: 0,
+        totalTokens: 25_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "oauth",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 25k/272k");
+    expect(normalized).not.toContain("Context: 25k/1.0m");
+  });
+
+  it("uses runtime context tokens to cap status when the sync cache is cold", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.5",
+        contextTokens: 1_000_000,
+      },
+      explicitConfiguredContextTokens: 1_000_000,
+      runtimeContextTokens: 272_000,
+      sessionEntry: {
+        sessionId: "sess-openai-codex-runtime-cap-context",
+        updatedAt: 0,
+        totalTokens: 25_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "oauth",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 25k/272k");
+    expect(normalized).not.toContain("Context: 25k/1.0m");
+  });
+
   it("does not synthesize a 32k fallback window when the active runtime model is unknown", () => {
     const text = buildStatusMessage({
       config: {

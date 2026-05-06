@@ -16,7 +16,7 @@ Audience: macOS app contributors. Goal: keep the voice overlay predictable when 
 
 ## Implemented (Dec 9, 2025)
 
-- Overlay sessions now carry a token per capture (wake-word or push-to-talk). Partial/final/send/dismiss/level updates are dropped when the token doesn’t match, avoiding stale callbacks.
+- Overlay sessions now carry a token per capture (wake-word or push-to-talk). Partial/final/send/dismiss/level updates are dropped when the token doesn't match, avoiding stale callbacks.
 - Push-to-talk adopts any visible overlay text as a prefix (so pressing the hotkey while the wake overlay is up keeps the text and appends new speech). It waits up to 1.5s for a final transcript before falling back to the current text.
 - Chime/overlay logging is emitted at `info` in categories `voicewake.overlay`, `voicewake.ptt`, and `voicewake.chime` (session start, partial, final, send, dismiss, chime reason).
 
@@ -35,7 +35,7 @@ Audience: macOS app contributors. Goal: keep the voice overlay predictable when 
 4. **Unified send path**
    - On `endCapture`: if trimmed text is empty → dismiss; else `performSend(session:)` (plays send chime once, forwards, dismisses).
    - Push-to-talk: no delay; wake-word: optional delay for auto-send.
-   - Apply a short cooldown to the wake runtime after push-to-talk finishes so wake-word doesn’t immediately retrigger.
+   - Apply a short cooldown to the wake runtime after push-to-talk finishes so wake-word doesn't immediately retrigger.
 5. **Logging**
    - Coordinator emits `.info` logs in subsystem `ai.openclaw`, categories `voicewake.overlay` and `voicewake.chime`.
    - Key events: `session_started`, `adopted_by_push_to_talk`, `partial`, `finalized`, `send`, `dismiss`, `cancel`, `cooldown`.

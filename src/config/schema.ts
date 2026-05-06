@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
-import { GENERATED_BASE_CONFIG_SCHEMA } from "./schema.base.generated.js";
+import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
 import { applySensitiveHints, applySensitiveUrlHints } from "./schema.hints.js";
 import {
@@ -525,7 +525,7 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   if (cachedBase) {
     return cachedBase;
   }
-  const generated = GENERATED_BASE_CONFIG_SCHEMA as unknown as ConfigSchemaResponse;
+  const generated = computeBaseConfigSchemaResponse();
   const bundledChannels = getBundledChannelSchemaMetadata();
   const mergedWithoutSensitiveHints = applyHeartbeatTargetHints(
     applyChannelHints(generated.uiHints, bundledChannels),

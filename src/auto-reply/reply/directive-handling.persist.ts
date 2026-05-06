@@ -3,8 +3,6 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { resolveContextTokensForModel } from "../../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import { normalizeProviderId, type ModelAliasIndex } from "../../agents/model-selection.js";
@@ -23,6 +21,7 @@ import {
   enqueueModeSwitchEvents,
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
+import { resolveContextTokens } from "./model-selection.js";
 
 export type PersistedThinkingLevelRemap = {
   from: ThinkLevel;
@@ -66,6 +65,29 @@ function resolveModelRuntimeOverride(params: {
   }
 
   return { kind: "invalid", runtime: rawRuntime };
+}
+
+function resolveContextConfigProviderForRuntime(params: {
+  provider: string;
+  runtimeId?: string;
+}): string {
+  const provider = normalizeProviderId(params.provider);
+  const runtimeId = normalizeProviderId(params.runtimeId ?? "");
+  if (provider === "openai" && runtimeId === "codex") {
+    return "openai-codex";
+  }
+  return params.provider;
+}
+
+function resolveDirectiveRuntimeId(params: {
+  agentCfg: NonNullable<OpenClawConfig["agents"]>["defaults"] | undefined;
+  sessionEntry?: SessionEntry;
+}): string | undefined {
+  return (
+    params.sessionEntry?.agentRuntimeOverride ??
+    params.sessionEntry?.agentHarnessId ??
+    params.agentCfg?.agentRuntime?.id
+  );
 }
 
 export async function persistInlineDirectives(params: {
@@ -342,13 +364,14 @@ export async function persistInlineDirectives(params: {
     provider,
     model,
     thinkingRemap,
-    contextTokens:
-      resolveContextTokensForModel({
-        cfg,
+    contextTokens: resolveContextTokens({
+      cfg,
+      agentCfg,
+      provider: resolveContextConfigProviderForRuntime({
         provider,
-        model,
-        contextTokensOverride: agentCfg?.contextTokens,
-        allowAsyncLoad: false,
-      }) ?? DEFAULT_CONTEXT_TOKENS,
+        runtimeId: resolveDirectiveRuntimeId({ agentCfg, sessionEntry }),
+      }),
+      model,
+    }),
   };
 }

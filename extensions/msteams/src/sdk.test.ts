@@ -392,6 +392,31 @@ describe("createBotFrameworkJwtValidator", () => {
     await expect(validator.validate("Bearer no-iss")).resolves.toBe(false);
     expect(jwtState.verifyCalls).toHaveLength(0);
   });
+
+  it("rethrows JWKS network errors (ECONNREFUSED) instead of silently returning false (#77674)", async () => {
+    // Simulate a firewall blocking egress to login.botframework.com.
+    // The top-level vi.mock("jwks-rsa") sets up a class-level mock, so we spy
+    // on the prototype to override getSigningKey for this test only.
+    const networkErr = Object.assign(new Error("connect ECONNREFUSED 40.126.25.32:443"), {
+      code: "ECONNREFUSED",
+    });
+    const { JwksClient } = await import("jwks-rsa");
+    vi.spyOn(JwksClient.prototype, "getSigningKey").mockRejectedValueOnce(networkErr);
+
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    const validator = await createBotFrameworkJwtValidator(creds);
+    // Network errors must bubble out — callers can then log them at warn/error
+    // level rather than silently returning 401 that looks like a bad credential.
+    await expect(validator.validate("Bearer token-firewall")).rejects.toThrow("ECONNREFUSED");
+  });
+
+  it("returns false (not throws) for non-network JWKS errors like bad signature (#77674)", async () => {
+    // Auth errors (bad signature, expired token) should still return false.
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyBehavior = "throw";
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer token-bad-sig")).resolves.toBe(false);
+  });
 });
 
 function makeFakeSdk() {

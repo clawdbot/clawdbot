@@ -11,6 +11,8 @@ import {
   type SessionEntry,
   type SessionHeader,
 } from "@mariozechner/pi-coding-agent";
+import { appendRegularFile } from "../../infra/fs-safe.js";
+import { privateFileStore } from "../../infra/private-file-store.js";
 
 type BranchSummaryEntry = Extract<SessionEntry, { type: "branch_summary" }>;
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
@@ -293,20 +295,10 @@ export async function writeTranscriptFileAtomic(
   filePath: string,
   entries: Array<SessionHeader | SessionEntry>,
 ): Promise<void> {
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true });
-  const tmpFile = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  try {
-    await fs.writeFile(tmpFile, serializeTranscriptFileEntries(entries), {
-      encoding: "utf-8",
-      mode: 0o600,
-      flag: "wx",
-    });
-    await fs.rename(tmpFile, filePath);
-  } catch (err) {
-    await fs.unlink(tmpFile).catch(() => undefined);
-    throw err;
-  }
+  await privateFileStore(path.dirname(filePath)).writeText(
+    path.basename(filePath),
+    serializeTranscriptFileEntries(entries),
+  );
 }
 
 export async function persistTranscriptStateMutation(params: {
@@ -324,9 +316,9 @@ export async function persistTranscriptStateMutation(params: {
     ]);
     return;
   }
-  await fs.appendFile(
-    params.sessionFile,
-    params.appendedEntries.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
-    "utf-8",
-  );
+  await appendRegularFile({
+    filePath: params.sessionFile,
+    content: `${params.appendedEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    rejectSymlinkParents: true,
+  });
 }

@@ -6,8 +6,6 @@ read_when:
 title: "Brave search"
 ---
 
-# Brave Search API
-
 OpenClaw supports Brave Search API as a `web_search` provider.
 
 ## Get an API key

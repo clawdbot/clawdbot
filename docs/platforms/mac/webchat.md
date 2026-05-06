@@ -13,10 +13,10 @@ agent (with a session switcher for other sessions).
 - **Remote mode**: forwards the Gateway control port over SSH and uses that
   tunnel as the data plane.
 
-## Launch & debugging
+## Launch and debugging
 
-- Manual: Lobster menu → “Open Chat”.
-- Auto‑open for testing:
+- Manual: Lobster menu → "Open Chat".
+- Auto-open for testing:
 
   ```bash
   dist/OpenClaw.app/Contents/MacOS/OpenClaw --webchat
@@ -38,7 +38,7 @@ agent (with a session switcher for other sessions).
   omitted, and oversized rows can be replaced with placeholders.
 - Session: defaults to the primary session (`main`, or `global` when scope is
   global). The UI can switch between sessions.
-- Onboarding uses a dedicated session to keep first‑run setup separate.
+- Onboarding uses a dedicated session to keep first-run setup separate.
 
 ## Security surface
 

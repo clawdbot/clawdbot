@@ -1,3 +1,4 @@
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-message";
 import { describe, expect, it, vi } from "vitest";
 import { createSlackDraftStream } from "./draft-stream.js";
 
@@ -9,6 +10,17 @@ type DraftWarnFn = NonNullable<DraftStreamParams["warn"]>;
 
 const TEST_CFG = {};
 
+function slackDraftSendResult(messageId: string, channelId = "C123") {
+  return {
+    channelId,
+    messageId,
+    receipt: createMessageReceiptFromOutboundResults({
+      results: [{ channel: "slack", messageId, channelId }],
+      kind: "preview",
+    }),
+  };
+}
+
 function createDraftStreamHarness(
   params: {
     maxChars?: number;
@@ -18,12 +30,7 @@ function createDraftStreamHarness(
     warn?: DraftWarnFn;
   } = {},
 ) {
-  const send =
-    params.send ??
-    vi.fn<DraftSendFn>(async () => ({
-      channelId: "C123",
-      messageId: "111.222",
-    }));
+  const send = params.send ?? vi.fn<DraftSendFn>(async () => slackDraftSendResult("111.222"));
   const edit = params.edit ?? vi.fn<DraftEditFn>(async () => {});
   const remove = params.remove ?? vi.fn<DraftRemoveFn>(async () => {});
   const warn = params.warn ?? vi.fn<DraftWarnFn>();
@@ -96,8 +103,8 @@ describe("createSlackDraftStream", () => {
   it("supports forceNewMessage for subsequent assistant messages", async () => {
     const send = vi
       .fn<DraftSendFn>()
-      .mockResolvedValueOnce({ channelId: "C123", messageId: "111.222" })
-      .mockResolvedValueOnce({ channelId: "C123", messageId: "333.444" });
+      .mockResolvedValueOnce(slackDraftSendResult("111.222"))
+      .mockResolvedValueOnce(slackDraftSendResult("333.444"));
     const { stream, edit } = createDraftStreamHarness({ send });
 
     stream.update("first");

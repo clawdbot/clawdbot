@@ -1438,6 +1438,13 @@
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/channels.ts",
+      "text": "Refreshing channel status in the background; showing the last successful snapshot."
+    },
+    {
+      "count": 1,
       "kind": "object-property",
       "name": "subtitle",
       "path": "ui/src/ui/views/channels.whatsapp.ts",

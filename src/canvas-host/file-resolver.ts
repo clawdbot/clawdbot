@@ -1,6 +1,5 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { SafeOpenError, openFileWithinRoot, type SafeOpenResult } from "../infra/fs-safe.js";
+import { root as fsRoot, FsSafeError, type OpenResult } from "../infra/fs-safe.js";
 
 export function normalizeUrlPath(rawPath: string): string {
   const decoded = decodeURIComponent(rawPath || "/");
@@ -11,18 +10,19 @@ export function normalizeUrlPath(rawPath: string): string {
 export async function resolveFileWithinRoot(
   rootReal: string,
   urlPath: string,
-): Promise<SafeOpenResult | null> {
+): Promise<OpenResult | null> {
   const normalized = normalizeUrlPath(urlPath);
   const rel = normalized.replace(/^\/+/, "");
   if (rel.split("/").some((p) => p === "..")) {
     return null;
   }
+  const root = await fsRoot(rootReal);
 
   const tryOpen = async (relative: string) => {
     try {
-      return await openFileWithinRoot({ rootDir: rootReal, relativePath: relative });
+      return await root.open(relative);
     } catch (err) {
-      if (err instanceof SafeOpenError) {
+      if (err instanceof FsSafeError) {
         return null;
       }
       throw err;
@@ -33,17 +33,19 @@ export async function resolveFileWithinRoot(
     return await tryOpen(path.posix.join(rel, "index.html"));
   }
 
-  const candidate = path.join(rootReal, rel);
   try {
-    const st = await fs.lstat(candidate);
-    if (st.isSymbolicLink()) {
+    const st = await root.stat(rel);
+    if (st.isSymbolicLink) {
       return null;
     }
-    if (st.isDirectory()) {
+    if (st.isDirectory) {
       return await tryOpen(path.posix.join(rel, "index.html"));
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    if (err instanceof FsSafeError) {
+      return null;
+    }
+    throw err;
   }
 
   return await tryOpen(rel);

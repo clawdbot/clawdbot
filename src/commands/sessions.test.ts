@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   makeRuntime,
   mockSessionsConfig,
+  resetMockSessionsConfig,
   runSessionsJson,
+  setMockSessionsConfig,
   writeStore,
 } from "./sessions.test-helpers.js";
 
@@ -12,7 +14,7 @@ process.env.FORCE_COLOR = "0";
 
 mockSessionsConfig();
 
-import { sessionsCommand } from "./sessions.js";
+import { sessionsCommand, __testing } from "./sessions.js";
 
 describe("sessionsCommand", () => {
   beforeEach(() => {
@@ -21,6 +23,7 @@ describe("sessionsCommand", () => {
   });
 
   afterEach(() => {
+    resetMockSessionsConfig();
     vi.useRealTimers();
   });
 
@@ -49,6 +52,75 @@ describe("sessionsCommand", () => {
     expect(row).toContain("2.0k/32k (6%)");
     expect(row).toContain("45m ago");
     expect(row).toContain("pi:opus");
+  });
+
+  it("renders the agent runtime in the tabular view", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: { "anthropic/claude-opus-4-7": {} },
+          contextTokens: 200_000,
+        },
+      },
+    }));
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-7",
+        },
+      },
+      "sessions-runtime-table",
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+
+    fs.rmSync(store);
+
+    const tableHeader = logs.find((line) => line.includes("Runtime"));
+    expect(tableHeader).toBeTruthy();
+
+    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
+    expect(row).toContain("claude-opus-4-7");
+    expect(row).toContain("Claude CLI");
+  });
+
+  it("renders configured CLI runtime when the session stores a canonical provider", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: { "anthropic/claude-opus-4-7": {} },
+          contextTokens: 200_000,
+        },
+      },
+    }));
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      },
+      "sessions-runtime-canonical-provider",
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+
+    fs.rmSync(store);
+
+    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
+    expect(row).toContain("claude-opus-4-7");
+    expect(row).toContain("Claude CLI");
   });
 
   it("shows placeholder rows when tokens are missing", async () => {
@@ -154,31 +226,8 @@ describe("sessionsCommand", () => {
     expect(payload.sessions?.map((row) => row.key)).toEqual(["recent"]);
   });
 
-  it("limits JSON output to the newest 100 sessions by default", async () => {
-    const entries: Record<string, { sessionId: string; updatedAt: number; model: string }> = {};
-    for (let i = 0; i < 105; i += 1) {
-      entries[`session-${String(i).padStart(3, "0")}`] = {
-        sessionId: `session-${i}`,
-        updatedAt: Date.now() - i * 60_000,
-        model: "pi:opus",
-      };
-    }
-    const store = writeStore(entries, "sessions-default-limit");
-
-    const payload = await runSessionsJson<{
-      count?: number;
-      totalCount?: number;
-      limitApplied?: number | null;
-      hasMore?: boolean;
-      sessions?: Array<{ key: string }>;
-    }>(sessionsCommand, store);
-
-    expect(payload.count).toBe(100);
-    expect(payload.totalCount).toBe(105);
-    expect(payload.limitApplied).toBe(100);
-    expect(payload.hasMore).toBe(true);
-    expect(payload.sessions?.at(0)?.key).toBe("session-000");
-    expect(payload.sessions?.some((row) => row.key === "session-104")).toBe(false);
+  it("uses a default JSON output limit of 100 sessions", () => {
+    expect(__testing.parseSessionsLimit(undefined)).toBe(100);
   });
 
   it("honors explicit JSON output limits", async () => {

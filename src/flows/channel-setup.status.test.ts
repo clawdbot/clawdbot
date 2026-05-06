@@ -12,6 +12,7 @@ type FormatChannelPrimerLine = typeof import("../channels/registry.js").formatCh
 type FormatChannelSelectionLine =
   typeof import("../channels/registry.js").formatChannelSelectionLine;
 type IsChannelConfigured = typeof import("../config/channel-configured.js").isChannelConfigured;
+type ChannelSetupStatusModule = typeof import("./channel-setup.status.js");
 type NoteChannelPrimerChannels = Parameters<
   typeof import("./channel-setup.status.js").noteChannelPrimer
 >[1];
@@ -73,15 +74,14 @@ vi.mock("../plugins/bundled-sources.js", () => ({
   findBundledPluginSourceInMap: () => undefined,
 }));
 
-import {
-  collectChannelStatus,
-  noteChannelPrimer,
-  resolveChannelSelectionNoteLines,
-  resolveChannelSetupSelectionContributions,
-} from "./channel-setup.status.js";
+let collectChannelStatus: ChannelSetupStatusModule["collectChannelStatus"];
+let noteChannelPrimer: ChannelSetupStatusModule["noteChannelPrimer"];
+let resolveChannelSelectionNoteLines: ChannelSetupStatusModule["resolveChannelSelectionNoteLines"];
+let resolveChannelSetupSelectionContributions: ChannelSetupStatusModule["resolveChannelSetupSelectionContributions"];
 
 describe("resolveChannelSetupSelectionContributions", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
     listChatChannels.mockReturnValue([
       makeMeta("discord", "Discord"),
@@ -93,6 +93,12 @@ describe("resolveChannelSetupSelectionContributions", () => {
     );
     formatChannelSelectionLine.mockImplementation((meta) => `${meta.label} — ${meta.blurb}`);
     isChannelConfigured.mockReturnValue(false);
+    ({
+      collectChannelStatus,
+      noteChannelPrimer,
+      resolveChannelSelectionNoteLines,
+      resolveChannelSetupSelectionContributions,
+    } = await import("./channel-setup.status.js"));
   });
 
   it("sorts channels alphabetically by picker label", () => {

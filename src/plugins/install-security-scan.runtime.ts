@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { tryReadJson } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
@@ -496,10 +497,8 @@ async function scanManifestDependencyDenylist(params: {
   });
   const packageManifestPaths = traversalResult.packageManifestPaths;
   for (const manifestPath of packageManifestPaths) {
-    let manifest: PackageManifest;
-    try {
-      manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as PackageManifest;
-    } catch {
+    const manifest = await tryReadJson<PackageManifest>(manifestPath);
+    if (!manifest) {
       continue;
     }
 

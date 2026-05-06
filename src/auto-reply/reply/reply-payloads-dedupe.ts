@@ -1,8 +1,8 @@
 import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
-import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import {
   channelRouteTargetsMatchExact,
   stringifyRouteThreadId,
@@ -91,6 +91,18 @@ function normalizeThreadIdForComparison(value?: string): string | undefined {
   return stringifyRouteThreadId(value);
 }
 
+function normalizeTargetForDedupe(provider: string, rawTarget?: string): string | undefined {
+  const fallback = normalizeOptionalString(rawTarget);
+  if (!fallback) {
+    return undefined;
+  }
+  const providerId = normalizeProviderForComparison(provider);
+  const normalizer = providerId
+    ? getLoadedChannelPluginForRead(providerId)?.messaging?.normalizeTarget
+    : undefined;
+  return normalizeOptionalString(normalizer?.(rawTarget ?? "") ?? fallback);
+}
+
 function resolveTargetProviderForComparison(params: {
   currentProvider: string;
   targetProvider?: string;
@@ -113,7 +125,7 @@ function normalizeRouteTargetForDedupe(params: {
   accountId?: string;
   threadId?: string;
 }): MessagingToolDedupeRouteTarget | null {
-  const to = normalizeTargetForProvider(params.provider, params.rawTarget);
+  const to = normalizeTargetForDedupe(params.provider, params.rawTarget);
   if (!to) {
     return null;
   }

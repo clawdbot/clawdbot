@@ -5,7 +5,7 @@ read_when: "You want an agent with its own identity that acts on behalf of human
 status: active
 ---
 
-Goal: run OpenClaw as a **named delegate** — an agent with its own identity that acts "on behalf of" people in an organization. The agent never impersonates a human. It sends, reads, and schedules under its own account with explicit delegation permissions.
+Goal: run OpenClaw as a **named delegate** - an agent with its own identity that acts "on behalf of" people in an organization. The agent never impersonates a human. It sends, reads, and schedules under its own account with explicit delegation permissions.
 
 This extends [Multi-Agent Routing](/concepts/multi-agent) from personal use into organizational deployments.
 
@@ -14,15 +14,15 @@ This extends [Multi-Agent Routing](/concepts/multi-agent) from personal use into
 A **delegate** is an OpenClaw agent that:
 
 - Has its **own identity** (email address, display name, calendar).
-- Acts **on behalf of** one or more humans — never pretends to be them.
+- Acts **on behalf of** one or more humans - never pretends to be them.
 - Operates under **explicit permissions** granted by the organization's identity provider.
-- Follows **[standing orders](/automation/standing-orders)** — rules defined in the agent's `AGENTS.md` that specify what it may do autonomously vs. what requires human approval (see [Cron Jobs](/automation/cron-jobs) for scheduled execution).
+- Follows **[standing orders](/automation/standing-orders)** - rules defined in the agent's `AGENTS.md` that specify what it may do autonomously vs. what requires human approval (see [Cron Jobs](/automation/cron-jobs) for scheduled execution).
 
 The delegate model maps directly to how executive assistants work: they have their own credentials, send mail "on behalf of" their principal, and follow a defined scope of authority.
 
 ## Why delegates?
 
-OpenClaw's default mode is a **personal assistant** — one human, one agent. Delegates extend this to organizations:
+OpenClaw's default mode is a **personal assistant** - one human, one agent. Delegates extend this to organizations:
 
 | Personal mode               | Delegate mode                                  |
 | --------------------------- | ---------------------------------------------- |
@@ -48,7 +48,7 @@ The delegate can **read** organizational data and **draft** messages for human r
 - Calendar: read events, surface conflicts, summarize the day.
 - Files: read shared documents, summarize content.
 
-This tier requires only read permissions from the identity provider. The agent does not write to any mailbox or calendar — drafts and proposals are delivered via chat for the human to act on.
+This tier requires only read permissions from the identity provider. The agent does not write to any mailbox or calendar - drafts and proposals are delivered via chat for the human to act on.
 
 ### Tier 2: Send on Behalf
 
@@ -93,7 +93,7 @@ These rules load every session. They are the last line of defense regardless of 
 
 ### Tool restrictions
 
-Use per-agent tool policy (v2026.1.6+) to enforce boundaries at the Gateway level. This operates independently of the agent's personality files — even if the agent is instructed to bypass its rules, the Gateway blocks the tool call:
+Use per-agent tool policy (v2026.1.6+) to enforce boundaries at the Gateway level. This operates independently of the agent's personality files - even if the agent is instructed to bypass its rules, the Gateway blocks the tool call:
 
 ```json5
 {
@@ -159,7 +159,7 @@ Configure the delegate's personality in its workspace files:
 
 ### 2. Configure identity provider delegation
 
-The delegate needs its own account in your identity provider with explicit delegation permissions. **Apply the principle of least privilege** — start with Tier 1 (read-only) and escalate only when the use case demands it.
+The delegate needs its own account in your identity provider with explicit delegation permissions. **Apply the principle of least privilege** - start with Tier 1 (read-only) and escalate only when the use case demands it.
 
 #### Microsoft 365
 
@@ -286,7 +286,7 @@ A complete delegate configuration for an organizational assistant that handles e
 }
 ```
 
-The delegate's `AGENTS.md` defines its autonomous authority — what it may do without asking, what requires approval, and what is forbidden. [Cron Jobs](/automation/cron-jobs) drive its daily schedule.
+The delegate's `AGENTS.md` defines its autonomous authority - what it may do without asking, what requires approval, and what is forbidden. [Cron Jobs](/automation/cron-jobs) drive its daily schedule.
 
 If you grant `sessions_history`, remember it is a bounded, safety-filtered
 recall view. OpenClaw redacts credential/token-like text, truncates long
@@ -304,13 +304,13 @@ instead of returning a raw transcript dump.
 The delegate model works for any small organization:
 
 1. **Create one delegate agent** per organization.
-2. **Harden first** — tool restrictions, sandbox, hard blocks, audit trail.
+2. **Harden first** - tool restrictions, sandbox, hard blocks, audit trail.
 3. **Grant scoped permissions** via the identity provider (least privilege).
 4. **Define [standing orders](/automation/standing-orders)** for autonomous operations.
 5. **Schedule cron jobs** for recurring tasks.
 6. **Review and adjust** the capability tier as trust builds.
 
-Multiple organizations can share one Gateway server using multi-agent routing — each org gets its own isolated agent, workspace, and credentials.
+Multiple organizations can share one Gateway server using multi-agent routing - each org gets its own isolated agent, workspace, and credentials.
 
 ## Related
 

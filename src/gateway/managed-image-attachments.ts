@@ -4,6 +4,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { getLatestSubagentRunByChildSessionKey } from "../agents/subagent-registry.js";
 import { resolveStateDir } from "../config/paths.js";
+import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { tryReadJson, writeJson } from "../infra/json-files.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import {
   getImageMetadata,
@@ -366,7 +368,7 @@ function parseImageDataUrl(
 }
 
 async function getVariantStats(filePath: string) {
-  const [stats, metadataBuffer] = await Promise.all([fs.stat(filePath), fs.readFile(filePath)]);
+  const { buffer: metadataBuffer, stat } = await readLocalFileSafely({ filePath });
   const metadata = (await getImageMetadata(metadataBuffer).catch(() => null)) ?? {
     width: null,
     height: null,
@@ -374,14 +376,13 @@ async function getVariantStats(filePath: string) {
   return {
     width: metadata.width ?? null,
     height: metadata.height ?? null,
-    sizeBytes: Number.isFinite(stats.size) ? stats.size : null,
+    sizeBytes: Number.isFinite(stat.size) ? stat.size : null,
   };
 }
 
 async function writeManagedImageRecord(record: ManagedImageRecord, stateDir = resolveStateDir()) {
   const recordPath = resolveOutgoingRecordPath(record.attachmentId, stateDir);
-  await fs.mkdir(path.dirname(recordPath), { recursive: true });
-  await fs.writeFile(recordPath, JSON.stringify(record, null, 2), "utf-8");
+  await writeJson(recordPath, record, { trailingNewline: true });
 }
 
 async function deleteManagedImageRecordArtifacts(
@@ -478,10 +479,8 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
       continue;
     }
     const recordPath = path.join(recordsDir, name);
-    let record: ManagedImageRecord;
-    try {
-      record = JSON.parse(await fs.readFile(recordPath, "utf-8")) as ManagedImageRecord;
-    } catch {
+    const record = await tryReadJson<ManagedImageRecord>(recordPath);
+    if (!record) {
       try {
         await fs.rm(recordPath, { force: true });
       } catch {
@@ -866,7 +865,7 @@ export async function createManagedOutgoingImageBlocks(params: {
       let originalBuffer =
         parsedDataUrl.kind === "image-data-url"
           ? parsedDataUrl.buffer
-          : await fs.readFile(savedOriginal.path);
+          : (await readLocalFileSafely({ filePath: savedOriginal.path })).buffer;
       validateManagedImageBuffer(originalBuffer, alt, limits);
 
       let originalStats = await getVariantStats(savedOriginal.path);
@@ -1081,7 +1080,7 @@ export async function handleManagedOutgoingImageHttpRequest(
 
   let body: Buffer;
   try {
-    body = await fs.readFile(record.original.path);
+    body = (await readLocalFileSafely({ filePath: record.original.path })).buffer;
   } catch {
     sendStatus(res, 404, "not found");
     return true;

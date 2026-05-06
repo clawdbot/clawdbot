@@ -1,24 +1,35 @@
 import type { Command } from "commander";
 import { danger } from "../globals.js";
-import { listBundledPackageChannelMetadata } from "../plugins/bundled-package-channel-metadata.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
 import { formatCliChannelOptions } from "./channel-options.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { hasExplicitOptions } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
+import { normalizeWindowsArgv } from "./windows-argv.js";
 
 type ChannelsCommandsModule = typeof import("../commands/channels.js");
+type BundledPackageChannelMetadataModule =
+  typeof import("../plugins/bundled-package-channel-metadata.js");
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
+
+type RegisterChannelsCliOptions = {
+  includeSetupOptions?: boolean;
+};
 
 const channelsCommandsLoader = createLazyImportLoader<ChannelsCommandsModule>(
   () => import("../commands/channels.js"),
 );
+const bundledPackageChannelMetadataLoader =
+  createLazyImportLoader<BundledPackageChannelMetadataModule>(
+    () => import("../plugins/bundled-package-channel-metadata.js"),
+  );
 
 function loadChannelsCommands(): Promise<ChannelsCommandsModule> {
   return channelsCommandsLoader.load();
@@ -39,7 +50,19 @@ function getOptionNames(command: Command): string[] {
   return command.options.map((option) => option.attributeName());
 }
 
-function addChannelSetupOptions(command: Command): Command {
+function shouldRegisterChannelSetupOptions(
+  argv: string[] = process.argv,
+  options: RegisterChannelsCliOptions = {},
+): boolean {
+  if (options.includeSetupOptions) {
+    return true;
+  }
+  const { commandPath } = resolveCliArgvInvocation(normalizeWindowsArgv(argv));
+  return commandPath[0] === "channels" && commandPath[1] === "add";
+}
+
+async function addChannelSetupOptions(command: Command): Promise<Command> {
+  const { listBundledPackageChannelMetadata } = await bundledPackageChannelMetadataLoader.load();
   const seenFlags = new Set(command.options.map((option) => option.flags));
   const channels = listBundledPackageChannelMetadata().toSorted((left, right) => {
     const leftOrder = left.order ?? Number.MAX_SAFE_INTEGER;
@@ -64,7 +87,11 @@ function addChannelSetupOptions(command: Command): Command {
   return command;
 }
 
-export function registerChannelsCli(program: Command) {
+export async function registerChannelsCli(
+  program: Command,
+  argv: string[] = process.argv,
+  options: RegisterChannelsCliOptions = {},
+) {
   const channelNames = formatCliChannelOptions();
   const channels = program
     .command("channels")
@@ -163,27 +190,31 @@ export function registerChannelsCli(program: Command) {
       });
     });
 
-  addChannelSetupOptions(
-    channels
-      .command("add")
-      .description("Add or update a channel account")
-      .option("--channel <name>", `Channel (${channelNames})`)
-      .option("--account <id>", "Account id (default when omitted)")
-      .option("--name <name>", "Display name for this account")
-      .option("--token <token>", "Channel token or credential payload")
-      .option("--token-file <path>", "Read channel token or credential payload from file")
-      .option("--secret <secret>", "Channel shared secret")
-      .option("--secret-file <path>", "Read channel shared secret from file")
-      .option("--bot-token <token>", "Bot token")
-      .option("--app-token <token>", "App token")
-      .option("--password <password>", "Channel password or login secret")
-      .option("--cli-path <path>", "Channel CLI path")
-      .option("--url <url>", "Channel setup URL")
-      .option("--base-url <url>", "Channel base URL")
-      .option("--http-url <url>", "Channel HTTP service URL")
-      .option("--auth-dir <path>", "Channel auth directory override")
-      .option("--use-env", "Use env-backed credentials when supported", false),
-  ).action(async (opts, command) => {
+  const addCommand = channels
+    .command("add")
+    .description("Add or update a channel account")
+    .option("--channel <name>", `Channel (${channelNames})`)
+    .option("--account <id>", "Account id (default when omitted)")
+    .option("--name <name>", "Display name for this account")
+    .option("--token <token>", "Channel token or credential payload")
+    .option("--token-file <path>", "Read channel token or credential payload from file")
+    .option("--secret <secret>", "Channel shared secret")
+    .option("--secret-file <path>", "Read channel shared secret from file")
+    .option("--bot-token <token>", "Bot token")
+    .option("--app-token <token>", "App token")
+    .option("--password <password>", "Channel password or login secret")
+    .option("--cli-path <path>", "Channel CLI path")
+    .option("--url <url>", "Channel setup URL")
+    .option("--base-url <url>", "Channel base URL")
+    .option("--http-url <url>", "Channel HTTP service URL")
+    .option("--auth-dir <path>", "Channel auth directory override")
+    .option("--use-env", "Use env-backed credentials when supported", false);
+
+  if (shouldRegisterChannelSetupOptions(argv, options)) {
+    await addChannelSetupOptions(addCommand);
+  }
+
+  addCommand.action(async (opts, command) => {
     await runChannelsCommand(async () => {
       const { channelsAddCommand } = await loadChannelsCommands();
       const hasFlags = hasExplicitOptions(command, getOptionNames(command));

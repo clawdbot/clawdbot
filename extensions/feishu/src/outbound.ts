@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import {
   attachChannelToResult,
@@ -18,6 +17,7 @@ import {
   sendPayloadMediaSequenceAndFinalize,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { statRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
@@ -66,18 +66,12 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
   if (!path.isAbsolute(raw)) {
     return null;
   }
-  if (!fs.existsSync(raw)) {
-    return null;
-  }
-
-  // Fix race condition: wrap statSync in try-catch to handle file deletion
-  // between existsSync and statSync
   try {
-    if (!fs.statSync(raw).isFile()) {
+    const stat = statRegularFileSync(raw);
+    if (stat.missing) {
       return null;
     }
   } catch {
-    // File may have been deleted or became inaccessible between checks
     return null;
   }
 

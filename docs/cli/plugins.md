@@ -74,6 +74,7 @@ openclaw plugins search "calendar"                   # search ClawHub plugins
 openclaw plugins install <package>                      # npm by default
 openclaw plugins install clawhub:<package>              # ClawHub only
 openclaw plugins install npm:<package>                  # npm only
+openclaw plugins install npm-pack:<path.tgz>            # local npm pack through npm install semantics
 openclaw plugins install git:github.com/<owner>/<repo>  # git repo
 openclaw plugins install git:github.com/<owner>/<repo>@<ref>
 openclaw plugins install <package> --force              # overwrite existing install
@@ -149,6 +150,12 @@ is available, then fall back to `latest`.
   </Accordion>
   <Accordion title="Archives">
     Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`. Native OpenClaw plugin archives must contain a valid `openclaw.plugin.json` at the extracted plugin root; archives that only contain `package.json` are rejected before OpenClaw writes install records.
+
+    Use `npm-pack:<path.tgz>` when the file is an npm-pack tarball and you want
+    to test the same managed npm-root install path used by registry installs,
+    including `package-lock.json` verification, hoisted dependency scanning, and
+    npm install records. Plain archive paths still install as local archives
+    under the plugin extensions root.
 
     Claude marketplace installs are also supported.
 

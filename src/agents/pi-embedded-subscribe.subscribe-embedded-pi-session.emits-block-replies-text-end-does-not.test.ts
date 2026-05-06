@@ -125,6 +125,32 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
   });
 
+  it("message_end block-replies visible text when text_end streamed only silent NO_REPLY chunks", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextEnd({ emit, content: "NO_REPLY" });
+    await Promise.resolve();
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final visible reply." }],
+      } as AssistantMessage,
+    });
+    await Promise.resolve();
+
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+    });
+    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Final visible reply.");
+    expect(subscription.assistantTexts).toEqual(["Final visible reply."]);
+  });
+
   it("does not duplicate when message_end flushes and a late text_end arrives", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });

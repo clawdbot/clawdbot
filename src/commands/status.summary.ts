@@ -111,6 +111,7 @@ export async function getStatusSummary(
     classifySessionKey,
     resolveConfiguredStatusModelRef,
     resolveContextTokensForModel,
+    resolveSessionRuntimeLabel,
     resolveSessionModelRef,
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? getRuntimeConfig();
@@ -191,6 +192,8 @@ export async function getStatusSummary(
       .map(([key, entry]) => {
         const updatedAt = entry?.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;
+        const parsedAgentId = parseAgentSessionKey(key)?.agentId;
+        const agentId = opts.agentIdOverride ?? parsedAgentId;
         const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
         const model = resolvedModel.model ?? configModel ?? null;
         const contextTokens =
@@ -211,8 +214,14 @@ export async function getStatusSummary(
           contextTokens && contextTokens > 0 && total !== undefined
             ? Math.min(999, Math.round((total / contextTokens) * 100))
             : null;
-        const parsedAgentId = parseAgentSessionKey(key)?.agentId;
-        const agentId = opts.agentIdOverride ?? parsedAgentId;
+        const runtime = resolveSessionRuntimeLabel({
+          cfg,
+          entry,
+          provider: resolvedModel.provider,
+          model: model ?? "",
+          agentId,
+          sessionKey: key,
+        });
 
         return {
           agentId,
@@ -238,6 +247,7 @@ export async function getStatusSummary(
           remainingTokens: remaining,
           percentUsed: pct,
           model,
+          runtime,
           contextTokens,
           flags: buildFlags(entry),
         } satisfies SessionStatus;

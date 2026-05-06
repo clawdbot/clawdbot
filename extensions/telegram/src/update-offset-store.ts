@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 const STORE_VERSION = 2;
@@ -45,30 +45,30 @@ function extractBotIdFromToken(token?: string): string | null {
   return rawBotId;
 }
 
-function safeParseState(raw: string): TelegramUpdateOffsetState | null {
+function safeParseState(parsed: unknown): TelegramUpdateOffsetState | null {
   try {
-    const parsed = JSON.parse(raw) as {
+    const state = parsed as {
       version?: number;
       lastUpdateId?: number | null;
       botId?: string | null;
     };
-    if (parsed?.version !== STORE_VERSION && parsed?.version !== 1) {
+    if (state?.version !== STORE_VERSION && state?.version !== 1) {
       return null;
     }
-    if (parsed.lastUpdateId !== null && !isValidUpdateId(parsed.lastUpdateId)) {
+    if (state.lastUpdateId !== null && !isValidUpdateId(state.lastUpdateId)) {
       return null;
     }
     if (
-      parsed.version === STORE_VERSION &&
-      parsed.botId !== null &&
-      typeof parsed.botId !== "string"
+      state.version === STORE_VERSION &&
+      state.botId !== null &&
+      typeof state.botId !== "string"
     ) {
       return null;
     }
     return {
       version: STORE_VERSION,
-      lastUpdateId: parsed.lastUpdateId ?? null,
-      botId: parsed.version === STORE_VERSION ? (parsed.botId ?? null) : null,
+      lastUpdateId: state.lastUpdateId ?? null,
+      botId: state.version === STORE_VERSION ? (state.botId ?? null) : null,
     };
   } catch {
     return null;
@@ -81,24 +81,16 @@ export async function readTelegramUpdateOffset(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<number | null> {
   const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
-  try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    const parsed = safeParseState(raw);
-    const expectedBotId = extractBotIdFromToken(params.botToken);
-    if (expectedBotId && parsed?.botId && parsed.botId !== expectedBotId) {
-      return null;
-    }
-    if (expectedBotId && parsed?.botId === null) {
-      return null;
-    }
-    return parsed?.lastUpdateId ?? null;
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return null;
-    }
+  const { value } = await readJsonFileWithFallback<unknown>(filePath, null);
+  const parsed = safeParseState(value);
+  const expectedBotId = extractBotIdFromToken(params.botToken);
+  if (expectedBotId && parsed?.botId && parsed.botId !== expectedBotId) {
     return null;
   }
+  if (expectedBotId && parsed?.botId === null) {
+    return null;
+  }
+  return parsed?.lastUpdateId ?? null;
 }
 
 export async function writeTelegramUpdateOffset(params: {

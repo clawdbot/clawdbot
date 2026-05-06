@@ -103,16 +103,16 @@ candidate contains redacted secret placeholders such as `***`.
   <Accordion title="Set up a channel (WhatsApp, Telegram, Discord, etc.)">
     Each channel has its own config section under `channels.<provider>`. See the dedicated channel page for setup steps:
 
-    - [WhatsApp](/channels/whatsapp) — `channels.whatsapp`
-    - [Telegram](/channels/telegram) — `channels.telegram`
-    - [Discord](/channels/discord) — `channels.discord`
-    - [Feishu](/channels/feishu) — `channels.feishu`
-    - [Google Chat](/channels/googlechat) — `channels.googlechat`
-    - [Microsoft Teams](/channels/msteams) — `channels.msteams`
-    - [Slack](/channels/slack) — `channels.slack`
-    - [Signal](/channels/signal) — `channels.signal`
-    - [iMessage](/channels/imessage) — `channels.imessage`
-    - [Mattermost](/channels/mattermost) — `channels.mattermost`
+    - [WhatsApp](/channels/whatsapp) - `channels.whatsapp`
+    - [Telegram](/channels/telegram) - `channels.telegram`
+    - [Discord](/channels/discord) - `channels.discord`
+    - [Feishu](/channels/feishu) - `channels.feishu`
+    - [Google Chat](/channels/googlechat) - `channels.googlechat`
+    - [Microsoft Teams](/channels/msteams) - `channels.msteams`
+    - [Slack](/channels/slack) - `channels.slack`
+    - [Signal](/channels/signal) - `channels.signal`
+    - [iMessage](/channels/imessage) - `channels.imessage`
+    - [Mattermost](/channels/mattermost) - `channels.mattermost`
 
     All channels share the same DM policy pattern:
 
@@ -329,7 +329,7 @@ candidate contains redacted secret placeholders such as `***`.
     }
     ```
 
-    Build the image first — from a source checkout run `scripts/sandbox-setup.sh`, or from an npm install see the inline `docker build` command in [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup).
+    Build the image first - from a source checkout run `scripts/sandbox-setup.sh`, or from an npm install see the inline `docker build` command in [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup).
 
     See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents#agentsdefaultssandbox) for all options.
 
@@ -531,7 +531,7 @@ candidate contains redacted secret placeholders such as `***`.
 
 ## Config hot reload
 
-The Gateway watches `~/.openclaw/openclaw.json` and applies changes automatically — no manual restart needed for most settings.
+The Gateway watches `~/.openclaw/openclaw.json` and applies changes automatically - no manual restart needed for most settings.
 
 Direct file edits are treated as untrusted until they validate. The watcher waits
 for editor temp-write/rename churn to settle, reads the final file, and rejects
@@ -550,7 +550,7 @@ for the checklist.
 | Mode                   | Behavior                                                                                |
 | ---------------------- | --------------------------------------------------------------------------------------- |
 | **`hybrid`** (default) | Hot-applies safe changes instantly. Automatically restarts for critical ones.           |
-| **`hot`**              | Hot-applies safe changes only. Logs a warning when a restart is needed — you handle it. |
+| **`hot`**              | Hot-applies safe changes only. Logs a warning when a restart is needed - you handle it. |
 | **`restart`**          | Restarts the Gateway on any config change, safe or not.                                 |
 | **`off`**              | Disables file watching. Changes take effect on the next manual restart.                 |
 
@@ -568,7 +568,7 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
 
 | Category            | Fields                                                            | Restart needed? |
 | ------------------- | ----------------------------------------------------------------- | --------------- |
-| Channels            | `channels.*`, `web` (WhatsApp) — all built-in and plugin channels | No              |
+| Channels            | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels | No              |
 | Agent & models      | `agent`, `agents`, `models`, `routing`                            | No              |
 | Automation          | `hooks`, `cron`, `agent.heartbeat`                                | No              |
 | Sessions & messages | `session`, `messages`                                             | No              |
@@ -578,7 +578,7 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
 | Infrastructure      | `discovery`, `canvasHost`, `plugins`                              | **Yes**         |
 
 <Note>
-`gateway.reload` and `gateway.remote` are exceptions — changing them does **not** trigger a restart.
+`gateway.reload` and `gateway.remote` are exceptions - changing them does **not** trigger a restart.
 </Note>
 
 ### Reload planning

@@ -24,6 +24,7 @@ import {
 import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { sendMessageDiscord } from "./send.outbound.js";
+import { createDiscordSendResult } from "./send.receipt.js";
 import {
   buildDiscordSendError,
   createDiscordClient,
@@ -321,10 +322,12 @@ export async function sendDiscordComponentMessage(
     direction: "outbound",
   });
 
-  return {
-    messageId: result.id ?? "unknown",
-    channelId: result.channel_id ?? channelId,
-  };
+  return createDiscordSendResult({
+    result,
+    fallbackChannelId: channelId,
+    kind: "card",
+    ...(opts.replyTo ? { replyToId: opts.replyTo } : {}),
+  });
 }
 
 export async function editDiscordComponentMessage(
@@ -374,8 +377,13 @@ export async function editDiscordComponentMessage(
     direction: "outbound",
   });
 
-  return {
-    messageId: result.id ?? messageId,
-    channelId: result.channel_id ?? channelId,
-  };
+  return createDiscordSendResult({
+    result: {
+      id: result.id ?? messageId,
+      channel_id: result.channel_id,
+    },
+    fallbackChannelId: channelId,
+    kind: "card",
+    ...(opts.replyTo ? { replyToId: opts.replyTo } : {}),
+  });
 }

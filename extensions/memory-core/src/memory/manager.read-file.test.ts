@@ -246,19 +246,19 @@ describe("MemoryIndexManager.readFile", () => {
     await fs.mkdir(path.dirname(absPath), { recursive: true });
     await fs.writeFile(absPath, "first\nsecond", "utf-8");
 
-    const realReadFile = fs.readFile;
+    const realOpen = fs.open;
     let injected = false;
-    const readSpy = vi
-      .spyOn(fs, "readFile")
-      .mockImplementation(async (...args: Parameters<typeof realReadFile>) => {
-        const [target, options] = args;
+    const openSpy = vi
+      .spyOn(fs, "open")
+      .mockImplementation(async (...args: Parameters<typeof realOpen>) => {
+        const [target, flags, mode] = args;
         if (!injected && typeof target === "string" && path.resolve(target) === absPath) {
           injected = true;
           const err = new Error("missing") as NodeJS.ErrnoException;
           err.code = "ENOENT";
           throw err;
         }
-        return realReadFile(target, options);
+        return realOpen(target, flags, mode);
       });
 
     try {
@@ -269,7 +269,7 @@ describe("MemoryIndexManager.readFile", () => {
       });
       expect(result).toEqual({ text: "", path: relPath });
     } finally {
-      readSpy.mockRestore();
+      openSpy.mockRestore();
     }
   });
 

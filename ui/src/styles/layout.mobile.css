@@ -787,22 +787,30 @@
 
 /* nth-child is 1-based and includes the checkbox column (col 1). */
 
-/* ≤1400px: hide Verbose (col 9) and Reasoning (col 10) */
+/* ≤1400px: hide Verbose (col 10) and Reasoning (col 11) */
 @media (max-width: 1400px) {
-  .data-table th:nth-child(9),
-  .data-table td:nth-child(9),
-  .data-table th:nth-child(10),
-  .data-table td:nth-child(10) {
+  .data-table.sessions-table {
+    min-width: 1080px;
+  }
+
+  .sessions-table th:nth-child(10),
+  .sessions-table td:nth-child(10),
+  .sessions-table th:nth-child(11),
+  .sessions-table td:nth-child(11) {
     display: none;
   }
 }
 
-/* ≤1100px: also hide Fast (col 8) and Kind (col 4) */
+/* ≤1100px: also hide Fast (col 9) and Kind (col 4) */
 @media (max-width: 1100px) {
-  .data-table th:nth-child(4),
-  .data-table td:nth-child(4),
-  .data-table th:nth-child(8),
-  .data-table td:nth-child(8) {
+  .data-table.sessions-table {
+    min-width: 900px;
+  }
+
+  .sessions-table th:nth-child(4),
+  .sessions-table td:nth-child(4),
+  .sessions-table th:nth-child(9),
+  .sessions-table td:nth-child(9) {
     display: none;
   }
 
@@ -812,20 +820,28 @@
   }
 }
 
-/* ≤900px: also hide Thinking (col 7) and Label (col 3) */
+/* ≤900px: also hide Thinking (col 8) and Label (col 3) */
 @media (max-width: 900px) {
-  .data-table th:nth-child(3),
-  .data-table td:nth-child(3),
-  .data-table th:nth-child(7),
-  .data-table td:nth-child(7) {
+  .data-table.sessions-table {
+    min-width: 690px;
+  }
+
+  .sessions-table th:nth-child(3),
+  .sessions-table td:nth-child(3),
+  .sessions-table th:nth-child(8),
+  .sessions-table td:nth-child(8) {
     display: none;
   }
 }
 
 /* ≤768px: also hide Tokens (col 6); tighten padding; stack pagination */
 @media (max-width: 768px) {
-  .data-table th:nth-child(6),
-  .data-table td:nth-child(6) {
+  .data-table.sessions-table {
+    min-width: 540px;
+  }
+
+  .sessions-table th:nth-child(6),
+  .sessions-table td:nth-child(6) {
     display: none;
   }
 
@@ -863,6 +879,32 @@
     max-width: 200px;
   }
 
+  .session-compaction-col {
+    width: 96px;
+    min-width: 86px;
+  }
+
+  .session-compaction-trigger {
+    padding: 6px 7px;
+  }
+
+  .session-details-panel {
+    padding: 12px;
+  }
+
+  .session-details-panel__hero,
+  .session-details-section {
+    padding: 12px;
+  }
+
+  .session-details-panel__title {
+    max-width: 100%;
+  }
+
+  .session-details-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .session-key-cell .session-link,
   .session-key-cell .session-key-display-name {
     overflow: hidden;
@@ -880,6 +922,21 @@
 
 /* ≤500px: tighten further, truncate key column */
 @media (max-width: 500px) {
+  .data-table.sessions-table {
+    min-width: 330px;
+  }
+
+  .sessions-table th:nth-child(5),
+  .sessions-table td:nth-child(5) {
+    display: none;
+  }
+
+  .data-table.sessions-table .data-table-key-col {
+    width: 144px;
+    min-width: 144px;
+    max-width: 144px;
+  }
+
   .data-table th,
   .data-table td {
     padding: 6px 4px;

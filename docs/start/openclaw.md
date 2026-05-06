@@ -6,13 +6,11 @@ read_when:
 title: "Personal assistant setup"
 ---
 
-# Building a personal assistant with OpenClaw
-
 OpenClaw is a self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI agents. This guide covers the "personal assistant" setup: a dedicated WhatsApp number that behaves like your always-on AI assistant.
 
 ## ⚠️ Safety first
 
-You’re putting an agent in a position to:
+You're putting an agent in a position to:
 
 - run commands on your machine (depending on your tool policy)
 - read/write files in your workspace
@@ -26,7 +24,7 @@ Start conservative:
 
 ## Prerequisites
 
-- OpenClaw installed and onboarded — see [Getting Started](/start/getting-started) if you haven't done this yet
+- OpenClaw installed and onboarded - see [Getting Started](/start/getting-started) if you haven't done this yet
 - A second phone number (SIM/eSIM/prepaid) for the assistant
 
 ## The two-phone setup (recommended)
@@ -39,7 +37,7 @@ flowchart TB
     B -- linked via QR --> C["<b>Your Mac (openclaw)<br></b><br>AI agent"]
 ```
 
-If you link your personal WhatsApp to OpenClaw, every message to you becomes “agent input”. That’s rarely what you want.
+If you link your personal WhatsApp to OpenClaw, every message to you becomes "agent input". That's rarely what you want.
 
 ## 5-minute quick start
 
@@ -70,7 +68,7 @@ When onboarding finishes, OpenClaw auto-opens the dashboard and prints a clean (
 
 ## Give the agent a workspace (AGENTS)
 
-OpenClaw reads operating instructions and “memory” from its workspace directory.
+OpenClaw reads operating instructions and "memory" from its workspace directory.
 
 By default, OpenClaw uses `~/.openclaw/workspace` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) automatically on setup/first agent run. `BOOTSTRAP.md` is only created when the workspace is brand new (it should not come back after you delete it). `MEMORY.md` is optional (not auto-created); when present, it is loaded for normal sessions. Subagent sessions only inject `AGENTS.md` and `TOOLS.md`.
 
@@ -111,7 +109,7 @@ If you already ship your own workspace files from a repo, you can disable bootst
 
 ## The config that turns it into "an assistant"
 
-OpenClaw defaults to a good assistant setup, but you’ll usually want to tune:
+OpenClaw defaults to a good assistant setup, but you'll usually want to tune:
 
 - persona/instructions in [`SOUL.md`](/concepts/soul)
 - thinking defaults (if desired)
@@ -172,7 +170,7 @@ Set `agents.defaults.heartbeat.every: "0m"` to disable.
 - If the file is missing, the heartbeat still runs and the model decides what to do.
 - If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agents.defaults.heartbeat.ackMaxChars`), OpenClaw suppresses outbound delivery for that heartbeat.
 - By default, heartbeat delivery to DM-style `user:<id>` targets is allowed. Set `agents.defaults.heartbeat.directPolicy: "block"` to suppress direct-target delivery while keeping heartbeat runs active.
-- Heartbeats run full agent turns — shorter intervals burn more tokens.
+- Heartbeats run full agent turns - shorter intervals burn more tokens.
 
 ```json5
 {
@@ -193,7 +191,7 @@ Inbound attachments (images/audio/docs) can be surfaced to your command via temp
 Outbound attachments from the agent: include `MEDIA:<path-or-url>` on its own line (no spaces). Example:
 
 ```
-Here’s the screenshot.
+Here's the screenshot.
 MEDIA:https://example.com/screenshot.png
 ```
 

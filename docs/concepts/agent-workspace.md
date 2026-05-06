@@ -60,40 +60,40 @@ Older installs may have created `~/openclaw`. Keeping multiple workspace directo
 These are the standard files OpenClaw expects inside the workspace:
 
 <AccordionGroup>
-  <Accordion title="AGENTS.md — operating instructions">
+  <Accordion title="AGENTS.md - operating instructions">
     Operating instructions for the agent and how it should use memory. Loaded at the start of every session. Good place for rules, priorities, and "how to behave" details.
   </Accordion>
-  <Accordion title="SOUL.md — persona and tone">
+  <Accordion title="SOUL.md - persona and tone">
     Persona, tone, and boundaries. Loaded every session. Guide: [SOUL.md personality guide](/concepts/soul).
   </Accordion>
-  <Accordion title="USER.md — who the user is">
+  <Accordion title="USER.md - who the user is">
     Who the user is and how to address them. Loaded every session.
   </Accordion>
-  <Accordion title="IDENTITY.md — name, vibe, emoji">
+  <Accordion title="IDENTITY.md - name, vibe, emoji">
     The agent's name, vibe, and emoji. Created/updated during the bootstrap ritual.
   </Accordion>
-  <Accordion title="TOOLS.md — local tool conventions">
+  <Accordion title="TOOLS.md - local tool conventions">
     Notes about your local tools and conventions. Does not control tool availability; it is only guidance.
   </Accordion>
-  <Accordion title="HEARTBEAT.md — heartbeat checklist">
+  <Accordion title="HEARTBEAT.md - heartbeat checklist">
     Optional tiny checklist for heartbeat runs. Keep it short to avoid token burn.
   </Accordion>
-  <Accordion title="BOOT.md — startup checklist">
+  <Accordion title="BOOT.md - startup checklist">
     Optional startup checklist run automatically on gateway restart (when [internal hooks](/automation/hooks) are enabled). Keep it short; use the message tool for outbound sends.
   </Accordion>
-  <Accordion title="BOOTSTRAP.md — first-run ritual">
+  <Accordion title="BOOTSTRAP.md - first-run ritual">
     One-time first-run ritual. Only created for a brand-new workspace. Delete it after the ritual is complete.
   </Accordion>
-  <Accordion title="memory/YYYY-MM-DD.md — daily memory log">
+  <Accordion title="memory/YYYY-MM-DD.md - daily memory log">
     Daily memory log (one file per day). Recommended to read today + yesterday on session start.
   </Accordion>
-  <Accordion title="MEMORY.md — curated long-term memory (optional)">
+  <Accordion title="MEMORY.md - curated long-term memory (optional)">
     Curated long-term memory. Only load in the main, private session (not shared/group contexts). See [Memory](/concepts/memory) for the workflow and automatic memory flush.
   </Accordion>
-  <Accordion title="skills/ — workspace skills (optional)">
+  <Accordion title="skills/ - workspace skills (optional)">
     Workspace-specific skills. Highest-precedence skill location for that workspace. Overrides project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.
   </Accordion>
-  <Accordion title="canvas/ — Canvas UI files (optional)">
+  <Accordion title="canvas/ - Canvas UI files (optional)">
     Canvas UI files for node displays (for example `canvas/index.html`).
   </Accordion>
 </AccordionGroup>
@@ -224,7 +224,7 @@ Suggested `.gitignore` starter:
 
 ## Related
 
-- [Heartbeat](/gateway/heartbeat) — HEARTBEAT.md workspace file
-- [Sandboxing](/gateway/sandboxing) — workspace access in sandboxed environments
-- [Session](/concepts/session) — session storage paths
-- [Standing orders](/automation/standing-orders) — persistent instructions in workspace files
+- [Heartbeat](/gateway/heartbeat) - HEARTBEAT.md workspace file
+- [Sandboxing](/gateway/sandboxing) - workspace access in sandboxed environments
+- [Session](/concepts/session) - session storage paths
+- [Standing orders](/automation/standing-orders) - persistent instructions in workspace files

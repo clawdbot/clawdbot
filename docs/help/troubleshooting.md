@@ -80,6 +80,40 @@ Example:
 
 Reference: [Plugin architecture](/plugins/architecture)
 
+## Plugin present but blocked by suspicious ownership
+
+If `openclaw doctor`, setup, or startup warnings show:
+
+```text
+blocked plugin candidate: suspicious ownership (... uid=1000, expected uid=0 or root)
+plugin present but blocked
+```
+
+the plugin files are owned by a different Unix user than the process loading
+them. Do not remove the plugin config. Fix the file ownership or run OpenClaw as
+the same user that owns the state directory.
+
+Docker installs normally run as `node` (uid `1000`). For the default Docker
+setup, repair the host bind mounts:
+
+```bash
+sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
+openclaw doctor --fix
+```
+
+If you intentionally run OpenClaw as root, repair the managed plugin root to
+root ownership instead:
+
+```bash
+sudo chown -R root:root /path/to/openclaw-config/npm
+openclaw doctor --fix
+```
+
+Deeper docs:
+
+- [Plugin path ownership](/tools/plugin#blocked-plugin-path-ownership)
+- [Docker permissions](/install/docker#permissions-and-eacces)
+
 ## Decision tree
 
 ```mermaid

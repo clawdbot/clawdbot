@@ -164,6 +164,54 @@ describe("channelsHandlers channels.status", () => {
     );
   });
 
+  it("returns a partial snapshot when a channel probe exceeds the status budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const autoEnabledConfig = { autoEnabled: true };
+      const probeAccount = vi.fn(() => new Promise(() => undefined));
+      mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+      mocks.listChannelPlugins.mockReturnValue([
+        {
+          id: "whatsapp",
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+            isEnabled: () => true,
+            isConfigured: async () => true,
+          },
+          status: {
+            probeAccount,
+          },
+        },
+      ]);
+      const respond = vi.fn();
+      const run = channelsHandlers["channels.status"](
+        createOptions({ probe: true, timeoutMs: 1000 }, { respond }),
+      );
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await run;
+
+      expect(mocks.buildChannelAccountSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          probe: expect.objectContaining({
+            timedOut: true,
+          }),
+        }),
+      );
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          partial: true,
+          warnings: [expect.stringContaining("whatsapp:default probe timed out after 1000ms")],
+        }),
+        undefined,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("annotates unhealthy channel snapshots and includes event-loop health", async () => {
     const now = Date.now();
     mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });

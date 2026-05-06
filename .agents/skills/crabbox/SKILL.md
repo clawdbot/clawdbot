@@ -22,6 +22,8 @@ Blacksmith fallback playbook.
 command -v crabbox
 ../crabbox/bin/crabbox --version
 pnpm crabbox:run -- --help | sed -n '1,120p'
+../crabbox/bin/crabbox desktop launch --help
+../crabbox/bin/crabbox webvnc --help
 ```
 
 - OpenClaw scripts prefer `../crabbox/bin/crabbox` when present. The user PATH
@@ -138,6 +140,35 @@ Stop boxes you created before handoff:
 pnpm crabbox:stop -- <id-or-slug>
 blacksmith testbox stop --id <tbx_id>
 ```
+
+## Interactive Desktop And WebVNC
+
+Prefer WebVNC for human inspection because the browser portal can preload the
+lease VNC password and avoids a native VNC client's copy/paste/password dance.
+Use native `crabbox vnc` only when WebVNC is unavailable, the browser portal is
+broken, or the user explicitly wants a local VNC client.
+
+Common desktop flow:
+
+```sh
+../crabbox/bin/crabbox warmup --provider hetzner --desktop --browser --class standard --idle-timeout 60m --ttl 240m
+../crabbox/bin/crabbox desktop launch --provider hetzner --id <cbx_id-or-slug> --browser --url https://example.com --webvnc --open
+```
+
+Useful WebVNC commands:
+
+```sh
+../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --open
+../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --daemon --open
+../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --status
+../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --stop
+../crabbox/bin/crabbox screenshot --provider hetzner --id <cbx_id-or-slug> --output desktop.png
+```
+
+`desktop launch --webvnc --open` is usually the nicest one-shot: it starts the
+browser/app inside the visible session, bridges the lease into the authenticated
+WebVNC portal, and opens the portal. Keep browsers windowed for human QA; use
+`--fullscreen` only for capture/video workflows.
 
 ## If Crabbox Fails
 
@@ -265,6 +296,18 @@ macOS config lives at:
 It should include `broker.url`, `broker.token`, and usually `provider: aws`
 for owned-cloud lanes. Do not let that config override the OpenClaw default
 when Blacksmith proof is requested; pass `--provider blacksmith-testbox`.
+
+### Interactive Desktop / WebVNC
+
+For human desktop demos, prefer `webvnc` over native `vnc` and keep the remote
+desktop visible/windowed. Do not fullscreen the remote browser or hide the XFCE
+panel/window chrome unless the explicit goal is video/capture output. After
+launch, verify a screenshot shows the desktop panel plus browser title bar. If
+Chrome is fullscreen, toggle it back with:
+
+```sh
+crabbox run --id <lease> --shell -- 'DISPLAY=:99 xdotool search --onlyvisible --class google-chrome windowactivate key F11'
+```
 
 ## Diagnostics
 

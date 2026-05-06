@@ -7,6 +7,7 @@ enum class OpenClawCapability(
   Camera("camera"),
   Sms("sms"),
   VoiceWake("voiceWake"),
+  Talk("talk"),
   Location("location"),
   Device("device"),
   Notifications("notifications"),
@@ -68,6 +69,20 @@ enum class OpenClawSmsCommand(
 
   companion object {
     const val NamespacePrefix: String = "sms."
+  }
+}
+
+enum class OpenClawTalkCommand(
+  val rawValue: String,
+) {
+  PttStart("talk.ptt.start"),
+  PttStop("talk.ptt.stop"),
+  PttCancel("talk.ptt.cancel"),
+  PttOnce("talk.ptt.once"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "talk."
   }
 }
 

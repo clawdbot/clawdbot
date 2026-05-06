@@ -1,12 +1,10 @@
-import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
-import { __testing as setupRegistryRuntimeTesting } from "../plugins/setup-registry.runtime.js";
 import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
-  isCliProvider,
   parseModelRef,
   buildModelAliasIndex,
   normalizeModelSelection,
@@ -24,6 +22,14 @@ import {
   resolveThinkingDefault,
   resolveModelRefFromString,
 } from "./model-selection.js";
+
+vi.mock("./provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
+vi.mock("./model-selection-cli.js", () => ({
+  isCliProvider: () => false,
+}));
 
 const EXPLICIT_ALLOWLIST_CONFIG = {
   agents: {
@@ -155,33 +161,6 @@ describe("model-selection", () => {
     });
   });
 
-  describe("isCliProvider", () => {
-    beforeEach(() => {
-      setupRegistryRuntimeTesting.resetRuntimeState();
-      setupRegistryRuntimeTesting.setRuntimeModuleForTest({
-        resolvePluginSetupCliBackend: ({ backend }) =>
-          backend === "claude-cli"
-            ? {
-                pluginId: "anthropic",
-                backend: { id: "claude-cli", config: { command: "claude" } },
-              }
-            : undefined,
-      });
-    });
-
-    afterEach(() => {
-      setupRegistryRuntimeTesting.resetRuntimeState();
-    });
-
-    it("returns true for setup-registered cli backends", () => {
-      expect(isCliProvider("claude-cli", {} as OpenClawConfig)).toBe(true);
-    });
-
-    it("returns false for provider ids", () => {
-      expect(isCliProvider("example-cli", {} as OpenClawConfig)).toBe(false);
-    });
-  });
-
   describe("modelKey", () => {
     it("keeps canonical OpenRouter native ids without duplicating the provider", () => {
       expect(modelKey("openrouter", "openrouter/hunter-alpha")).toBe("openrouter/hunter-alpha");
@@ -195,11 +174,14 @@ describe("model-selection", () => {
       expected: { provider: string; model: string },
     ) => {
       for (const raw of variants) {
-        expect(parseModelRef(raw, defaultProvider), raw).toEqual(expected);
+        expect(
+          parseModelRef(raw, defaultProvider, { allowPluginNormalization: false }),
+          raw,
+        ).toEqual(expected);
       }
     };
 
-    it.each([
+    const parseModelRefCases = [
       {
         name: "parses explicit provider/model refs",
         variants: ["anthropic/claude-3-5-sonnet"],
@@ -335,19 +317,30 @@ describe("model-selection", () => {
         defaultProvider: "google-vertex",
         expected: { provider: "google-vertex", model: "gemini-3.1-flash-lite-preview" },
       },
-    ])("$name", ({ variants, defaultProvider, expected }) => {
-      expectParsedModelVariants(variants, defaultProvider, expected);
+    ];
+
+    it("parses and normalizes provider/model refs", () => {
+      for (const { variants, defaultProvider, expected } of parseModelRefCases) {
+        expectParsedModelVariants(variants, defaultProvider, expected);
+      }
     });
 
     it("round-trips normalized refs through modelKey", () => {
-      const parsed = parseModelRef(" opus-4.6 ", "anthropic");
+      const parsed = parseModelRef(" opus-4.6 ", "anthropic", {
+        allowPluginNormalization: false,
+      });
       expect(parsed).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
       expect(modelKey(parsed?.provider ?? "", parsed?.model ?? "")).toBe(
         "anthropic/claude-opus-4-6",
       );
     });
-    it.each(["", "  ", "/", "anthropic/", "/model"])("returns null for invalid ref %j", (raw) => {
-      expect(parseModelRef(raw, "anthropic")).toBeNull();
+    it("returns null for invalid refs", () => {
+      for (const raw of ["", "  ", "/", "anthropic/", "/model"]) {
+        expect(
+          parseModelRef(raw, "anthropic", { allowPluginNormalization: false }),
+          raw,
+        ).toBeNull();
+      }
     });
   });
 

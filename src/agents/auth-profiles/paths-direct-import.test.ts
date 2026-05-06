@@ -41,10 +41,9 @@ describe("path-resolve helpers (direct-import coverage attribution)", () => {
     expect(path.basename(resolved)).toMatch(/auth-profiles/);
   });
 
-  it("resolveAuthStorePath falls back to resolveOpenClawAgentDir when agentDir is omitted", () => {
-    // Omitting agentDir exercises the `agentDir ?? resolveOpenClawAgentDir()`
-    // nullish branch. With OPENCLAW_STATE_DIR set to our tempdir, the
-    // resolved path must live under it.
+  it("resolveAuthStorePath falls back to the default agent dir when agentDir is omitted", () => {
+    // Omitting agentDir exercises the default agent-dir branch. With
+    // OPENCLAW_STATE_DIR set to our tempdir, the resolved path must live under it.
     const resolved = resolveAuthStorePath();
     expect(resolved.startsWith(stateDir)).toBe(true);
     expect(path.basename(resolved)).toMatch(/auth-profiles/);

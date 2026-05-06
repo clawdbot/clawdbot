@@ -1145,6 +1145,103 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("skips channel item progress when a matching tool event carries the progress", async () => {
+    const onItemEvent = vi.fn();
+    const onToolStart = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "cmd-1",
+          kind: "command",
+          title: "Command",
+          name: "bash",
+          phase: "start",
+          status: "running",
+          suppressChannelProgress: true,
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          itemId: "cmd-1",
+          toolCallId: "cmd-1",
+          name: "bash",
+          phase: "start",
+          args: { command: "pnpm test" },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onItemEvent,
+          onToolStart,
+        } satisfies GetReplyOptions,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "bash",
+      phase: "start",
+      args: { command: "pnpm test" },
+      detailMode: undefined,
+    });
+  });
+
+  it("preserves suppressed item progress when no tool-start callback is registered", async () => {
+    const onItemEvent = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "cmd-1",
+          kind: "command",
+          title: "Command",
+          name: "bash",
+          phase: "start",
+          status: "running",
+          suppressChannelProgress: true,
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          itemId: "cmd-1",
+          toolCallId: "cmd-1",
+          name: "bash",
+          phase: "start",
+          args: { command: "pnpm test" },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onItemEvent,
+        } satisfies GetReplyOptions,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onItemEvent).toHaveBeenCalledWith({
+      itemId: "cmd-1",
+      kind: "command",
+      title: "Command",
+      name: "bash",
+      phase: "start",
+      status: "running",
+    });
+  });
+
   it("forwards raw tool progress detail mode to tool-start reply options", async () => {
     const onToolStart = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -1176,6 +1273,54 @@ describe("runAgentTurnWithFallback", () => {
       args: { command: "pnpm test -- --watch=false" },
       detailMode: "raw",
     });
+  });
+
+  it("fires tool-start progress before slow typing signals resolve for best-effort Pi events", async () => {
+    const onToolStart = vi.fn(async () => {});
+    let releaseTyping: (() => void) | undefined;
+    const typingSignals = createMockTypingSignaler();
+    vi.mocked(typingSignals.signalToolStart).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseTyping = resolve;
+        }),
+    );
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      void params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "exec",
+          phase: "start",
+          args: { command: "echo hi" },
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onToolStart,
+        } satisfies GetReplyOptions,
+      }),
+      typingSignals,
+    });
+
+    try {
+      expect(result.kind).toBe("success");
+      expect(onToolStart).toHaveBeenCalledWith({
+        name: "exec",
+        phase: "start",
+        args: { command: "echo hi" },
+        detailMode: undefined,
+      });
+    } finally {
+      releaseTyping?.();
+      await Promise.resolve();
+    }
   });
 
   it("leaves Codex app-server telemetry publication to the harness", async () => {
@@ -2363,6 +2508,55 @@ describe("runAgentTurnWithFallback", () => {
       expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
     }
   });
+
+  it.each([
+    {
+      rejection: new Error("CLI exceeded timeout (300s) and was terminated."),
+      modeLabel: "overall CLI turn budget" as const,
+      routingSubstring: undefined as string | undefined,
+    },
+    {
+      rejection: new Error("CLI produced no output for 120s and was terminated."),
+      modeLabel: "no-output stall" as const,
+      routingSubstring: undefined,
+    },
+    {
+      rejection: new Error(
+        "All models failed (2): anthropic/claude-opus-4-7: CLI exceeded timeout (300s) and was terminated. | anthropic/foo: bar",
+      ),
+      modeLabel: "overall CLI turn budget" as const,
+      routingSubstring: "(routing anthropic/claude-opus-4-7)",
+    },
+    {
+      rejection: new Error("codex-cli/gpt-5.5: CLI exceeded timeout (60s) and was terminated."),
+      modeLabel: "overall CLI turn budget" as const,
+      routingSubstring: "(routing codex-cli/gpt-5.5)",
+    },
+  ])(
+    "surfaces CLI subprocess timeout copy instead of generic failure when verbose is off ($modeLabel)",
+    async ({ rejection, modeLabel, routingSubstring }) => {
+      state.runWithModelFallbackMock.mockRejectedValueOnce(rejection);
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams(),
+      });
+
+      expect(result.kind).toBe("final");
+      if (result.kind !== "final") {
+        throw new Error("expected final reply");
+      }
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+      expect(result.payload.text).toContain("CLI subprocess");
+      expect(result.payload.text).not.toContain("Claude CLI");
+      expect(result.payload.text).toContain(modeLabel);
+      expect(result.payload.text).toContain("gateway may still be healthy");
+      expect(result.payload.text).toContain("cliBackends.<your-runtime>");
+      if (routingSubstring) {
+        expect(result.payload.text).toContain(routingSubstring);
+      }
+    },
+  );
 
   it("forwards sanitized generic errors on external chat channels when verbose is on", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(

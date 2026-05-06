@@ -890,7 +890,7 @@ module.exports = {
       };
     });
     vi.doMock("../../infra/boundary-file-read.js", () => ({
-      openBoundaryFileSync: ({ absolutePath }: { absolutePath: string }) => ({
+      openRootFileSync: ({ absolutePath }: { absolutePath: string }) => ({
         ok: true,
         path: absolutePath,
         fd: fs.openSync(absolutePath, "r"),

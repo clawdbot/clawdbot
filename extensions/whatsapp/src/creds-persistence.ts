@@ -1,6 +1,4 @@
-import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { resolveWebCredsPath } from "./creds-files.js";
 
 const CREDS_FILE_MODE = 0o600;
@@ -15,47 +13,18 @@ async function stringifyCreds(creds: unknown): Promise<string> {
   return JSON.stringify(creds, BufferJSON.replacer);
 }
 
-async function syncDirectory(dirPath: string): Promise<void> {
-  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-  try {
-    handle = await fs.open(dirPath, "r");
-    await handle.sync();
-  } catch {
-    // best-effort on platforms that do not support directory fsync
-  } finally {
-    await handle?.close().catch(() => {
-      // best-effort close
-    });
-  }
-}
-
 export async function writeCredsJsonAtomically(authDir: string, creds: unknown): Promise<void> {
   const credsPath = resolveWebCredsPath(authDir);
-  const tempPath = path.join(authDir, `.creds.${process.pid}.${randomUUID()}.tmp`);
   const json = await stringifyCreds(creds);
-
-  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-  try {
-    handle = await fs.open(tempPath, "w", CREDS_FILE_MODE);
-    await handle.writeFile(json, { encoding: "utf-8" });
-    await handle.sync();
-    await handle.close();
-    handle = undefined;
-
-    await fs.rename(tempPath, credsPath);
-    await fs.chmod(credsPath, CREDS_FILE_MODE).catch(() => {
-      // best-effort on platforms that support it
-    });
-    await syncDirectory(path.dirname(credsPath));
-  } catch (error) {
-    await handle?.close().catch(() => {
-      // best-effort close
-    });
-    await fs.rm(tempPath, { force: true }).catch(() => {
-      // best-effort cleanup
-    });
-    throw error;
-  }
+  await replaceFileAtomic({
+    filePath: credsPath,
+    content: json,
+    dirMode: 0o700,
+    mode: CREDS_FILE_MODE,
+    tempPrefix: ".creds",
+    syncTempFile: true,
+    syncParentDir: true,
+  });
 }
 
 export function enqueueCredsSave(

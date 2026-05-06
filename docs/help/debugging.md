@@ -203,7 +203,7 @@ pnpm gateway:dev
 OPENCLAW_PROFILE=dev openclaw tui
 ```
 
-If you don’t have a global install yet, run the CLI via `pnpm openclaw ...`.
+If you don't have a global install yet, run the CLI via `pnpm openclaw ...`.
 
 What this does:
 
@@ -219,7 +219,7 @@ What this does:
    - Sets `agent.skipBootstrap=true` (no BOOTSTRAP.md).
    - Seeds the workspace files if missing:
      `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`.
-   - Default identity: **C3‑PO** (protocol droid).
+   - Default identity: **C3-PO** (protocol droid).
    - Skips channel providers in dev mode (`OPENCLAW_SKIP_CHANNELS=1`).
 
 Reset flow (fresh start):
@@ -297,7 +297,7 @@ Default file:
 
 `~/.pi-mono/logs/raw-openai-completions.jsonl`
 
-> Note: this is only emitted by processes using pi-mono’s
+> Note: this is only emitted by processes using pi-mono's
 > `openai-completions` provider.
 
 ## Safety notes
@@ -305,6 +305,38 @@ Default file:
 - Raw stream logs can include full prompts, tool output, and user data.
 - Keep logs local and delete them after debugging.
 - If you share logs, scrub secrets and PII first.
+
+## Debugging in VSCode
+
+Source maps are required to enable debugging in VSCode-based IDEs because many of the generated files end up with hashed names as part of the build process. The included `launch.json` configurations target the Gateway service, but can be adapted quickly for other purposes:
+
+1. **Rebuild and Debug Gateway** - Debugs the Gateway service after creating a new build
+2. **Debug Gateway** - Debugs the Gateway service of a pre-existing build
+
+### Setup
+
+The default **Rebuild and Debug Gateway** configuration is batteries-included, it will automatically delete the `/dist` folder and rebuild the project with debugging enabled:
+
+1. Open the **Run and Debug** panel from the Activity Bar or press `Ctrl`+`Shift`+`D`
+2. In the IDE, ensure **Rebuild and Debug Gateway** is selected in the configuration dropdown and then press the **Start Debugging** button
+
+Alternatively - if you prefer to manage the build and debug processes manually:
+
+1. Open a terminal and enable source maps:
+   - **Linux/macOS**: `export OUTPUT_SOURCE_MAPS=1`
+   - **Windows (PowerShell)**: `$env:OUTPUT_SOURCE_MAPS="1"`
+   - **Windows (CMD)**: `set OUTPUT_SOURCE_MAPS=1`
+2. In the same terminal, rebuild the project: `pnpm clean:dist && pnpm build`
+3. In the IDE, select the **Debug Gateway** option in the **Run and Debug** configuration dropdown and then press the **Start Debugging** button
+
+You can now set breakpoints in your TypeScript source files (`src/` directory) and the debugger will correctly map breakpoints to the compiled JavaScript via source maps. You'll be able to inspect variables, step through code, and examine call stacks as expected.
+
+### Notes
+
+- If using the **"Rebuild and Debug Gateway"** option - each time the debugger is launched it will completely delete the `/dist` folder and run a full `pnpm build` with source maps enabled before starting the Gateway
+- If using the **"Debug Gateway"** option - debug sessions can be started and stopped at any time without affecting the `/dist` folder, but you must use a separate terminal process to both enable debugging and manage the build cycle
+- Modify the `launch.json` settings for `args` to debug other sections of the project
+- If you need to use the built OpenClaw CLI for other tasks (i.e. `dashboard --no-open` if your debug session spawns a new auth token), you can execute it in another terminal as `node ./openclaw.mjs` or create a shell alias like `alias openclaw-build="node $(pwd)/openclaw.mjs"`
 
 ## Related
 

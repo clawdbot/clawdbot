@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   type ConfigDocBaselineEntry,
@@ -8,6 +8,14 @@ import {
   renderConfigDocBaselineArtifacts,
   writeConfigDocBaselineArtifacts,
 } from "./doc-baseline.js";
+
+vi.mock("./doc-baseline.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doc-baseline.runtime.js")>();
+  return {
+    ...actual,
+    collectBundledChannelConfigs: () => undefined,
+  };
+});
 
 describe("config doc baseline integration", () => {
   let sharedRenderedPromise: Promise<

@@ -49,7 +49,7 @@ Onboarding starts with **QuickStart** (defaults) vs **Advanced** (full control).
     - Local gateway (loopback)
     - Workspace default (or existing workspace)
     - Gateway port **18789**
-    - Gateway auth **Token** (auto‑generated, even on loopback)
+    - Gateway auth **Token** (auto-generated, even on loopback)
     - Tool policy default for new local setups: `tools.profile: "coding"` (existing explicit profile is preserved)
     - DM isolation default: local onboarding writes `session.dmScope: "per-channel-peer"` when unset. Details: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals)
     - Tailscale exposure **Off**

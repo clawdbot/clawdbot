@@ -34,7 +34,10 @@ vi.mock("../cli/prompt.js", () => ({
 vi.mock("@clack/prompts", () => ({
   cancel: mocks.clackCancel,
   isCancel: mocks.clackIsCancel,
-  multiselect: mocks.multiselect,
+}));
+
+vi.mock("./migrate/skill-selection-prompt.js", () => ({
+  promptMigrationSkillSelectionValues: mocks.multiselect,
 }));
 
 vi.mock("../plugins/migration-provider-runtime.js", () => ({
@@ -47,6 +50,11 @@ vi.mock("./backup.js", () => ({
   backupCreateCommand: mocks.backupCreateCommand,
 }));
 
+const {
+  MIGRATION_SKILL_SELECTION_SKIP,
+  MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+  MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
+} = await import("./migrate/selection.js");
 const { migrateApplyCommand, migrateDefaultCommand } = await import("./migrate.js");
 
 function plan(overrides: Partial<MigrationPlan> = {}): MigrationPlan {
@@ -215,10 +223,22 @@ describe("migrateApplyCommand", () => {
         message: expect.stringContaining("Select Codex skills"),
         initialValues: ["skill:alpha", "skill:beta"],
         required: false,
-        options: expect.arrayContaining([
+        options: [
+          expect.objectContaining({
+            value: MIGRATION_SKILL_SELECTION_SKIP,
+            label: "Skip for now",
+          }),
+          expect.objectContaining({
+            value: MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
+            label: "Toggle all on",
+          }),
+          expect.objectContaining({
+            value: MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+            label: "Toggle all off",
+          }),
           expect.objectContaining({ value: "skill:alpha", label: "alpha" }),
           expect.objectContaining({ value: "skill:beta", label: "beta" }),
-        ]),
+        ],
       }),
     );
     expect(mocks.promptYesNo).toHaveBeenCalledWith("Apply this migration now?", false);
@@ -235,6 +255,155 @@ describe("migrateApplyCommand", () => {
         expect.objectContaining({ id: "archive:config.toml", status: "planned" }),
       ]),
     );
+  });
+
+  it("leaves conflicting Codex skills unchecked by default", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    const planned = codexSkillPlan({
+      summary: {
+        total: 3,
+        planned: 2,
+        migrated: 0,
+        skipped: 0,
+        conflicts: 1,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [
+        {
+          id: "skill:alpha",
+          kind: "skill",
+          action: "copy",
+          status: "planned",
+          details: { skillName: "alpha" },
+        },
+        {
+          id: "skill:beta",
+          kind: "skill",
+          action: "copy",
+          status: "conflict",
+          reason: "target exists",
+          details: { skillName: "beta" },
+        },
+        {
+          id: "archive:config.toml",
+          kind: "archive",
+          action: "archive",
+          status: "planned",
+        },
+      ],
+    });
+    mocks.provider.plan.mockResolvedValue(planned);
+    mocks.multiselect.mockResolvedValue(["skill:alpha"]);
+    mocks.promptYesNo.mockResolvedValue(false);
+
+    await migrateDefaultCommand(runtime, { provider: "codex" });
+
+    expect(mocks.multiselect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialValues: ["skill:alpha"],
+        options: expect.arrayContaining([
+          expect.objectContaining({ value: "skill:beta", label: "beta" }),
+        ]),
+      }),
+    );
+    expect(mocks.promptYesNo).toHaveBeenCalledWith("Apply this migration now?", false);
+    expect(mocks.provider.apply).not.toHaveBeenCalled();
+  });
+
+  it("skips interactive Codex skill migration when Skip for now is selected", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    const planned = codexSkillPlan();
+    mocks.provider.plan.mockResolvedValue(planned);
+    mocks.multiselect.mockResolvedValue([MIGRATION_SKILL_SELECTION_SKIP]);
+
+    const result = await migrateDefaultCommand(runtime, { provider: "codex" });
+
+    expect(result).toBe(planned);
+    expect(mocks.promptYesNo).not.toHaveBeenCalled();
+    expect(mocks.backupCreateCommand).not.toHaveBeenCalled();
+    expect(mocks.provider.apply).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("Codex skill migration skipped for now.");
+  });
+
+  it("applies Toggle all off before interactive Codex migration apply", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    const planned = codexSkillPlan();
+    mocks.provider.plan.mockResolvedValue(planned);
+    mocks.multiselect.mockResolvedValue([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF]);
+    mocks.promptYesNo.mockResolvedValue(true);
+    mocks.provider.apply.mockImplementation(async (_ctx, selectedPlan: MigrationPlan) => ({
+      ...selectedPlan,
+      summary: { ...selectedPlan.summary, planned: 0, migrated: 1 },
+      items: selectedPlan.items.map((item) =>
+        item.status === "planned" ? { ...item, status: "migrated" as const } : item,
+      ),
+    }));
+
+    await migrateDefaultCommand(runtime, { provider: "codex" });
+
+    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    expect(appliedPlan.summary).toMatchObject({ planned: 1, skipped: 2, conflicts: 0 });
+    expect(appliedPlan.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "skill:alpha",
+          status: "skipped",
+          reason: "not selected for migration",
+        }),
+        expect.objectContaining({
+          id: "skill:beta",
+          status: "skipped",
+          reason: "not selected for migration",
+        }),
+        expect.objectContaining({ id: "archive:config.toml", status: "planned" }),
+      ]),
+    );
+  });
+
+  it("applies Toggle all on unless Toggle all off is also selected", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    const planned = codexSkillPlan();
+    mocks.provider.plan.mockResolvedValue(planned);
+    mocks.multiselect.mockResolvedValue([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON]);
+    mocks.promptYesNo.mockResolvedValue(true);
+    mocks.provider.apply.mockImplementation(async (_ctx, selectedPlan: MigrationPlan) => ({
+      ...selectedPlan,
+      summary: { ...selectedPlan.summary, planned: 0, migrated: 3 },
+      items: selectedPlan.items.map((item) =>
+        item.status === "planned" ? { ...item, status: "migrated" as const } : item,
+      ),
+    }));
+
+    await migrateDefaultCommand(runtime, { provider: "codex" });
+
+    let appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    expect(appliedPlan.summary).toMatchObject({ planned: 3, skipped: 0, conflicts: 0 });
+
+    mocks.provider.plan.mockResolvedValue(planned);
+    mocks.multiselect.mockResolvedValue([
+      MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
+      MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+    ]);
+    mocks.promptYesNo.mockResolvedValue(true);
+    mocks.provider.apply.mockClear();
+
+    await migrateDefaultCommand(runtime, { provider: "codex" });
+
+    appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    expect(appliedPlan.summary).toMatchObject({ planned: 1, skipped: 2, conflicts: 0 });
   });
 
   it("does not apply when interactive apply confirmation is declined", async () => {

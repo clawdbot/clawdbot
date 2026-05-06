@@ -211,8 +211,20 @@ describe("device pairing tokens", () => {
       },
       baseDir,
     );
-    const originalTs = first.request.ts;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    const originalTs = first.request.ts - 1_000;
+    const paths = resolvePairingPaths(baseDir, "devices");
+    const pendingById = JSON.parse(await readFile(paths.pendingPath, "utf8")) as Record<
+      string,
+      { ts: number }
+    >;
+    const pending = pendingById[first.request.requestId];
+    expect(pending).toBeDefined();
+    if (!pending) {
+      throw new Error("expected pending pairing request");
+    }
+    pending.ts = originalTs;
+    await writeFile(paths.pendingPath, JSON.stringify(pendingById, null, 2));
+
     const second = await requestDevicePairing(
       {
         deviceId: "device-1",

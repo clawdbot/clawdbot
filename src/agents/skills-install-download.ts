@@ -6,7 +6,7 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { writeFileFromPathWithinRoot } from "../infra/fs-safe.js";
+import { root as fsRoot } from "../infra/fs-safe.js";
 import { assertCanonicalPathWithinBase } from "../infra/install-safe-path.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isWithinDir } from "../infra/path-safety.js";
@@ -29,21 +29,21 @@ function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {
 }
 
 function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): string {
-  const safeRoot = resolveSkillToolsRootDir(entry);
+  const root = resolveSkillToolsRootDir(entry);
   const raw = spec.targetDir?.trim();
   if (!raw) {
-    return safeRoot;
+    return root;
   }
 
   // Treat non-absolute paths as relative to the per-skill tools root.
   const resolved =
     raw.startsWith("~") || path.isAbsolute(raw) || isWindowsDrivePath(raw)
       ? resolveUserPath(raw)
-      : path.resolve(safeRoot, raw);
+      : path.resolve(root, raw);
 
-  if (!isWithinDir(safeRoot, resolved)) {
+  if (!isWithinDir(root, resolved)) {
     throw new Error(
-      `Refusing to install outside the skill tools directory. targetDir="${raw}" resolves to "${resolved}". Allowed root: "${safeRoot}".`,
+      `Refusing to install outside the skill tools directory. targetDir="${raw}" resolves to "${resolved}". Allowed root: "${root}".`,
     );
   }
   return resolved;
@@ -99,11 +99,8 @@ async function downloadFile(params: {
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
     await pipeline(readable, file);
-    await writeFileFromPathWithinRoot({
-      rootDir: params.rootDir,
-      relativePath: params.relativePath,
-      sourcePath: tempPath,
-    });
+    const root = await fsRoot(params.rootDir);
+    await root.copyIn(params.relativePath, tempPath);
     const stat = await fs.promises.stat(destPath);
     return { bytes: stat.size };
   } finally {
@@ -118,7 +115,7 @@ export async function installDownloadSpec(params: {
   timeoutMs: number;
 }): Promise<SkillInstallResult> {
   const { entry, spec, timeoutMs } = params;
-  const safeRoot = resolveSkillToolsRootDir(entry);
+  const root = resolveSkillToolsRootDir(entry);
   const url = spec.url?.trim();
   if (!url) {
     return {
@@ -141,33 +138,33 @@ export async function installDownloadSpec(params: {
     filename = "download";
   }
 
-  let canonicalSafeRoot = "";
+  let canonicalRoot = "";
   let targetDir = "";
   try {
-    await ensureDir(safeRoot);
+    await ensureDir(root);
     await assertCanonicalPathWithinBase({
-      baseDir: safeRoot,
-      candidatePath: safeRoot,
+      baseDir: root,
+      candidatePath: root,
       boundaryLabel: "skill tools directory",
     });
-    canonicalSafeRoot = await fs.promises.realpath(safeRoot);
+    canonicalRoot = await fs.promises.realpath(root);
 
     const requestedTargetDir = resolveDownloadTargetDir(entry, spec);
     await ensureDir(requestedTargetDir);
     await assertCanonicalPathWithinBase({
-      baseDir: safeRoot,
+      baseDir: root,
       candidatePath: requestedTargetDir,
       boundaryLabel: "skill tools directory",
     });
-    const targetRelativePath = path.relative(safeRoot, requestedTargetDir);
-    targetDir = path.join(canonicalSafeRoot, targetRelativePath);
+    const targetRelativePath = path.relative(root, requestedTargetDir);
+    targetDir = path.join(canonicalRoot, targetRelativePath);
   } catch (err) {
     const message = formatErrorMessage(err);
     return { ok: false, message, stdout: "", stderr: message, code: null };
   }
 
   const archivePath = path.join(targetDir, filename);
-  const archiveRelativePath = path.relative(canonicalSafeRoot, archivePath);
+  const archiveRelativePath = path.relative(canonicalRoot, archivePath);
   if (
     !archiveRelativePath ||
     archiveRelativePath === ".." ||
@@ -186,7 +183,7 @@ export async function installDownloadSpec(params: {
   try {
     const result = await downloadFile({
       url,
-      rootDir: canonicalSafeRoot,
+      rootDir: canonicalRoot,
       relativePath: archiveRelativePath,
       timeoutMs,
     });
@@ -220,7 +217,7 @@ export async function installDownloadSpec(params: {
 
   try {
     await assertCanonicalPathWithinBase({
-      baseDir: canonicalSafeRoot,
+      baseDir: canonicalRoot,
       candidatePath: targetDir,
       boundaryLabel: "skill tools directory",
     });

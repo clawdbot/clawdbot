@@ -274,6 +274,15 @@ export const mainLanes = [
     stateScenario: "empty",
   }),
   npmLane(
+    "update-corrupt-plugin",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-corrupt-plugin",
+    {
+      stateScenario: "empty",
+      timeoutMs: 30 * 60 * 1000,
+      weight: 3,
+    },
+  ),
+  npmLane(
     "plugin-lifecycle-matrix",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-lifecycle-matrix",
     {

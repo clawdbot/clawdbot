@@ -21,8 +21,11 @@ export type ControlUiRefreshRun = {
 
 const EVENT_LOG_LIMIT = 250;
 const SLOW_RPC_MS = 1_000;
+const SLOW_RENDER_MS = 16;
+const VERY_SLOW_RENDER_MS = 50;
 const RESPONSIVENESS_ENTRY_MS = 50;
 const RESPONSIVENESS_EVENT_LOG_LIMIT = 50;
+const RENDER_EVENT_LOG_LIMIT = 50;
 
 type ControlUiResponsivenessObserver = {
   disconnect: () => void;
@@ -219,6 +222,36 @@ export function recordControlUiRpcTiming(
     },
     { warn },
   );
+}
+
+export function recordControlUiRenderTiming(
+  host: ControlUiPerformanceHost,
+  surface: string,
+  payload: Record<string, unknown>,
+) {
+  const durationMs =
+    typeof payload.durationMs === "number"
+      ? roundedControlUiDurationMs(payload.durationMs)
+      : undefined;
+  if (durationMs == null || durationMs < SLOW_RENDER_MS) {
+    return;
+  }
+  runAfterMicrotask(() => {
+    recordControlUiPerformanceEvent(
+      host,
+      "control-ui.render",
+      {
+        surface,
+        ...payload,
+        durationMs,
+        slow: true,
+      },
+      {
+        warn: durationMs >= VERY_SLOW_RENDER_MS,
+        maxBufferedEventsForType: RENDER_EVENT_LOG_LIMIT,
+      },
+    );
+  });
 }
 
 function getPerformanceObserverCtor(): PerformanceObserverCtor | null {

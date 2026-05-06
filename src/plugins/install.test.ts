@@ -949,6 +949,8 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
       expect(result.error).toContain("requires compiled runtime output");
       expect(result.error).toContain("./dist/index.js");
+      expect(result.error).toContain("plugin packaging issue");
+      expect(result.error).toContain("disable/uninstall the plugin");
     }
   });
 

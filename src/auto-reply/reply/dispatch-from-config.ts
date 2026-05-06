@@ -1243,15 +1243,24 @@ export async function dispatchReplyFromConfig(
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
+    const allowSuppressedSourceProgressCallbacks =
+      params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
+    const shouldForwardProgressCallback = (options?: {
+      forwardWhenSourceDeliverySuppressed?: boolean;
+    }) =>
+      !suppressAutomaticSourceDelivery ||
+      (allowSuppressedSourceProgressCallbacks &&
+        options?.forwardWhenSourceDeliverySuppressed === true);
     const wrapProgressCallback = <Args extends unknown[]>(
       callback: ((...args: Args) => Promise<void> | void) | undefined,
+      options?: { forwardWhenSourceDeliverySuppressed?: boolean },
     ): ((...args: Args) => Promise<void>) | undefined => {
       if (!callback && (!suppressAutomaticSourceDelivery || !canTrackSession)) {
         return undefined;
       }
       return async (...args: Args) => {
         markProgress();
-        if (!suppressAutomaticSourceDelivery) {
+        if (shouldForwardProgressCallback(options)) {
           await callback?.(...args);
         }
       };
@@ -1274,11 +1283,21 @@ export async function dispatchReplyFromConfig(
         onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),
         onAssistantMessageStart: wrapProgressCallback(params.replyOptions?.onAssistantMessageStart),
         onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
-        onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart),
-        onItemEvent: wrapProgressCallback(params.replyOptions?.onItemEvent),
-        onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput),
-        onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart),
-        onCompactionEnd: wrapProgressCallback(params.replyOptions?.onCompactionEnd),
+        onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
+          forwardWhenSourceDeliverySuppressed: true,
+        }),
+        onItemEvent: wrapProgressCallback(params.replyOptions?.onItemEvent, {
+          forwardWhenSourceDeliverySuppressed: true,
+        }),
+        onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput, {
+          forwardWhenSourceDeliverySuppressed: true,
+        }),
+        onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart, {
+          forwardWhenSourceDeliverySuppressed: true,
+        }),
+        onCompactionEnd: wrapProgressCallback(params.replyOptions?.onCompactionEnd, {
+          forwardWhenSourceDeliverySuppressed: true,
+        }),
         onToolResult: (payload: ReplyPayload) => {
           markProgress();
           const run = async () => {
@@ -1330,7 +1349,7 @@ export async function dispatchReplyFromConfig(
         onPlanUpdate: async (payload) => {
           markProgress();
           markInboundDedupeReplayUnsafe();
-          if (!suppressAutomaticSourceDelivery) {
+          if (shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true })) {
             await onPlanUpdateFromReplyOptions?.(payload);
           }
           if (payload.phase !== "update" || shouldSuppressDefaultToolProgressMessages()) {
@@ -1341,7 +1360,7 @@ export async function dispatchReplyFromConfig(
         onApprovalEvent: async (payload) => {
           markProgress();
           markInboundDedupeReplayUnsafe();
-          if (!suppressAutomaticSourceDelivery) {
+          if (shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true })) {
             await onApprovalEventFromReplyOptions?.(payload);
           }
           if (payload.phase !== "requested" || shouldSuppressDefaultToolProgressMessages()) {
@@ -1360,7 +1379,7 @@ export async function dispatchReplyFromConfig(
         onPatchSummary: async (payload) => {
           markProgress();
           markInboundDedupeReplayUnsafe();
-          if (!suppressAutomaticSourceDelivery) {
+          if (shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true })) {
             await onPatchSummaryFromReplyOptions?.(payload);
           }
           if (payload.phase !== "end" || shouldSuppressDefaultToolProgressMessages()) {

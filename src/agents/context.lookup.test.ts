@@ -29,10 +29,6 @@ vi.mock("./models-config.runtime.js", () => ({
   ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson,
 }));
 
-vi.mock("./agent-paths.js", () => ({
-  resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
-}));
-
 vi.mock("./pi-model-discovery-runtime.js", () => ({
   discoverAuthStorage: contextTestState.discoverAuthStorage,
   discoverModels: contextTestState.discoverModels,
@@ -301,7 +297,7 @@ describe("lookupContextTokens", () => {
 
     expect(contextTestState.discoverModels).toHaveBeenCalledWith(
       expect.anything(),
-      "/tmp/openclaw-agent",
+      expect.stringMatching(/\/\.openclaw\/agents\/main\/agent$/),
       { normalizeModels: false },
     );
     expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(1_048_576);

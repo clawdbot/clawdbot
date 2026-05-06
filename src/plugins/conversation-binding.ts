@@ -10,7 +10,7 @@ import {
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { writeJsonAtomic } from "../infra/json-files.js";
+import { writeJson } from "../infra/json-files.js";
 import { type ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -379,7 +379,7 @@ async function saveApprovals(file: PluginBindingApprovalsFile): Promise<void> {
   const state = getPluginBindingGlobalState();
   state.approvalsCache = file;
   state.approvalsLoaded = true;
-  await writeJsonAtomic(filePath, file, {
+  await writeJson(filePath, file, {
     mode: 0o600,
     trailingNewline: true,
   });

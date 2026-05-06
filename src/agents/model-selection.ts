@@ -207,6 +207,7 @@ export function resolveAllowlistModelKey(
 export function resolveDefaultModelForAgent(params: {
   cfg: OpenClawConfig;
   agentId?: string;
+  allowPluginNormalization?: boolean;
 }): ModelRef {
   const agentModelOverride = params.agentId
     ? resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)
@@ -231,6 +232,7 @@ export function resolveDefaultModelForAgent(params: {
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
 }
 

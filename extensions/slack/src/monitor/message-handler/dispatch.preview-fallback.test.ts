@@ -208,47 +208,51 @@ vi.mock("../conversation.runtime.js", () => ({
   recordInboundSession: vi.fn(async () => undefined),
 }));
 
-vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
-  createChannelReplyPipeline: (params: {
-    typing?: {
-      start: () => Promise<void>;
-      stop?: () => Promise<void>;
-      onStartError: (err: unknown) => void;
-      onStopError?: (err: unknown) => void;
-    };
-  }) => {
-    capturedTyping = params.typing;
-    return {
-      ...(params.typing
-        ? {
-            typingCallbacks: {
-              onReplyStart: params.typing.start,
-              onIdle: () => {
-                void params.typing?.stop?.();
+vi.mock("openclaw/plugin-sdk/channel-message", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-message")>();
+  return {
+    ...actual,
+    createChannelMessageReplyPipeline: (params: {
+      typing?: {
+        start: () => Promise<void>;
+        stop?: () => Promise<void>;
+        onStartError: (err: unknown) => void;
+        onStopError?: (err: unknown) => void;
+      };
+    }) => {
+      capturedTyping = params.typing;
+      return {
+        ...(params.typing
+          ? {
+              typingCallbacks: {
+                onReplyStart: params.typing.start,
+                onIdle: () => {
+                  void params.typing?.stop?.();
+                },
               },
-            },
-          }
-        : {}),
-      onModelSelected: undefined,
-    };
-  },
-  resolveChannelSourceReplyDeliveryMode: (params: {
-    cfg?: { messages?: { groupChat?: { visibleReplies?: string } } };
-    ctx?: { ChatType?: string };
-    requested?: "automatic" | "message_tool_only";
-  }) => {
-    if (params.requested) {
-      return params.requested;
-    }
-    const chatType = params.ctx?.ChatType;
-    if (chatType === "group" || chatType === "channel") {
-      return params.cfg?.messages?.groupChat?.visibleReplies === "automatic"
-        ? "automatic"
-        : "message_tool_only";
-    }
-    return "automatic";
-  },
-}));
+            }
+          : {}),
+        onModelSelected: undefined,
+      };
+    },
+    resolveChannelMessageSourceReplyDeliveryMode: (params: {
+      cfg?: { messages?: { groupChat?: { visibleReplies?: string } } };
+      ctx?: { ChatType?: string };
+      requested?: "automatic" | "message_tool_only";
+    }) => {
+      if (params.requested) {
+        return params.requested;
+      }
+      const chatType = params.ctx?.ChatType;
+      if (chatType === "group" || chatType === "channel") {
+        return params.cfg?.messages?.groupChat?.visibleReplies === "automatic"
+          ? "automatic"
+          : "message_tool_only";
+      }
+      return "automatic";
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
   buildChannelProgressDraftLine: (params: {

@@ -9,7 +9,7 @@ OpenClaw has three related (but different) controls:
 
 1. **Sandbox** (`agents.defaults.sandbox.*` / `agents.list[].sandbox.*`) decides **where tools run** (sandbox backend vs host).
 2. **Tool policy** (`tools.*`, `tools.sandbox.tools.*`, `agents.list[].tools.*`) decides **which tools are available/allowed**.
-3. **Elevated** (`tools.elevated.*`, `agents.list[].tools.elevated.*`) is an **exec-only escape hatch** to run outside the sandbox when you’re sandboxed (`gateway` by default, or `node` when the exec target is configured to `node`).
+3. **Elevated** (`tools.elevated.*`, `agents.list[].tools.elevated.*`) is an **exec-only escape hatch** to run outside the sandbox when you're sandboxed (`gateway` by default, or `node` when the exec target is configured to `node`).
 
 ## Quick debug
 
@@ -34,7 +34,7 @@ It prints:
 Sandboxing is controlled by `agents.defaults.sandbox.mode`:
 
 - `"off"`: everything runs on the host.
-- `"non-main"`: only non-main sessions are sandboxed (common “surprise” for groups/channels).
+- `"non-main"`: only non-main sessions are sandboxed (common "surprise" for groups/channels).
 - `"all"`: everything is sandboxed.
 
 See [Sandboxing](/gateway/sandboxing) for the full matrix (scope, workspace mounts, images).
@@ -92,20 +92,20 @@ Available groups:
 - `group:memory`: `memory_search`, `memory_get`
 - `group:web`: `web_search`, `x_search`, `web_fetch`
 - `group:ui`: `browser`, `canvas`
-- `group:automation`: `cron`, `gateway`
+- `group:automation`: `heartbeat_respond`, `cron`, `gateway`
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`
-- `group:agents`: `agents_list`
-- `group:media`: `image`, `image_generate`, `video_generate`, `tts`
+- `group:agents`: `agents_list`, `update_plan`
+- `group:media`: `image`, `image_generate`, `music_generate`, `video_generate`, `tts`
 - `group:openclaw`: all built-in OpenClaw tools (excludes provider plugins)
 
 ## Elevated: exec-only "run on host"
 
 Elevated does **not** grant extra tools; it only affects `exec`.
 
-- If you’re sandboxed, `/elevated on` (or `exec` with `elevated: true`) runs outside the sandbox (approvals may still apply).
+- If you're sandboxed, `/elevated on` (or `exec` with `elevated: true`) runs outside the sandbox (approvals may still apply).
 - Use `/elevated full` to skip exec approvals for the session.
-- If you’re already running direct, elevated is effectively a no-op (still gated).
+- If you're already running direct, elevated is effectively a no-op (still gated).
 - Elevated is **not** skill-scoped and does **not** override tool allow/deny.
 - Elevated does not grant arbitrary cross-host overrides from `host=auto`; it follows the normal exec target rules and only preserves `node` when the configured/session target is already `node`.
 - `/exec` is separate from elevated. It only adjusts per-session exec defaults for authorized senders.

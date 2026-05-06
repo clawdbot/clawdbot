@@ -86,8 +86,8 @@ openclaw doctor
 
 ### Control UI (web)
 
-The Control UI’s **Logs** tab tails the same file using `logs.tail`.
-See [/web/control-ui](/web/control-ui) for how to open it.
+The Control UI's **Logs** tab tails the same file using `logs.tail`.
+See [Control UI](/web/control-ui) for how to open it.
 
 ### Channel-only logs
 

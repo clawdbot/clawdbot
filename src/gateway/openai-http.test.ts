@@ -1028,6 +1028,85 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
+  it(
+    "sends an initial SSE chunk before a streaming agent run settles",
+    { timeout: 15_000 },
+    async () => {
+      const port = enabledPort;
+      let serverAbortSignal: AbortSignal | undefined;
+
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce(
+        (opts: unknown) =>
+          new Promise<undefined>((resolve) => {
+            const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+            serverAbortSignal = signal;
+            if (signal?.aborted) {
+              resolve(undefined);
+              return;
+            }
+            signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+          }),
+      );
+
+      let settled = false;
+      const firstChunk = new Promise<string>((resolve, reject) => {
+        const clientReq = http.request(
+          {
+            hostname: "127.0.0.1",
+            port,
+            path: "/v1/chat/completions",
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: "Bearer secret",
+            },
+          },
+          (res) => {
+            expect(res.statusCode).toBe(200);
+            expect(res.headers["content-type"] ?? "").toContain("text/event-stream");
+            res.setEncoding("utf8");
+            res.once("data", (chunk) => {
+              settled = true;
+              resolve(String(chunk));
+              clientReq.destroy();
+            });
+          },
+        );
+        clientReq.on("error", (err) => {
+          if (!settled) {
+            reject(err);
+          }
+        });
+        clientReq.setTimeout(2_000, () => {
+          if (!settled) {
+            settled = true;
+            clientReq.destroy(new Error("timed out waiting for first SSE chunk"));
+          }
+        });
+        clientReq.end(
+          JSON.stringify({
+            stream: true,
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          }),
+        );
+      });
+
+      await expect(firstChunk).resolves.toContain('"role":"assistant"');
+      await vi.waitFor(() => {
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(serverAbortSignal?.aborted).toBe(true);
+        },
+        { timeout: 5_000, interval: 50 },
+      );
+    },
+  );
+
   it("includes usage in final stream chunk when stream_options.include_usage=true", async () => {
     const port = enabledPort;
     agentCommand.mockClear();

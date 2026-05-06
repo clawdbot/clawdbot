@@ -47,6 +47,9 @@ const { registerPluginsCli, registerPluginCliCommandsFromValidatedConfig } = vi.
   }),
   registerPluginCliCommandsFromValidatedConfig: vi.fn(async () => null),
 }));
+const { registerChannelsCli } = vi.hoisted(() => ({
+  registerChannelsCli: vi.fn(async () => undefined),
+}));
 const { addGatewayRunCommand, gatewayRunAction, registerGatewayCli } = vi.hoisted(() => {
   const runAction = vi.fn();
   return {
@@ -69,6 +72,7 @@ vi.mock("../gateway-cli/run.js", () => ({ addGatewayRunCommand }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
 vi.mock("../capability-cli.js", () => ({ registerCapabilityCli }));
 vi.mock("../plugins-cli.js", () => ({ registerPluginsCli }));
+vi.mock("../channels-cli.js", () => ({ registerChannelsCli }));
 vi.mock("../../plugins/cli.js", () => ({ registerPluginCliCommandsFromValidatedConfig }));
 vi.mock("./private-qa-cli.js", async () => {
   const actual = await vi.importActual<typeof import("./private-qa-cli.js")>("./private-qa-cli.js");
@@ -110,6 +114,7 @@ describe("registerSubCliCommands", () => {
     inferAction.mockClear();
     registerPluginsCli.mockClear();
     registerPluginCliCommandsFromValidatedConfig.mockClear();
+    registerChannelsCli.mockClear();
     addGatewayRunCommand.mockClear();
     gatewayRunAction.mockClear();
     registerGatewayCli.mockClear();
@@ -216,6 +221,17 @@ describe("registerSubCliCommands", () => {
 
     expect(addGatewayRunCommand).not.toHaveBeenCalled();
     expect(registerGatewayCli).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes completion context to channel registration", async () => {
+    const argv = ["node", "openclaw", "completion", "--write-state"];
+    const program = new Command().name("openclaw");
+
+    await registerSubCliByName(program, "channels", argv, { purpose: "completion" });
+
+    expect(registerChannelsCli).toHaveBeenCalledWith(program, argv, {
+      includeSetupOptions: true,
+    });
   });
 
   it.each([

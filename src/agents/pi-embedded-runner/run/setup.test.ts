@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildBeforeModelResolveAttachments, resolveHookModelSelection } from "./setup.js";
+import type { ModelDefinitionConfig } from "../../../config/types.models.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
+import {
+  buildBeforeModelResolveAttachments,
+  resolveEffectiveRuntimeModel,
+  resolveHookModelSelection,
+} from "./setup.js";
 
 const hookContext = {
   sessionId: "session-1",
@@ -71,5 +78,92 @@ describe("resolveHookModelSelection", () => {
       { prompt: "text only" },
       hookContext,
     );
+  });
+});
+
+function createRuntimeModel(): ProviderRuntimeModel {
+  return {
+    provider: "openai",
+    id: "gpt-5.5",
+    name: "gpt-5.5",
+    baseUrl: "https://api.openai.com/v1",
+    api: "openai-responses",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_050_000,
+    contextTokens: 272_000,
+    maxTokens: 128_000,
+  };
+}
+
+function createConfiguredModel(
+  overrides: Partial<ModelDefinitionConfig> = {},
+): ModelDefinitionConfig {
+  return {
+    id: "gpt-5.5",
+    name: "gpt-5.5",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_050_000,
+    contextTokens: 1_000_000,
+    maxTokens: 128_000,
+    ...overrides,
+  };
+}
+
+describe("resolveEffectiveRuntimeModel", () => {
+  it("can read Codex OAuth context overrides for native Codex harness runs", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            models: [createConfiguredModel()],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveEffectiveRuntimeModel({
+      cfg,
+      provider: "openai",
+      contextConfigProvider: "openai-codex",
+      modelId: "gpt-5.5",
+      runtimeModel: createRuntimeModel(),
+    });
+
+    expect(result.ctxInfo).toEqual({
+      source: "modelsConfig",
+      tokens: 1_000_000,
+    });
+    expect(result.effectiveModel.contextWindow).toBe(1_000_000);
+  });
+
+  it("keeps the runtime model contextTokens when no alternate context provider is supplied", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            models: [createConfiguredModel()],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveEffectiveRuntimeModel({
+      cfg,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      runtimeModel: createRuntimeModel(),
+    });
+
+    expect(result.ctxInfo).toEqual({
+      source: "model",
+      tokens: 272_000,
+    });
+    expect(result.effectiveModel.contextWindow).toBe(272_000);
   });
 });

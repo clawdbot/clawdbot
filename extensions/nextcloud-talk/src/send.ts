@@ -1,3 +1,4 @@
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-message";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import {
   convertMarkdownTables,
@@ -79,6 +80,28 @@ function recordNextcloudTalkOutboundActivity(accountId: string): void {
       throw error;
     }
   }
+}
+
+function createNextcloudTalkSendReceipt(params: {
+  messageId: string;
+  roomToken: string;
+  replyTo?: string;
+}) {
+  const messageId = params.messageId.trim();
+  return createMessageReceiptFromOutboundResults({
+    results:
+      messageId && messageId !== "unknown"
+        ? [
+            {
+              channel: "nextcloud-talk",
+              messageId,
+              conversationId: params.roomToken,
+            },
+          ]
+        : [],
+    kind: "text",
+    ...(params.replyTo ? { replyToId: params.replyTo } : {}),
+  });
 }
 
 export async function sendMessageNextcloudTalk(
@@ -183,7 +206,16 @@ export async function sendMessageNextcloudTalk(
 
     recordNextcloudTalkOutboundActivity(account.accountId);
 
-    return { messageId, roomToken, timestamp };
+    return {
+      messageId,
+      roomToken,
+      receipt: createNextcloudTalkSendReceipt({
+        messageId,
+        roomToken,
+        ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
+      }),
+      timestamp,
+    };
   } finally {
     await release();
   }

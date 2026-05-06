@@ -1,3 +1,8 @@
+import {
+  createMessageReceiptFromOutboundResults,
+  type MessageReceipt,
+  type MessageReceiptPartKind,
+} from "openclaw/plugin-sdk/channel-message";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
@@ -38,6 +43,7 @@ type SendMSTeamsMessageParams = {
 type SendMSTeamsMessageResult = {
   messageId: string;
   conversationId: string;
+  receipt: MessageReceipt;
   /** If a FileConsentCard was sent instead of the file, this contains the upload ID */
   pendingUploadId?: string;
 };
@@ -50,6 +56,45 @@ const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024; // 4MB
  * Higher than the default because OneDrive upload handles large files well.
  */
 const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
+
+function createMSTeamsSendReceipt(params: {
+  conversationId: string;
+  platformMessageIds: readonly string[];
+  kind: MessageReceiptPartKind;
+}) {
+  return createMessageReceiptFromOutboundResults({
+    kind: params.kind,
+    results: params.platformMessageIds.map((messageId) => ({
+      channel: "msteams",
+      messageId,
+      conversationId: params.conversationId,
+    })),
+  });
+}
+
+function createMSTeamsSendResult(params: {
+  conversationId: string;
+  messageId: string;
+  platformMessageIds?: readonly string[];
+  kind: MessageReceiptPartKind;
+  pendingUploadId?: string;
+}): SendMSTeamsMessageResult {
+  const platformMessageIds = (
+    params.platformMessageIds?.length ? [...params.platformMessageIds] : [params.messageId]
+  )
+    .map((messageId) => messageId.trim())
+    .filter((messageId) => messageId && messageId !== "unknown");
+  return {
+    messageId: params.messageId,
+    conversationId: params.conversationId,
+    receipt: createMSTeamsSendReceipt({
+      conversationId: params.conversationId,
+      platformMessageIds,
+      kind: params.kind,
+    }),
+    ...(params.pendingUploadId ? { pendingUploadId: params.pendingUploadId } : {}),
+  };
+}
 
 type SendMSTeamsPollParams = {
   /** Full config (for credentials) */
@@ -182,11 +227,12 @@ export async function sendMessageMSTeams(
 
       log.info("sent file consent card", { conversationId, messageId, uploadId });
 
-      return {
+      return createMSTeamsSendResult({
         messageId,
         conversationId,
+        kind: "card",
         pendingUploadId: uploadId,
-      };
+      });
     }
 
     // Personal chat with small image: use base64 (only works for images)
@@ -264,7 +310,11 @@ export async function sendMessageMSTeams(
           fileName: driveItem.name,
         });
 
-        return { messageId, conversationId };
+        return createMSTeamsSendResult({
+          messageId,
+          conversationId,
+          kind: "media",
+        });
       }
 
       // Fallback: no SharePoint site configured, use OneDrive with markdown link
@@ -304,7 +354,11 @@ export async function sendMessageMSTeams(
         shareUrl: uploaded.shareUrl,
       });
 
-      return { messageId, conversationId };
+      return createMSTeamsSendResult({
+        messageId,
+        conversationId,
+        kind: "media",
+      });
     } catch (err) {
       const classification = classifyMSTeamsSendError(err);
       const hint = formatMSTeamsSendErrorHint(classification);
@@ -339,9 +393,9 @@ async function sendTextWithMedia(
     mediaMaxBytes,
   } = ctx;
 
-  let messageIds: string[];
+  let platformMessageIds: string[];
   try {
-    messageIds = await sendMSTeamsMessages({
+    platformMessageIds = await sendMSTeamsMessages({
       replyStyle: "top-level",
       adapter,
       appId,
@@ -365,12 +419,17 @@ async function sendTextWithMedia(
     );
   }
 
-  const messageId = messageIds[0] ?? "unknown";
+  const messageId = platformMessageIds[0] ?? "unknown";
   log.info("sent proactive message", { conversationId, messageId });
 
   return {
     messageId,
     conversationId,
+    receipt: createMSTeamsSendReceipt({
+      conversationId,
+      platformMessageIds,
+      kind: mediaUrl ? "media" : "text",
+    }),
   };
 }
 

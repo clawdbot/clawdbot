@@ -4,18 +4,10 @@
   "type": "object",
   "required": ["error", "threadId", "turnId", "willRetry"],
   "properties": {
-    "error": {
-      "$ref": "#/definitions/TurnError"
-    },
-    "threadId": {
-      "type": "string"
-    },
-    "turnId": {
-      "type": "string"
-    },
-    "willRetry": {
-      "type": "boolean"
-    }
+    "error": { "$ref": "#/definitions/TurnError" },
+    "threadId": { "type": "string" },
+    "turnId": { "type": "string" },
+    "willRetry": { "type": "boolean" }
   },
   "definitions": {
     "CodexErrorInfo": {
@@ -43,11 +35,7 @@
             "httpConnectionFailed": {
               "type": "object",
               "properties": {
-                "httpStatusCode": {
-                  "type": ["integer", "null"],
-                  "format": "uint16",
-                  "minimum": 0.0
-                }
+                "httpStatusCode": { "type": ["integer", "null"], "format": "uint16", "minimum": 0 }
               }
             }
           },
@@ -62,11 +50,7 @@
             "responseStreamConnectionFailed": {
               "type": "object",
               "properties": {
-                "httpStatusCode": {
-                  "type": ["integer", "null"],
-                  "format": "uint16",
-                  "minimum": 0.0
-                }
+                "httpStatusCode": { "type": ["integer", "null"], "format": "uint16", "minimum": 0 }
               }
             }
           },
@@ -81,11 +65,7 @@
             "responseStreamDisconnected": {
               "type": "object",
               "properties": {
-                "httpStatusCode": {
-                  "type": ["integer", "null"],
-                  "format": "uint16",
-                  "minimum": 0.0
-                }
+                "httpStatusCode": { "type": ["integer", "null"], "format": "uint16", "minimum": 0 }
               }
             }
           },
@@ -100,11 +80,7 @@
             "responseTooManyFailedAttempts": {
               "type": "object",
               "properties": {
-                "httpStatusCode": {
-                  "type": ["integer", "null"],
-                  "format": "uint16",
-                  "minimum": 0.0
-                }
+                "httpStatusCode": { "type": ["integer", "null"], "format": "uint16", "minimum": 0 }
               }
             }
           },
@@ -119,11 +95,7 @@
             "activeTurnNotSteerable": {
               "type": "object",
               "required": ["turnKind"],
-              "properties": {
-                "turnKind": {
-                  "$ref": "#/definitions/NonSteerableTurnKind"
-                }
-              }
+              "properties": { "turnKind": { "$ref": "#/definitions/NonSteerableTurnKind" } }
             }
           },
           "additionalProperties": false,
@@ -131,31 +103,16 @@
         }
       ]
     },
-    "NonSteerableTurnKind": {
-      "type": "string",
-      "enum": ["review", "compact"]
-    },
+    "NonSteerableTurnKind": { "type": "string", "enum": ["review", "compact"] },
     "TurnError": {
       "type": "object",
       "required": ["message"],
       "properties": {
-        "additionalDetails": {
-          "default": null,
-          "type": ["string", "null"]
-        },
+        "additionalDetails": { "default": null, "type": ["string", "null"] },
         "codexErrorInfo": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/CodexErrorInfo"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "anyOf": [{ "$ref": "#/definitions/CodexErrorInfo" }, { "type": "null" }]
         },
-        "message": {
-          "type": "string"
-        }
+        "message": { "type": "string" }
       }
     }
   }

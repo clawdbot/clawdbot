@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
@@ -37,15 +38,13 @@ function readPluginSdkPackageJson(packageRoot: string): PluginSdkPackageJson | n
   if (pluginSdkPackageJsonByRoot.has(cacheKey)) {
     return pluginSdkPackageJsonByRoot.get(cacheKey) ?? null;
   }
-  try {
-    const pkgRaw = fs.readFileSync(path.join(packageRoot, "package.json"), "utf-8");
-    const parsed = JSON.parse(pkgRaw) as PluginSdkPackageJson;
-    pluginSdkPackageJsonByRoot.set(cacheKey, parsed);
-    return parsed;
-  } catch {
+  const parsed = tryReadJsonSync<PluginSdkPackageJson>(path.join(packageRoot, "package.json"));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     pluginSdkPackageJsonByRoot.set(cacheKey, null);
     return null;
   }
+  pluginSdkPackageJsonByRoot.set(cacheKey, parsed);
+  return parsed;
 }
 
 function isSafePluginSdkSubpathSegment(subpath: string): boolean {
@@ -306,29 +305,19 @@ function isUsableDistPluginSdkArtifact(candidate: string): boolean {
 }
 
 function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
-  try {
-    const raw = fs.readFileSync(
-      path.join(packageRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
-      "utf-8",
-    );
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath));
-  } catch {
+  const parsed = tryReadJsonSync(
+    path.join(packageRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
+  );
+  if (!Array.isArray(parsed)) {
     return [];
   }
+  return parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath));
 }
 
 function readBundledPluginPackageName(packageJsonPath: string): string | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as { name?: unknown };
-    const name = typeof parsed.name === "string" ? parsed.name.trim() : "";
-    return name.startsWith("@openclaw/") ? name : null;
-  } catch {
-    return null;
-  }
+  const parsed = tryReadJsonSync<{ name?: unknown }>(packageJsonPath);
+  const name = typeof parsed?.name === "string" ? parsed.name.trim() : "";
+  return name.startsWith("@openclaw/") ? name : null;
 }
 
 function isBundledPluginPublicSurfaceSourceBasename(params: {

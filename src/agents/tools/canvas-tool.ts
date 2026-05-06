@@ -1,12 +1,10 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { Type } from "typebox";
 import { writeBase64ToFile } from "../../cli/nodes-camera.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../../cli/nodes-canvas.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
-import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
+import { readLocalFileFromRoots } from "../../infra/fs-safe.js";
 import { getDefaultMediaLocalRoots } from "../../media/local-roots.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
@@ -33,22 +31,19 @@ async function readJsonlFromPath(jsonlPath: string): Promise<string> {
   if (!trimmed) {
     return "";
   }
-  const resolved = path.resolve(trimmed);
   const roots = getDefaultMediaLocalRoots();
-  if (!isInboundPathAllowed({ filePath: resolved, roots })) {
+  const result = await readLocalFileFromRoots({
+    filePath: trimmed,
+    roots,
+    label: "canvas jsonlPath",
+  });
+  if (!result) {
     if (shouldLogVerbose()) {
-      logVerbose(`Blocked canvas jsonlPath outside allowed roots: ${resolved}`);
+      logVerbose(`Blocked canvas jsonlPath outside allowed roots: ${trimmed}`);
     }
     throw new Error("jsonlPath outside allowed roots");
   }
-  const canonical = await fs.realpath(resolved).catch(() => resolved);
-  if (!isInboundPathAllowed({ filePath: canonical, roots })) {
-    if (shouldLogVerbose()) {
-      logVerbose(`Blocked canvas jsonlPath outside allowed roots: ${canonical}`);
-    }
-    throw new Error("jsonlPath outside allowed roots");
-  }
-  return await fs.readFile(canonical, "utf8");
+  return result.buffer.toString("utf8");
 }
 
 // Flattened schema: runtime validates per-action requirements.

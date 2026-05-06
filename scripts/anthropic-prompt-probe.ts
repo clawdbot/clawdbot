@@ -12,7 +12,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { resolveOpenClawAgentDir } from "../src/agents/agent-paths.js";
+import { resolveDefaultAgentDir } from "../src/agents/agent-scope.js";
 import { ensureAuthProfileStore, type AuthProfileCredential } from "../src/agents/auth-profiles.js";
 import { normalizeProviderId } from "../src/agents/model-selection.js";
 import { validateAnthropicSetupToken } from "../src/commands/auth-token.js";
@@ -185,7 +185,7 @@ function resolveSetupTokenSource(): TokenSource {
     };
   }
 
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = resolveDefaultAgentDir({});
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });

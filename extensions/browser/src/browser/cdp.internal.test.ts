@@ -963,6 +963,22 @@ describe("cdp internal", () => {
           const msg = JSON.parse(rawDataToString(raw)) as { id?: number; method?: string };
           if (msg.method === "Target.createTarget") {
             socket.send(JSON.stringify({ id: msg.id, result: { targetId: "T_BARE_WS" } }));
+            return;
+          }
+          if (msg.method === "Target.attachToTarget") {
+            socket.send(JSON.stringify({ id: msg.id, result: { sessionId: "S_BARE_WS" } }));
+            return;
+          }
+          if (
+            msg.method === "Page.enable" ||
+            msg.method === "Runtime.enable" ||
+            msg.method === "Network.enable" ||
+            msg.method === "DOM.enable" ||
+            msg.method === "Accessibility.enable" ||
+            msg.method === "Runtime.runIfWaitingForDebugger" ||
+            msg.method === "Target.detachFromTarget"
+          ) {
+            socket.send(JSON.stringify({ id: msg.id, result: {} }));
           }
         });
       });

@@ -36,6 +36,7 @@ import ai.openclaw.app.node.Quad
 import ai.openclaw.app.node.SmsHandler
 import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.node.SystemHandler
+import ai.openclaw.app.node.TalkHandler
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.invokeErrorFromThrowable
@@ -205,6 +206,16 @@ class NodeRuntime(
       deviceHandler = deviceHandler,
       notificationsHandler = notificationsHandler,
       systemHandler = systemHandler,
+      talkHandler =
+        object : TalkHandler {
+          override suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStart()
+
+          override suspend fun handlePttStop(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStop()
+
+          override suspend fun handlePttCancel(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttCancel()
+
+          override suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttOnce()
+        },
       photosHandler = photosHandler,
       contactsHandler = contactsHandler,
       calendarHandler = calendarHandler,
@@ -879,6 +890,80 @@ class NodeRuntime(
 
   fun setTalkModeEnabled(value: Boolean) {
     setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
+  }
+
+  private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
+    runPreparedTalkPttCommand {
+      val payload = talkMode.beginPushToTalk()
+      GatewaySession.InvokeResult.ok(payload.toJson())
+    }
+
+  private suspend fun handleTalkPttStop(): GatewaySession.InvokeResult =
+    runTalkPttCommand {
+      val payload = talkMode.endPushToTalk()
+      finishTalkCaptureIfIdle()
+      GatewaySession.InvokeResult.ok(payload.toJson())
+    }
+
+  private suspend fun handleTalkPttCancel(): GatewaySession.InvokeResult =
+    runTalkPttCommand {
+      val payload = talkMode.cancelPushToTalk()
+      finishTalkCaptureIfIdle()
+      GatewaySession.InvokeResult.ok(payload.toJson())
+    }
+
+  private suspend fun handleTalkPttOnce(): GatewaySession.InvokeResult =
+    runPreparedTalkPttCommand {
+      val payload = talkMode.runPushToTalkOnce()
+      finishTalkCaptureIfIdle()
+      GatewaySession.InvokeResult.ok(payload.toJson())
+    }
+
+  private suspend fun runPreparedTalkPttCommand(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult =
+    runTalkPttCommand {
+      prepareTalkCapture()
+      try {
+        block()
+      } catch (err: Throwable) {
+        cleanupFailedTalkCapture()
+        throw err
+      }
+    }
+
+  private suspend fun runTalkPttCommand(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult =
+    try {
+      block()
+    } catch (err: Throwable) {
+      val (code, message) = invokeErrorFromThrowable(err)
+      GatewaySession.InvokeResult.error(code = code, message = message)
+    }
+
+  private suspend fun prepareTalkCapture() {
+    if (!hasRecordAudioPermission()) {
+      throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
+    }
+    micCapture.setMicEnabled(false)
+    stopVoicePlayback()
+    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
+    talkMode.ttsOnAllResponses = true
+    talkMode.setPlaybackEnabled(speakerEnabled.value)
+    talkMode.ensureChatSubscribed()
+    externalAudioCaptureActive.value = true
+  }
+
+  private suspend fun cleanupFailedTalkCapture() {
+    runCatching { talkMode.cancelPushToTalk() }
+    talkMode.ttsOnAllResponses = false
+    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+    externalAudioCaptureActive.value = false
+  }
+
+  private fun finishTalkCaptureIfIdle() {
+    if (!talkMode.isEnabled.value && !talkMode.isListening.value && !talkMode.isSpeaking.value) {
+      talkMode.ttsOnAllResponses = false
+      NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+      externalAudioCaptureActive.value = false
+    }
   }
 
   val speakerEnabled: StateFlow<Boolean>

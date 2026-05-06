@@ -1,0 +1,586 @@
+name: Mantis Discord Thread Attachment
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Ref, tag, or SHA expected to preserve filePath attachments
+        required: true
+        default: main
+        type: string
+      baseline_ref:
+        description: Display label for the synthetic baseline; the workflow reverts only the thread attachment fix
+        required: false
+        default: synthetic-reverted-thread-filepath-fix
+        type: string
+      pr_number:
+        description: Optional bug or fix PR number to receive the QA evidence comment
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: mantis-discord-thread-attachment-${{ github.event.issue.number || inputs.pr_number || inputs.candidate_ref || github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.33.0"
+  OPENCLAW_BUILD_PRIVATE_QA: "1"
+  OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+
+jobs:
+  authorize_actor:
+    name: Authorize workflow actor
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request &&
+          (
+            contains(github.event.comment.body, '@Mantis') ||
+            contains(github.event.comment.body, '@mantis') ||
+            contains(github.event.comment.body, '/mantis')
+          )
+        )
+      }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    steps:
+      - name: Require maintainer-level repository access
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            const permission = data.permission;
+            core.info(`Actor ${context.actor} permission: ${permission}`);
+            if (!allowed.has(permission)) {
+              core.setFailed(
+                `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
+              );
+            }
+
+  resolve_request:
+    name: Resolve Mantis request
+    needs: authorize_actor
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      baseline_ref: ${{ steps.resolve.outputs.baseline_ref }}
+      candidate_ref: ${{ steps.resolve.outputs.candidate_ref }}
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      request_source: ${{ steps.resolve.outputs.request_source }}
+      should_run: ${{ steps.resolve.outputs.should_run }}
+    steps:
+      - name: Resolve refs and target PR
+        id: resolve
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const defaultBaseline = "synthetic-reverted-thread-filepath-fix";
+            const eventName = context.eventName;
+
+            function setOutput(name, value) {
+              core.setOutput(name, value ?? "");
+              core.info(`${name}=${value ?? ""}`);
+            }
+
+            if (eventName === "workflow_dispatch") {
+              const inputs = context.payload.inputs ?? {};
+              setOutput("should_run", "true");
+              setOutput("baseline_ref", inputs.baseline_ref || defaultBaseline);
+              setOutput("candidate_ref", inputs.candidate_ref || "main");
+              setOutput("pr_number", inputs.pr_number || "");
+              setOutput("request_source", "workflow_dispatch");
+              return;
+            }
+
+            if (eventName !== "issue_comment") {
+              core.setFailed(`Unsupported event: ${eventName}`);
+              return;
+            }
+
+            const issue = context.payload.issue;
+            const body = context.payload.comment?.body ?? "";
+            if (!issue?.pull_request) {
+              core.setFailed("Mantis issue_comment trigger requires a pull request comment.");
+              return;
+            }
+
+            const normalized = body.toLowerCase();
+            const requested =
+              (normalized.includes("@mantis") || normalized.includes("/mantis")) &&
+              normalized.includes("discord") &&
+              normalized.includes("thread") &&
+              (normalized.includes("attachment") ||
+                normalized.includes("filepath") ||
+                normalized.includes("file path"));
+            if (!requested) {
+              core.notice("Comment mentioned Mantis but did not request the Discord thread attachment scenario.");
+              setOutput("should_run", "false");
+              setOutput("baseline_ref", "");
+              setOutput("candidate_ref", "");
+              setOutput("pr_number", "");
+              setOutput("request_source", "unsupported_issue_comment");
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: issue.number,
+            });
+            const candidateMatch = body.match(/(?:candidate|head)[\s:=]+([^\s`]+)/i);
+            const rawCandidate = candidateMatch?.[1];
+            const candidate =
+              rawCandidate && !["head", "pr", "pr-head"].includes(rawCandidate.toLowerCase())
+                ? rawCandidate
+                : pr.head.sha;
+
+            setOutput("should_run", "true");
+            setOutput("baseline_ref", defaultBaseline);
+            setOutput("candidate_ref", candidate);
+            setOutput("pr_number", String(issue.number));
+            setOutput("request_source", "issue_comment");
+
+            await github.rest.reactions.createForIssueComment({
+              owner,
+              repo,
+              comment_id: context.payload.comment.id,
+              content: "eyes",
+            }).catch((error) => core.warning(`Could not add eyes reaction: ${error.message}`));
+
+  validate_candidate:
+    name: Validate selected candidate
+    needs: resolve_request
+    if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
+    steps:
+      - name: Checkout harness ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Validate candidate ref is trusted
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+          revision="$(git rev-parse "${CANDIDATE_REF}^{commit}")"
+          reason=""
+          if git merge-base --is-ancestor "$revision" refs/remotes/origin/main; then
+            reason="main-ancestor"
+          elif git tag --points-at "$revision" | grep -Eq '^v'; then
+            reason="release-tag"
+          else
+            pr_head_count="$(
+              gh api \
+                -H "Accept: application/vnd.github+json" \
+                "repos/${GITHUB_REPOSITORY}/commits/${revision}/pulls" \
+                --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${revision}"'")] | length'
+            )"
+            if [[ "$pr_head_count" != "0" ]]; then
+              reason="open-pr-head"
+            fi
+          fi
+
+          if [[ -z "$reason" ]]; then
+            echo "Candidate ref '${CANDIDATE_REF}' resolved to ${revision}, which is not trusted for this secret-bearing Mantis run." >&2
+            exit 1
+          fi
+
+          echo "candidate_revision=${revision}" >> "$GITHUB_OUTPUT"
+          {
+            echo "Candidate: \`${CANDIDATE_REF}\`"
+            echo "Candidate SHA: \`${revision}\`"
+            echo "Candidate trust reason: \`${reason}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  run_thread_attachment:
+    name: Run Discord thread attachment before/after
+    needs: [resolve_request, validate_candidate]
+    if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 120
+    environment: qa-live-shared
+    outputs:
+      comparison_status: ${{ steps.run_mantis.outputs.comparison_status }}
+      output_dir: ${{ steps.run_mantis.outputs.output_dir }}
+    steps:
+      - name: Checkout harness ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Build Mantis harness
+        run: pnpm build
+
+      - name: Setup Go for Crabbox CLI
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: false
+
+      - name: Install Crabbox CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/crabbox"
+          mkdir -p "$install_dir" "$HOME/.local/bin"
+          git clone --depth 1 https://github.com/openclaw/crabbox.git "$install_dir/src"
+          go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/crabbox" --version
+          "$HOME/.local/bin/crabbox" warmup --help 2>&1 | grep -q -- "-desktop"
+
+      - name: Prepare baseline and candidate worktrees
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ needs.validate_candidate.outputs.candidate_revision }}
+        run: |
+          set -euo pipefail
+
+          worktree_root=".artifacts/qa-e2e/mantis/discord-thread-attachment-worktrees"
+          mkdir -p "$worktree_root"
+          git worktree add --detach "$worktree_root/baseline" "$CANDIDATE_SHA"
+          git worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
+
+          baseline_file="$worktree_root/baseline/extensions/discord/src/actions/handle-action.guild-admin.ts"
+          node - "$baseline_file" <<'NODE'
+          const fs = require("node:fs");
+          const file = process.argv[2];
+          let text = fs.readFileSync(file, "utf8");
+          const mediaReadFileContext = '\n  | "mediaReadFile"';
+          const mediaFallback = [
+            '    const mediaUrl =',
+            '      readStringParam(actionParams, "media", { trim: false }) ??',
+            '      readStringParam(actionParams, "path", { trim: false }) ??',
+            '      readStringParam(actionParams, "filePath", { trim: false });',
+            '',
+          ].join("\n");
+          const mediaOnly = '    const mediaUrl = readStringParam(actionParams, "media", { trim: false });\n';
+          const optionForwarding = [
+            '      cfg,',
+            '      { mediaLocalRoots: ctx.mediaLocalRoots, mediaReadFile: ctx.mediaReadFile },',
+            '',
+          ].join("\n");
+          if (!text.includes(mediaReadFileContext)) {
+            throw new Error("Could not find mediaReadFile context entry to synthesize baseline.");
+          }
+          if (!text.includes(mediaFallback)) {
+            throw new Error("Could not find media/path/filePath fallback to synthesize baseline.");
+          }
+          if (!text.includes(optionForwarding)) {
+            throw new Error("Could not find mediaLocalRoots/mediaReadFile forwarding to synthesize baseline.");
+          }
+          text = text.replace(mediaReadFileContext, "");
+          text = text.replace(mediaFallback, mediaOnly);
+          text = text.replace(optionForwarding, "      cfg,\n");
+          fs.writeFileSync(file, text);
+          NODE
+
+          for lane in baseline candidate; do
+            lane_dir="$worktree_root/${lane}"
+            echo "Installing ${lane} worktree dependencies"
+            pnpm --dir "$lane_dir" install --frozen-lockfile
+            echo "Building ${lane} worktree"
+            pnpm --dir "$lane_dir" build
+          done
+
+      - name: Run baseline and candidate
+        id: run_mantis
+        shell: bash
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_DISCORD_CAPTURE_CONTENT: "1"
+          MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64: ${{ secrets.MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64 }}
+          MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR: ${{ vars.MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR }}
+          CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR }}
+          CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN }}
+          OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
+          OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
+          CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
+          CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
+          CANDIDATE_SHA: ${{ needs.validate_candidate.outputs.candidate_revision }}
+          BASELINE_LABEL: ${{ needs.resolve_request.outputs.baseline_ref }}
+        run: |
+          set -euo pipefail
+
+          require_var() {
+            local key="$1"
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required ${key}." >&2
+              exit 1
+            fi
+          }
+          require_var OPENCLAW_QA_CONVEX_SITE_URL
+          require_var OPENCLAW_QA_CONVEX_SECRET_CI
+
+          root=".artifacts/qa-e2e/mantis/discord-thread-attachment"
+          worktree_root=".artifacts/qa-e2e/mantis/discord-thread-attachment-worktrees"
+          mkdir -p "$root"
+          echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
+
+          run_lane() {
+            local lane="$1"
+            local repo_root="${GITHUB_WORKSPACE}/${worktree_root}/${lane}"
+            local output_dir=".artifacts/qa-e2e/mantis/discord-thread-attachment/${lane}"
+            local lane_env=()
+            if [[ "$lane" == "candidate" ]]; then
+              lane_env=(
+                OPENCLAW_QA_DISCORD_CAPTURE_UI_METADATA=1
+                OPENCLAW_QA_DISCORD_KEEP_THREADS=1
+              )
+            fi
+            env "${lane_env[@]}" pnpm --dir "$repo_root" openclaw qa discord \
+              --repo-root "$repo_root" \
+              --output-dir "$output_dir" \
+              --provider-mode mock-openai \
+              --credential-source convex \
+              --credential-role ci \
+              --scenario discord-thread-reply-filepath-attachment \
+              --allow-failures
+            rm -rf "$root/$lane"
+            mkdir -p "$root/$lane"
+            cp -a "$repo_root/$output_dir/." "$root/$lane/"
+          }
+
+          run_lane baseline
+          run_lane candidate
+
+          capture_candidate_discord_web() {
+            if [[ -z "${MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64:-}" && -z "${MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR:-}" ]]; then
+              echo "::notice::No Mantis Discord viewer browser profile is configured; skipping logged-in Discord Web video."
+              return 0
+            fi
+            CRABBOX_COORDINATOR="${CRABBOX_COORDINATOR:-${OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR:-}}"
+            CRABBOX_COORDINATOR_TOKEN="${CRABBOX_COORDINATOR_TOKEN:-${OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN:-}}"
+            export CRABBOX_COORDINATOR CRABBOX_COORDINATOR_TOKEN
+            if [[ -z "${CRABBOX_COORDINATOR_TOKEN:-}" ]]; then
+              echo "::warning::Crabbox coordinator token missing; skipping logged-in Discord Web video."
+              return 0
+            fi
+
+            local ui_json="$root/candidate/discord-thread-reply-filepath-attachment-ui.json"
+            if [[ ! -f "$ui_json" ]]; then
+              echo "::warning::Candidate Discord UI metadata is missing; skipping logged-in Discord Web video."
+              return 0
+            fi
+            local discord_url
+            discord_url="$(jq -r '.discordWebUrl // empty' "$ui_json")"
+            if [[ -z "$discord_url" ]]; then
+              echo "::warning::Candidate Discord UI URL is empty; skipping logged-in Discord Web video."
+              return 0
+            fi
+
+            local desktop_dir="$root/candidate/discord-web"
+            local profile_args=()
+            if [[ -n "${MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64:-}" ]]; then
+              profile_args+=(--browser-profile-archive-env MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64)
+            fi
+            if [[ -n "${MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR:-}" ]]; then
+              profile_args+=(--browser-profile-dir "$MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR")
+            fi
+            pnpm openclaw qa mantis desktop-browser-smoke \
+              --browser-url "$discord_url" \
+              "${profile_args[@]}" \
+              --video-duration 24 \
+              --output-dir "$desktop_dir" \
+              --provider hetzner \
+              --class standard \
+              --idle-timeout 30m \
+              --ttl 90m
+
+            cp "$desktop_dir/desktop-browser-smoke.png" "$root/candidate/discord-thread-reply-filepath-attachment-discord-web.png"
+            if [[ -f "$desktop_dir/desktop-browser-smoke.mp4" ]]; then
+              cp "$desktop_dir/desktop-browser-smoke.mp4" "$root/candidate/discord-thread-reply-filepath-attachment-discord-web.mp4"
+            fi
+
+            if [[ -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web.mp4" ]]; then
+              if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+                sudo apt-get update && sudo apt-get install -y ffmpeg || true
+              fi
+              crabbox media preview \
+                --input "$root/candidate/discord-thread-reply-filepath-attachment-discord-web.mp4" \
+                --output "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-preview.gif" \
+                --trimmed-video-output "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-change.mp4" \
+                --json > "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-preview.json" || {
+                  rm -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-preview.gif"
+                  rm -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-change.mp4"
+                  rm -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-preview.json"
+                  echo "::warning::Could not generate logged-in Discord Web motion preview; keeping screenshot/full MP4."
+                }
+            fi
+          }
+
+          capture_candidate_discord_web
+
+          baseline_status="$(jq -r '.scenarios[] | select(.id == "discord-thread-reply-filepath-attachment") | .status' "$root/baseline/discord-qa-summary.json")"
+          candidate_status="$(jq -r '.scenarios[] | select(.id == "discord-thread-reply-filepath-attachment") | .status' "$root/candidate/discord-qa-summary.json")"
+          comparison_status="fail"
+          if [[ "$baseline_status" == "fail" && "$candidate_status" == "pass" ]]; then
+            comparison_status="pass"
+          fi
+          echo "comparison_status=${comparison_status}" >> "$GITHUB_OUTPUT"
+
+          jq -n \
+            --arg baselineRef "$BASELINE_LABEL" \
+            --arg candidateRef "$CANDIDATE_SHA" \
+            --arg baselineStatus "$baseline_status" \
+            --arg candidateStatus "$candidate_status" \
+            --argjson pass "$([[ "$comparison_status" == "pass" ]] && echo true || echo false)" \
+            '{
+              scenario: "discord-thread-reply-filepath-attachment",
+              transport: "discord",
+              pass: $pass,
+              baseline: { ref: $baselineRef, status: $baselineStatus, reproduced: ($baselineStatus == "fail"), expected: "thread reply omits filePath attachment" },
+              candidate: { ref: $candidateRef, status: $candidateStatus, fixed: ($candidateStatus == "pass"), expected: "thread reply includes filePath attachment" }
+            }' > "$root/comparison.json"
+
+          {
+            echo "# Mantis Discord Thread Attachment"
+            echo
+            echo "- Scenario: \`discord-thread-reply-filepath-attachment\`"
+            echo "- Baseline: \`${BASELINE_LABEL}\`"
+            echo "- Candidate: \`${CANDIDATE_SHA}\`"
+            echo "- Baseline status: \`${baseline_status}\`"
+            echo "- Candidate status: \`${candidate_status}\`"
+            echo "- Result: \`${comparison_status}\`"
+            echo "- Baseline screenshot: \`baseline/discord-thread-reply-filepath-attachment-attachment.png\`"
+            echo "- Candidate screenshot: \`candidate/discord-thread-reply-filepath-attachment-attachment.png\`"
+            if [[ -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web.png" ]]; then
+              echo "- Candidate logged-in Discord Web screenshot: \`candidate/discord-thread-reply-filepath-attachment-discord-web.png\`"
+            fi
+            if [[ -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-preview.gif" ]]; then
+              echo "- Candidate logged-in Discord Web preview: \`candidate/discord-thread-reply-filepath-attachment-discord-web-preview.gif\`"
+            fi
+            if [[ -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-change.mp4" ]]; then
+              echo "- Candidate logged-in Discord Web change clip: \`candidate/discord-thread-reply-filepath-attachment-discord-web-change.mp4\`"
+            fi
+            if [[ -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web.mp4" ]]; then
+              echo "- Candidate logged-in Discord Web video: \`candidate/discord-thread-reply-filepath-attachment-discord-web.mp4\`"
+            fi
+          } > "$root/mantis-report.md"
+
+          jq -n \
+            --arg baselineRef "$BASELINE_LABEL" \
+            --arg candidateRef "$CANDIDATE_SHA" \
+            --arg baselineStatus "$baseline_status" \
+            --arg candidateStatus "$candidate_status" \
+            --argjson pass "$([[ "$comparison_status" == "pass" ]] && echo true || echo false)" \
+            '{
+              schemaVersion: 1,
+              id: "discord-thread-attachment",
+              title: "Mantis Discord Thread Attachment QA",
+              summary: "Mantis reproduced the Discord thread-reply filePath attachment bug with a synthetic baseline that reverts only the thread attachment fix, then verified the candidate preserves the attachment.",
+              scenario: "discord-thread-reply-filepath-attachment",
+              comparison: {
+                pass: $pass,
+                baseline: { ref: $baselineRef, status: $baselineStatus, expected: "thread reply omits filePath attachment" },
+                candidate: { ref: $candidateRef, status: $candidateStatus, expected: "thread reply includes filePath attachment" }
+              },
+              artifacts: [
+                { kind: "timeline", lane: "baseline", label: "Baseline missing filePath attachment", path: "baseline/discord-thread-reply-filepath-attachment-attachment.png", targetPath: "baseline.png", alt: "Baseline Discord thread reply without filePath attachment", width: 420 },
+                { kind: "timeline", lane: "candidate", label: "Candidate includes filePath attachment", path: "candidate/discord-thread-reply-filepath-attachment-attachment.png", targetPath: "candidate.png", alt: "Candidate Discord thread reply with filePath attachment", width: 420 },
+                { kind: "desktopScreenshot", lane: "candidate", label: "Candidate logged-in Discord Web", path: "candidate/discord-thread-reply-filepath-attachment-discord-web.png", targetPath: "candidate-discord-web.png", alt: "Logged-in Discord Web showing the candidate thread attachment", width: 560, required: false, inline: true },
+                { kind: "motionPreview", lane: "candidate", label: "Candidate logged-in Discord Web motion", path: "candidate/discord-thread-reply-filepath-attachment-discord-web-preview.gif", targetPath: "candidate-discord-web-preview.gif", alt: "Animated logged-in Discord Web proof for the candidate thread attachment", width: 560, required: false, inline: true },
+                { kind: "motionClip", lane: "candidate", label: "Candidate logged-in Discord Web change MP4", path: "candidate/discord-thread-reply-filepath-attachment-discord-web-change.mp4", targetPath: "candidate-discord-web-change.mp4", required: false },
+                { kind: "fullVideo", lane: "candidate", label: "Candidate logged-in Discord Web MP4", path: "candidate/discord-thread-reply-filepath-attachment-discord-web.mp4", targetPath: "candidate-discord-web.mp4", required: false },
+                { kind: "metadata", lane: "candidate", label: "Candidate logged-in Discord Web preview metadata", path: "candidate/discord-thread-reply-filepath-attachment-discord-web-preview.json", targetPath: "candidate-discord-web-preview.json", required: false },
+                { kind: "metadata", lane: "candidate", label: "Candidate Discord UI metadata", path: "candidate/discord-thread-reply-filepath-attachment-ui.json", targetPath: "candidate-discord-ui.json", required: false },
+                { kind: "metadata", lane: "run", label: "Comparison JSON", path: "comparison.json", targetPath: "comparison.json" },
+                { kind: "report", lane: "run", label: "Mantis report", path: "mantis-report.md", targetPath: "mantis-report.md" }
+              ]
+            }' > "$root/mantis-evidence.json"
+
+          cat "$root/mantis-report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Mantis thread attachment artifacts
+        id: upload_artifact
+        if: ${{ always() && steps.run_mantis.outputs.output_dir != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mantis-discord-thread-attachment-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.run_mantis.outputs.output_dir }}
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Create Mantis GitHub App token
+        id: mantis_app_token
+        if: ${{ always() && needs.resolve_request.outputs.pr_number != '' }}
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Comment PR with inline QA evidence
+        if: ${{ always() && needs.resolve_request.outputs.pr_number != '' && steps.run_mantis.outputs.output_dir != '' }}
+        env:
+          GH_TOKEN: ${{ steps.mantis_app_token.outputs.token }}
+          TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
+          ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
+          REQUEST_SOURCE: ${{ needs.resolve_request.outputs.request_source }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          root=".artifacts/qa-e2e/mantis/discord-thread-attachment"
+          if [[ ! -f "$root/mantis-evidence.json" ]]; then
+            echo "No Mantis evidence manifest found; skipping PR evidence comment."
+            exit 0
+          fi
+          artifact_url_args=()
+          if [[ -n "${ARTIFACT_URL:-}" ]]; then
+            artifact_url_args=(--artifact-url "$ARTIFACT_URL")
+          fi
+          node scripts/mantis/publish-pr-evidence.mjs \
+            --manifest "$root/mantis-evidence.json" \
+            --target-pr "$TARGET_PR" \
+            --artifact-root "mantis/discord-thread-attachment/pr-${TARGET_PR}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --marker "<!-- mantis-discord-thread-attachment -->" \
+            "${artifact_url_args[@]}" \
+            --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --request-source "$REQUEST_SOURCE"
+
+      - name: Fail when Mantis comparison failed
+        if: ${{ steps.run_mantis.outputs.comparison_status != 'pass' }}
+        run: |
+          echo "Mantis comparison failed." >&2
+          exit 1

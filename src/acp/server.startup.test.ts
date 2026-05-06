@@ -15,10 +15,15 @@ type ResolveGatewayClientBootstrap = (params: unknown) => Promise<{
   urlSource: string;
   auth: GatewayClientAuth;
 }>;
+type GatewayClientOptions = GatewayClientCallbacks &
+  GatewayClientAuth & {
+    url?: string;
+  };
 
 const mockState = vi.hoisted(() => ({
   gateways: [] as MockGatewayClient[],
   gatewayAuth: [] as GatewayClientAuth[],
+  gatewayOptions: [] as GatewayClientOptions[],
   agentSideConnectionCtor: vi.fn(),
   agentStart: vi.fn(),
   routeLogsToStderr: vi.fn(),
@@ -37,8 +42,9 @@ const mockState = vi.hoisted(() => ({
 class MockGatewayClient {
   private callbacks: GatewayClientCallbacks;
 
-  constructor(opts: GatewayClientCallbacks & GatewayClientAuth) {
+  constructor(opts: GatewayClientOptions) {
     this.callbacks = opts;
+    mockState.gatewayOptions.push(opts);
     mockState.gatewayAuth.push({ token: opts.token, password: opts.password });
     mockState.gateways.push(this);
   }
@@ -196,6 +202,7 @@ describe("serveAcpGateway startup", () => {
   beforeEach(async () => {
     mockState.gateways.length = 0;
     mockState.gatewayAuth.length = 0;
+    mockState.gatewayOptions.length = 0;
     mockState.agentSideConnectionCtor.mockReset();
     mockState.agentStart.mockReset();
     mockState.routeLogsToStderr.mockReset();
@@ -314,6 +321,36 @@ describe("serveAcpGateway startup", () => {
         expect.objectContaining({
           env: process.env,
           gatewayUrl: "wss://override.example/ws",
+        }),
+      );
+
+      await emitHelloAndWaitForAgentSideConnection();
+      await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("passes the configured Gateway URL into the ACP gateway client", async () => {
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "ws://127.0.0.1:19999",
+      urlSource: "cli --url",
+      auth: {
+        token: undefined,
+        password: undefined,
+      },
+    });
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({
+        gatewayUrl: "ws://127.0.0.1:19999",
+      });
+      await Promise.resolve();
+
+      expect(mockState.gatewayOptions[0]).toEqual(
+        expect.objectContaining({
+          url: "ws://127.0.0.1:19999",
         }),
       );
 

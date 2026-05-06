@@ -145,13 +145,13 @@ const googleMeetConfigSchema = {
       advanced: true,
     },
     "voiceCall.dtmfDelayMs": {
-      label: "Legacy DTMF Delay (ms)",
-      help: "Compatibility setting from the old post-connect DTMF flow. Twilio Meet joins now play DTMF before realtime connect.",
+      label: "DTMF Wait Before PIN (ms)",
+      help: "Leading Twilio wait time before playing a PIN-derived Meet DTMF sequence. Increase it if Meet asks for the PIN after DTMF was sent.",
       advanced: true,
     },
     "voiceCall.postDtmfSpeechDelayMs": {
-      label: "Legacy Post-DTMF Speech Delay (ms)",
-      help: "Compatibility setting from the old delayed-speech flow. Twilio Meet joins now carry the intro as the initial Voice Call message.",
+      label: "Post-DTMF Speech Delay (ms)",
+      help: "Delay before requesting the realtime intro greeting after Voice Call starts the Twilio leg.",
       advanced: true,
     },
     "voiceCall.introMessage": { label: "Voice Call Intro Message", advanced: true },

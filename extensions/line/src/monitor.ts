@@ -1,7 +1,6 @@
 import type { webhook } from "@line/bot-sdk";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { hasFinalChannelMessageReplyDispatch } from "openclaw/plugin-sdk/channel-message";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   danger,
@@ -24,6 +23,7 @@ import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
+import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 import { getLineRuntime } from "./runtime.js";
 import {
@@ -223,13 +223,6 @@ export async function monitorLineProvider(
       try {
         const textLimit = 5000;
         let replyTokenUsed = false;
-        const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-          cfg: config,
-          agentId: route.agentId,
-          channel: "line",
-          accountId: route.accountId,
-        });
-
         const core = getLineRuntime();
         const turnResult = await core.channel.turn.run({
           channel: "line",
@@ -252,13 +245,16 @@ export async function monitorLineProvider(
               dispatchReplyWithBufferedBlockDispatcher:
                 core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
               record: ctx.turn.record,
-              dispatcherOptions: {
-                ...replyPipeline,
-              },
-              replyOptions: {
-                onModelSelected,
-              },
+              replyPipeline: {},
               delivery: {
+                durable: (payload, info) =>
+                  resolveLineDurableReplyOptions({
+                    payload,
+                    infoKind: info.kind,
+                    to: ctxPayload.From,
+                    replyToken,
+                    replyTokenUsed,
+                  }),
                 deliver: async (payload) => {
                   const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
 
@@ -317,7 +313,7 @@ export async function monitorLineProvider(
           },
         });
         const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
-        if (!hasFinalInboundReplyDispatch(dispatchResult)) {
+        if (!hasFinalChannelMessageReplyDispatch(dispatchResult)) {
           logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
         }
       } catch (err) {

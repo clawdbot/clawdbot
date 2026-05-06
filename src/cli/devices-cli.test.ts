@@ -582,12 +582,48 @@ describe("devices cli local fallback", () => {
   });
 
   it("falls back to local pairing list when gateway returns a scope upgrade message on loopback", async () => {
-    mockLocalPairingFallback("scope upgrade pending approval (requestId: req-123)");
+    mockLocalPairingFallback("scope upgrade pending approval (requestId: req-1)");
 
     await runDevicesCommand(["list"]);
 
     expect(listDevicePairing).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+  });
+
+  it("refuses local fallback when the gateway request is absent from local pairing state", async () => {
+    rejectGatewayForLocalFallback("scope upgrade pending approval (requestId: req-profile)");
+    listDevicePairing.mockResolvedValueOnce({
+      pending: [{ requestId: "req-default", deviceId: "device-1", publicKey: "pk", ts: 1 }],
+      paired: [],
+    });
+    summarizeDeviceTokens.mockReturnValue(undefined);
+
+    await expect(runDevicesCommand(["list"])).rejects.toThrow(
+      "different OPENCLAW_PROFILE or OPENCLAW_STATE_DIR",
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+  });
+
+  it("refuses local approve fallback when the gateway request is absent locally", async () => {
+    rejectGatewayForLocalFallback("device pairing required (requestId: req-profile)");
+    rejectGatewayForLocalFallback("device pairing required (requestId: req-profile)");
+    approveDevicePairing.mockResolvedValueOnce(undefined);
+
+    await expect(runDevicesApprove(["req-profile"])).rejects.toThrow(
+      "local fallback pairing state does not contain the gateway request",
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+  });
+
+  it("refuses local approve fallback before approving a different local request", async () => {
+    rejectGatewayForLocalFallback("device pairing required (requestId: req-profile)");
+    rejectGatewayForLocalFallback("device pairing required (requestId: req-profile)");
+
+    await expect(runDevicesApprove(["req-default"])).rejects.toThrow(
+      "local fallback pairing state does not contain the gateway request",
+    );
+    expect(approveDevicePairing).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
   });
 
   it("does not use local fallback when an explicit --url is provided", async () => {

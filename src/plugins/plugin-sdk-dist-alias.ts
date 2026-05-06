@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { writeJsonSync } from "../infra/json-files.js";
 
 function writeRuntimeJsonFile(targetPath: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  fs.writeFileSync(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  writeJsonSync(targetPath, value);
 }
 
 function writeRuntimeModuleWrapper(sourcePath: string, targetPath: string): void {

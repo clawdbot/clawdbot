@@ -12,20 +12,26 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 
+internal interface TalkAudioPlaying {
+  suspend fun play(audio: TalkSpeakAudio)
+
+  fun stop()
+}
+
 internal class TalkAudioPlayer(
   private val context: Context,
-) {
+) : TalkAudioPlaying {
   private val lock = Any()
   private var active: ActivePlayback? = null
 
-  suspend fun play(audio: TalkSpeakAudio) {
+  override suspend fun play(audio: TalkSpeakAudio) {
     when (val mode = resolvePlaybackMode(audio)) {
       is TalkPlaybackMode.Pcm -> playPcm(audio.bytes, mode.sampleRate)
       is TalkPlaybackMode.Compressed -> playCompressed(audio.bytes, mode.fileExtension)
     }
   }
 
-  fun stop() {
+  override fun stop() {
     synchronized(lock) {
       active?.cancel()
       active = null

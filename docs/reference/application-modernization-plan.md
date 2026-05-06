@@ -7,8 +7,6 @@ read_when:
   - Turning a broad product quality review into phased engineering work
 ---
 
-# Application modernization plan
-
 ## Goal
 
 Move the application toward a cleaner, faster, more maintainable product without

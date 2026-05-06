@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -18,7 +19,6 @@ import {
   resolveAttemptSpawnWorkspaceDir,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveModelAuthMode,
-  resolveOpenClawAgentDir,
   resolveSandboxContext,
   resolveSessionAgentIds,
   resolveUserPath,
@@ -38,7 +38,9 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
   refreshCodexAppServerAuthTokens,
@@ -46,8 +48,8 @@ import {
   resolveCodexAppServerAuthProfileIdForAgent,
 } from "./auth-bridge.js";
 import {
-  createCodexAppServerClientFactoryTestHooks,
   defaultCodexAppServerClientFactory,
+  type CodexAppServerClientFactory,
 } from "./client-factory.js";
 import {
   isCodexAppServerApprovalRequest,
@@ -97,6 +99,12 @@ import {
   startOrResumeThread,
 } from "./thread-lifecycle.js";
 import {
+  inferCodexDynamicToolMeta,
+  resolveCodexToolProgressDetailMode,
+  sanitizeCodexToolArguments,
+  sanitizeCodexToolResponse,
+} from "./tool-progress-normalization.js";
+import {
   createCodexTrajectoryRecorder,
   normalizeCodexTrajectoryError,
   recordCodexTrajectoryCompletion,
@@ -126,8 +134,16 @@ const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
 >;
+type OpenClawCodingToolsFactory =
+  (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
 
-let clientFactory = defaultCodexAppServerClientFactory;
+const testClientFactoryStorage = new AsyncLocalStorage<CodexAppServerClientFactory | undefined>();
+const clientFactory = defaultCodexAppServerClientFactory;
+let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
+
+function resolveCodexAppServerClientFactory(): CodexAppServerClientFactory {
+  return testClientFactoryStorage.getStore() ?? clientFactory;
+}
 
 function emitCodexAppServerEvent(
   params: EmbeddedRunAttemptParams,
@@ -351,7 +367,7 @@ export async function runCodexAppServerAttempt(
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
-  const attemptClientFactory = clientFactory;
+  const attemptClientFactory = resolveCodexAppServerClientFactory();
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
@@ -385,7 +401,7 @@ export async function runCodexAppServerAttempt(
     config: params.config,
     agentId: params.agentId,
   });
-  const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const startupBinding = await readCodexAppServerBinding(params.sessionFile);
   const startupAuthProfileCandidate =
     params.runtimePlan?.auth.forwardedAuthProfileId ??
@@ -435,7 +451,7 @@ export async function runCodexAppServerAttempt(
       runId: params.runId,
     },
   });
-  const hadSessionFile = await fileExists(params.sessionFile);
+  const hadSessionFile = await pathExists(params.sessionFile);
   let historyMessages = (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? [];
   const hookContext = {
     runId: params.runId,
@@ -468,8 +484,21 @@ export async function runCodexAppServerAttempt(
       (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? historyMessages;
   }
   const baseDeveloperInstructions = buildDeveloperInstructions(params);
+  // Build the workspace bootstrap block before finalizing developer
+  // instructions so persona files (SOUL.md, IDENTITY.md, ...) reach Codex
+  // through the explicit `developerInstructions` field.
+  const workspaceBootstrapInstructions = await buildCodexWorkspaceBootstrapInstructions({
+    params,
+    resolvedWorkspace,
+    effectiveWorkspace,
+    sessionKey: sandboxSessionKey,
+    sessionAgentId,
+  });
   let promptText = params.prompt;
-  let developerInstructions = baseDeveloperInstructions;
+  let developerInstructions = joinPresentSections(
+    baseDeveloperInstructions,
+    workspaceBootstrapInstructions,
+  );
   let prePromptMessageCount = historyMessages.length;
   if (activeContextEngine) {
     try {
@@ -496,6 +525,7 @@ export async function runCodexAppServerAttempt(
       promptText = projection.promptText;
       developerInstructions = joinPresentSections(
         baseDeveloperInstructions,
+        workspaceBootstrapInstructions,
         projection.developerInstructionAddition,
       );
       prePromptMessageCount = projection.prePromptMessageCount;
@@ -524,13 +554,6 @@ export async function runCodexAppServerAttempt(
     developerInstructions,
     messages: historyMessages,
     ctx: hookContext,
-  });
-  const workspaceBootstrapInstructions = await buildCodexWorkspaceBootstrapInstructions({
-    params,
-    resolvedWorkspace,
-    effectiveWorkspace,
-    sessionKey: sandboxSessionKey,
-    sessionAgentId,
   });
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
@@ -567,10 +590,7 @@ export async function runCodexAppServerAttempt(
       : options.nativeHookRelay?.enabled === false
         ? buildCodexNativeHookRelayDisabledConfig()
         : undefined;
-    const threadConfig = mergeCodexConfigInstructions(
-      nativeHookRelayConfig,
-      workspaceBootstrapInstructions,
-    );
+    const threadConfig = nativeHookRelayConfig;
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
       timeoutFloorMs: options.startupTimeoutFloorMs,
@@ -963,6 +983,19 @@ export async function runCodexAppServerAttempt(
         name: call.tool,
         arguments: call.arguments,
       });
+      const toolProgressDetailMode = resolveCodexToolProgressDetailMode(params.toolProgressDetail);
+      const toolMeta = inferCodexDynamicToolMeta(call, toolProgressDetailMode);
+      const toolArgs = sanitizeCodexToolArguments(call.arguments);
+      emitCodexAppServerEvent(params, {
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: call.tool,
+          toolCallId: call.callId,
+          ...(toolMeta ? { meta: toolMeta } : {}),
+          ...(toolArgs ? { args: toolArgs } : {}),
+        },
+      });
       const response = await handleDynamicToolCallWithTimeout({
         call,
         toolBridge,
@@ -985,6 +1018,17 @@ export async function runCodexAppServerAttempt(
         name: call.tool,
         success: response.success,
         contentItems: response.contentItems,
+      });
+      emitCodexAppServerEvent(params, {
+        stream: "tool",
+        data: {
+          phase: "result",
+          name: call.tool,
+          toolCallId: call.callId,
+          ...(toolMeta ? { meta: toolMeta } : {}),
+          isError: !response.success,
+          result: sanitizeCodexToolResponse(response),
+        },
       });
       return response as JsonValue;
     } finally {
@@ -1466,7 +1510,7 @@ type DynamicToolBuildParams = {
   sandboxSessionKey: string;
   sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>;
   runAbortController: AbortController;
-  sessionAgentId: string | undefined;
+  sessionAgentId: string;
   pluginConfig: CodexPluginConfig;
   onYieldDetected: () => void;
 };
@@ -1477,8 +1521,10 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     return [];
   }
   const modelHasVision = params.model.input?.includes("image") ?? false;
-  const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-  const { createOpenClawCodingTools } = await import("openclaw/plugin-sdk/agent-harness");
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, input.sessionAgentId);
+  const createOpenClawCodingTools =
+    openClawCodingToolsFactoryForTests ??
+    (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools;
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
     ...buildEmbeddedAttemptToolRunContext(params),
@@ -1829,20 +1875,6 @@ function renderCodexWorkspaceBootstrapInstructions(
   return lines.join("\n").trim();
 }
 
-function mergeCodexConfigInstructions(
-  config: JsonObject | undefined,
-  instructions: string | undefined,
-): JsonObject | undefined {
-  if (!instructions?.trim()) {
-    return config;
-  }
-  const merged: JsonObject = { ...config };
-  const existingInstructions =
-    typeof merged.instructions === "string" ? merged.instructions.trim() : undefined;
-  merged.instructions = joinPresentSections(existingInstructions, instructions);
-  return merged;
-}
-
 function remapCodexContextFilePath(params: {
   file: EmbeddedContextFile;
   sourceWorkspaceDir: string;
@@ -1916,18 +1948,6 @@ async function mirrorTranscriptBestEffort(params: {
   }
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.stat(filePath);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
-}
-
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
@@ -1963,7 +1983,16 @@ export const __testing = {
   buildDynamicTools,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
-  ...createCodexAppServerClientFactoryTestHooks((factory) => {
-    clientFactory = factory;
-  }),
+  setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {
+    openClawCodingToolsFactoryForTests = factory;
+  },
+  resetOpenClawCodingToolsFactoryForTests(): void {
+    openClawCodingToolsFactoryForTests = undefined;
+  },
+  setCodexAppServerClientFactoryForTests(factory: CodexAppServerClientFactory): void {
+    testClientFactoryStorage.enterWith(factory);
+  },
+  resetCodexAppServerClientFactoryForTests(): void {
+    testClientFactoryStorage.enterWith(undefined);
+  },
 } as const;

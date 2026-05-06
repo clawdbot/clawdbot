@@ -8,8 +8,6 @@ read_when:
 title: "macOS VMs"
 ---
 
-# OpenClaw on macOS VMs (Sandboxing)
-
 ## Recommended default (most users)
 
 - **Small Linux VPS** for an always-on Gateway and low cost. See [VPS hosting](/vps).

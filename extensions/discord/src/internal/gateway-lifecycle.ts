@@ -4,6 +4,24 @@ export class GatewayHeartbeatTimers {
   heartbeatInterval?: GatewayTimer;
   firstHeartbeatTimeout?: GatewayTimer;
 
+  private scheduleHeartbeatCycle(params: {
+    intervalMs: number;
+    isAcked: () => boolean;
+    onAckTimeout: () => void;
+    onHeartbeat: () => void;
+  }): void {
+    this.heartbeatInterval = setTimeout(() => {
+      this.heartbeatInterval = undefined;
+      if (!params.isAcked()) {
+        params.onAckTimeout();
+        return;
+      }
+      params.onHeartbeat();
+      this.scheduleHeartbeatCycle(params);
+    }, params.intervalMs);
+    this.heartbeatInterval.unref?.();
+  }
+
   start(params: {
     intervalMs: number;
     isAcked: () => boolean;
@@ -14,23 +32,19 @@ export class GatewayHeartbeatTimers {
     this.stop();
     const random = params.random ?? Math.random;
     this.firstHeartbeatTimeout = setTimeout(
-      params.onHeartbeat,
+      () => {
+        this.firstHeartbeatTimeout = undefined;
+        params.onHeartbeat();
+        this.scheduleHeartbeatCycle(params);
+      },
       Math.max(0, params.intervalMs * random()),
     );
     this.firstHeartbeatTimeout.unref?.();
-    this.heartbeatInterval = setInterval(() => {
-      if (!params.isAcked()) {
-        params.onAckTimeout();
-        return;
-      }
-      params.onHeartbeat();
-    }, params.intervalMs);
-    this.heartbeatInterval.unref?.();
   }
 
   stop(): void {
     if (this.heartbeatInterval) {
-      clearInterval(this.heartbeatInterval);
+      clearTimeout(this.heartbeatInterval);
       this.heartbeatInterval = undefined;
     }
     if (this.firstHeartbeatTimeout) {

@@ -221,6 +221,32 @@ describe("resolveContextTokens", () => {
 
     expect(result).toBe(1_000_000);
   });
+
+  it("treats agent contextTokens as a cap, not an expansion beyond the model window", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("openai/gpt-5.5", 272_000);
+
+    const result = resolveContextTokens({
+      cfg: {} as OpenClawConfig,
+      agentCfg: { contextTokens: 1_000_000 },
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+
+    expect(result).toBe(272_000);
+  });
+
+  it("allows agent contextTokens to lower a larger model window", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("qwen/qwen3.6-plus", 1_000_000);
+
+    const result = resolveContextTokens({
+      cfg: {} as OpenClawConfig,
+      agentCfg: { contextTokens: 180_000 },
+      provider: "qwen",
+      model: "qwen3.6-plus",
+    });
+
+    expect(result).toBe(180_000);
+  });
 });
 
 const makeEntry = (overrides: Partial<SessionEntry> = {}): SessionEntry => ({

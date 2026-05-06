@@ -3,6 +3,13 @@ import { markMigrationItemSkipped, summarizeMigrationItems } from "../../plugin-
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
 
 export const MIGRATION_SKILL_NOT_SELECTED_REASON = "not selected for migration";
+export const MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON = "__openclaw_migrate_toggle_all_on__";
+export const MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF = "__openclaw_migrate_toggle_all_off__";
+export const MIGRATION_SKILL_SELECTION_SKIP = "__openclaw_migrate_skip_for_now__";
+
+export type InteractiveMigrationSkillSelection =
+  | { action: "skip" }
+  | { action: "select"; selectedItemIds: Set<string> };
 
 function normalizeSelectionRef(value: string): string {
   return value.trim().toLowerCase();
@@ -112,6 +119,10 @@ export function getMigrationSkillSelectionValue(item: MigrationItem): string {
   return item.id;
 }
 
+export function getDefaultMigrationSkillSelectionValues(items: readonly MigrationItem[]): string[] {
+  return items.filter((item) => item.status === "planned").map(getMigrationSkillSelectionValue);
+}
+
 export function formatMigrationSkillSelectionLabel(item: MigrationItem): string {
   return readMigrationSkillName(item) ?? item.id.replace(/^skill:/u, "");
 }
@@ -156,4 +167,88 @@ export function applyMigrationSkillSelection(
   const selectable = getSelectableMigrationSkillItems(plan);
   const selectedIds = resolveSelectedSkillItemIds(selectable, selectedSkillRefs);
   return applyMigrationSelectedSkillItemIds(plan, selectedIds);
+}
+
+export function resolveInteractiveMigrationSkillSelection(
+  items: readonly MigrationItem[],
+  selectedValues: readonly string[],
+): InteractiveMigrationSkillSelection {
+  const selectableIds = new Set(items.map(getMigrationSkillSelectionValue));
+  const selectedItemIds = new Set(selectedValues.filter((value) => selectableIds.has(value)));
+  if (selectedItemIds.size > 0) {
+    return { action: "select", selectedItemIds };
+  }
+
+  const selectedValueSet = new Set(selectedValues);
+  if (selectedValueSet.has(MIGRATION_SKILL_SELECTION_SKIP)) {
+    return { action: "skip" };
+  }
+
+  if (selectedValueSet.has(MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF)) {
+    return { action: "select", selectedItemIds: new Set() };
+  }
+  if (selectedValueSet.has(MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON)) {
+    return { action: "select", selectedItemIds: selectableIds };
+  }
+
+  return {
+    action: "select",
+    selectedItemIds,
+  };
+}
+
+export function reconcileInteractiveMigrationSkillToggleValues(
+  selectedValues: readonly string[],
+  activatedValue: string | undefined,
+  selectableValues: readonly string[],
+): string[] {
+  if (activatedValue === MIGRATION_SKILL_SELECTION_SKIP) {
+    return selectedValues.includes(MIGRATION_SKILL_SELECTION_SKIP)
+      ? [MIGRATION_SKILL_SELECTION_SKIP]
+      : [];
+  }
+  if (activatedValue === MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON) {
+    return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON, ...selectableValues];
+  }
+  if (activatedValue === MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF) {
+    return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF];
+  }
+  if (activatedValue !== undefined && selectableValues.includes(activatedValue)) {
+    return selectedValues.filter(
+      (value) =>
+        value !== MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON &&
+        value !== MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF &&
+        value !== MIGRATION_SKILL_SELECTION_SKIP,
+    );
+  }
+  return selectedValues.filter(
+    (value) =>
+      value !== MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON ||
+      !selectedValues.includes(MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF),
+  );
+}
+
+export function reconcileInteractiveMigrationShortcutValues(
+  previousValues: readonly string[],
+  selectedValues: readonly string[],
+  selectableValues: readonly string[],
+  key: "a" | "i",
+): string[] {
+  const previousSelectable = previousValues.filter((value) => selectableValues.includes(value));
+  if (
+    key === "a" &&
+    !previousValues.includes(MIGRATION_SKILL_SELECTION_SKIP) &&
+    previousSelectable.length === selectableValues.length
+  ) {
+    return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF];
+  }
+
+  const selectedSelectable = selectedValues.filter((value) => selectableValues.includes(value));
+  if (selectedSelectable.length === selectableValues.length) {
+    return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON, ...selectableValues];
+  }
+  if (selectedSelectable.length === 0) {
+    return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF];
+  }
+  return selectedSelectable;
 }

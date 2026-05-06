@@ -11,7 +11,6 @@ function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendRes
   return {
     kind,
     messageId: id,
-    messageIds: [id],
     keys: [{ id }],
     providerAccepted: true,
   };

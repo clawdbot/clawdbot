@@ -3,7 +3,9 @@ import net from "node:net";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeTranscriptionSession,
+  RealtimeTranscriptionSessionCreateRequest,
 } from "openclaw/plugin-sdk/realtime-transcription";
+import { createTalkSessionController, type TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { MediaStreamHandler, sanitizeLogText } from "./media-stream.js";
@@ -160,6 +162,124 @@ describe("MediaStreamHandler TTS queue", () => {
 });
 
 describe("MediaStreamHandler security hardening", () => {
+  it("emits common Talk events for telephony STT/TTS sessions", async () => {
+    let callbacks: RealtimeTranscriptionSessionCreateRequest | undefined;
+    const sentAudio: Buffer[] = [];
+    const session: RealtimeTranscriptionSession = {
+      connect: async () => {},
+      sendAudio: (audio) => {
+        sentAudio.push(Buffer.from(audio));
+      },
+      close: () => {},
+      isConnected: () => true,
+    };
+    const talkEvents: TalkEvent[] = [];
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: {
+        createSession: (request) => {
+          callbacks = request;
+          return session;
+        },
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+      },
+      providerConfig: {},
+      shouldAcceptStream: () => true,
+      onTalkEvent: (_callId, _streamSid, event) => {
+        talkEvents.push(event);
+      },
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-talk",
+          start: { callSid: "CA-talk" },
+        }),
+      );
+      await flush();
+
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          streamSid: "MZ-talk",
+          media: { payload: Buffer.from("hello").toString("base64") },
+        }),
+      );
+      await flush();
+      expect(Buffer.concat(sentAudio).toString()).toBe("hello");
+
+      callbacks?.onSpeechStart?.();
+      callbacks?.onPartial?.("hel");
+      callbacks?.onTranscript?.("hello there");
+
+      await handler.queueTts("MZ-talk", async () => {
+        handler.sendAudio("MZ-talk", Buffer.alloc(160, 0xff));
+      });
+
+      const activePlayback = handler.queueTts("MZ-talk", async (signal) => {
+        await waitForAbort(signal);
+      });
+      await flush();
+      handler.clearTtsQueue("MZ-talk", "barge-in");
+      await activePlayback;
+
+      ws.close();
+      await waitForClose(ws);
+      await vi.waitFor(() => {
+        expect(talkEvents.some((event) => event.type === "session.closed")).toBe(true);
+      });
+
+      expect(talkEvents.map((event) => event.type)).toEqual([
+        "session.started",
+        "session.ready",
+        "turn.started",
+        "input.audio.delta",
+        "transcript.delta",
+        "input.audio.committed",
+        "transcript.done",
+        "output.audio.started",
+        "output.audio.delta",
+        "output.audio.done",
+        "turn.ended",
+        "turn.started",
+        "output.audio.started",
+        "turn.cancelled",
+        "session.closed",
+      ]);
+      expect(talkEvents[0]).toEqual(
+        expect.objectContaining({
+          sessionId: "voice-call:CA-talk:MZ-talk",
+          mode: "stt-tts",
+          transport: "gateway-relay",
+          brain: "agent-consult",
+          provider: "openai",
+          seq: 1,
+        }),
+      );
+      expect(talkEvents.find((event) => event.type === "transcript.done")).toEqual(
+        expect.objectContaining({
+          final: true,
+          turnId: "MZ-talk:turn-1",
+          payload: expect.objectContaining({ text: "hello there", role: "user" }),
+        }),
+      );
+      expect(talkEvents.find((event) => event.type === "turn.cancelled")).toEqual(
+        expect.objectContaining({
+          final: true,
+          turnId: "MZ-talk:turn-2",
+          payload: expect.objectContaining({ reason: "barge-in" }),
+        }),
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
   it("fails sends and closes stream when buffered bytes already exceed the cap", () => {
     const handler = new MediaStreamHandler({
       transcriptionProvider: createStubSttProvider(),
@@ -180,6 +300,7 @@ describe("MediaStreamHandler security hardening", () => {
             streamSid: string;
             ws: WebSocket;
             sttSession: RealtimeTranscriptionSession;
+            talk: ReturnType<typeof createTalkSessionController>;
           }
         >;
       }
@@ -188,6 +309,13 @@ describe("MediaStreamHandler security hardening", () => {
       streamSid: "MZ-backpressure",
       ws,
       sttSession: createStubSession(),
+      talk: createTalkSessionController({
+        sessionId: "voice-call:CA-backpressure:MZ-backpressure",
+        mode: "stt-tts",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "openai",
+      }),
     });
 
     const result = handler.sendAudio("MZ-backpressure", Buffer.alloc(160, 0xff));

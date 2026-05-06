@@ -35,8 +35,10 @@
  */
 
 import * as crypto from "node:crypto";
-import * as fs from "node:fs";
-import type { MediaSource } from "../messaging/media-source.js";
+import type { FileHandle } from "node:fs/promises";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { MediaSource, OpenedLocalFile } from "../messaging/media-source.js";
+import { openLocalFile } from "../messaging/media-source.js";
 import {
   ApiError,
   MediaFileType,
@@ -178,138 +180,137 @@ export class ChunkedMediaApi {
   async uploadChunked(opts: UploadChunkedOptions): Promise<UploadMediaResponse> {
     const prefix = opts.logPrefix ?? "[qqbot:chunked-upload]";
 
-    // 1. Resolve input: size + local path (or temp buffer handle).
-    const input = resolveSource(opts.source, opts.fileName);
-
-    const displayName = input.fileName;
-    const fileSize = input.size;
-    const pathLabel = input.kind === "localPath" ? input.path : "<buffer>";
-
-    this.logger?.info?.(
-      `${prefix} Start: file=${displayName} size=${formatFileSize(fileSize)} type=${opts.fileType}`,
-    );
-
-    // 2. Compute md5 / sha1 / md5_10m. Identical for buffer and localPath,
-    // but the localPath path streams so it never has to materialize the
-    // whole file twice.
-    const hashes = await computeHashes(input);
-    this.logger?.debug?.(
-      `${prefix} hashes: md5=${hashes.md5} sha1=${hashes.sha1} md5_10m=${hashes.md5_10m}`,
-    );
-
-    // 3. Upload-cache fast path: the md5 hash is already a strong content
-    // identifier, so we can short-circuit before even calling upload_prepare.
-    if (this.cache) {
-      const cached = this.cache.get(hashes.md5, opts.scope, opts.targetId, opts.fileType);
-      if (cached) {
-        this.logger?.info?.(
-          `${prefix} cache HIT (md5=${hashes.md5.slice(0, 8)}) — skipping chunked upload`,
-        );
-        return { file_uuid: "", file_info: cached, ttl: 0 };
-      }
-    }
-
-    // 4. upload_prepare.
-    const fileNameForPrepare =
-      opts.fileType === MediaFileType.FILE ? this.sanitize(displayName) : displayName;
-    const prepareResp = await this.callUploadPrepare(
-      opts,
-      fileNameForPrepare,
-      fileSize,
-      hashes,
-      pathLabel,
-    );
-
-    const { upload_id, parts } = prepareResp;
-    const block_size = prepareResp.block_size;
-    const maxConcurrent = Math.min(
-      prepareResp.concurrency ? prepareResp.concurrency : DEFAULT_CONCURRENT_PARTS,
-      MAX_CONCURRENT_PARTS,
-    );
-    const retryTimeoutMs = prepareResp.retry_timeout
-      ? Math.min(prepareResp.retry_timeout * 1000, MAX_PART_FINISH_RETRY_TIMEOUT_MS)
-      : undefined;
-
-    this.logger?.info?.(
-      `${prefix} prepared: upload_id=${upload_id} block=${formatFileSize(block_size)} parts=${parts.length} concurrency=${maxConcurrent}`,
-    );
-
-    // 5. Upload every part. Concurrency is per-upload, not global.
-    let completedParts = 0;
-    let uploadedBytes = 0;
-
-    const uploadPart = async (part: UploadPart): Promise<void> => {
-      const partIndex = part.index; // 1-based.
-      const offset = (partIndex - 1) * block_size;
-      const length = Math.min(block_size, fileSize - offset);
-
-      const partBuffer = await readPart(input, offset, length);
-      const md5Hex = crypto.createHash("md5").update(partBuffer).digest("hex");
-
-      this.logger?.debug?.(
-        `${prefix} part ${partIndex}/${parts.length}: ${formatFileSize(length)} offset=${offset} md5=${md5Hex}`,
-      );
-
-      // 5a. PUT to pre-signed COS URL.
-      await putToPresignedUrl(
-        part.presigned_url,
-        partBuffer,
-        partIndex,
-        parts.length,
-        this.logger,
-        prefix,
-      );
-
-      // 5b. upload_part_finish — fetch a fresh token each time to defend
-      // against long uploads exceeding the token TTL.
-      await this.callUploadPartFinish(opts, upload_id, partIndex, length, md5Hex, retryTimeoutMs);
-
-      completedParts++;
-      uploadedBytes += length;
-      this.logger?.info?.(
-        `${prefix} part ${partIndex}/${parts.length} done (${completedParts}/${parts.length})`,
-      );
-
-      opts.onProgress?.({
-        completedParts,
-        totalParts: parts.length,
-        uploadedBytes,
-        totalBytes: fileSize,
-      });
-    };
+    // 1. Resolve input: size + verified local file descriptor (or buffer).
+    const input = await resolveSource(opts.source, opts.fileName);
 
     try {
+      const displayName = input.fileName;
+      const fileSize = input.size;
+      const pathLabel = input.kind === "localPath" ? input.path : "<buffer>";
+
+      this.logger?.info?.(
+        `${prefix} Start: file=${displayName} size=${formatFileSize(fileSize)} type=${opts.fileType}`,
+      );
+
+      // 2. Compute md5 / sha1 / md5_10m. Identical for buffer and localPath,
+      // but the localPath descriptor streams so it never has to materialize the
+      // whole file twice or reopen a path after validation.
+      const hashes = await computeHashes(input);
+      this.logger?.debug?.(
+        `${prefix} hashes: md5=${hashes.md5} sha1=${hashes.sha1} md5_10m=${hashes.md5_10m}`,
+      );
+
+      // 3. Upload-cache fast path: the md5 hash is already a strong content
+      // identifier, so we can short-circuit before even calling upload_prepare.
+      if (this.cache) {
+        const cached = this.cache.get(hashes.md5, opts.scope, opts.targetId, opts.fileType);
+        if (cached) {
+          this.logger?.info?.(
+            `${prefix} cache HIT (md5=${hashes.md5.slice(0, 8)}) — skipping chunked upload`,
+          );
+          return { file_uuid: "", file_info: cached, ttl: 0 };
+        }
+      }
+
+      // 4. upload_prepare.
+      const fileNameForPrepare =
+        opts.fileType === MediaFileType.FILE ? this.sanitize(displayName) : displayName;
+      const prepareResp = await this.callUploadPrepare(
+        opts,
+        fileNameForPrepare,
+        fileSize,
+        hashes,
+        pathLabel,
+      );
+
+      const { upload_id, parts } = prepareResp;
+      const block_size = prepareResp.block_size;
+      const maxConcurrent = Math.min(
+        prepareResp.concurrency ? prepareResp.concurrency : DEFAULT_CONCURRENT_PARTS,
+        MAX_CONCURRENT_PARTS,
+      );
+      const retryTimeoutMs = prepareResp.retry_timeout
+        ? Math.min(prepareResp.retry_timeout * 1000, MAX_PART_FINISH_RETRY_TIMEOUT_MS)
+        : undefined;
+
+      this.logger?.info?.(
+        `${prefix} prepared: upload_id=${upload_id} block=${formatFileSize(block_size)} parts=${parts.length} concurrency=${maxConcurrent}`,
+      );
+
+      // 5. Upload every part. Concurrency is per-upload, not global.
+      let completedParts = 0;
+      let uploadedBytes = 0;
+
+      const uploadPart = async (part: UploadPart): Promise<void> => {
+        const partIndex = part.index; // 1-based.
+        const offset = (partIndex - 1) * block_size;
+        const length = Math.min(block_size, fileSize - offset);
+
+        const partBuffer = await readPart(input, offset, length);
+        const md5Hex = crypto.createHash("md5").update(partBuffer).digest("hex");
+
+        this.logger?.debug?.(
+          `${prefix} part ${partIndex}/${parts.length}: ${formatFileSize(length)} offset=${offset} md5=${md5Hex}`,
+        );
+
+        // 5a. PUT to pre-signed COS URL.
+        await putToPresignedUrl(
+          part.presigned_url,
+          partBuffer,
+          partIndex,
+          parts.length,
+          this.logger,
+          prefix,
+        );
+
+        // 5b. upload_part_finish — fetch a fresh token each time to defend
+        // against long uploads exceeding the token TTL.
+        await this.callUploadPartFinish(opts, upload_id, partIndex, length, md5Hex, retryTimeoutMs);
+
+        completedParts++;
+        uploadedBytes += length;
+        this.logger?.info?.(
+          `${prefix} part ${partIndex}/${parts.length} done (${completedParts}/${parts.length})`,
+        );
+
+        opts.onProgress?.({
+          completedParts,
+          totalParts: parts.length,
+          uploadedBytes,
+          totalBytes: fileSize,
+        });
+      };
+
       await runWithConcurrency(
         parts.map((part) => () => uploadPart(part)),
         maxConcurrent,
       );
+
+      this.logger?.info?.(`${prefix} all parts uploaded, completing...`);
+
+      // 6. complete_upload.
+      const result = await this.callCompleteUpload(opts, upload_id);
+      this.logger?.info?.(`${prefix} completed: file_uuid=${result.file_uuid} ttl=${result.ttl}s`);
+
+      // 7. Populate the shared upload cache so subsequent sends skip re-uploading.
+      if (this.cache && result.file_info && result.ttl > 0) {
+        this.cache.set(
+          hashes.md5,
+          opts.scope,
+          opts.targetId,
+          opts.fileType,
+          result.file_info,
+          result.file_uuid,
+          result.ttl,
+        );
+      }
+
+      return result;
     } finally {
-      // If the input opened a buffered read stream we don't keep state,
-      // but localPath readers open / close the file per-part so there
-      // is nothing to unwind here. Kept as a seam for future streaming
-      // optimizations.
+      if (input.kind === "localPath" && input.closeWhenDone) {
+        await input.opened.close().catch(() => undefined);
+      }
     }
-
-    this.logger?.info?.(`${prefix} all parts uploaded, completing...`);
-
-    // 6. complete_upload.
-    const result = await this.callCompleteUpload(opts, upload_id);
-    this.logger?.info?.(`${prefix} completed: file_uuid=${result.file_uuid} ttl=${result.ttl}s`);
-
-    // 7. Populate the shared upload cache so subsequent sends skip re-uploading.
-    if (this.cache && result.file_info && result.ttl > 0) {
-      this.cache.set(
-        hashes.md5,
-        opts.scope,
-        opts.targetId,
-        opts.fileType,
-        result.file_info,
-        result.file_uuid,
-        result.ttl,
-      );
-    }
-
-    return result;
   }
 
   // -------- Internal call wrappers --------
@@ -429,17 +430,31 @@ export function isChunkedUploadImplemented(): boolean {
  * the bytes plus the metadata required by `upload_prepare`.
  */
 type ChunkedInput =
-  | { kind: "localPath"; path: string; size: number; fileName: string }
+  | {
+      kind: "localPath";
+      path: string;
+      size: number;
+      fileName: string;
+      opened: OpenedLocalFile;
+      closeWhenDone: boolean;
+    }
   | { kind: "buffer"; buffer: Buffer; size: number; fileName: string };
 
-function resolveSource(source: MediaSource, fileNameOverride?: string): ChunkedInput {
+async function resolveSource(
+  source: MediaSource,
+  fileNameOverride?: string,
+): Promise<ChunkedInput> {
   if (source.kind === "localPath") {
     const inferredName = source.path.split(/[/\\]/).pop() || "file";
+    const opened =
+      source.opened ?? (await openLocalFile(source.path, { maxSize: Number.MAX_SAFE_INTEGER }));
     return {
       kind: "localPath",
       path: source.path,
-      size: source.size,
+      size: opened.size,
       fileName: fileNameOverride ?? inferredName,
+      opened,
+      closeWhenDone: source.opened === undefined,
     };
   }
   if (source.kind === "buffer") {
@@ -460,14 +475,9 @@ async function readPart(input: ChunkedInput, offset: number, length: number): Pr
   if (input.kind === "buffer") {
     return input.buffer.subarray(offset, offset + length);
   }
-  const handle = await fs.promises.open(input.path, "r");
-  try {
-    const buf = Buffer.alloc(length);
-    const { bytesRead } = await handle.read(buf, 0, length, offset);
-    return bytesRead < length ? buf.subarray(0, bytesRead) : buf;
-  } finally {
-    await handle.close();
-  }
+  const buf = Buffer.alloc(length);
+  const { bytesRead } = await input.opened.handle.read(buf, 0, length, offset);
+  return bytesRead < length ? buf.subarray(0, bytesRead) : buf;
 }
 
 // ============ Hash computation ============
@@ -476,8 +486,8 @@ async function readPart(input: ChunkedInput, offset: number, length: number): Pr
  * Stream the source once to compute md5 + sha1 + md5_10m.
  *
  * For buffer inputs the three hashes are computed in a single pass over
- * the existing memory. For localPath inputs a ReadStream drives the
- * hashers so memory use stays constant.
+ * the existing memory. For localPath inputs the verified descriptor drives
+ * the hashers so memory use stays constant.
  */
 async function computeHashes(input: ChunkedInput): Promise<UploadPrepareHashes> {
   if (input.kind === "buffer") {
@@ -497,7 +507,7 @@ async function computeHashes(input: ChunkedInput): Promise<UploadPrepareHashes> 
     let consumed = 0;
     const needsMd5_10m = input.size > MD5_10M_SIZE;
 
-    const stream = fs.createReadStream(input.path);
+    const stream = createReadStreamFromHandle(input.opened.handle);
     stream.on("data", (chunk: Buffer | string) => {
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       md5.update(buf);
@@ -521,6 +531,10 @@ async function computeHashes(input: ChunkedInput): Promise<UploadPrepareHashes> 
     });
     stream.on("error", reject);
   });
+}
+
+function createReadStreamFromHandle(handle: FileHandle): NodeJS.ReadableStream {
+  return handle.createReadStream({ autoClose: false, start: 0 });
 }
 
 // ============ COS PUT ============
@@ -551,30 +565,38 @@ async function putToPresignedUrl(
       ) as ArrayBuffer;
 
       const startTime = Date.now();
-      const response = await fetch(presignedUrl, {
-        method: "PUT",
-        body: new Blob([ab]),
-        headers: { "Content-Length": String(data.length) },
+      const { response, release } = await fetchWithSsrFGuard({
+        url: presignedUrl,
+        auditContext: "qqbot-media-part-upload",
+        init: {
+          method: "PUT",
+          body: new Blob([ab]),
+          headers: { "Content-Length": String(data.length) },
+        },
         signal: controller.signal,
       });
-      const elapsed = Date.now() - startTime;
-      const requestId = response.headers.get("x-cos-request-id") ?? "-";
-      const etag = response.headers.get("ETag") ?? "-";
+      try {
+        const elapsed = Date.now() - startTime;
+        const requestId = response.headers.get("x-cos-request-id") ?? "-";
+        const etag = response.headers.get("ETag") ?? "-";
 
-      if (!response.ok) {
-        const body = await response.text().catch(() => "");
-        logger?.error?.(
-          `${prefix} PUT part ${partIndex}/${totalParts}: HTTP ${response.status} ${response.statusText} (${elapsed}ms, requestId=${requestId}) body=${body.slice(0, 160)}`,
+        if (!response.ok) {
+          const body = await response.text().catch(() => "");
+          logger?.error?.(
+            `${prefix} PUT part ${partIndex}/${totalParts}: HTTP ${response.status} ${response.statusText} (${elapsed}ms, requestId=${requestId}) body=${body.slice(0, 160)}`,
+          );
+          throw new Error(
+            `COS PUT failed: ${response.status} ${response.statusText} - ${body.slice(0, 120)}`,
+          );
+        }
+
+        logger?.debug?.(
+          `${prefix} PUT part ${partIndex}/${totalParts} OK (${elapsed}ms ETag=${etag} requestId=${requestId})`,
         );
-        throw new Error(
-          `COS PUT failed: ${response.status} ${response.statusText} - ${body.slice(0, 120)}`,
-        );
+        return;
+      } finally {
+        await release();
       }
-
-      logger?.debug?.(
-        `${prefix} PUT part ${partIndex}/${totalParts} OK (${elapsed}ms ETag=${etag} requestId=${requestId})`,
-      );
-      return;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
       if (lastError.name === "AbortError") {

@@ -117,7 +117,7 @@ function createSession(
 ): RealtimeTalkJsonPcmWebSocketSessionResult {
   return {
     provider: "google",
-    transport: "json-pcm-websocket",
+    transport: "provider-websocket",
     protocol: "google-live-bidi",
     clientSecret,
     websocketUrl,
@@ -187,7 +187,8 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
 
   it("requests ArrayBuffer frames and decodes binary setup messages", async () => {
     const onStatus = vi.fn();
-    const transport = createTransport({ onStatus });
+    const onTalkEvent = vi.fn();
+    const transport = createTransport({ onStatus, onTalkEvent });
 
     await transport.start();
     const ws = latestWebSocket();
@@ -195,6 +196,13 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
 
     expect(ws.binaryType).toBe("arraybuffer");
     await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith("listening"));
+    expect(onTalkEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session.ready",
+        sessionId: "main:google:provider-websocket",
+        transport: "provider-websocket",
+      }),
+    );
   });
 
   it("decodes Blob setup messages", async () => {
@@ -208,7 +216,8 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
   });
 
   it("stops queued output when Google Live sends interruption", async () => {
-    const transport = createTransport();
+    const onTalkEvent = vi.fn();
+    const transport = createTransport({ onTalkEvent });
     await transport.start();
     const ws = latestWebSocket();
 
@@ -227,6 +236,60 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     ws.emitMessage(encodeJsonFrame({ serverContent: { interrupted: true } }));
 
     await vi.waitFor(() => expect(source?.stop).toHaveBeenCalledTimes(1));
+    expect(onTalkEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "turn.cancelled",
+        final: true,
+        payload: { reason: "provider-interrupted" },
+      }),
+    );
+  });
+
+  it("emits common Talk events for Google Live transcript and audio frames", async () => {
+    const onTranscript = vi.fn();
+    const onTalkEvent = vi.fn();
+    const transport = createTransport({ onTalkEvent, onTranscript });
+
+    await transport.start();
+    latestWebSocket().emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          inputTranscription: { text: "hello", finished: true },
+          outputTranscription: { text: "hi", finished: false },
+          modelTurn: {
+            parts: [
+              { inlineData: { data: "AAAAAA==", mimeType: "audio/pcm;rate=24000" } },
+              { text: "there" },
+            ],
+          },
+          turnComplete: true,
+        },
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
+        "transcript.done",
+        "output.text.delta",
+        "output.audio.delta",
+        "output.text.done",
+        "turn.ended",
+      ]),
+    );
+    expect(onTalkEvent.mock.calls.map(([event]) => event.turnId)).toEqual([
+      "turn-1",
+      "turn-1",
+      "turn-1",
+      "turn-1",
+      "turn-1",
+    ]);
+    expect(onTranscript).toHaveBeenCalledWith({ role: "user", text: "hello", final: true });
+    expect(onTranscript).toHaveBeenCalledWith({ role: "assistant", text: "hi", final: false });
+    expect(onTalkEvent.mock.calls[2]?.[0]).toMatchObject({
+      payload: { byteLength: 4, mimeType: "audio/pcm;rate=24000" },
+      sessionId: "main:google:provider-websocket",
+      transport: "provider-websocket",
+    });
   });
 
   it("ignores late WebSocket events after stop", async () => {
@@ -253,8 +316,18 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         listeners.add(listener);
         return () => listeners.delete(listener);
       }),
-      request: vi.fn(async (_method: string, params: { idempotencyKey?: string }) => {
-        runId = params.idempotencyKey ?? runId;
+      request: vi.fn(async (method: string, params: Record<string, unknown>) => {
+        if (method === "chat.abort") {
+          expect(params).toEqual({ sessionKey: "main", runId });
+          return { ok: true, aborted: true };
+        }
+        expect(method).toBe("talk.client.toolCall");
+        expect(params).toEqual(
+          expect.objectContaining({
+            callId: "call-1",
+            name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+          }),
+        );
         return { runId };
       }),
     } as unknown as RealtimeTalkTransportContext["client"];
@@ -283,6 +356,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     }
 
     await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(client.request).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId });
     expect(onStatus).not.toHaveBeenCalledWith("listening");
   });
 });

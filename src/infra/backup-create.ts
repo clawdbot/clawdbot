@@ -13,6 +13,7 @@ import {
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { writeJson } from "./json-files.js";
 
 type TarRuntime = typeof import("tar");
 
@@ -366,7 +367,7 @@ export async function createBackupArchive(
       oauthDir: plan.oauthDir,
       workspaceDirs: plan.workspaceDirs,
     });
-    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    await writeJson(manifestPath, manifest, { trailingNewline: true });
 
     const tar = await loadTarRuntime();
     const stateAsset = result.assets.find((asset) => asset.kind === "state");

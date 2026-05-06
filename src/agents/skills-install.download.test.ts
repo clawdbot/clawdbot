@@ -22,60 +22,6 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
 }));
 
-// Download tests cover installer path handling; fs-safe has dedicated pinned-helper coverage.
-vi.mock("../infra/fs-pinned-write-helper.js", async () => {
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
-  const { pipeline } = await import("node:stream/promises");
-
-  type PinnedWriteParams = {
-    rootPath: string;
-    relativeParentPath: string;
-    basename: string;
-    mkdir: boolean;
-    mode: number;
-    input:
-      | { kind: "buffer"; data: string | Buffer; encoding?: BufferEncoding }
-      | { kind: "stream"; stream: NodeJS.ReadableStream };
-  };
-
-  async function resolveParentPath(params: PinnedWriteParams): Promise<string> {
-    const parentPath = params.relativeParentPath
-      ? path.join(params.rootPath, ...params.relativeParentPath.split("/"))
-      : params.rootPath;
-    if (params.mkdir) {
-      await fs.mkdir(parentPath, { recursive: true });
-    }
-    return parentPath;
-  }
-
-  async function writePinnedTarget(params: PinnedWriteParams, targetPath: string) {
-    if (params.input.kind === "buffer") {
-      await fs.writeFile(targetPath, params.input.data, {
-        encoding: params.input.encoding,
-        mode: params.mode,
-      });
-      return;
-    }
-    const handle = await fs.open(targetPath, "w", params.mode);
-    try {
-      await pipeline(params.input.stream, handle.createWriteStream());
-    } finally {
-      await handle.close().catch(() => undefined);
-    }
-  }
-
-  return {
-    runPinnedWriteHelper: async (params: PinnedWriteParams) => {
-      const parentPath = await resolveParentPath(params);
-      const targetPath = path.join(parentPath, params.basename);
-      await writePinnedTarget(params, targetPath);
-      const stat = await fs.stat(targetPath);
-      return { dev: stat.dev, ino: stat.ino };
-    },
-  };
-});
-
 vi.mock("./skills.js", () => ({
   hasBinary: (bin: string) => hasBinaryMock(bin),
 }));
@@ -262,7 +208,7 @@ describe("installDownloadSpec extraction safety", () => {
     "fails closed when the lexical tools root is rebound before the final copy",
     async () => {
       const entry = buildEntry("base-rebind");
-      const safeRoot = resolveSkillToolsRootDir(entry);
+      const safeToolsRoot = resolveSkillToolsRootDir(entry);
       const outsideRoot = path.join(workspaceDir, "outside-root");
       await fs.mkdir(outsideRoot, { recursive: true });
 
@@ -274,9 +220,9 @@ describe("installDownloadSpec extraction safety", () => {
           body: Readable.from(
             (async function* () {
               yield Buffer.from("payload");
-              const reboundRoot = `${safeRoot}-rebound`;
-              await fs.rename(safeRoot, reboundRoot);
-              await fs.symlink(outsideRoot, safeRoot);
+              const reboundRoot = `${safeToolsRoot}-rebound`;
+              await fs.rename(safeToolsRoot, reboundRoot);
+              await fs.symlink(outsideRoot, safeToolsRoot);
             })(),
           ),
         },

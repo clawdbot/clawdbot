@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
   readManagedNpmRootInstalledDependency,
   resolveManagedNpmRootDependencySpec,
@@ -10,6 +11,15 @@ import {
 } from "./npm-managed-root.js";
 
 const tempDirs: string[] = [];
+
+const successfulSpawn = {
+  code: 0,
+  stdout: "",
+  stderr: "",
+  signal: null,
+  killed: false,
+  termination: "exit" as const,
+};
 
 async function makeTempRoot(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-managed-root-"));
@@ -59,6 +69,22 @@ describe("managed npm root", () => {
         fixture: "1.0.0",
       },
     });
+  });
+
+  it("does not overwrite a present malformed package manifest", async () => {
+    const npmRoot = await makeTempRoot();
+    const manifestPath = path.join(npmRoot, "package.json");
+    await fs.writeFile(manifestPath, "{not-json", "utf8");
+
+    await expect(
+      upsertManagedNpmRootDependency({
+        npmRoot,
+        packageName: "@openclaw/feishu",
+        dependencySpec: "2026.5.2",
+      }),
+    ).rejects.toThrow();
+
+    await expect(fs.readFile(manifestPath, "utf8")).resolves.toBe("{not-json");
   });
 
   it("pins managed dependencies to the resolved version", () => {
@@ -165,6 +191,134 @@ describe("managed npm root", () => {
       devDependencies: {
         fixture: "1.0.0",
       },
+    });
+  });
+
+  it("repairs stale managed openclaw peer state without dropping plugin packages", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.mkdir(path.join(npmRoot, "node_modules", "openclaw"), { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            openclaw: "2026.5.4",
+            "@openclaw/discord": "2026.5.4",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(
+      path.join(npmRoot, "package-lock.json"),
+      `${JSON.stringify(
+        {
+          lockfileVersion: 3,
+          packages: {
+            "": {
+              dependencies: {
+                openclaw: "2026.5.4",
+                "@openclaw/discord": "2026.5.4",
+              },
+            },
+            "node_modules/openclaw": {
+              version: "2026.5.4",
+            },
+            "node_modules/@openclaw/discord": {
+              version: "2026.5.4",
+            },
+          },
+          dependencies: {
+            openclaw: {
+              version: "2026.5.4",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(
+      path.join(npmRoot, "node_modules", "openclaw", "package.json"),
+      `${JSON.stringify({ name: "openclaw", version: "2026.5.4" })}\n`,
+    );
+    await fs.mkdir(path.join(npmRoot, "node_modules", ".bin"), { recursive: true });
+    await fs.writeFile(path.join(npmRoot, "node_modules", ".bin", "openclaw"), "shim");
+    await fs.writeFile(path.join(npmRoot, "node_modules", ".bin", "openclaw.cmd"), "cmd shim");
+    await fs.writeFile(path.join(npmRoot, "node_modules", ".bin", "openclaw.ps1"), "ps1 shim");
+    await fs.writeFile(
+      path.join(npmRoot, "node_modules", ".package-lock.json"),
+      `${JSON.stringify(
+        {
+          lockfileVersion: 3,
+          packages: {
+            "node_modules/openclaw": {
+              version: "2026.5.4",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
+    await expect(repairManagedNpmRootOpenClawPeer({ npmRoot, runCommand })).resolves.toBe(true);
+    expect(runCommand).toHaveBeenCalledWith(
+      [
+        "npm",
+        "uninstall",
+        "--loglevel=error",
+        "--legacy-peer-deps",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--prefix",
+        ".",
+        "openclaw",
+      ],
+      expect.objectContaining({
+        cwd: npmRoot,
+        env: expect.objectContaining({
+          npm_config_legacy_peer_deps: "true",
+        }),
+      }),
+    );
+
+    const manifest = JSON.parse(await fs.readFile(path.join(npmRoot, "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
+    };
+    expect(manifest.dependencies).toEqual({
+      "@openclaw/discord": "2026.5.4",
+    });
+    const lockfile = JSON.parse(
+      await fs.readFile(path.join(npmRoot, "package-lock.json"), "utf8"),
+    ) as {
+      packages?: Record<string, { dependencies?: Record<string, string>; version?: string }>;
+      dependencies?: Record<string, unknown>;
+    };
+    expect(lockfile.packages?.[""]?.dependencies).toEqual({
+      "@openclaw/discord": "2026.5.4",
+    });
+    expect(lockfile.packages?.["node_modules/openclaw"]).toBeUndefined();
+    expect(lockfile.packages?.["node_modules/@openclaw/discord"]?.version).toBe("2026.5.4");
+    expect(lockfile.dependencies?.openclaw).toBeUndefined();
+    await expect(fs.lstat(path.join(npmRoot, "node_modules", "openclaw"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    for (const binName of ["openclaw", "openclaw.cmd", "openclaw.ps1"]) {
+      await expect(
+        fs.lstat(path.join(npmRoot, "node_modules", ".bin", binName)),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
+    await expect(
+      fs.lstat(path.join(npmRoot, "node_modules", ".package-lock.json")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
     });
   });
 });

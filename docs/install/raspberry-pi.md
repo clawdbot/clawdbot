@@ -7,7 +7,21 @@ read_when:
 title: "Raspberry Pi"
 ---
 
-Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is just the gateway (models run in the cloud via API), even a modest Pi handles the workload well.
+Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is just the gateway (models run in the cloud via API), even a modest Pi handles the workload well — typical hardware cost is **$35–80 one-time**, no monthly fees.
+
+## Hardware compatibility
+
+| Pi model    | RAM    | Works? | Notes                               |
+| ----------- | ------ | ------ | ----------------------------------- |
+| Pi 5        | 4/8 GB | Best   | Fastest, recommended.               |
+| Pi 4        | 4 GB   | Good   | Sweet spot for most users.          |
+| Pi 4        | 2 GB   | OK     | Add swap.                           |
+| Pi 4        | 1 GB   | Tight  | Possible with swap, minimal config. |
+| Pi 3B+      | 1 GB   | Slow   | Works but sluggish.                 |
+| Pi Zero 2 W | 512 MB | No     | Not recommended.                    |
+
+**Minimum:** 1 GB RAM, 1 core, 500 MB free disk, 64-bit OS.
+**Recommended:** 2 GB+ RAM, 16 GB+ SD card (or USB SSD), Ethernet.
 
 ## Prerequisites
 
@@ -137,6 +151,61 @@ source ~/.bashrc
 echo 'gpu_mem=16' | sudo tee -a /boot/config.txt
 sudo systemctl disable bluetooth
 ```
+
+**systemd drop-in for stable restarts** -- If this Pi is mostly running OpenClaw, add a service drop-in:
+
+```bash
+systemctl --user edit openclaw-gateway.service
+```
+
+```ini
+[Service]
+Environment=OPENCLAW_NO_RESPAWN=1
+Environment=NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
+Restart=always
+RestartSec=2
+TimeoutStartSec=90
+```
+
+Then `systemctl --user daemon-reload && systemctl --user restart openclaw-gateway.service`. On a headless Pi, also enable lingering once so the user service survives logout: `sudo loginctl enable-linger "$(whoami)"`.
+
+## Recommended model setup
+
+Since the Pi only runs the gateway, use cloud-hosted API models:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "anthropic/claude-sonnet-4-6",
+        "fallbacks": ["openai/gpt-5.4-mini"]
+      }
+    }
+  }
+}
+```
+
+Do not run local LLMs on a Pi — even small models are too slow to be useful. Let Claude or GPT do the model work.
+
+## ARM binary notes
+
+Most OpenClaw features work on ARM64 without changes (Node.js, Telegram, WhatsApp/Baileys, Chromium). The binaries that occasionally lack ARM builds are typically optional Go/Rust CLI tools shipped by skills. Verify a missing binary's release page for `linux-arm64` / `aarch64` artifacts before falling back to building from source.
+
+## Persistence and backups
+
+OpenClaw state lives under:
+
+- `~/.openclaw/` — `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, sessions.
+- `~/.openclaw/workspace/` — agent workspace (SOUL.md, memory, artifacts).
+
+These survive reboots. Take a portable snapshot with:
+
+```bash
+openclaw backup create
+```
+
+If you keep these on an SSD, both performance and longevity improve over the SD card.
 
 ## Troubleshooting
 

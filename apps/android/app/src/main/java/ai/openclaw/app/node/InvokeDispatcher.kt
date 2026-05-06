@@ -13,6 +13,7 @@ import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawNotificationsCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
+import ai.openclaw.app.protocol.OpenClawTalkCommand
 
 internal enum class SmsSearchAvailabilityReason {
   Available,
@@ -59,6 +60,7 @@ class InvokeDispatcher(
   private val deviceHandler: DeviceHandler,
   private val notificationsHandler: NotificationsHandler,
   private val systemHandler: SystemHandler,
+  private val talkHandler: TalkHandler,
   private val photosHandler: PhotosHandler,
   private val contactsHandler: ContactsHandler,
   private val calendarHandler: CalendarHandler,
@@ -187,6 +189,12 @@ class InvokeDispatcher(
 
       // System command
       OpenClawSystemCommand.Notify.rawValue -> systemHandler.handleSystemNotify(paramsJson)
+
+      // Talk commands
+      OpenClawTalkCommand.PttStart.rawValue -> talkHandler.handlePttStart(paramsJson)
+      OpenClawTalkCommand.PttStop.rawValue -> talkHandler.handlePttStop(paramsJson)
+      OpenClawTalkCommand.PttCancel.rawValue -> talkHandler.handlePttCancel(paramsJson)
+      OpenClawTalkCommand.PttOnce.rawValue -> talkHandler.handlePttOnce(paramsJson)
 
       // Photos command
       ai.openclaw.app.protocol.OpenClawPhotosCommand.Latest.rawValue ->
@@ -335,4 +343,14 @@ class InvokeDispatcher(
           )
         }
     }
+}
+
+interface TalkHandler {
+  suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult
+
+  suspend fun handlePttStop(paramsJson: String?): GatewaySession.InvokeResult
+
+  suspend fun handlePttCancel(paramsJson: String?): GatewaySession.InvokeResult
+
+  suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult
 }

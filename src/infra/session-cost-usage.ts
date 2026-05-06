@@ -28,6 +28,7 @@ import {
   resolveModelCostConfigFingerprint,
 } from "../utils/usage-format.js";
 import { formatErrorMessage } from "./errors.js";
+import { replaceFileAtomic } from "./replace-file.js";
 import type {
   CostBreakdown,
   CostUsageTotals,
@@ -337,10 +338,11 @@ async function readUsageCostCache(cachePath: string): Promise<UsageCostCacheFile
 }
 
 async function writeUsageCostCache(cachePath: string, cache: UsageCostCacheFile): Promise<void> {
-  const tmpPath = `${cachePath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
-  await fs.promises.writeFile(tmpPath, `${JSON.stringify(cache)}\n`, "utf-8");
-  await fs.promises.rename(tmpPath, cachePath);
+  await replaceFileAtomic({
+    filePath: cachePath,
+    content: `${JSON.stringify(cache)}\n`,
+    tempPrefix: ".usage-cost-cache",
+  });
 }
 
 async function listUsageCountedTranscriptFiles(

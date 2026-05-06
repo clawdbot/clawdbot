@@ -1186,7 +1186,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
-  it("persists accepted update offsets before completion", async () => {
+  it("persists update offsets after successful dispatch completion", async () => {
     // For this test we need sequentialize(...) to behave like a normal middleware and call next().
     sequentializeSpy.mockImplementationOnce(
       () => async (_ctx: unknown, next: () => Promise<void>) => {
@@ -1243,18 +1243,20 @@ describe("createTelegramBot", () => {
 
     // Start processing update 101 but keep it pending (simulates a long-running turn).
     const p101 = runMiddlewareChain({ update: { update_id: 101 } }, async () => update101Gate);
-    // Let update 101 enter the chain and persist acceptance before 102 completes.
+    // Let update 101 enter the chain. Telegram now persists the restart watermark only after
+    // the handler completes, so a crash during the pending turn can replay the update.
     await Promise.resolve();
-    expect(onUpdateId).toHaveBeenCalledWith(101);
+    expect(onUpdateId).not.toHaveBeenCalled();
 
-    // Complete update 102 while 101 is still pending. Restart replay protection is at-most-once.
+    // Complete update 102 while 101 is still pending. The persisted watermark must not advance
+    // past pending lower ids.
     await runMiddlewareChain({ update: { update_id: 102 } }, async () => {});
-    expect(onUpdateId).toHaveBeenCalledWith(102);
+    expect(onUpdateId).not.toHaveBeenCalled();
 
     releaseUpdate101?.();
     await p101;
 
-    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([101, 102]);
+    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([102]);
   });
   it("logs and swallows update watermark persistence failures", async () => {
     sequentializeSpy.mockImplementationOnce(
@@ -1326,7 +1328,7 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("persists failed updates once accepted while preserving same-process retries", async () => {
+  it("keeps failed updates unpersisted while preserving same-process retries", async () => {
     sequentializeSpy.mockImplementationOnce(
       () => async (_ctx: unknown, next: () => Promise<void>) => {
         await next();
@@ -1378,12 +1380,12 @@ describe("createTelegramBot", () => {
       }),
     ).rejects.toThrow("middleware boom");
     await flushTelegramTestMicrotasks();
-    expect(onUpdateId).toHaveBeenCalledWith(201);
+    expect(onUpdateId).not.toHaveBeenCalled();
 
     await runMiddlewareChain({ update: { update_id: 202 } }, async () => {});
 
     await flushTelegramTestMicrotasks();
-    expect(onUpdateId).toHaveBeenCalledWith(202);
+    expect(onUpdateId).not.toHaveBeenCalled();
 
     const retryHandler = vi.fn();
     await runMiddlewareChain({ update: { update_id: 201 } }, async () => {
@@ -1392,7 +1394,7 @@ describe("createTelegramBot", () => {
 
     await flushTelegramTestMicrotasks();
     expect(retryHandler).toHaveBeenCalledTimes(1);
-    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([201, 202]);
+    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([202]);
   });
 
   it("skips replayed update ids even when the semantic update key differs", async () => {
@@ -2786,7 +2788,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-    expect(sendMessageSpy.mock.calls[0][0]).toBe("5");
+    expect(String(sendMessageSpy.mock.calls[0][0])).toBe("5");
     expect(sendMessageSpy.mock.calls[0][1]).toBe(codexRateLimitText);
     expect(String(sendMessageSpy.mock.calls[0][1])).not.toContain(
       "All models are temporarily rate-limited",
@@ -2804,6 +2806,11 @@ describe("createTelegramBot", () => {
       replySpy.mockResolvedValue({
         text: "a".repeat(4500),
         replyToId: String(messageId),
+      });
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: { dmPolicy: "open", allowFrom: ["*"], streamMode: "off" },
+        },
       });
 
       createTelegramBot({ token: "tok", replyToMode: mode });

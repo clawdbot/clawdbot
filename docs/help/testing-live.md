@@ -63,8 +63,8 @@ loopback/private fallbacks are rejected by design.
 
 Live tests are split into two layers so we can isolate failures:
 
-- “Direct model” tells us the provider/model can answer at all with the given key.
-- “Gateway smoke” tells us the full gateway+agent pipeline works for that model (sessions, history, tools, sandbox policy, etc.).
+- "Direct model" tells us the provider/model can answer at all with the given key.
+- "Gateway smoke" tells us the full gateway+agent pipeline works for that model (sessions, history, tools, sandbox policy, etc.).
 
 ### Layer 1: Direct model completion (no gateway)
 
@@ -89,7 +89,7 @@ Live tests are split into two layers so we can isolate failures:
   - By default: profile store and env fallbacks
   - Set `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to enforce **profile store** only
 - Why this exists:
-  - Separates “provider API is broken / key is invalid” from “gateway agent pipeline is broken”
+  - Separates "provider API is broken / key is invalid" from "gateway agent pipeline is broken"
   - Contains small, isolated regressions (example: OpenAI Responses/Codex Responses reasoning replay + tool-call flows)
 
 ### Layer 2: Gateway + dev agent smoke (what "@openclaw" actually does)
@@ -99,7 +99,7 @@ Live tests are split into two layers so we can isolate failures:
   - Spin up an in-process gateway
   - Create/patch a `agent:dev:*` session (model override per run)
   - Iterate models-with-keys and assert:
-    - “meaningful” response (no tools)
+    - "meaningful" response (no tools)
     - a real tool invocation works (read probe)
     - optional extra tool probes (exec+read probe)
     - OpenAI regression paths (tool-call-only → follow-up) keep working
@@ -115,13 +115,13 @@ Live tests are split into two layers so we can isolate failures:
   - `OPENCLAW_LIVE_GATEWAY_MODELS=all` is an alias for the modern allowlist
   - Or set `OPENCLAW_LIVE_GATEWAY_MODELS="provider/model"` (or comma list) to narrow
   - Modern/all gateway sweeps default to a curated high-signal cap; set `OPENCLAW_LIVE_GATEWAY_MAX_MODELS=0` for an exhaustive modern sweep or a positive number for a smaller cap.
-- How to select providers (avoid “OpenRouter everything”):
+- How to select providers (avoid "OpenRouter everything"):
   - `OPENCLAW_LIVE_GATEWAY_PROVIDERS="google,google-antigravity,google-gemini-cli,openai,anthropic,zai,minimax"` (comma allowlist)
 - Tool + image probes are always on in this live test:
   - `read` probe + `exec+read` probe (tool stress)
   - image probe runs when the model advertises image input support
   - Flow (high level):
-    - Test generates a tiny PNG with “CAT” + random code (`src/gateway/live-image-probe.ts`)
+    - Test generates a tiny PNG with "CAT" + random code (`src/gateway/live-image-probe.ts`)
     - Sends it via `agent` `attachments: [{ mimeType: "image/png", content: "<base64>" }]`
     - Gateway parses attachments into `images[]` (`src/gateway/server-methods/agent.ts` + `src/gateway/chat-attachments.ts`)
     - Embedded agent forwards a multimodal user message to the model
@@ -367,16 +367,16 @@ Notes:
 - `google-antigravity/...` uses the Antigravity OAuth bridge (Cloud Code Assist-style agent endpoint).
 - `google-gemini-cli/...` uses the local Gemini CLI on your machine (separate auth + tooling quirks).
 - Gemini API vs Gemini CLI:
-  - API: OpenClaw calls Google’s hosted Gemini API over HTTP (API key / profile auth); this is what most users mean by “Gemini”.
+  - API: OpenClaw calls Google's hosted Gemini API over HTTP (API key / profile auth); this is what most users mean by "Gemini".
   - CLI: OpenClaw shells out to a local `gemini` binary; it has its own auth and can behave differently (streaming/tool support/version skew).
 
 ## Live: model matrix (what we cover)
 
-There is no fixed “CI model list” (live is opt-in), but these are the **recommended** models to cover regularly on a dev machine with keys.
+There is no fixed "CI model list" (live is opt-in), but these are the **recommended** models to cover regularly on a dev machine with keys.
 
 ### Modern smoke set (tool calling + image)
 
-This is the “common models” run we expect to keep working:
+This is the "common models" run we expect to keep working:
 
 - OpenAI (non-Codex): `openai/gpt-5.5`
 - OpenAI Codex OAuth: `openai-codex/gpt-5.5`
@@ -404,7 +404,7 @@ Pick at least one per provider family:
 Optional additional coverage (nice to have):
 
 - xAI: `xai/grok-4.3` (or latest available)
-- Mistral: `mistral/`… (pick one “tools” capable model you have enabled)
+- Mistral: `mistral/`… (pick one "tools" capable model you have enabled)
 - Cerebras: `cerebras/`… (if you have access)
 - LM Studio: `lmstudio/`… (local; tool calling depends on API mode)
 
@@ -433,9 +433,9 @@ Do not hardcode "all models" in docs. The authoritative list is whatever `discov
 Live tests discover credentials the same way the CLI does. Practical implications:
 
 - If the CLI works, live tests should find the same keys.
-- If a live test says “no creds”, debug the same way you’d debug `openclaw models list` / model selection.
+- If a live test says "no creds", debug the same way you'd debug `openclaw models list` / model selection.
 
-- Per-agent auth profiles: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (this is what “profile keys” means in the live tests)
+- Per-agent auth profiles: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (this is what "profile keys" means in the live tests)
 - Config: `~/.openclaw/openclaw.json` (or `OPENCLAW_CONFIG_PATH`)
 - Legacy state dir: `~/.openclaw/credentials/` (copied into the staged live home when present, but not the main profile-key store)
 - Live local runs copy the active config, per-agent `auth-profiles.json` files, legacy `credentials/`, and supported external CLI auth dirs into a temp test home by default; staged live homes skip `workspace/` and `sandboxes/`, and `agents.*.workspace` / `agentDir` path overrides are stripped so probes stay off your real host workspace.
@@ -584,4 +584,4 @@ request. Plugin dependencies are expected to be present before runtime load.
 
 ## Related
 
-- [Testing](/help/testing) — unit, integration, QA, and Docker suites
+- [Testing](/help/testing) - unit, integration, QA, and Docker suites

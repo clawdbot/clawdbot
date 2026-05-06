@@ -229,6 +229,8 @@ Current runtime behaviour:
 - Bundled realtime voice providers: Google Gemini Live (`google`) and OpenAI (`openai`), registered by their provider plugins.
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. The realtime model can call it when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
+- `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`.
+- `realtime.agentContext.enabled` is default-off. When enabled, Voice Call injects a bounded agent identity, system prompt override, and selected workspace-file capsule into the realtime provider instructions at session setup.
 - `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns those snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
 - Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, or `per-call` for isolated calls).
@@ -242,6 +244,51 @@ Current runtime behaviour:
 | `safe-read-only` | Expose the consult tool and limit the regular agent to `read`, `web_search`, `web_fetch`, `x_search`, `memory_search`, and `memory_get`. |
 | `owner`          | Expose the consult tool and let the regular agent use the normal agent tool policy.                                                      |
 | `none`           | Do not expose the consult tool. Custom `realtime.tools` are still passed through to the realtime provider.                               |
+
+`realtime.consultPolicy` controls only the realtime model instructions:
+
+| Policy        | Guidance                                                                                        |
+| ------------- | ----------------------------------------------------------------------------------------------- |
+| `auto`        | Keep the default prompt and let the provider decide when to call the consult tool.              |
+| `substantive` | Answer simple conversational glue directly and consult before facts, memory, tools, or context. |
+| `always`      | Consult before every substantive answer.                                                        |
+
+### Agent voice context
+
+Enable `realtime.agentContext` when the voice bridge should sound like the
+configured OpenClaw agent without paying a full agent-consult round trip on
+ordinary turns. The context capsule is added once when the realtime session is
+created, so it does not add per-turn latency. Calls to
+`openclaw_agent_consult` still run the full OpenClaw agent and should be used
+for tool work, current information, memory lookups, or workspace state.
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          agentId: "main",
+          realtime: {
+            enabled: true,
+            provider: "google",
+            toolPolicy: "safe-read-only",
+            consultPolicy: "substantive",
+            agentContext: {
+              enabled: true,
+              maxChars: 6000,
+              includeIdentity: true,
+              includeSystemPrompt: true,
+              includeWorkspaceFiles: true,
+              files: ["SOUL.md", "IDENTITY.md", "USER.md"],
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
 
 ### Realtime provider examples
 
@@ -268,6 +315,8 @@ Current runtime behaviour:
                 provider: "google",
                 instructions: "Speak briefly. Call openclaw_agent_consult before using deeper tools.",
                 toolPolicy: "safe-read-only",
+                consultPolicy: "substantive",
+                agentContext: { enabled: true },
                 providers: {
                   google: {
                     apiKey: "${GEMINI_API_KEY}",
@@ -853,10 +902,11 @@ If Voice Call is green but the Meet participant never joins, check the Meet
 dial-in number, PIN, and `--dtmf-sequence`. The phone call can be healthy while
 the meeting rejects or ignores an incorrect DTMF sequence.
 
-Google Meet passes the Meet DTMF sequence and intro text to `voicecall.start`.
-For Twilio calls, Voice Call serves the DTMF TwiML first, redirects back to the
-webhook, then opens the realtime media stream so the saved intro is generated
-after the phone participant has joined the meeting.
+Google Meet starts the Twilio phone leg through `voicecall.start` with a
+pre-connect DTMF sequence. PIN-derived sequences include the Google Meet plugin's
+`voiceCall.dtmfDelayMs` as leading Twilio wait digits. The default is 12 seconds
+because Meet dial-in prompts can arrive late. Voice Call then redirects back to
+realtime handling before the intro greeting is requested.
 
 Use `openclaw logs --follow` for the live phase trace. A healthy Twilio Meet
 join logs this order:
@@ -865,7 +915,7 @@ join logs this order:
 - Voice Call stores pre-connect DTMF TwiML.
 - Twilio initial TwiML is consumed and served before realtime handling.
 - Voice Call serves realtime TwiML for the Twilio call.
-- The realtime bridge starts with the initial greeting queued.
+- Google Meet requests intro speech with `voicecall.speak` after the post-DTMF delay.
 
 `openclaw voicecall tail` still shows persisted call records; it is useful for
 call state and transcripts, but not every webhook/realtime transition appears

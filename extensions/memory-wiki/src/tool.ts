@@ -89,6 +89,7 @@ async function syncImportedSourcesIfNeeded(
 type WikiToolMemoryContext = {
   agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
 };
 
 export function createWikiStatusTool(
@@ -139,6 +140,7 @@ export function createWikiSearchTool(
         appConfig,
         agentId: memoryContext.agentId,
         agentSessionKey: memoryContext.agentSessionKey,
+        sandboxed: memoryContext.sandboxed,
         query: params.query,
         maxResults: params.maxResults,
         ...(params.backend ? { searchBackend: params.backend } : {}),
@@ -255,6 +257,7 @@ export function createWikiGetTool(
         appConfig,
         agentId: memoryContext.agentId,
         agentSessionKey: memoryContext.agentSessionKey,
+        sandboxed: memoryContext.sandboxed,
         lookup: params.lookup,
         fromLine: params.fromLine,
         lineCount: params.lineCount,

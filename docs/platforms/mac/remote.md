@@ -5,9 +5,7 @@ read_when:
 title: "Remote control"
 ---
 
-# Remote OpenClaw (macOS ⇄ remote host)
-
-This flow lets the macOS app act as a full remote control for an OpenClaw gateway running on another host (desktop/server). It’s the app’s **Remote over SSH** (remote run) feature. All features—health checks, Voice Wake forwarding, and Web Chat—reuse the same remote SSH configuration from _Settings → General_.
+This flow lets the macOS app act as a full remote control for an OpenClaw gateway running on another host (desktop/server). It's the app's **Remote over SSH** (remote run) feature. All features-health checks, Voice Wake forwarding, and Web Chat-reuse the same remote SSH configuration from _Settings → General_.
 
 ## Modes
 
@@ -19,7 +17,7 @@ This flow lets the macOS app act as a full remote control for an OpenClaw gatewa
 
 Remote mode supports two transports:
 
-- **SSH tunnel** (default): Uses `ssh -N -L ...` to forward the gateway port to localhost. The gateway will see the node’s IP as `127.0.0.1` because the tunnel is loopback.
+- **SSH tunnel** (default): Uses `ssh -N -L ...` to forward the gateway port to localhost. The gateway will see the node's IP as `127.0.0.1` because the tunnel is loopback.
 - **Direct (ws/wss)**: Connects straight to the gateway URL. The gateway sees the real client IP.
 
 In SSH tunnel mode, discovered LAN/tailnet hostnames are saved as
@@ -51,7 +49,7 @@ node.
    - **Identity file** (advanced): path to your key.
    - **Project root** (advanced): remote checkout path used for commands.
    - **CLI path** (advanced): optional path to a runnable `openclaw` entrypoint/binary (auto-filled when advertised).
-3. Hit **Test remote**. Success indicates the remote `openclaw status --json` runs correctly. Failures usually mean PATH/CLI issues; exit 127 means the CLI isn’t found remotely.
+3. Hit **Test remote**. Success indicates the remote `openclaw status --json` runs correctly. Failures usually mean PATH/CLI issues; exit 127 means the CLI isn't found remotely.
 4. Health checks and Web Chat will now run through this SSH tunnel automatically.
 
 ## Web Chat
@@ -63,7 +61,7 @@ node.
 ## Permissions
 
 - The remote host needs the same TCC approvals as local (Automation, Accessibility, Screen Recording, Microphone, Speech Recognition, Notifications). Run onboarding on that machine to grant them once.
-- Nodes advertise their permission state via `node.list` / `node.describe` so agents know what’s available.
+- Nodes advertise their permission state via `node.list` / `node.describe` so agents know what's available.
 
 ## Security notes
 
@@ -79,7 +77,7 @@ node.
 
 ## Troubleshooting
 
-- **exit 127 / not found**: `openclaw` isn’t on PATH for non-login shells. Add it to `/etc/paths`, your shell rc, or symlink into `/usr/local/bin`/`/opt/homebrew/bin`.
+- **exit 127 / not found**: `openclaw` isn't on PATH for non-login shells. Add it to `/etc/paths`, your shell rc, or symlink into `/usr/local/bin`/`/opt/homebrew/bin`.
 - **Health probe failed**: check SSH reachability, PATH, and that Baileys is logged in (`openclaw status --json`).
 - **Web Chat stuck**: confirm the gateway is running on the remote host and the forwarded port matches the gateway WS port; the UI requires a healthy WS connection.
 - **Node IP shows 127.0.0.1**: expected with the SSH tunnel. Switch **Transport** to **Direct (ws/wss)** if you want the gateway to see the real client IP.
@@ -94,7 +92,7 @@ Pick sounds per notification from scripts with `openclaw` and `node.invoke`, e.g
 openclaw nodes notify --node <id> --title "Ping" --body "Remote gateway ready" --sound Glass
 ```
 
-There is no global “default sound” toggle in the app anymore; callers choose a sound (or none) per request.
+There is no global "default sound" toggle in the app anymore; callers choose a sound (or none) per request.
 
 ## Related
 

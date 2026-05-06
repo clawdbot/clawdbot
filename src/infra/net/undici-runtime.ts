@@ -11,6 +11,11 @@ export type UndiciRuntimeDeps = {
   fetch: typeof import("undici").fetch;
 };
 
+export type UndiciGlobalDispatcherDeps = Pick<UndiciRuntimeDeps, "Agent" | "EnvHttpProxyAgent"> & {
+  getGlobalDispatcher: typeof import("undici").getGlobalDispatcher;
+  setGlobalDispatcher: typeof import("undici").setGlobalDispatcher;
+};
+
 type UndiciAgentOptions = ConstructorParameters<UndiciRuntimeDeps["Agent"]>[0];
 type UndiciEnvHttpProxyAgentOptions = ConstructorParameters<
   UndiciRuntimeDeps["EnvHttpProxyAgent"]
@@ -50,6 +55,17 @@ function isUndiciRuntimeDeps(value: unknown): value is UndiciRuntimeDeps {
   );
 }
 
+function isUndiciGlobalDispatcherDeps(value: unknown): value is UndiciGlobalDispatcherDeps {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as UndiciGlobalDispatcherDeps).Agent === "function" &&
+    typeof (value as UndiciGlobalDispatcherDeps).EnvHttpProxyAgent === "function" &&
+    typeof (value as UndiciGlobalDispatcherDeps).getGlobalDispatcher === "function" &&
+    typeof (value as UndiciGlobalDispatcherDeps).setGlobalDispatcher === "function"
+  );
+}
+
 export function loadUndiciRuntimeDeps(): UndiciRuntimeDeps {
   const override = (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY];
   if (isUndiciRuntimeDeps(override)) {
@@ -64,6 +80,22 @@ export function loadUndiciRuntimeDeps(): UndiciRuntimeDeps {
     FormData: undici.FormData,
     ProxyAgent: undici.ProxyAgent,
     fetch: undici.fetch,
+  };
+}
+
+export function loadUndiciGlobalDispatcherDeps(): UndiciGlobalDispatcherDeps {
+  const override = (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY];
+  if (isUndiciGlobalDispatcherDeps(override)) {
+    return override;
+  }
+
+  const require = createRequire(import.meta.url);
+  const undici = require("undici") as typeof import("undici");
+  return {
+    Agent: undici.Agent,
+    EnvHttpProxyAgent: undici.EnvHttpProxyAgent,
+    getGlobalDispatcher: undici.getGlobalDispatcher,
+    setGlobalDispatcher: undici.setGlobalDispatcher,
   };
 }
 

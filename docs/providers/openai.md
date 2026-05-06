@@ -218,6 +218,14 @@ Choose your preferred auth method and follow the setup steps.
     | `openai-codex/gpt-5.4-mini` | omitted / `runtime: "pi"` | ChatGPT/Codex OAuth through PI | Codex sign-in |
     | `openai-codex/gpt-5.5` | `runtime: "auto"` | Still PI unless a plugin explicitly claims `openai-codex` | Codex sign-in |
 
+    <Warning>
+    Do not configure older `openai-codex/gpt-5.1*`, `openai-codex/gpt-5.2*`, or
+    `openai-codex/gpt-5.3*` model refs. ChatGPT/Codex OAuth accounts now reject
+    those models. Use `openai-codex/gpt-5.5` for the PI OAuth route, or
+    `openai/gpt-5.5` with `agentRuntime.id: "codex"` for native Codex runtime
+    execution.
+    </Warning>
+
     <Note>
     Keep using the `openai-codex` provider id for auth/profile commands. The
     `openai-codex/*` model prefix is also the explicit PI route for Codex OAuth.

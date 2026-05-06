@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
 
 /** Placeholder for blank user messages — preserves the user turn so strict
@@ -278,28 +279,19 @@ export async function repairSessionFileIfNeeded(params: {
 
   const cleaned = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
   const backupPath = `${sessionFile}.bak-${process.pid}-${Date.now()}`;
-  const tmpPath = `${sessionFile}.repair-${process.pid}-${Date.now()}.tmp`;
   try {
     const stat = await fs.stat(sessionFile).catch(() => null);
     await fs.writeFile(backupPath, content, "utf-8");
     if (stat) {
       await fs.chmod(backupPath, stat.mode);
     }
-    await fs.writeFile(tmpPath, cleaned, "utf-8");
-    if (stat) {
-      await fs.chmod(tmpPath, stat.mode);
-    }
-    await fs.rename(tmpPath, sessionFile);
+    await replaceFileAtomic({
+      filePath: sessionFile,
+      content: cleaned,
+      preserveExistingMode: true,
+      tempPrefix: `${path.basename(sessionFile)}.repair`,
+    });
   } catch (err) {
-    try {
-      await fs.unlink(tmpPath);
-    } catch (cleanupErr) {
-      params.warn?.(
-        `session file repair cleanup failed: ${cleanupErr instanceof Error ? cleanupErr.message : "unknown error"} (${path.basename(
-          tmpPath,
-        )})`,
-      );
-    }
     return {
       repaired: false,
       droppedLines,

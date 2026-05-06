@@ -106,7 +106,7 @@ When a provider has multiple profiles, OpenClaw chooses an order like this:
   </Step>
 </Steps>
 
-If no explicit order is configured, OpenClaw uses a round‑robin order:
+If no explicit order is configured, OpenClaw uses a round-robin order:
 
 - **Primary key:** profile type (**OAuth before API keys**).
 - **Secondary key:** `usageStats.lastUsed` (oldest first, within each type).
@@ -128,7 +128,7 @@ Auto-pinned profiles (selected by the session router) are treated as a **prefere
 
 ### Why OAuth can "look lost"
 
-If you have both an OAuth profile and an API key profile for the same provider, round‑robin can switch between them across messages unless pinned. To force a single profile:
+If you have both an OAuth profile and an API key profile for the same provider, round-robin can switch between them across messages unless pinned. To force a single profile:
 
 - Pin with `auth.order[provider] = ["provider:profileId"]`, or
 - Use a per-session override via `/model …` with a profile override (when supported by your UI/chat surface).

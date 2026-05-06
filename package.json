@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.5.4",
+  "version": "2026.5.6",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -798,6 +798,14 @@
       "types": "./dist/plugin-sdk/channel-lifecycle.d.ts",
       "default": "./dist/plugin-sdk/channel-lifecycle.js"
     },
+    "./plugin-sdk/channel-message": {
+      "types": "./dist/plugin-sdk/channel-message.d.ts",
+      "default": "./dist/plugin-sdk/channel-message.js"
+    },
+    "./plugin-sdk/channel-message-runtime": {
+      "types": "./dist/plugin-sdk/channel-message-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-message-runtime.js"
+    },
     "./plugin-sdk/channel-pairing": {
       "types": "./dist/plugin-sdk/channel-pairing.d.ts",
       "default": "./dist/plugin-sdk/channel-pairing.js"
@@ -1330,6 +1338,7 @@
     "ci:full-release": "node scripts/full-release-validation-at-sha.mjs",
     "ci:timings": "node scripts/ci-run-timings.mjs --latest-main",
     "ci:timings:recent": "node scripts/ci-run-timings.mjs --recent 10",
+    "clean:dist": "node -e \"require('fs').rmSync('dist', {recursive: true, force: true})\"",
     "codex-app-server:protocol:check": "node --import tsx scripts/check-codex-app-server-protocol.ts",
     "codex-app-server:protocol:sync": "node --import tsx scripts/sync-codex-app-server-protocol.ts",
     "config:channels:check": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
@@ -1569,6 +1578,7 @@
     "test:docker:session-runtime-context": "bash scripts/e2e/session-runtime-context-docker.sh",
     "test:docker:timings": "node scripts/docker-e2e-timings.mjs",
     "test:docker:update-channel-switch": "bash scripts/e2e/update-channel-switch-docker.sh",
+    "test:docker:update-corrupt-plugin": "bash scripts/e2e/update-corrupt-plugin-docker.sh",
     "test:docker:update-migration": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.4.23} OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:update-restart-auth": "env OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:upgrade-survivor": "bash scripts/e2e/upgrade-survivor-docker.sh",
@@ -1672,6 +1682,7 @@
     "@aws-sdk/client-bedrock-runtime": "3.1042.0",
     "@aws-sdk/credential-provider-node": "3.972.39",
     "@aws/bedrock-token-generator": "^1.1.0",
+    "@clack/core": "^1.3.0",
     "@clack/prompts": "^1.3.0",
     "@google/genai": "^1.51.0",
     "@grammyjs/runner": "^2.0.3",
@@ -1684,6 +1695,7 @@
     "@mariozechner/pi-tui": "0.73.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
+    "@openclaw/fs-safe": "github:openclaw/fs-safe#3c508734af0b",
     "@slack/bolt": "^4.7.2",
     "@slack/types": "^2.21.0",
     "@slack/web-api": "^7.15.2",
@@ -1755,6 +1767,7 @@
     "@aws-sdk/client-bedrock-runtime": "$@aws-sdk/client-bedrock-runtime",
     "axios": "1.16.0",
     "follow-redirects": "1.16.0",
+    "ip-address": "10.2.0",
     "node-domexception": "npm:@nolyfill/domexception@1.0.28",
     "uuid": "14.0.0"
   },
@@ -1777,6 +1790,7 @@
       "basic-ftp": "5.3.0",
       "file-type": "22.0.1",
       "form-data": "2.5.4",
+      "ip-address": "10.2.0",
       "minimatch": "10.2.5",
       "path-to-regexp": "8.4.0",
       "qs": "6.14.2",
@@ -1789,6 +1803,7 @@
       "uuid": "14.0.0"
     },
     "onlyBuiltDependencies": [
+      "@openclaw/fs-safe",
       "@discordjs/opus",
       "@google/genai",
       "@lydell/node-pty",

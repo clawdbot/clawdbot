@@ -8,6 +8,7 @@ import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { replaceFileAtomic, replaceFileAtomicSync } from "../infra/replace-file.js";
 import {
   loadShellEnvFallback,
   resolveShellEnvFallbackTimeoutMs,
@@ -1313,38 +1314,15 @@ export function createConfigIO(
   }
 
   function replaceConfigFileSync(raw: string): void {
-    const dir = path.dirname(configPath);
-    deps.fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const tmp = path.join(
-      dir,
-      `${path.basename(configPath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
-    );
-    try {
-      deps.fs.writeFileSync(tmp, raw, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-      try {
-        deps.fs.renameSync(tmp, configPath);
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException)?.code;
-        if (code !== "EPERM" && code !== "EEXIST") {
-          throw err;
-        }
-        deps.fs.copyFileSync(tmp, configPath);
-        deps.fs.chmodSync(configPath, 0o600);
-        deps.fs.unlinkSync(tmp);
-      }
-    } catch (err) {
-      try {
-        deps.fs.unlinkSync(tmp);
-      } catch (cleanupErr) {
-        if ((cleanupErr as NodeJS.ErrnoException)?.code !== "ENOENT") {
-          deps.logger.warn(`Failed to clean temporary config file ${tmp}: ${String(cleanupErr)}`);
-        }
-      }
-      throw err;
-    }
+    replaceFileAtomicSync({
+      filePath: configPath,
+      content: raw,
+      dirMode: 0o700,
+      mode: 0o600,
+      tempPrefix: path.basename(configPath),
+      copyFallbackOnPermissionError: true,
+      fileSystem: deps.fs,
+    });
   }
 
   function migrateAndStripShippedPluginInstallConfigRecords(
@@ -2208,57 +2186,29 @@ export function createConfigIO(
       throw err;
     }
 
-    const tmp = path.join(
-      dir,
-      `${path.basename(configPath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
-    );
-
     const pluginInstallConfigMigration =
       ensureShippedPluginInstallConfigRecordsMigratedForWrite(snapshot);
     let configCommitted = false;
     try {
-      await deps.fs.promises.writeFile(tmp, json, {
-        encoding: "utf-8",
+      const result = await replaceFileAtomic({
+        filePath: configPath,
+        content: json,
+        dirMode: 0o700,
         mode: 0o600,
+        tempPrefix: path.basename(configPath),
+        copyFallbackOnPermissionError: true,
+        fileSystem: deps.fs,
+        beforeRename: async () => {
+          if (deps.fs.existsSync(configPath)) {
+            await maintainConfigBackups(configPath, deps.fs.promises);
+          }
+        },
       });
-
-      if (deps.fs.existsSync(configPath)) {
-        await maintainConfigBackups(configPath, deps.fs.promises);
-      }
-
-      try {
-        await deps.fs.promises.rename(tmp, configPath);
-      } catch (err) {
-        const code = (err as { code?: string }).code;
-        // Windows doesn't reliably support atomic replace via rename when dest exists.
-        if (code === "EPERM" || code === "EEXIST") {
-          await deps.fs.promises.copyFile(tmp, configPath);
-          await deps.fs.promises.chmod(configPath, 0o600).catch(() => {
-            // best-effort
-          });
-          await deps.fs.promises.unlink(tmp).catch(() => {
-            // best-effort
-          });
-          configCommitted = true;
-          logConfigOverwrite();
-          logConfigWriteAnomalies();
-          await appendWriteAudit(
-            "copy-fallback",
-            undefined,
-            await deps.fs.promises.stat(configPath).catch(() => null),
-          );
-          return { persistedHash: nextHash, persistedConfig: stampedOutputConfig };
-        }
-        await deps.fs.promises.unlink(tmp).catch(() => {
-          // best-effort
-        });
-        throw err;
-      }
       configCommitted = true;
       logConfigOverwrite();
       logConfigWriteAnomalies();
       await appendWriteAudit(
-        "rename",
+        result.method,
         undefined,
         await deps.fs.promises.stat(configPath).catch(() => null),
       );

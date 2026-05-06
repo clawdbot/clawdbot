@@ -719,7 +719,6 @@ describe("scripts/changed-lanes", () => {
       "apps/macos/Sources/OpenClaw/Resources/Info.plist",
       "docs/.generated/config-baseline.sha256",
       "package.json",
-      "src/config/schema.base.generated.ts",
     ]);
     const plan = createChangedCheckPlan(result, { staged: true });
 

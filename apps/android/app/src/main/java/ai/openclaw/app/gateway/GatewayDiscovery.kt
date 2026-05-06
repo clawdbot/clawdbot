@@ -278,14 +278,13 @@ class GatewayDiscovery(
     return legacyHostAddress(resolved)
   }
 
-  private fun legacyHostAddress(resolved: NsdServiceInfo): String? {
-    return try {
+  private fun legacyHostAddress(resolved: NsdServiceInfo): String? =
+    try {
       val host = NsdServiceInfo::class.java.getMethod("getHost").invoke(resolved) as? InetAddress
       host?.hostAddress
     } catch (_: Throwable) {
       null
     }
-  }
 
   private fun publish() {
     _gateways.value =
@@ -529,20 +528,20 @@ class GatewayDiscovery(
     val cm = connectivity ?: return null
 
     // Prefer VPN (Tailscale) when present; otherwise use the active network.
-    trackedNetworks(cm).firstOrNull { n ->
-      val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
-      caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-    }?.let { return it }
+    trackedNetworks(cm)
+      .firstOrNull { n ->
+        val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+      }?.let { return it }
 
     return cm.activeNetwork
   }
 
-  private fun trackedNetworks(cm: ConnectivityManager): List<Network> {
-    return buildList {
+  private fun trackedNetworks(cm: ConnectivityManager): List<Network> =
+    buildList {
       cm.activeNetwork?.let(::add)
       addAll(availableNetworks)
     }.distinct()
-  }
 
   private fun createDirectResolver(): Resolver? {
     val cm = connectivity ?: return null

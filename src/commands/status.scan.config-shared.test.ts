@@ -86,4 +86,73 @@ describe("status.scan.config-shared", () => {
       secretDiagnostics: ["resolved"],
     });
   });
+
+  it("adds a status diagnostic for gateway token source conflicts", async () => {
+    const sourceConfig = { gateway: { auth: { token: "config-token" } } };
+    const resolvedConfig = sourceConfig;
+    const readBestEffortConfig = vi.fn(async () => sourceConfig);
+    const resolveConfig = vi.fn(async () => ({
+      resolvedConfig,
+      diagnostics: [],
+    }));
+
+    const result = await loadStatusScanCommandConfig({
+      commandName: "status --json",
+      readBestEffortConfig,
+      resolveConfig,
+      env: { VITEST: "true", OPENCLAW_GATEWAY_TOKEN: "env-token" },
+      allowMissingConfigFastPath: true,
+    });
+
+    expect(result.secretDiagnostics).toEqual([
+      expect.stringContaining("OPENCLAW_GATEWAY_TOKEN overrides gateway.auth.token"),
+    ]);
+  });
+
+  it("does not add a status diagnostic when config uses OPENCLAW_GATEWAY_TOKEN", async () => {
+    const sourceConfig = {
+      gateway: { auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" } },
+      secrets: { providers: { default: { source: "env" as const } } },
+    };
+    const readBestEffortConfig = vi.fn(async () => sourceConfig);
+    const resolveConfig = vi.fn(async () => ({
+      resolvedConfig: sourceConfig,
+      diagnostics: [],
+    }));
+
+    const result = await loadStatusScanCommandConfig({
+      commandName: "status --json",
+      readBestEffortConfig,
+      resolveConfig,
+      env: { VITEST: "true", OPENCLAW_GATEWAY_TOKEN: "env-token" },
+      allowMissingConfigFastPath: true,
+    });
+
+    expect(result.secretDiagnostics).toEqual([]);
+  });
+
+  it("does not add a status diagnostic for remote gateway mode", async () => {
+    const sourceConfig = {
+      gateway: {
+        mode: "remote" as const,
+        remote: { token: "remote-token" },
+        auth: { token: "local-token" },
+      },
+    };
+    const readBestEffortConfig = vi.fn(async () => sourceConfig);
+    const resolveConfig = vi.fn(async () => ({
+      resolvedConfig: sourceConfig,
+      diagnostics: [],
+    }));
+
+    const result = await loadStatusScanCommandConfig({
+      commandName: "status --json",
+      readBestEffortConfig,
+      resolveConfig,
+      env: { VITEST: "true", OPENCLAW_GATEWAY_TOKEN: "env-token" },
+      allowMissingConfigFastPath: true,
+    });
+
+    expect(result.secretDiagnostics).toEqual([]);
+  });
 });

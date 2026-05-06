@@ -1,3 +1,4 @@
+import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
 import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSynologyChatAccount } from "./types.js";
@@ -28,6 +29,7 @@ function makeSecurityAccount(
 const clientModule = await import("./client.js");
 const gatewayRuntimeModule = await import("./gateway-runtime.js");
 const mockSendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true);
+const mockSendFileUrl = vi.spyOn(clientModule, "sendFileUrl").mockResolvedValue(true);
 const registerSynologyWebhookRouteMock = vi
   .spyOn(gatewayRuntimeModule, "registerSynologyWebhookRoute")
   .mockImplementation(() => vi.fn());
@@ -44,8 +46,10 @@ describe("createSynologyChatPlugin", () => {
     vi.stubEnv("SYNOLOGY_CHAT_TOKEN", "");
     vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", "");
     mockSendMessage.mockClear();
+    mockSendFileUrl.mockClear();
     registerSynologyWebhookRouteMock.mockClear();
     mockSendMessage.mockResolvedValue(true);
+    mockSendFileUrl.mockResolvedValue(true);
     registerSynologyWebhookRouteMock.mockImplementation(() => vi.fn());
   });
 
@@ -383,6 +387,57 @@ describe("createSynologyChatPlugin", () => {
   });
 
   describe("outbound", () => {
+    it("declares message adapter durable text and media with receipt proofs", async () => {
+      const plugin = createSynologyChatPlugin();
+      const cfg = {
+        channels: {
+          "synology-chat": {
+            enabled: true,
+            token: "t",
+            incomingUrl: "https://nas/incoming",
+            allowInsecureSsl: true,
+          },
+        },
+      };
+
+      await expect(
+        verifyChannelMessageAdapterCapabilityProofs({
+          adapterName: "synology-chat",
+          adapter: plugin.message,
+          proofs: {
+            text: async () => {
+              const result = await plugin.message.send?.text?.({
+                cfg,
+                text: "hello",
+                to: "user1",
+              });
+              expect(result?.receipt.parts[0]?.kind).toBe("text");
+              expect(result?.receipt.platformMessageIds).toHaveLength(1);
+            },
+            media: async () => {
+              const result = await plugin.message.send?.media?.({
+                cfg,
+                text: "image",
+                mediaUrl: "https://example.com/img.png",
+                to: "user1",
+              });
+              expect(result?.receipt.parts[0]?.kind).toBe("media");
+              expect(result?.receipt.platformMessageIds).toHaveLength(1);
+            },
+            messageSendingHooks: () => {
+              expect(plugin.message.durableFinal?.capabilities?.messageSendingHooks).toBe(true);
+            },
+          },
+        }),
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          { capability: "text", status: "verified" },
+          { capability: "media", status: "verified" },
+          { capability: "messageSendingHooks", status: "verified" },
+        ]),
+      );
+    });
+
     it("sendText throws when no incomingUrl", async () => {
       const plugin = createSynologyChatPlugin();
       await expect(
@@ -419,6 +474,8 @@ describe("createSynologyChatPlugin", () => {
         chatId: "user1",
       });
       expect(result.messageId).toMatch(/^sc-\d+$/);
+      expect(result.receipt.primaryPlatformMessageId).toBe(result.messageId);
+      expect(result.receipt.parts[0]?.kind).toBe("text");
     });
 
     it("sendMedia throws when missing incomingUrl", async () => {

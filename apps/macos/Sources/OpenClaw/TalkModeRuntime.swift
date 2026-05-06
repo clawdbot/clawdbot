@@ -395,10 +395,18 @@ actor TalkModeRuntime {
                 "talk chat.send ok runId=\(response.runId, privacy: .public) " +
                     "session=\(sessionKey, privacy: .public)")
 
-            guard let assistantText = await self.waitForAssistantText(
+            var assistantText = await self.waitForAssistantEventText(
                 sessionKey: sessionKey,
-                since: startedAt,
+                runId: response.runId,
                 timeoutSeconds: 45)
+            if assistantText == nil {
+                self.logger.warning("talk assistant event text missing; using history fallback")
+                assistantText = await self.waitForAssistantTextFromHistory(
+                    sessionKey: sessionKey,
+                    since: startedAt,
+                    timeoutSeconds: 12)
+            }
+            guard let assistantText
             else {
                 self.logger.warning("talk assistant text missing after timeout")
                 await self.startListening()
@@ -439,7 +447,67 @@ actor TalkModeRuntime {
         return TalkPromptBuilder.build(transcript: transcript, interruptedAtSeconds: interrupted)
     }
 
-    private func waitForAssistantText(
+    private func waitForAssistantEventText(
+        sessionKey: String,
+        runId: String,
+        timeoutSeconds: Int) async -> String?
+    {
+        let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 200)
+        return await withTaskGroup(of: String?.self) { group in
+            group.addTask { [runId, sessionKey] in
+                var latestText: String?
+                for await push in stream {
+                    if Task.isCancelled { return latestText }
+                    guard case let .event(evt) = push else { continue }
+                    guard evt.event == "chat", let payload = evt.payload else { continue }
+                    guard let chatEvent = try? GatewayPayloadDecoding.decode(
+                        payload,
+                        as: OpenClawChatEventPayload.self)
+                    else {
+                        continue
+                    }
+                    guard chatEvent.runId == runId else { continue }
+                    if let eventSessionKey = chatEvent.sessionKey,
+                       !Self.matchesSessionKey(eventSessionKey, sessionKey)
+                    {
+                        continue
+                    }
+                    if let text = OpenClawChatEventText.assistantText(from: chatEvent) {
+                        latestText = text
+                    }
+                    switch chatEvent.state {
+                    case "final":
+                        return latestText
+                    case "aborted", "error":
+                        return nil
+                    default:
+                        break
+                    }
+                }
+                return latestText
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
+                return nil
+            }
+            guard let result = await group.next() else {
+                group.cancelAll()
+                return nil
+            }
+            group.cancelAll()
+            return result
+        }
+    }
+
+    private static func matchesSessionKey(_ incoming: String, _ current: String) -> Bool {
+        let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let current = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if incoming == current { return true }
+        return (incoming == "agent:main:main" && current == "main") ||
+            (incoming == "main" && current == "agent:main:main")
+    }
+
+    private func waitForAssistantTextFromHistory(
         sessionKey: String,
         since: Double,
         timeoutSeconds: Int) async -> String?
@@ -1111,7 +1179,10 @@ extension TalkModeRuntime {
             } else {
                 self.ttsLogger
                     .info(
-                        "talk provider \(parsed.activeProvider, privacy: .public) uses gateway talk.speak with system voice fallback")
+                        """
+                        talk provider \(parsed.activeProvider, privacy: .public) uses gateway talk.speak \
+                        with system voice fallback
+                        """)
             }
             return parsed
         } catch {

@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 
 export function isMatrixQaPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -19,9 +19,12 @@ async function readMatrixQaGatewayConfigFile(configPath: string) {
 }
 
 async function writeMatrixQaGatewayConfigFile(configPath: string, config: unknown) {
-  const tempPath = `${configPath}.${randomUUID()}.tmp`;
-  await writeFile(tempPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  await rename(tempPath, configPath);
+  await replaceFileAtomic({
+    filePath: configPath,
+    content: `${JSON.stringify(config, null, 2)}\n`,
+    mode: 0o600,
+    tempPrefix: ".matrix-qa-config",
+  });
 }
 
 export async function readMatrixQaGatewayMatrixAccount(params: {

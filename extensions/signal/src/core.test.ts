@@ -1,3 +1,7 @@
+import {
+  createMessageReceiptFromOutboundResults,
+  verifyChannelMessageAdapterCapabilityProofs,
+} from "openclaw/plugin-sdk/channel-message";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -216,6 +220,67 @@ describe("signal outbound", () => {
     }
 
     expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+  });
+
+  it("declares message adapter durable text and media with receipt proofs", async () => {
+    const send = vi.fn(async (_to: string, _text: string, opts: { mediaUrl?: string } = {}) => {
+      const messageId = opts.mediaUrl ? "signal-media-1" : "signal-text-1";
+      return {
+        messageId,
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ channel: "signal", messageId }],
+          kind: opts.mediaUrl ? "media" : "text",
+        }),
+      };
+    });
+    const deps = { signal: send };
+
+    await expect(
+      verifyChannelMessageAdapterCapabilityProofs({
+        adapterName: "signal",
+        adapter: signalPlugin.message!,
+        proofs: {
+          text: async () => {
+            const result = await signalPlugin.message?.send?.text?.({
+              cfg: {} as OpenClawConfig,
+              to: "signal:+15555550123",
+              text: "hello",
+              deps,
+            } as Parameters<NonNullable<typeof signalPlugin.message.send.text>>[0] & {
+              deps: typeof deps;
+            });
+            expect(send).toHaveBeenCalledWith(
+              "signal:+15555550123",
+              "hello",
+              expect.objectContaining({ cfg: {} }),
+            );
+            expect(result?.receipt.platformMessageIds).toEqual(["signal-text-1"]);
+          },
+          media: async () => {
+            const result = await signalPlugin.message?.send?.media?.({
+              cfg: {} as OpenClawConfig,
+              to: "signal:+15555550123",
+              text: "image",
+              mediaUrl: "https://example.com/image.png",
+              deps,
+            } as Parameters<NonNullable<typeof signalPlugin.message.send.media>>[0] & {
+              deps: typeof deps;
+            });
+            expect(send).toHaveBeenCalledWith(
+              "signal:+15555550123",
+              "image",
+              expect.objectContaining({ mediaUrl: "https://example.com/image.png" }),
+            );
+            expect(result?.receipt.platformMessageIds).toEqual(["signal-media-1"]);
+          },
+        },
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        { capability: "text", status: "verified" },
+        { capability: "media", status: "verified" },
+      ]),
+    );
   });
 });
 

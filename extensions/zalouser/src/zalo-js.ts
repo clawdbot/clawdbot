@@ -3,6 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
+import {
+  privateFileStoreSync,
+  readRegularFileSync,
+  statRegularFileSync,
+  withTimeout,
+} from "openclaw/plugin-sdk/security-runtime";
 import { resolveStateDir as resolvePluginStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -10,6 +16,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeZaloReactionIcon } from "./reaction.js";
+import { createZalouserSendReceipt } from "./send-receipt.js";
 import type {
   ZaloAuthStatus,
   ZaloEventMessage,
@@ -117,25 +124,9 @@ function isNodeErrorCode(error: unknown, code: string): boolean {
   );
 }
 
-function ensureCredentialsDir(): string {
-  const dir = resolveCredentialsDir();
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const stat = fs.lstatSync(dir);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    throw new Error("Refusing to use non-directory Zalo credentials path");
-  }
-  try {
-    fs.chmodSync(dir, 0o700);
-  } catch {
-    // Best-effort on platforms that support POSIX permissions.
-  }
-  return dir;
-}
-
 function isReadableCredentialFile(filePath: string): boolean {
   try {
-    const stat = fs.lstatSync(filePath);
-    return stat.isFile() && !stat.isSymbolicLink();
+    return !statRegularFileSync(filePath).missing;
   } catch (error) {
     if (isNodeErrorCode(error, "ENOENT")) {
       return false;
@@ -144,61 +135,8 @@ function isReadableCredentialFile(filePath: string): boolean {
   }
 }
 
-function assertWritableCredentialTarget(filePath: string): void {
-  try {
-    const stat = fs.lstatSync(filePath);
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      throw new Error("Refusing to write Zalo credentials to symlinked path");
-    }
-  } catch (error) {
-    if (isNodeErrorCode(error, "ENOENT")) {
-      return;
-    }
-    throw error;
-  }
-}
-
 function writeCredentialFileAtomic(filePath: string, payload: string): void {
-  const dir = ensureCredentialsDir();
-  assertWritableCredentialTarget(filePath);
-  const tempPath = path.join(dir, `.${path.basename(filePath)}.tmp-${process.pid}-${randomUUID()}`);
-  try {
-    fs.writeFileSync(tempPath, payload, { encoding: "utf-8", mode: 0o600, flag: "wx" });
-    try {
-      fs.chmodSync(tempPath, 0o600);
-    } catch {
-      // Best-effort on platforms that support POSIX permissions.
-    }
-    fs.renameSync(tempPath, filePath);
-    try {
-      fs.chmodSync(filePath, 0o600);
-    } catch {
-      // Best-effort on platforms that support POSIX permissions.
-    }
-  } finally {
-    try {
-      fs.unlinkSync(tempPath);
-    } catch {
-      // The temp file is normally moved by renameSync.
-    }
-  }
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(label));
-    }, timeoutMs);
-    void promise
-      .then((result) => {
-        clearTimeout(timer);
-        resolve(result);
-      })
-      .catch((err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-  });
+  privateFileStoreSync(resolveCredentialsDir()).writeText(path.basename(filePath), payload);
 }
 
 function delay(ms: number): Promise<void> {
@@ -619,7 +557,7 @@ function readCredentials(profile: string): StoredZaloCredentials | null {
     if (!isReadableCredentialFile(filePath)) {
       return null;
     }
-    const raw = fs.readFileSync(filePath, "utf-8");
+    const raw = readRegularFileSync({ filePath }).buffer.toString("utf-8");
     const parsed = JSON.parse(raw) as Partial<StoredZaloCredentials>;
     if (
       typeof parsed.imei !== "string" ||
@@ -813,7 +751,7 @@ async function ensureApi(
         language: stored.language,
       }),
       timeoutMs,
-      `Timed out restoring Zalo session for profile "${profile}"`,
+      { message: `Timed out restoring Zalo session for profile "${profile}"` },
     );
     apiByProfile.set(profile, api);
     writeApiCredentials(profile, api, stored);
@@ -1039,7 +977,9 @@ export async function checkZaloAuthenticated(profileInput?: string | null): Prom
     await withZaloApi(
       profile,
       async (api) =>
-        await withTimeout(api.fetchAccountInfo(), 12_000, "Timed out checking Zalo session"),
+        await withTimeout(api.fetchAccountInfo(), 12_000, {
+          message: "Timed out checking Zalo session",
+        }),
       { timeoutMs: 12_000 },
     );
     return true;
@@ -1243,7 +1183,11 @@ export async function sendZaloTextMessage(
   const profile = normalizeProfile(options.profile);
   const trimmedThreadId = threadId.trim();
   if (!trimmedThreadId) {
-    return { ok: false, error: "No threadId provided" };
+    return {
+      ok: false,
+      error: "No threadId provided",
+      receipt: createZalouserSendReceipt({ threadId, kind: "unknown" }),
+    };
   }
 
   return await withZaloApi(
@@ -1297,9 +1241,15 @@ export async function sendZaloTextMessage(
             }
             const voiceUrl = buildZaloVoicePlaybackUrl(voiceAsset);
             const response = await api.sendVoice({ voiceUrl }, trimmedThreadId, type);
+            const voiceMessageId = extractSendMessageId(response);
             return {
               ok: true,
-              messageId: extractSendMessageId(response) ?? textMessageId,
+              messageId: voiceMessageId ?? textMessageId,
+              receipt: createZalouserSendReceipt({
+                platformMessageIds: [textMessageId, voiceMessageId],
+                threadId: trimmedThreadId,
+                kind: "voice",
+              }),
             };
           }
 
@@ -1320,7 +1270,16 @@ export async function sendZaloTextMessage(
             trimmedThreadId,
             type,
           );
-          return { ok: true, messageId: extractSendMessageId(response) };
+          const messageId = extractSendMessageId(response);
+          return {
+            ok: true,
+            messageId,
+            receipt: createZalouserSendReceipt({
+              messageId,
+              threadId: trimmedThreadId,
+              kind: "media",
+            }),
+          };
         }
 
         const payloadText = text.slice(0, 2000);
@@ -1330,9 +1289,22 @@ export async function sendZaloTextMessage(
           trimmedThreadId,
           type,
         );
-        return { ok: true, messageId: extractSendMessageId(response) };
+        const messageId = extractSendMessageId(response);
+        return {
+          ok: true,
+          messageId,
+          receipt: createZalouserSendReceipt({
+            messageId,
+            threadId: trimmedThreadId,
+            kind: "text",
+          }),
+        };
       } catch (error) {
-        return { ok: false, error: toErrorMessage(error) };
+        return {
+          ok: false,
+          error: toErrorMessage(error),
+          receipt: createZalouserSendReceipt({ threadId: trimmedThreadId, kind: "unknown" }),
+        };
       }
     },
     { shouldPersist: (result) => result.ok },
@@ -1453,10 +1425,18 @@ export async function sendZaloLink(
   const trimmedThreadId = threadId.trim();
   const trimmedUrl = url.trim();
   if (!trimmedThreadId) {
-    return { ok: false, error: "No threadId provided" };
+    return {
+      ok: false,
+      error: "No threadId provided",
+      receipt: createZalouserSendReceipt({ threadId, kind: "unknown" }),
+    };
   }
   if (!trimmedUrl) {
-    return { ok: false, error: "No URL provided" };
+    return {
+      ok: false,
+      error: "No URL provided",
+      receipt: createZalouserSendReceipt({ threadId: trimmedThreadId, kind: "card" }),
+    };
   }
 
   try {
@@ -1469,12 +1449,25 @@ export async function sendZaloLink(
           trimmedThreadId,
           type,
         );
-        return { ok: true, messageId: String(response.msgId) };
+        const messageId = String(response.msgId);
+        return {
+          ok: true,
+          messageId,
+          receipt: createZalouserSendReceipt({
+            messageId,
+            threadId: trimmedThreadId,
+            kind: "card",
+          }),
+        };
       },
       { shouldPersist: (result) => result.ok },
     );
   } catch (error) {
-    return { ok: false, error: toErrorMessage(error) };
+    return {
+      ok: false,
+      error: toErrorMessage(error),
+      receipt: createZalouserSendReceipt({ threadId: trimmedThreadId, kind: "card" }),
+    };
   }
 }
 

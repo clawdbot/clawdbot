@@ -541,6 +541,38 @@ describe("discordOutbound", () => {
     ).toBe("reply-1");
   });
 
+  it("sends prepared native Discord payload data through outbound delivery", async () => {
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "hello",
+        mediaUrl: "https://example.com/photo.png",
+        channelData: {
+          discord: {
+            components: [{ type: 1, components: [] }],
+            filename: "photo.png",
+          },
+        },
+      },
+      accountId: "default",
+      replyToId: "reply-1",
+    });
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:123456",
+      "hello",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/photo.png",
+        components: [{ type: 1, components: [] }],
+        filename: "photo.png",
+        accountId: "default",
+        replyTo: "reply-1",
+      }),
+    );
+  });
+
   it("preserves explicit component payload replies when replyToMode is off", async () => {
     const payload = await discordOutbound.renderPresentation?.({
       payload: {

@@ -1,10 +1,8 @@
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
-import {
-  hasPotentialConfiguredChannels,
-  listPotentialConfiguredChannelPresenceSignals,
-} from "../channels/config-presence.js";
+import { listPotentialConfiguredChannelPresenceSignals } from "../channels/config-presence.js";
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   type PluginManifestRecord,
   type PluginManifestRegistry,
@@ -493,7 +491,7 @@ export function configMayNeedPluginAutoEnable(
   if (hasConfiguredPluginConfigEntry(cfg)) {
     return true;
   }
-  if (hasPotentialConfiguredChannels(cfg, env, { includePersistedAuthState: false })) {
+  if (collectConfiguredChannelIds(cfg, env).length > 0) {
     return true;
   }
   if (hasConfiguredProviderModelOrHarness(cfg, env)) {
@@ -889,14 +887,23 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
   env: NodeJS.ProcessEnv;
   manifestRegistry?: PluginManifestRegistry;
 }): PluginManifestRegistry {
+  if (params.manifestRegistry) {
+    return params.manifestRegistry;
+  }
+  if (!configMayNeedPluginManifestRegistry(params.config, params.env)) {
+    return EMPTY_PLUGIN_MANIFEST_REGISTRY;
+  }
+  const currentSnapshot = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    env: params.env,
+    allowWorkspaceScopedSnapshot: true,
+  });
   return (
-    params.manifestRegistry ??
-    (configMayNeedPluginManifestRegistry(params.config, params.env)
-      ? loadPluginMetadataSnapshot({
-          config: params.config,
-          env: params.env,
-        }).manifestRegistry
-      : EMPTY_PLUGIN_MANIFEST_REGISTRY)
+    currentSnapshot?.manifestRegistry ??
+    loadPluginMetadataSnapshot({
+      config: params.config,
+      env: params.env,
+    }).manifestRegistry
   );
 }
 

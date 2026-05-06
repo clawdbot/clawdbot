@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { SafeOpenError } from "../../infra/fs-safe.js";
+import { FsSafeError } from "../../infra/fs-safe.js";
 /* ------------------------------------------------------------------ */
 /* Mocks                                                              */
 /* ------------------------------------------------------------------ */
@@ -39,7 +39,24 @@ const mocks = vi.hoisted(() => ({
   fsRealpath: vi.fn(async (p: string) => p),
   fsReadlink: vi.fn(async () => ""),
   fsOpen: vi.fn(async () => ({}) as unknown),
-  writeFileWithinRoot: vi.fn(async () => {}),
+  rootRead: vi.fn(async (_params?: unknown) => ({
+    buffer: Buffer.from(""),
+    realPath: "/workspace/test-agent/AGENTS.md",
+    stat: { size: 0, mtimeMs: 0 },
+  })),
+  rootOpen: vi.fn(async (_params?: unknown) => ({
+    handle: { close: vi.fn(async () => {}) },
+    realPath: "/workspace/test-agent/AGENTS.md",
+    stat: { size: 0, mtimeMs: 0 },
+  })),
+  rootStat: vi.fn(async (_params?: unknown) => ({
+    isFile: true,
+    isSymbolicLink: false,
+    mtimeMs: 0,
+    nlink: 1,
+    size: 0,
+  })),
+  rootWrite: vi.fn(async (_params?: unknown) => {}),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -106,7 +123,24 @@ vi.mock("../../infra/fs-safe.js", async () => {
     await vi.importActual<typeof import("../../infra/fs-safe.js")>("../../infra/fs-safe.js");
   return {
     ...actual,
-    writeFileWithinRoot: mocks.writeFileWithinRoot,
+    root: vi.fn(async (rootDir: string) => ({
+      open: async (relativePath: string, options?: Record<string, unknown>) =>
+        await mocks.rootOpen({ rootDir, relativePath, ...options }),
+      stat: async (relativePath: string) => await mocks.rootStat({ rootDir, relativePath }),
+      read: async (relativePath: string, options?: Record<string, unknown>) =>
+        await mocks.rootRead({ rootDir, relativePath, ...options }),
+      write: async (
+        relativePath: string,
+        data: string | Buffer,
+        options?: Record<string, unknown>,
+      ) =>
+        await mocks.rootWrite({
+          rootDir,
+          relativePath,
+          data,
+          ...options,
+        }),
+    })),
   };
 });
 
@@ -154,8 +188,53 @@ beforeEach(() => {
   mocks.resolveAgentWorkspaceDir.mockImplementation((cfg: unknown, agentId?: string) =>
     resolveMockWorkspaceDir(cfg, agentId),
   );
-  mocks.writeFileWithinRoot.mockResolvedValue(undefined);
+  mocks.rootOpen.mockResolvedValue({
+    handle: { close: vi.fn(async () => {}) },
+    realPath: "/workspace/test-agent/AGENTS.md",
+    stat: { size: 0, mtimeMs: 0 },
+  });
+  mocks.rootRead.mockResolvedValue({
+    buffer: Buffer.from(""),
+    realPath: "/workspace/test-agent/AGENTS.md",
+    stat: { size: 0, mtimeMs: 0 },
+  });
+  mocks.rootStat.mockResolvedValue({
+    isFile: true,
+    isSymbolicLink: false,
+    mtimeMs: 0,
+    nlink: 1,
+    size: 0,
+  });
+  mocks.rootWrite.mockResolvedValue(undefined);
 });
+
+function makeRootForTest(overrides?: {
+  open?: (params: Record<string, unknown>) => Promise<unknown>;
+  read?: (params: Record<string, unknown>) => Promise<unknown>;
+  stat?: (params: Record<string, unknown>) => Promise<unknown>;
+  write?: (params: Record<string, unknown>) => Promise<unknown>;
+}) {
+  return async (rootDir: string) =>
+    ({
+      open: async (relativePath: string, options?: Record<string, unknown>) =>
+        await (overrides?.open ?? mocks.rootOpen)({ rootDir, relativePath, ...options }),
+      stat: async (relativePath: string) =>
+        await (overrides?.stat ?? mocks.rootStat)({ rootDir, relativePath }),
+      read: async (relativePath: string, options?: Record<string, unknown>) =>
+        await (overrides?.read ?? mocks.rootRead)({ rootDir, relativePath, ...options }),
+      write: async (
+        relativePath: string,
+        data: string | Buffer,
+        options?: Record<string, unknown>,
+      ) =>
+        await (overrides?.write ?? mocks.rootWrite)({
+          rootDir,
+          relativePath,
+          data,
+          ...options,
+        }),
+    }) as never;
+}
 
 function makeCall(method: keyof typeof agentsHandlers, params: Record<string, unknown>) {
   const respond = vi.fn();
@@ -466,7 +545,7 @@ describe("agents.create", () => {
         identity: expect.objectContaining({ name: "Plain Agent" }),
       }),
     );
-    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
       expect.objectContaining({
         rootDir: "/resolved/tmp/ws",
         relativePath: "IDENTITY.md",
@@ -494,7 +573,7 @@ describe("agents.create", () => {
         }),
       }),
     );
-    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
       expect.objectContaining({
         rootDir: "/resolved/tmp/ws",
         relativePath: "IDENTITY.md",
@@ -503,9 +582,9 @@ describe("agents.create", () => {
     );
   });
 
-  it("does not persist config when IDENTITY.md write fails with SafeOpenError", async () => {
-    mocks.writeFileWithinRoot.mockRejectedValueOnce(
-      new SafeOpenError("path-mismatch", "path escapes workspace root"),
+  it("does not persist config when IDENTITY.md write fails with FsSafeError", async () => {
+    mocks.rootWrite.mockRejectedValueOnce(
+      new FsSafeError("path-mismatch", "path escapes workspace root"),
     );
 
     const { respond, promise } = makeCall("agents.create", {
@@ -524,9 +603,11 @@ describe("agents.create", () => {
 
   it("does not persist config when IDENTITY.md read fails", async () => {
     agentsTesting.setDepsForTests({
-      readFileWithinRoot: async () => {
-        throw createErrnoError("EACCES");
-      },
+      root: makeRootForTest({
+        read: async () => {
+          throw createErrnoError("EACCES");
+        },
+      }),
     });
     mocks.ensureAgentWorkspace.mockResolvedValueOnce({
       dir: "/resolved/tmp/ws",
@@ -540,14 +621,16 @@ describe("agents.create", () => {
 
     await expect(promise).rejects.toMatchObject({ code: "EACCES" });
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-    expect(mocks.writeFileWithinRoot).not.toHaveBeenCalled();
+    expect(mocks.rootWrite).not.toHaveBeenCalled();
   });
 
   it("treats unsafe IDENTITY.md reads as invalid create requests", async () => {
     agentsTesting.setDepsForTests({
-      readFileWithinRoot: async () => {
-        throw new SafeOpenError("invalid-path", "path is not a regular file under root");
-      },
+      root: makeRootForTest({
+        read: async () => {
+          throw new FsSafeError("invalid-path", "path is not a regular file under root");
+        },
+      }),
     });
 
     const { respond, promise } = makeCall("agents.create", {
@@ -564,14 +647,14 @@ describe("agents.create", () => {
       }),
     );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-    expect(mocks.writeFileWithinRoot).not.toHaveBeenCalled();
+    expect(mocks.rootWrite).not.toHaveBeenCalled();
   });
 
   it("uses non-blocking reads for IDENTITY.md during agents.create", async () => {
-    const readFileWithinRoot = vi.fn(async () => {
-      throw new SafeOpenError("not-found", "file not found");
+    const rootRead = vi.fn(async () => {
+      throw new FsSafeError("not-found", "file not found");
     });
-    agentsTesting.setDepsForTests({ readFileWithinRoot });
+    agentsTesting.setDepsForTests({ root: makeRootForTest({ read: rootRead }) });
 
     const { promise } = makeCall("agents.create", {
       name: "NB Agent",
@@ -579,7 +662,7 @@ describe("agents.create", () => {
     });
     await promise;
 
-    expect(readFileWithinRoot).toHaveBeenCalledWith(
+    expect(rootRead).toHaveBeenCalledWith(
       expect.objectContaining({
         relativePath: "IDENTITY.md",
         nonBlockingRead: true,
@@ -685,7 +768,7 @@ describe("agents.update", () => {
         }),
       }),
     );
-    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
       expect.objectContaining({
         rootDir: "/workspace/test-agent",
         relativePath: "IDENTITY.md",
@@ -710,7 +793,7 @@ describe("agents.update", () => {
         identity: expect.objectContaining({ emoji: "🦀" }),
       }),
     );
-    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
       expect.objectContaining({
         rootDir: "/workspace/test-agent",
         relativePath: "IDENTITY.md",
@@ -742,7 +825,7 @@ describe("agents.update", () => {
         }),
       }),
     );
-    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
       expect.objectContaining({
         rootDir: "/workspace/test-agent",
         relativePath: "IDENTITY.md",
@@ -759,50 +842,52 @@ describe("agents.update", () => {
       identityPathCreated: true,
     });
     agentsTesting.setDepsForTests({
-      readFileWithinRoot: async ({ rootDir, relativePath }) => {
-        const filePath = `${rootDir}/${relativePath}`;
-        if (filePath === "/workspace/test-agent/IDENTITY.md") {
-          return {
-            buffer: Buffer.from(
-              [
-                "# IDENTITY.md - Agent Identity",
-                "",
-                "- **Name:** Current Agent",
-                "- **Creature:** Steady Turtle",
-                "- **Vibe:** Calm and methodical",
-                "- **Emoji:** 🐢",
-                "",
-                "## Role",
-                "",
-                "Protect the queue.",
-                "",
-              ].join("\n"),
-            ),
-            realPath: filePath,
-            stat: makeFileStat(),
-          };
-        }
-        if (filePath === "/resolved/new/workspace/IDENTITY.md") {
-          return {
-            buffer: Buffer.from(
-              [
-                "# IDENTITY.md - Agent Identity",
-                "",
-                "- **Name:** C-3PO (Clawd's Third Protocol Observer)",
-                "- **Creature:** Flustered Protocol Droid",
-                "",
-                "## Role",
-                "",
-                "Debug agent for `--dev` mode.",
-                "",
-              ].join("\n"),
-            ),
-            realPath: filePath,
-            stat: makeFileStat(),
-          };
-        }
-        throw createEnoentError();
-      },
+      root: makeRootForTest({
+        read: async ({ rootDir, relativePath }) => {
+          const filePath = `${String(rootDir)}/${String(relativePath)}`;
+          if (filePath === "/workspace/test-agent/IDENTITY.md") {
+            return {
+              buffer: Buffer.from(
+                [
+                  "# IDENTITY.md - Agent Identity",
+                  "",
+                  "- **Name:** Current Agent",
+                  "- **Creature:** Steady Turtle",
+                  "- **Vibe:** Calm and methodical",
+                  "- **Emoji:** 🐢",
+                  "",
+                  "## Role",
+                  "",
+                  "Protect the queue.",
+                  "",
+                ].join("\n"),
+              ),
+              realPath: filePath,
+              stat: makeFileStat(),
+            };
+          }
+          if (filePath === "/resolved/new/workspace/IDENTITY.md") {
+            return {
+              buffer: Buffer.from(
+                [
+                  "# IDENTITY.md - Agent Identity",
+                  "",
+                  "- **Name:** C-3PO (Clawd's Third Protocol Observer)",
+                  "- **Creature:** Flustered Protocol Droid",
+                  "",
+                  "## Role",
+                  "",
+                  "Debug agent for `--dev` mode.",
+                  "",
+                ].join("\n"),
+              ),
+              realPath: filePath,
+              stat: makeFileStat(),
+            };
+          }
+          throw createEnoentError();
+        },
+      }),
     });
 
     const { respond, promise } = makeCall("agents.update", {
@@ -812,19 +897,19 @@ describe("agents.update", () => {
     await promise;
 
     expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
-    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
       expect.objectContaining({
         rootDir: "/resolved/new/workspace",
         relativePath: "IDENTITY.md",
         data: expect.stringContaining("- **Creature:** Steady Turtle"),
       }),
     );
-    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.stringContaining("## Role"),
       }),
     );
-    expect(mocks.writeFileWithinRoot).not.toHaveBeenCalledWith(
+    expect(mocks.rootWrite).not.toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.stringContaining("Flustered Protocol Droid"),
       }),
@@ -837,48 +922,50 @@ describe("agents.update", () => {
       identityPathCreated: false,
     });
     agentsTesting.setDepsForTests({
-      readFileWithinRoot: async ({ rootDir, relativePath }) => {
-        const filePath = `${rootDir}/${relativePath}`;
-        if (filePath === "/workspace/test-agent/IDENTITY.md") {
-          return {
-            buffer: Buffer.from(
-              [
-                "# IDENTITY.md - Agent Identity",
-                "",
-                "- **Name:** Current Agent",
-                "- **Creature:** Old Turtle",
-                "",
-                "## Role",
-                "",
-                "Old workspace role.",
-                "",
-              ].join("\n"),
-            ),
-            realPath: filePath,
-            stat: makeFileStat(),
-          };
-        }
-        if (filePath === "/resolved/new/workspace/IDENTITY.md") {
-          return {
-            buffer: Buffer.from(
-              [
-                "# IDENTITY.md - Agent Identity",
-                "",
-                "- **Name:** Destination Agent",
-                "- **Creature:** Destination Fox",
-                "",
-                "## Role",
-                "",
-                "Destination workspace role.",
-                "",
-              ].join("\n"),
-            ),
-            realPath: filePath,
-            stat: makeFileStat(),
-          };
-        }
-        throw createEnoentError();
-      },
+      root: makeRootForTest({
+        read: async ({ rootDir, relativePath }) => {
+          const filePath = `${String(rootDir)}/${String(relativePath)}`;
+          if (filePath === "/workspace/test-agent/IDENTITY.md") {
+            return {
+              buffer: Buffer.from(
+                [
+                  "# IDENTITY.md - Agent Identity",
+                  "",
+                  "- **Name:** Current Agent",
+                  "- **Creature:** Old Turtle",
+                  "",
+                  "## Role",
+                  "",
+                  "Old workspace role.",
+                  "",
+                ].join("\n"),
+              ),
+              realPath: filePath,
+              stat: makeFileStat(),
+            };
+          }
+          if (filePath === "/resolved/new/workspace/IDENTITY.md") {
+            return {
+              buffer: Buffer.from(
+                [
+                  "# IDENTITY.md - Agent Identity",
+                  "",
+                  "- **Name:** Destination Agent",
+                  "- **Creature:** Destination Fox",
+                  "",
+                  "## Role",
+                  "",
+                  "Destination workspace role.",
+                  "",
+                ].join("\n"),
+              ),
+              realPath: filePath,
+              stat: makeFileStat(),
+            };
+          }
+          throw createEnoentError();
+        },
+      }),
     });
 
     const { respond, promise } = makeCall("agents.update", {
@@ -888,19 +975,19 @@ describe("agents.update", () => {
     await promise;
 
     expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
-    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
       expect.objectContaining({
         rootDir: "/resolved/new/workspace",
         relativePath: "IDENTITY.md",
         data: expect.stringContaining("- **Creature:** Destination Fox"),
       }),
     );
-    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.stringContaining("Destination workspace role."),
       }),
     );
-    expect(mocks.writeFileWithinRoot).not.toHaveBeenCalledWith(
+    expect(mocks.rootWrite).not.toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.stringContaining("Old workspace role."),
       }),
@@ -908,8 +995,8 @@ describe("agents.update", () => {
   });
 
   it("does not persist config when IDENTITY.md write fails on update", async () => {
-    mocks.writeFileWithinRoot.mockRejectedValueOnce(
-      new SafeOpenError("path-mismatch", "path escapes workspace root"),
+    mocks.rootWrite.mockRejectedValueOnce(
+      new FsSafeError("path-mismatch", "path escapes workspace root"),
     );
 
     const { respond, promise } = makeCall("agents.update", {
@@ -929,9 +1016,11 @@ describe("agents.update", () => {
 
   it("treats unsafe IDENTITY.md reads as invalid update requests", async () => {
     agentsTesting.setDepsForTests({
-      readFileWithinRoot: async () => {
-        throw new SafeOpenError("invalid-path", "path is not a regular file under root");
-      },
+      root: makeRootForTest({
+        read: async () => {
+          throw new FsSafeError("invalid-path", "path is not a regular file under root");
+        },
+      }),
     });
 
     const { respond, promise } = makeCall("agents.update", {
@@ -948,14 +1037,14 @@ describe("agents.update", () => {
       }),
     );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-    expect(mocks.writeFileWithinRoot).not.toHaveBeenCalled();
+    expect(mocks.rootWrite).not.toHaveBeenCalled();
   });
 
   it("uses non-blocking reads for IDENTITY.md during agents.update", async () => {
-    const readFileWithinRoot = vi.fn(async () => {
-      throw new SafeOpenError("not-found", "file not found");
+    const rootRead = vi.fn(async () => {
+      throw new FsSafeError("not-found", "file not found");
     });
-    agentsTesting.setDepsForTests({ readFileWithinRoot });
+    agentsTesting.setDepsForTests({ root: makeRootForTest({ read: rootRead }) });
 
     const { promise } = makeCall("agents.update", {
       agentId: "test-agent",
@@ -963,7 +1052,7 @@ describe("agents.update", () => {
     });
     await promise;
 
-    expect(readFileWithinRoot).toHaveBeenCalledWith(
+    expect(rootRead).toHaveBeenCalledWith(
       expect.objectContaining({
         relativePath: "IDENTITY.md",
         nonBlockingRead: true,
@@ -1082,22 +1171,22 @@ describe("agents.files.list", () => {
   });
 
   it("reports unreadable workspace files as present in list responses", async () => {
-    const openFileWithinRoot = vi.fn(async () => {
+    const rootOpen = vi.fn(async () => {
       throw createErrnoError("EACCES");
     });
-    agentsTesting.setDepsForTests({ openFileWithinRoot });
-    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
-      if (args[0] === "/workspace/main/AGENTS.md") {
-        return makeFileStat({ size: 17, mtimeMs: 4567 });
+    const rootStat = vi.fn(async ({ relativePath }: Record<string, unknown>) => {
+      if (relativePath === "AGENTS.md") {
+        return {
+          isFile: true,
+          isSymbolicLink: false,
+          mtimeMs: 4567,
+          nlink: 1,
+          size: 17,
+        };
       }
       throw createEnoentError();
     });
-    mocks.fsStat.mockImplementation(async (...args: unknown[]) => {
-      if (args[0] === "/workspace/main/AGENTS.md") {
-        return makeFileStat({ size: 17, mtimeMs: 4567 });
-      }
-      throw createEnoentError();
-    });
+    agentsTesting.setDepsForTests({ root: makeRootForTest({ open: rootOpen, stat: rootStat }) });
 
     const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
     await promise;
@@ -1112,7 +1201,7 @@ describe("agents.files.list", () => {
         size: 17,
       }),
     );
-    expect(openFileWithinRoot).not.toHaveBeenCalled();
+    expect(rootOpen).not.toHaveBeenCalled();
   });
 });
 
@@ -1128,32 +1217,33 @@ describe("agents.files.get/set symlink safety", () => {
   });
 
   function mockWorkspaceEscapeSymlink() {
-    const safeOpenError = new SafeOpenError("invalid-path", "path escapes workspace root");
+    const safeOpenError = new FsSafeError("invalid-path", "path escapes workspace root");
     agentsTesting.setDepsForTests({
-      openFileWithinRoot: async () => {
-        throw safeOpenError;
-      },
-      readFileWithinRoot: async () => {
-        throw safeOpenError;
-      },
+      root: makeRootForTest({
+        open: async () => {
+          throw safeOpenError;
+        },
+        read: async () => {
+          throw safeOpenError;
+        },
+      }),
     });
-    mocks.writeFileWithinRoot.mockRejectedValue(safeOpenError);
+    mocks.rootWrite.mockRejectedValue(safeOpenError);
   }
 
   function mockInWorkspaceSymlinkAlias() {
-    const safeOpenError = new SafeOpenError(
-      "invalid-path",
-      "path is not a regular file under root",
-    );
+    const safeOpenError = new FsSafeError("invalid-path", "path is not a regular file under root");
     agentsTesting.setDepsForTests({
-      openFileWithinRoot: async () => {
-        throw safeOpenError;
-      },
-      readFileWithinRoot: async () => {
-        throw safeOpenError;
-      },
+      root: makeRootForTest({
+        open: async () => {
+          throw safeOpenError;
+        },
+        read: async () => {
+          throw safeOpenError;
+        },
+      }),
     });
-    mocks.writeFileWithinRoot.mockRejectedValue(safeOpenError);
+    mocks.rootWrite.mockRejectedValue(safeOpenError);
   }
 
   it.each([
@@ -1179,16 +1269,18 @@ describe("agents.files.get/set symlink safety", () => {
   );
 
   function mockHardlinkedWorkspaceAlias() {
-    const safeOpenError = new SafeOpenError("invalid-path", "hardlinked path not allowed");
+    const safeOpenError = new FsSafeError("invalid-path", "hardlinked path not allowed");
     agentsTesting.setDepsForTests({
-      openFileWithinRoot: async () => {
-        throw safeOpenError;
-      },
-      readFileWithinRoot: async () => {
-        throw safeOpenError;
-      },
+      root: makeRootForTest({
+        open: async () => {
+          throw safeOpenError;
+        },
+        read: async () => {
+          throw safeOpenError;
+        },
+      }),
     });
-    mocks.writeFileWithinRoot.mockRejectedValue(safeOpenError);
+    mocks.rootWrite.mockRejectedValue(safeOpenError);
   }
 
   it.each([
@@ -1206,12 +1298,12 @@ describe("agents.files.get/set symlink safety", () => {
   );
 
   it("uses non-blocking safe reads for agents.files.get", async () => {
-    const readFileWithinRoot = vi.fn(async () => ({
+    const rootRead = vi.fn(async () => ({
       buffer: Buffer.from("hello"),
       realPath: "/workspace/test-agent/AGENTS.md",
       stat: makeFileStat({ size: 5 }),
     }));
-    agentsTesting.setDepsForTests({ readFileWithinRoot });
+    agentsTesting.setDepsForTests({ root: makeRootForTest({ read: rootRead }) });
 
     const { respond, promise } = makeCall("agents.files.get", {
       agentId: "main",
@@ -1219,11 +1311,11 @@ describe("agents.files.get/set symlink safety", () => {
     });
     await promise;
 
-    expect(readFileWithinRoot).toHaveBeenCalledWith(
+    expect(rootRead).toHaveBeenCalledWith(
       expect.objectContaining({
         rootDir: "/workspace/test-agent",
         relativePath: "AGENTS.md",
-        rejectHardlinks: true,
+        hardlinks: "reject",
         nonBlockingRead: true,
       }),
     );

@@ -1196,7 +1196,8 @@ async function agentCommandInternal(
       sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
     }
 
-    if (result.meta.executionTrace?.runner === "cli") {
+    const transcriptPersistenceRunner = result.meta.executionTrace?.runner;
+    if (transcriptPersistenceRunner === "cli" || transcriptPersistenceRunner === "embedded") {
       try {
         sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
           body,
@@ -1211,6 +1212,7 @@ async function agentCommandInternal(
           threadId: opts.threadId,
           sessionCwd: workspaceDir,
           config: cfg,
+          embeddedAssistantGapFill: transcriptPersistenceRunner === "embedded",
         });
         sessionEntry = await (
           await loadCliCompactionRuntime()
@@ -1235,7 +1237,7 @@ async function agentCommandInternal(
         });
       } catch (error) {
         log.warn(
-          `CLI transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+          `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     }

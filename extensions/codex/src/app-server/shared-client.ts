@@ -1,4 +1,4 @@
-import { resolveOpenClawAgentDir } from "openclaw/plugin-sdk/provider-auth";
+import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions,
@@ -37,7 +37,7 @@ export async function getSharedCodexAppServerClient(options?: {
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
 }): Promise<CodexAppServerClient> {
   const state = getSharedCodexAppServerClientState();
-  const agentDir = options?.agentDir ?? resolveOpenClawAgentDir();
+  const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
   const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
     authProfileId: options?.authProfileId,
     agentDir,
@@ -104,7 +104,7 @@ export async function createIsolatedCodexAppServerClient(options?: {
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
 }): Promise<CodexAppServerClient> {
-  const agentDir = options?.agentDir ?? resolveOpenClawAgentDir();
+  const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
   const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
     authProfileId: options?.authProfileId,
     agentDir,

@@ -58,7 +58,7 @@ export {
   resolveDefaultGroupPolicy,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 export {
   deliverTextOrMediaReply,

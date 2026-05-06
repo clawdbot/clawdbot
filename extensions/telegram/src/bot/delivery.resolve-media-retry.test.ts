@@ -6,10 +6,17 @@ import type { TelegramContext } from "./types.js";
 
 const saveMediaBuffer = vi.fn();
 const fetchRemoteMedia = vi.fn();
-const readFileWithinRoot = vi.fn();
+const rootRead = vi.fn();
 
 vi.mock("openclaw/plugin-sdk/file-access-runtime", () => ({
-  readFileWithinRoot: (...args: unknown[]) => readFileWithinRoot(...args),
+  root: async (rootDir: string) => ({
+    read: async (relativePath: string, options?: { maxBytes?: number }) =>
+      await rootRead({
+        rootDir,
+        relativePath,
+        maxBytes: options?.maxBytes,
+      }),
+  }),
 }));
 
 vi.mock("./delivery.resolve-media.runtime.js", () => {
@@ -201,7 +208,7 @@ describe("resolveMedia getFile retry", () => {
     vi.useFakeTimers();
     fetchRemoteMedia.mockReset();
     saveMediaBuffer.mockReset();
-    readFileWithinRoot.mockReset();
+    rootRead.mockReset();
   });
 
   afterEach(() => {
@@ -435,7 +442,7 @@ describe("resolveMedia getFile retry", () => {
 
   it("copies trusted local absolute file paths into inbound media storage for media downloads", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
-    readFileWithinRoot.mockResolvedValueOnce({
+    rootRead.mockResolvedValueOnce({
       buffer: Buffer.from("pdf-data"),
       realPath: "/var/lib/telegram-bot-api/file.pdf",
       stat: { size: 8 },
@@ -451,7 +458,7 @@ describe("resolveMedia getFile retry", () => {
     );
 
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
-    expect(readFileWithinRoot).toHaveBeenCalledWith({
+    expect(rootRead).toHaveBeenCalledWith({
       rootDir: "/var/lib/telegram-bot-api",
       relativePath: "file.pdf",
       maxBytes: MAX_MEDIA_BYTES,
@@ -476,7 +483,7 @@ describe("resolveMedia getFile retry", () => {
     const getFile = vi
       .fn()
       .mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/sticker.webp" });
-    readFileWithinRoot.mockResolvedValueOnce({
+    rootRead.mockResolvedValueOnce({
       buffer: Buffer.from("sticker-data"),
       realPath: "/var/lib/telegram-bot-api/sticker.webp",
       stat: { size: 12 },
@@ -491,7 +498,7 @@ describe("resolveMedia getFile retry", () => {
     });
 
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
-    expect(readFileWithinRoot).toHaveBeenCalledWith({
+    expect(rootRead).toHaveBeenCalledWith({
       rootDir: "/var/lib/telegram-bot-api",
       relativePath: "sticker.webp",
       maxBytes: MAX_MEDIA_BYTES,
@@ -513,7 +520,7 @@ describe("resolveMedia getFile retry", () => {
 
   it("maps trusted local absolute path read failures to MediaFetchError", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
-    readFileWithinRoot.mockRejectedValueOnce(new Error("file not found"));
+    rootRead.mockRejectedValueOnce(new Error("file not found"));
 
     await expect(
       resolveMediaWithDefaults(makeCtx("document", getFile, { mime_type: "application/pdf" }), {
@@ -530,7 +537,7 @@ describe("resolveMedia getFile retry", () => {
 
   it("maps oversized trusted local absolute path reads to MediaFetchError", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
-    readFileWithinRoot.mockRejectedValueOnce(new Error("file exceeds limit"));
+    rootRead.mockRejectedValueOnce(new Error("file exceeds limit"));
 
     await expect(
       resolveMediaWithDefaults(makeCtx("document", getFile, { mime_type: "application/pdf" }), {
@@ -558,7 +565,7 @@ describe("resolveMedia getFile retry", () => {
       }),
     );
 
-    expect(readFileWithinRoot).not.toHaveBeenCalled();
+    expect(rootRead).not.toHaveBeenCalled();
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
   });
 });

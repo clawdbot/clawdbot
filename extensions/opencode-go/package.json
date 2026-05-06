@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/opencode-go-provider",
-  "version": "2026.5.4",
+  "version": "2026.5.6",
   "private": true,
   "description": "OpenClaw OpenCode Go provider plugin",
   "type": "module",

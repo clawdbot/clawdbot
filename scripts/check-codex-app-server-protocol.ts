@@ -160,10 +160,14 @@ async function compareGeneratedProtocolMirror(
       failures.push(`protocol-generated/json/${schema}: missing local schema (${String(error)})`);
       continue;
     }
-    if (source !== target) {
+    if (normalizeJsonSchema(source) !== normalizeJsonSchema(target)) {
       failures.push(`protocol-generated/json/${schema}: differs from source schema`);
     }
   }
+}
+
+function normalizeJsonSchema(source: string): string {
+  return JSON.stringify(JSON.parse(source));
 }
 
 async function listFiles(root: string, suffix: string): Promise<string[]> {

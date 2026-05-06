@@ -14,13 +14,13 @@ const ORIGINAL_PROXY_ENV = Object.fromEntries(
 ) as Record<(typeof PROXY_ENV_KEYS)[number], string | undefined>;
 
 const {
-  ProxyAgent,
   EnvHttpProxyAgent,
   MockUndiciFormData,
   undiciFetch,
   proxyAgentSpy,
   envAgentSpy,
   getLastAgent,
+  loadUndiciRuntimeDeps,
 } = vi.hoisted(() => {
   const undiciFetch = vi.fn();
   const proxyAgentSpy = vi.fn();
@@ -53,6 +53,12 @@ const {
       envAgentSpy(options);
     }
   }
+  const loadUndiciRuntimeDeps = vi.fn(() => ({
+    ProxyAgent,
+    EnvHttpProxyAgent,
+    FormData: MockUndiciFormData,
+    fetch: undiciFetch,
+  }));
 
   return {
     ProxyAgent,
@@ -62,16 +68,14 @@ const {
     proxyAgentSpy,
     envAgentSpy,
     getLastAgent: () => ProxyAgent.lastCreated,
+    loadUndiciRuntimeDeps,
   };
 });
 
-const mockedModuleIds = ["undici"] as const;
+const mockedModuleIds = ["./undici-runtime.js"] as const;
 
-vi.mock("undici", () => ({
-  ProxyAgent,
-  EnvHttpProxyAgent,
-  FormData: MockUndiciFormData,
-  fetch: undiciFetch,
+vi.mock("./undici-runtime.js", () => ({
+  loadUndiciRuntimeDeps,
 }));
 
 let getProxyUrlFromFetch: typeof import("./proxy-fetch.js").getProxyUrlFromFetch;
@@ -248,6 +252,7 @@ describe("resolveProxyFetchFromEnv", () => {
 
   it("returns undefined when no proxy env vars are set", () => {
     expect(resolveProxyFetchFromEnv({})).toBeUndefined();
+    expect(loadUndiciRuntimeDeps).not.toHaveBeenCalled();
   });
 
   it("returns proxy fetch using EnvHttpProxyAgent when HTTPS_PROXY is set", async () => {

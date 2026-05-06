@@ -1,7 +1,7 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsProvider } from "../config/types.tts.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -87,14 +87,7 @@ function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
 }
 
 function readPrefs(prefsPath: string): TtsUserPrefs {
-  try {
-    if (!fs.existsSync(prefsPath)) {
-      return {};
-    }
-    return JSON.parse(fs.readFileSync(prefsPath, "utf8")) as TtsUserPrefs;
-  } catch {
-    return {};
-  }
+  return tryReadJsonSync<TtsUserPrefs>(prefsPath) ?? {};
 }
 
 function resolveTtsAutoModeFromPrefs(prefs: TtsUserPrefs): TtsAutoMode | undefined {

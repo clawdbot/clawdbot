@@ -16,7 +16,10 @@ import {
   loadChannelSetupPluginRegistrySnapshotForChannel,
 } from "../commands/channel-setup/plugin-install.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
-import { listTrustedChannelPluginCatalogEntries } from "../commands/channel-setup/trusted-catalog.js";
+import {
+  getTrustedChannelPluginCatalogEntry,
+  listTrustedChannelPluginCatalogEntries,
+} from "../commands/channel-setup/trusted-catalog.js";
 import type {
   ChannelSetupConfiguredResult,
   ChannelSetupResult,
@@ -584,16 +587,99 @@ export async function setupChannels(
       await loadScopedChannelPlugin(channel, result.pluginId ?? catalogEntry.pluginId);
       await refreshStatus(channel);
     } else if (installedCatalogEntry) {
-      const plugin = await loadScopedChannelPlugin(channel, installedCatalogEntry.pluginId);
+      let plugin = await loadScopedChannelPlugin(channel, installedCatalogEntry.pluginId);
+      if (!plugin && installedCatalogEntry.install?.npmSpec) {
+        // The channel is recorded in the user's config (e.g. a stale
+        // `channels.<id>` entry left over from a previous install) but the
+        // plugin runtime cannot be loaded from disk — typically because the
+        // externalized npm package was uninstalled or pruned during an
+        // upgrade. Rather than dead-ending with "plugin not available", fall
+        // back to the catalog-driven install flow so onboard can recover by
+        // reinstalling the official external plugin.
+        //
+        // Preserve the same disabled-config guard used by
+        // `enableBundledPluginForSetup` so an operator-disabled channel
+        // cannot be silently reinstalled/re-enabled through this path.
+        const disabledHint = resolveConfigDisabledHint(channel);
+        if (disabledHint) {
+          await prompter.note(
+            `${channel} cannot be configured while ${disabledHint}. Enable it before setup.`,
+            "Channel setup",
+          );
+          return "done";
+        }
+        const workspaceDir = resolveWorkspaceDir();
+        const result = await ensureChannelSetupPluginInstalled({
+          cfg: next,
+          entry: installedCatalogEntry,
+          prompter,
+          runtime,
+          workspaceDir,
+          autoConfirmSingleSource: true,
+        });
+        next = result.cfg;
+        if (!result.installed) {
+          return "retry_selection";
+        }
+        plugin = await loadScopedChannelPlugin(
+          channel,
+          result.pluginId ?? installedCatalogEntry.pluginId,
+        );
+      }
       if (!plugin) {
         await prompter.note(`${channel} plugin not available.`, "Channel setup");
         return "done";
       }
       await refreshStatus(channel);
     } else {
-      const enabled = await enableBundledPluginForSetup(channel);
-      if (!enabled) {
-        return "done";
+      // Neither discovery bucket yielded an entry for this channel. This can
+      // happen when `channels.<id>` in user config carries stale fields (e.g.
+      // `appId`, tokens) left over from a previous install: `isStatically-
+      // ChannelConfigured` returns true, which removes the channel from the
+      // `installableCatalogEntries` bucket, while a missing/pruned plugin on
+      // disk keeps it out of `installedCatalogEntries`. Before falling back
+      // to the bundled-plugin enable path, consult the catalog directly so
+      // users with a stale config entry for an externalized channel (qqbot,
+      // bluebubbles, discord, whatsapp, ...) still get auto-install instead
+      // of a dead-end "plugin not available" note.
+      const fallbackCatalogEntry = getTrustedChannelPluginCatalogEntry(channel, {
+        cfg: next,
+        workspaceDir: resolveWorkspaceDir(),
+      });
+      if (fallbackCatalogEntry?.install?.npmSpec) {
+        // Preserve the same disabled-config guard used by
+        // `enableBundledPluginForSetup` so an operator-disabled channel
+        // cannot be silently reinstalled/re-enabled through this path. This
+        // mirrors the guard that was previously enforced inside the
+        // bundled-enable fallback.
+        const disabledHint = resolveConfigDisabledHint(channel);
+        if (disabledHint) {
+          await prompter.note(
+            `${channel} cannot be configured while ${disabledHint}. Enable it before setup.`,
+            "Channel setup",
+          );
+          return "done";
+        }
+        const workspaceDir = resolveWorkspaceDir();
+        const result = await ensureChannelSetupPluginInstalled({
+          cfg: next,
+          entry: fallbackCatalogEntry,
+          prompter,
+          runtime,
+          workspaceDir,
+          autoConfirmSingleSource: true,
+        });
+        next = result.cfg;
+        if (!result.installed) {
+          return "retry_selection";
+        }
+        await loadScopedChannelPlugin(channel, result.pluginId ?? fallbackCatalogEntry.pluginId);
+        await refreshStatus(channel);
+      } else {
+        const enabled = await enableBundledPluginForSetup(channel);
+        if (!enabled) {
+          return "done";
+        }
       }
     }
 

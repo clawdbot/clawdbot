@@ -1,7 +1,7 @@
 // Public auth/onboarding helpers for provider plugins.
 
 import path from "node:path";
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
@@ -72,7 +72,7 @@ export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth
 export { coerceSecretRef, hasConfiguredSecretInput } from "../config/types.secrets.js";
 export { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 export { resolveRequiredHomeDir } from "../infra/home-dir.js";
-export { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
@@ -279,7 +279,7 @@ export function listUsableProviderAuthProfileIds(params: {
   agentDir?: string;
 }): { agentDir: string; profileIds: string[] } {
   try {
-    const agentDir = params.agentDir?.trim() || resolveOpenClawAgentDir();
+    const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
     const store = ensureAuthProfileStore(agentDir, {
       allowKeychainPrompt: false,
     });

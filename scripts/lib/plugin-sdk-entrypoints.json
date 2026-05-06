@@ -176,6 +176,8 @@
   "channel-location",
   "channel-mention-gating",
   "channel-lifecycle",
+  "channel-message",
+  "channel-message-runtime",
   "channel-pairing",
   "channel-pairing-paths",
   "channel-policy",

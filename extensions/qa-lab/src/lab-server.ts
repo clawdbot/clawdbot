@@ -244,6 +244,7 @@ export async function startQaLabServer(
       transportId: "qa-channel",
       outputPath: params?.outputPath,
       repoRoot,
+      waitTimeoutMs: params?.selfCheckWaitTimeoutMs,
     });
     latestScenarioRun = withQaLabRunCounts({
       kind: "self-check",

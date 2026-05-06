@@ -7,8 +7,6 @@ read_when:
 title: "Discovery and transports"
 ---
 
-# Discovery & transports
-
 OpenClaw has two distinct problems that look similar on the surface:
 
 1. **Operator remote control**: the macOS menu bar app controlling a gateway running elsewhere.
@@ -31,7 +29,7 @@ Protocol details:
 - [Gateway protocol](/gateway/protocol)
 - [Bridge protocol (legacy)](/gateway/bridge-protocol)
 
-## Why we keep both "direct" and SSH
+## Why we keep both direct and SSH
 
 - **Direct WS** is the best UX on the same network and within a tailnet:
   - auto-discovery on LAN via Bonjour
@@ -57,7 +55,7 @@ Target direction:
 - The **gateway** advertises its WS endpoint via Bonjour when the bundled
   `bonjour` plugin is enabled. The plugin auto-starts on macOS hosts and is
   opt-in elsewhere.
-- Clients browse and show a “pick a gateway” list, then store the chosen endpoint.
+- Clients browse and show a "pick a gateway" list, then store the chosen endpoint.
 
 Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
 
@@ -83,7 +81,7 @@ Security notes:
 - Bonjour/mDNS TXT records are **unauthenticated**. Clients must treat TXT values as UX hints only.
 - Routing (host/port) should prefer the **resolved service endpoint** (SRV + A/AAAA) over TXT-provided `lanHost`, `tailnetDns`, or `gatewayPort`.
 - TLS pinning must never allow an advertised `gatewayTlsSha256` to override a previously stored pin.
-- iOS/Android nodes should require an explicit “trust this fingerprint” confirmation before storing a first-time pin (out-of-band verification) whenever the chosen route is secure/TLS-based.
+- iOS/Android nodes should require an explicit "trust this fingerprint" confirmation before storing a first-time pin (out-of-band verification) whenever the chosen route is secure/TLS-based.
 
 Enable/disable/override:
 
@@ -102,7 +100,7 @@ Enable/disable/override:
 
 ### 2) Tailnet (cross-network)
 
-For London/Vienna style setups, Bonjour won’t help. The recommended “direct” target is:
+For London/Vienna style setups, Bonjour won't help. The recommended "direct" target is:
 
 - Tailscale MagicDNS name (preferred) or a stable tailnet IP.
 
@@ -128,7 +126,7 @@ See [Remote access](/gateway/remote).
 Recommended client behavior:
 
 1. If a paired direct endpoint is configured and reachable, use it.
-2. Else, if discovery finds a gateway on `local.` or the configured wide-area domain, offer a one-tap “Use this gateway” choice and save it as the direct endpoint.
+2. Else, if discovery finds a gateway on `local.` or the configured wide-area domain, offer a one-tap "Use this gateway" choice and save it as the direct endpoint.
 3. Else, if a tailnet DNS/IP is configured, try direct.
    For mobile nodes on tailnet/public routes, direct means a secure endpoint, not plaintext remote `ws://`.
 4. Else, fall back to SSH.

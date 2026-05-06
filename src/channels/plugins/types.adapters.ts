@@ -24,6 +24,7 @@ export type {
   ChannelOutboundPayloadContext,
   ChannelOutboundPayloadHint,
   ChannelOutboundTargetRef,
+  ChannelDeliveryCapabilities,
 } from "./outbound.types.js";
 import type {
   ChannelAccountSnapshot,

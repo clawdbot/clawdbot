@@ -1,3 +1,8 @@
+import {
+  createMessageReceiptFromOutboundResults,
+  type MessageReceipt,
+  type MessageReceiptPartKind,
+} from "openclaw/plugin-sdk/channel-message";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -49,6 +54,7 @@ export type MattermostSendOpts = {
 export type MattermostSendResult = {
   messageId: string;
   channelId: string;
+  receipt: MessageReceipt;
 };
 
 export type MattermostReplyButtons = Array<
@@ -66,6 +72,39 @@ const channelByNameCache = new Map<string, string>();
 const dmChannelCache = new Map<string, string>();
 
 const getCore = () => getMattermostRuntime();
+
+function createMattermostSendReceipt(params: {
+  messageId: string;
+  channelId: string;
+  kind: MessageReceiptPartKind;
+  replyToId?: string;
+}): MessageReceipt {
+  const messageIds =
+    params.messageId.trim() && params.messageId !== "unknown" ? [params.messageId] : [];
+  return createMessageReceiptFromOutboundResults({
+    kind: params.kind,
+    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+    results: messageIds.map((messageId) => ({
+      channel: "mattermost",
+      messageId,
+      channelId: params.channelId,
+    })),
+  });
+}
+
+function resolveMattermostReceiptKind(params: {
+  fileIds?: readonly string[];
+  buttons?: readonly unknown[];
+  props?: Record<string, unknown>;
+}): MessageReceiptPartKind {
+  if (params.fileIds?.length) {
+    return "media";
+  }
+  if (params.buttons?.length || params.props) {
+    return "card";
+  }
+  return "text";
+}
 
 function recordMattermostOutboundActivity(accountId: string): void {
   try {
@@ -474,9 +513,20 @@ export async function sendMessageMattermost(
   });
 
   recordMattermostOutboundActivity(accountId);
+  const messageId = post.id ?? "unknown";
 
   return {
-    messageId: post.id ?? "unknown",
+    messageId,
     channelId,
+    receipt: createMattermostSendReceipt({
+      messageId,
+      channelId,
+      kind: resolveMattermostReceiptKind({
+        fileIds,
+        buttons: opts.buttons,
+        props,
+      }),
+      replyToId: opts.replyToId,
+    }),
   };
 }

@@ -38,7 +38,7 @@ Skill Workshop is useful when the agent learns a procedure such as:
 
 It is not intended for:
 
-- facts like “the user likes blue”
+- facts like "the user likes blue"
 - broad autobiographical memory
 - raw transcript archiving
 - secrets, credentials, or hidden prompt text
@@ -217,7 +217,7 @@ The reviewer has no tools:
 - `toolsAllow: []`
 - `disableMessageTool: true`
 
-The reviewer returns either `{ "action": "none" }` or one proposal. The `action` field is `create`, `append`, or `replace` — prefer `append`/`replace` when a relevant skill already exists; use `create` only when no existing skill fits.
+The reviewer returns either `{ "action": "none" }` or one proposal. The `action` field is `create`, `append`, or `replace` - prefer `append`/`replace` when a relevant skill already exists; use `create` only when no existing skill fits.
 
 Example `create`:
 
@@ -579,12 +579,12 @@ warning/debug message and skips that review pass.
 
 Use Skill Workshop when the user says:
 
-- “next time, do X”
-- “from now on, prefer Y”
-- “make sure to verify Z”
-- “save this as a workflow”
-- “this took a while; remember the process”
-- “update the local skill for this”
+- "next time, do X"
+- "from now on, prefer Y"
+- "make sure to verify Z"
+- "save this as a workflow"
+- "this took a while; remember the process"
+- "update the local skill for this"
 
 Good skill text:
 

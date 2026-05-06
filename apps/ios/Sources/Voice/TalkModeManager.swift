@@ -800,11 +800,11 @@ final class TalkModeManager: NSObject {
                 }
             }
             let completion = await self.waitForChatCompletion(runId: runId, gateway: gateway, timeoutSeconds: 120)
-            if completion == .timeout {
+            if completion.state == .timeout {
                 self.logger.warning(
                     "chat completion timeout runId=\(runId, privacy: .public); attempting history fallback")
                 GatewayDiagnostics.log("talk: chat completion timeout runId=\(runId)")
-            } else if completion == .aborted {
+            } else if completion.state == .aborted {
                 self.statusText = "Aborted"
                 self.logger.warning("chat completion aborted runId=\(runId, privacy: .public)")
                 GatewayDiagnostics.log("talk: chat completion aborted runId=\(runId)")
@@ -812,7 +812,7 @@ final class TalkModeManager: NSObject {
                 await self.finishIncrementalSpeech()
                 await self.start()
                 return
-            } else if completion == .error {
+            } else if completion.state == .error {
                 self.statusText = "Chat error"
                 self.logger.warning("chat completion error runId=\(runId, privacy: .public)")
                 GatewayDiagnostics.log("talk: chat completion error runId=\(runId)")
@@ -822,15 +822,18 @@ final class TalkModeManager: NSObject {
                 return
             }
 
-            var assistantText = try await self.waitForAssistantText(
-                gateway: gateway,
-                since: startedAt,
-                timeoutSeconds: completion == .final ? 12 : 25)
+            var assistantText = completion.assistantText
             if assistantText == nil, shouldIncremental {
                 let fallback = self.incrementalSpeechBuffer.latestText
                 if !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     assistantText = fallback
                 }
+            }
+            if assistantText == nil {
+                assistantText = try await self.waitForAssistantTextFromHistory(
+                    gateway: gateway,
+                    since: startedAt,
+                    timeoutSeconds: completion.state == .final ? 12 : 25)
             }
             guard let assistantText else {
                 self.statusText = "No reply"
@@ -898,6 +901,11 @@ final class TalkModeManager: NSObject {
         }
     }
 
+    private struct ChatCompletionResult {
+        var state: ChatCompletionState
+        var assistantText: String?
+    }
+
     private func sendChat(_ message: String, gateway: GatewayNodeSession) async throws -> String {
         struct SendResponse: Decodable { let runId: String }
         let payload: [String: Any] = [
@@ -922,40 +930,51 @@ final class TalkModeManager: NSObject {
     private func waitForChatCompletion(
         runId: String,
         gateway: GatewayNodeSession,
-        timeoutSeconds: Int = 120) async -> ChatCompletionState
+        timeoutSeconds: Int = 120) async -> ChatCompletionResult
     {
         let stream = await gateway.subscribeServerEvents(bufferingNewest: 200)
-        return await withTaskGroup(of: ChatCompletionState.self) { group in
+        return await withTaskGroup(of: ChatCompletionResult.self) { group in
             group.addTask { [runId] in
+                var latestAssistantText: String?
                 for await evt in stream {
-                    if Task.isCancelled { return .timeout }
+                    if Task.isCancelled {
+                        return ChatCompletionResult(state: .timeout, assistantText: latestAssistantText)
+                    }
                     guard evt.event == "chat", let payload = evt.payload else { continue }
-                    guard let chatEvent = try? GatewayPayloadDecoding.decode(payload, as: ChatEvent.self) else {
+                    guard let chatEvent = try? GatewayPayloadDecoding.decode(
+                        payload,
+                        as: OpenClawChatEventPayload.self)
+                    else {
                         continue
                     }
-                    guard chatEvent.runid == runId else { continue }
-                    if let state = chatEvent.state.value as? String {
-                        switch state {
-                        case "final": return .final
-                        case "aborted": return .aborted
-                        case "error": return .error
-                        default: break
-                        }
+                    guard chatEvent.runId == runId else { continue }
+                    if let text = OpenClawChatEventText.assistantText(from: chatEvent) {
+                        latestAssistantText = text
+                    }
+                    switch chatEvent.state {
+                    case "final":
+                        return ChatCompletionResult(state: .final, assistantText: latestAssistantText)
+                    case "aborted":
+                        return ChatCompletionResult(state: .aborted, assistantText: nil)
+                    case "error":
+                        return ChatCompletionResult(state: .error, assistantText: nil)
+                    default:
+                        break
                     }
                 }
-                return .timeout
+                return ChatCompletionResult(state: .timeout, assistantText: latestAssistantText)
             }
             group.addTask {
                 try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
-                return .timeout
+                return ChatCompletionResult(state: .timeout, assistantText: nil)
             }
-            let result = await group.next() ?? .timeout
+            let result = await group.next() ?? ChatCompletionResult(state: .timeout, assistantText: nil)
             group.cancelAll()
             return result
         }
     }
 
-    private func waitForAssistantText(
+    private func waitForAssistantTextFromHistory(
         gateway: GatewayNodeSession,
         since: Double,
         timeoutSeconds: Int) async throws -> String?

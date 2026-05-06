@@ -37,6 +37,25 @@ vi.mock("../channels/plugins/configured-state.js", async (importOriginal) => {
   };
 });
 
+const setupRegistryMock = vi.hoisted(() => ({
+  resolvePluginSetupAutoEnableReasons: vi.fn(
+    (params: { config?: OpenClawConfig; pluginIds?: readonly string[] }) => {
+      const pluginIds = new Set(params.pluginIds ?? []);
+      const browserEntry = params.config?.plugins?.entries?.browser;
+      const hasBrowserEntry =
+        browserEntry && typeof browserEntry === "object" && browserEntry.enabled !== false;
+      return pluginIds.has("browser") && hasBrowserEntry
+        ? [{ pluginId: "browser", reason: "browser plugin configured" }]
+        : [];
+    },
+  ),
+}));
+
+vi.mock("../plugins/setup-registry.js", () => ({
+  clearPluginSetupRegistryCache: vi.fn(),
+  resolvePluginSetupAutoEnableReasons: setupRegistryMock.resolvePluginSetupAutoEnableReasons,
+}));
+
 const env = makeIsolatedEnv();
 
 afterAll(() => {

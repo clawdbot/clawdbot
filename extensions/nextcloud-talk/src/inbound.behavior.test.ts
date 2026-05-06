@@ -7,7 +7,7 @@ import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
 
 const {
   createChannelPairingControllerMock,
-  dispatchInboundReplyWithBaseMock,
+  dispatchChannelMessageReplyWithBaseMock,
   readStoreAllowFromForDmPolicyMock,
   resolveDmGroupAccessWithCommandGateMock,
   resolveAllowlistProviderRuntimeGroupPolicyMock,
@@ -16,7 +16,7 @@ const {
 } = vi.hoisted(() => {
   return {
     createChannelPairingControllerMock: vi.fn(),
-    dispatchInboundReplyWithBaseMock: vi.fn(),
+    dispatchChannelMessageReplyWithBaseMock: vi.fn(),
     readStoreAllowFromForDmPolicyMock: vi.fn(),
     resolveDmGroupAccessWithCommandGateMock: vi.fn(),
     resolveAllowlistProviderRuntimeGroupPolicyMock: vi.fn(),
@@ -33,7 +33,7 @@ vi.mock("../runtime-api.js", async () => {
   return {
     ...actual,
     createChannelPairingController: createChannelPairingControllerMock,
-    dispatchInboundReplyWithBase: dispatchInboundReplyWithBaseMock,
+    dispatchChannelMessageReplyWithBase: dispatchChannelMessageReplyWithBaseMock,
     readStoreAllowFromForDmPolicy: readStoreAllowFromForDmPolicyMock,
     resolveDmGroupAccessWithCommandGate: resolveDmGroupAccessWithCommandGateMock,
     resolveAllowlistProviderRuntimeGroupPolicy: resolveAllowlistProviderRuntimeGroupPolicyMock,
@@ -196,7 +196,7 @@ describe("nextcloud-talk inbound behavior", () => {
       runtime,
     });
 
-    expect(dispatchInboundReplyWithBaseMock).not.toHaveBeenCalled();
+    expect(dispatchChannelMessageReplyWithBaseMock).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith("nextcloud-talk: drop room room-group (no mention)");
   });
 });

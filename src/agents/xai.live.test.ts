@@ -74,7 +74,6 @@ describeLive("xai live", () => {
         {
           apiKey: XAI_KEY,
           maxTokens: 64,
-          reasoning: "medium",
         },
       );
 
@@ -107,7 +106,6 @@ describeLive("xai live", () => {
         {
           apiKey: XAI_KEY,
           maxTokens: 128,
-          reasoning: "medium",
           onPayload: (payload) => {
             capturedPayload = payload as Record<string, unknown>;
           },

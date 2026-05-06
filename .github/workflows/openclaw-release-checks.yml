@@ -59,7 +59,7 @@ on:
           - qa-parity
           - qa-live
       live_suite_filter:
-        description: Optional exact live/E2E suite id, or comma-separated QA live lanes such as qa-live-matrix,qa-live-telegram; blank runs all selected live suites
+        description: Optional exact live/E2E suite id, or comma-separated QA live lanes such as qa-live-matrix,qa-live-telegram,qa-live-discord,qa-live-whatsapp; blank runs all selected live suites
         required: false
         default: ""
         type: string
@@ -102,6 +102,8 @@ jobs:
       cross_os_suite_filter: ${{ steps.inputs.outputs.cross_os_suite_filter }}
       qa_live_matrix_enabled: ${{ steps.inputs.outputs.qa_live_matrix_enabled }}
       qa_live_telegram_enabled: ${{ steps.inputs.outputs.qa_live_telegram_enabled }}
+      qa_live_discord_enabled: ${{ steps.inputs.outputs.qa_live_discord_enabled }}
+      qa_live_whatsapp_enabled: ${{ steps.inputs.outputs.qa_live_whatsapp_enabled }}
       qa_live_slack_enabled: ${{ steps.inputs.outputs.qa_live_slack_enabled }}
       package_acceptance_package_spec: ${{ steps.inputs.outputs.package_acceptance_package_spec }}
     steps:
@@ -222,19 +224,35 @@ jobs:
           RELEASE_RERUN_GROUP_INPUT: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER_INPUT: ${{ inputs.live_suite_filter }}
           RELEASE_CROSS_OS_SUITE_FILTER_INPUT: ${{ inputs.cross_os_suite_filter }}
-          RELEASE_QA_SLACK_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED || 'false' }}
+          RELEASE_QA_DISCORD_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_RELEASE_QA_DISCORD_LIVE_CI_ENABLED || 'false' }}
+          RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED || 'false' }}
+          RELEASE_QA_SLACK_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_RELEASE_QA_SLACK_LIVE_CI_ENABLED || 'false' }}
           RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT: ${{ inputs.package_acceptance_package_spec }}
         run: |
           set -euo pipefail
           qa_live_matrix_enabled=true
           qa_live_telegram_enabled=true
-          qa_live_slack_enabled=false
+          qa_live_discord_ci_enabled="$(printf '%s' "$RELEASE_QA_DISCORD_LIVE_CI_ENABLED" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$qa_live_discord_ci_enabled" != "true" && "$qa_live_discord_ci_enabled" != "1" && "$qa_live_discord_ci_enabled" != "yes" ]]; then
+            qa_live_discord_ci_enabled=false
+          else
+            qa_live_discord_ci_enabled=true
+          fi
+          qa_live_whatsapp_ci_enabled="$(printf '%s' "$RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$qa_live_whatsapp_ci_enabled" != "true" && "$qa_live_whatsapp_ci_enabled" != "1" && "$qa_live_whatsapp_ci_enabled" != "yes" ]]; then
+            qa_live_whatsapp_ci_enabled=false
+          else
+            qa_live_whatsapp_ci_enabled=true
+          fi
           qa_live_slack_ci_enabled="$(printf '%s' "$RELEASE_QA_SLACK_LIVE_CI_ENABLED" | tr '[:upper:]' '[:lower:]')"
           if [[ "$qa_live_slack_ci_enabled" != "true" && "$qa_live_slack_ci_enabled" != "1" && "$qa_live_slack_ci_enabled" != "yes" ]]; then
             qa_live_slack_ci_enabled=false
           else
             qa_live_slack_ci_enabled=true
           fi
+          qa_live_discord_enabled="$qa_live_discord_ci_enabled"
+          qa_live_whatsapp_enabled="$qa_live_whatsapp_ci_enabled"
+          qa_live_slack_enabled="$qa_live_slack_ci_enabled"
           run_release_soak="$(printf '%s' "$RELEASE_RUN_RELEASE_SOAK_INPUT" | tr '[:upper:]' '[:lower:]')"
           if [[ "$run_release_soak" != "true" && "$run_release_soak" != "1" && "$run_release_soak" != "yes" ]]; then
             run_release_soak=false
@@ -250,6 +268,8 @@ jobs:
             qa_filter_seen=false
             matrix_selected=false
             telegram_selected=false
+            discord_selected=false
+            whatsapp_selected=false
             slack_selected=false
 
             IFS=', ' read -r -a filter_tokens <<< "$filter"
@@ -263,11 +283,16 @@ jobs:
                   qa_filter_seen=true
                   matrix_selected=true
                   telegram_selected=true
+                  discord_selected="$qa_live_discord_ci_enabled"
+                  whatsapp_selected="$qa_live_whatsapp_ci_enabled"
+                  slack_selected="$qa_live_slack_ci_enabled"
                   ;;
                 qa-live-non-slack|qa-non-slack|non-slack|no-slack|without-slack)
                   qa_filter_seen=true
                   matrix_selected=true
                   telegram_selected=true
+                  discord_selected="$qa_live_discord_ci_enabled"
+                  whatsapp_selected="$qa_live_whatsapp_ci_enabled"
                   ;;
                 qa-live-matrix|qa-matrix|matrix)
                   qa_filter_seen=true
@@ -276,6 +301,14 @@ jobs:
                 qa-live-telegram|qa-telegram|telegram)
                   qa_filter_seen=true
                   telegram_selected=true
+                  ;;
+                qa-live-discord|qa-discord|discord)
+                  qa_filter_seen=true
+                  discord_selected="$qa_live_discord_ci_enabled"
+                  ;;
+                qa-live-whatsapp|qa-whatsapp|whatsapp)
+                  qa_filter_seen=true
+                  whatsapp_selected="$qa_live_whatsapp_ci_enabled"
                   ;;
                 qa-live-slack|qa-slack|slack)
                   qa_filter_seen=true
@@ -287,6 +320,8 @@ jobs:
             if [[ "$qa_filter_seen" == "true" ]]; then
               qa_live_matrix_enabled="$matrix_selected"
               qa_live_telegram_enabled="$telegram_selected"
+              qa_live_discord_enabled="$discord_selected"
+              qa_live_whatsapp_enabled="$whatsapp_selected"
               qa_live_slack_enabled="$slack_selected"
             fi
           fi
@@ -302,6 +337,8 @@ jobs:
             printf 'cross_os_suite_filter=%s\n' "$RELEASE_CROSS_OS_SUITE_FILTER_INPUT"
             printf 'qa_live_matrix_enabled=%s\n' "$qa_live_matrix_enabled"
             printf 'qa_live_telegram_enabled=%s\n' "$qa_live_telegram_enabled"
+            printf 'qa_live_discord_enabled=%s\n' "$qa_live_discord_enabled"
+            printf 'qa_live_whatsapp_enabled=%s\n' "$qa_live_whatsapp_enabled"
             printf 'qa_live_slack_enabled=%s\n' "$qa_live_slack_enabled"
             printf 'package_acceptance_package_spec=%s\n' "$RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT"
           } >> "$GITHUB_OUTPUT"
@@ -337,7 +374,7 @@ jobs:
             if [[ -n "${RELEASE_CROSS_OS_SUITE_FILTER// }" ]]; then
               echo "- Cross-OS suite filter: \`${RELEASE_CROSS_OS_SUITE_FILTER}\`"
             fi
-            echo "- QA live lanes: Matrix \`${{ steps.inputs.outputs.qa_live_matrix_enabled }}\`, Telegram \`${{ steps.inputs.outputs.qa_live_telegram_enabled }}\`, Slack \`${{ steps.inputs.outputs.qa_live_slack_enabled }}\`"
+            echo "- QA live lanes: Matrix \`${{ steps.inputs.outputs.qa_live_matrix_enabled }}\`, Telegram \`${{ steps.inputs.outputs.qa_live_telegram_enabled }}\`, Discord \`${{ steps.inputs.outputs.qa_live_discord_enabled }}\`, WhatsApp \`${{ steps.inputs.outputs.qa_live_whatsapp_enabled }}\`, Slack \`${{ steps.inputs.outputs.qa_live_slack_enabled }}\`"
             if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
               echo "- Package Acceptance package spec: \`${PACKAGE_ACCEPTANCE_PACKAGE_SPEC}\`"
             else
@@ -558,7 +595,7 @@ jobs:
       artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
       package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
       suite_profile: custom
-      docker_lanes: doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update
+      docker_lanes: doctor-switch update-channel-switch update-corrupt-plugin upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
       telegram_mode: mock-openai
@@ -926,10 +963,198 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  qa_live_discord_release_checks:
+    name: Run QA Lab live Discord lane
+    needs: [resolve_target]
+    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_discord_enabled == 'true' && vars.OPENCLAW_RELEASE_QA_DISCORD_LIVE_CI_ENABLED == 'true'
+    continue-on-error: true
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: read
+    environment: qa-live-shared
+    env:
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Validate required QA credential env
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_var() {
+            local key="$1"
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required ${key}." >&2
+              exit 1
+            fi
+          }
+
+          require_var OPENCLAW_QA_CONVEX_SITE_URL
+          require_var OPENCLAW_QA_CONVEX_SECRET_CI
+
+      - name: Build private QA runtime
+        run: pnpm build
+
+      - name: Run Discord live lane
+        id: run_lane
+        shell: bash
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_DISCORD_CAPTURE_CONTENT: "1"
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/discord-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          for attempt in 1 2; do
+            attempt_output_dir="${output_dir}/attempt-${attempt}"
+            if pnpm openclaw qa discord \
+              --repo-root . \
+              --output-dir "${attempt_output_dir}" \
+              --provider-mode mock-openai \
+              --model mock-openai/gpt-5.5 \
+              --alt-model mock-openai/gpt-5.5-alt \
+              --fast \
+              --credential-source convex \
+              --credential-role ci; then
+              exit 0
+            fi
+            if [[ "${attempt}" == "2" ]]; then
+              exit 1
+            fi
+            echo "Discord live lane failed on attempt ${attempt}; retrying once..." >&2
+            sleep 10
+          done
+
+      - name: Upload Discord QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-qa-live-discord-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: warn
+
+  qa_live_whatsapp_release_checks:
+    name: Run QA Lab live WhatsApp lane
+    needs: [resolve_target]
+    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_whatsapp_enabled == 'true' && vars.OPENCLAW_RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED == 'true'
+    continue-on-error: true
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: read
+    environment: qa-live-shared
+    env:
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Validate required QA credential env
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_var() {
+            local key="$1"
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required ${key}." >&2
+              exit 1
+            fi
+          }
+
+          require_var OPENCLAW_QA_CONVEX_SITE_URL
+          require_var OPENCLAW_QA_CONVEX_SECRET_CI
+
+      - name: Build private QA runtime
+        run: pnpm build
+
+      - name: Run WhatsApp live lane
+        id: run_lane
+        shell: bash
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT: "1"
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/whatsapp-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          for attempt in 1 2; do
+            attempt_output_dir="${output_dir}/attempt-${attempt}"
+            if pnpm openclaw qa whatsapp \
+              --repo-root . \
+              --output-dir "${attempt_output_dir}" \
+              --provider-mode mock-openai \
+              --model mock-openai/gpt-5.5 \
+              --alt-model mock-openai/gpt-5.5-alt \
+              --fast \
+              --credential-source convex \
+              --credential-role ci; then
+              exit 0
+            fi
+            if [[ "${attempt}" == "2" ]]; then
+              exit 1
+            fi
+            echo "WhatsApp live lane failed on attempt ${attempt}; retrying once..." >&2
+            sleep 10
+          done
+
+      - name: Upload WhatsApp QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-qa-live-whatsapp-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: warn
+
   qa_live_slack_release_checks:
     name: Run QA Lab live Slack lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_slack_enabled == 'true' && vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED == 'true'
+    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_slack_enabled == 'true' && vars.OPENCLAW_RELEASE_QA_SLACK_LIVE_CI_ENABLED == 'true'
     continue-on-error: true
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
@@ -1033,6 +1258,8 @@ jobs:
       - qa_lab_parity_report_release_checks
       - qa_live_matrix_release_checks
       - qa_live_telegram_release_checks
+      - qa_live_discord_release_checks
+      - qa_live_whatsapp_release_checks
       - qa_live_slack_release_checks
     if: always()
     runs-on: ubuntu-24.04
@@ -1055,6 +1282,8 @@ jobs:
             "qa_lab_parity_report_release_checks=${{ needs.qa_lab_parity_report_release_checks.result }}" \
             "qa_live_matrix_release_checks=${{ needs.qa_live_matrix_release_checks.result }}" \
             "qa_live_telegram_release_checks=${{ needs.qa_live_telegram_release_checks.result }}" \
+            "qa_live_discord_release_checks=${{ needs.qa_live_discord_release_checks.result }}" \
+            "qa_live_whatsapp_release_checks=${{ needs.qa_live_whatsapp_release_checks.result }}" \
             "qa_live_slack_release_checks=${{ needs.qa_live_slack_release_checks.result }}"
           do
             name="${item%%=*}"

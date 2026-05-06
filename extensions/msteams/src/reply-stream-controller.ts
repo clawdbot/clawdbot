@@ -1,4 +1,12 @@
 import {
+  createLiveMessageState,
+  createPreviewMessageReceipt,
+  defineFinalizableLivePreviewAdapter,
+  deliverWithFinalizableLivePreviewAdapter,
+  markLiveMessageFinalized,
+  type LiveMessageState,
+} from "openclaw/plugin-sdk/channel-message";
+import {
   createChannelProgressDraftGate,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
@@ -65,6 +73,20 @@ export function createTeamsReplyStreamController(params: {
   let progressLines: string[] = [];
   let lastInformativeText = "";
   let pendingFinalize: Promise<void> | undefined;
+  let liveState: LiveMessageState<ReplyPayload> = createLiveMessageState({
+    canFinalizeInPlace: Boolean(stream),
+  });
+
+  const markStreamFinalized = () => {
+    if (!stream || stream.isFailed) {
+      return;
+    }
+    const messageId = stream.messageId ?? stream.previewStreamId;
+    if (!messageId) {
+      return;
+    }
+    liveState = markLiveMessageFinalized(liveState, createPreviewMessageReceipt({ id: messageId }));
+  };
 
   const renderInformativeUpdate = async () => {
     if (!stream) {
@@ -144,6 +166,50 @@ export function createTeamsReplyStreamController(params: {
     return { ...payload, text: remainingText };
   };
 
+  const finalizeProgressPayload = async (
+    payload: ReplyPayload,
+    hasMedia: boolean,
+  ): Promise<Maybe<ReplyPayload>> => {
+    if (!stream || !payload.text) {
+      return payload;
+    }
+    const result = await deliverWithFinalizableLivePreviewAdapter({
+      kind: "final",
+      payload,
+      liveState,
+      adapter: defineFinalizableLivePreviewAdapter<ReplyPayload, string, { text: string }>({
+        draft: {
+          flush: async () => {},
+          clear: async () => {},
+          id: () => stream.previewStreamId,
+        },
+        buildFinalEdit: (candidate) => (candidate.text ? { text: candidate.text } : undefined),
+        editFinal: async (_previewId, edit) => {
+          const finalized = await stream.replaceInformativeWithFinal(edit.text);
+          informativeUpdateSent = false;
+          if (!finalized || stream.isFailed) {
+            throw new Error("Teams progress stream finalization failed");
+          }
+        },
+        resolveFinalizedId: (previewId) => stream.messageId ?? stream.previewStreamId ?? previewId,
+        createPreviewReceipt: (id) => createPreviewMessageReceipt({ id }),
+        onPreviewFinalized: (_id, _receipt, state) => {
+          liveState = state;
+        },
+        logPreviewEditFailure: (err) => {
+          params.log.debug?.(`stream finalization failed: ${formatUnknownError(err)}`);
+        },
+      }),
+      deliverNormally: async () => false,
+    });
+
+    return result.kind === "preview-finalized"
+      ? hasMedia
+        ? { ...payload, text: undefined }
+        : undefined
+      : payload;
+  };
+
   return {
     async onReplyStart(): Promise<void> {
       return;
@@ -183,12 +249,7 @@ export function createTeamsReplyStreamController(params: {
         if (!payload.text) {
           return payload;
         }
-        const finalized = await stream.replaceInformativeWithFinal(payload.text);
-        informativeUpdateSent = false;
-        if (!finalized || stream.isFailed) {
-          return payload;
-        }
-        return hasMedia ? { ...payload, text: undefined } : undefined;
+        return await finalizeProgressPayload(payload, hasMedia);
       }
 
       if (!stream || !streamReceivedTokens) {
@@ -211,7 +272,9 @@ export function createTeamsReplyStreamController(params: {
       // subsequent text segments (after tool calls) use fallback delivery.
       // finalize() is idempotent; the later call in markDispatchIdle is a no-op.
       streamReceivedTokens = false;
-      pendingFinalize = stream.finalize();
+      pendingFinalize = stream.finalize().then(() => {
+        markStreamFinalized();
+      });
 
       if (!hasMedia) {
         return undefined;
@@ -222,11 +285,18 @@ export function createTeamsReplyStreamController(params: {
     async finalize(): Promise<void> {
       progressDraftGate.cancel();
       await pendingFinalize;
-      await stream?.finalize();
+      if (!pendingFinalize) {
+        await stream?.finalize();
+        markStreamFinalized();
+      }
     },
 
     hasStream(): boolean {
       return Boolean(stream);
+    },
+
+    liveState(): LiveMessageState<ReplyPayload> {
+      return liveState;
     },
 
     /**

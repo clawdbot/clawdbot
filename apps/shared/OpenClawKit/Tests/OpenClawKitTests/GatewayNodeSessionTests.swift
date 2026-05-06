@@ -250,6 +250,42 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func passwordTakesPrecedenceOverBootstrapToken() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "operator",
+            scopes: ["operator.read"],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "ui",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: URL(string: "ws://example.invalid")!,
+            token: nil,
+            bootstrapToken: "stale-bootstrap-token",
+            password: "shared-password",
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+            })
+
+        let auth = try #require(session.latestTask()?.latestConnectAuth())
+        #expect(auth["password"] as? String == "shared-password")
+        #expect(auth["bootstrapToken"] == nil)
+        #expect(auth["token"] == nil)
+
+        await gateway.disconnect()
+    }
+
+    @Test
     func bootstrapHelloStoresAdditionalDeviceTokens() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

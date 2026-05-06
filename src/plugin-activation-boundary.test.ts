@@ -80,6 +80,11 @@ const facadeMockHelpers = vi.hoisted(() => {
 
 vi.mock("./plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry,
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
 }));
 
 vi.mock("./secrets/channel-env-vars.js", () => ({

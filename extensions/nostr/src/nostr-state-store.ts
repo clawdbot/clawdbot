@@ -1,8 +1,7 @@
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import { z } from "zod";
 import { getNostrRuntime } from "./runtime.js";
 
@@ -114,13 +113,14 @@ export async function readNostrBusState(params: {
 }): Promise<NostrBusState | null> {
   const filePath = resolveNostrStatePath(params.accountId, params.env);
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    return safeParseState(raw);
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
+    const raw = await privateFileStore(path.dirname(filePath)).readTextIfExists(
+      path.basename(filePath),
+    );
+    if (raw === null) {
       return null;
     }
+    return safeParseState(raw);
+  } catch {
     return null;
   }
 }
@@ -133,20 +133,15 @@ export async function writeNostrBusState(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const filePath = resolveNostrStatePath(params.accountId, params.env);
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   const payload: NostrBusState = {
     version: STORE_VERSION,
     lastProcessedAt: params.lastProcessedAt,
     gatewayStartedAt: params.gatewayStartedAt,
     recentEventIds: (params.recentEventIds ?? []).filter((x): x is string => typeof x === "string"),
   };
-  await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, {
-    encoding: "utf-8",
+  await privateFileStore(path.dirname(filePath)).writeJson(path.basename(filePath), payload, {
+    trailingNewline: true,
   });
-  await fs.chmod(tmp, 0o600);
-  await fs.rename(tmp, filePath);
 }
 
 /**
@@ -187,13 +182,14 @@ export async function readNostrProfileState(params: {
 }): Promise<NostrProfileState | null> {
   const filePath = resolveNostrProfileStatePath(params.accountId, params.env);
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    return safeParseProfileState(raw);
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
+    const raw = await privateFileStore(path.dirname(filePath)).readTextIfExists(
+      path.basename(filePath),
+    );
+    if (raw === null) {
       return null;
     }
+    return safeParseProfileState(raw);
+  } catch {
     return null;
   }
 }
@@ -206,18 +202,13 @@ export async function writeNostrProfileState(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const filePath = resolveNostrProfileStatePath(params.accountId, params.env);
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   const payload: NostrProfileState = {
     version: PROFILE_STATE_VERSION,
     lastPublishedAt: params.lastPublishedAt,
     lastPublishedEventId: params.lastPublishedEventId,
     lastPublishResults: params.lastPublishResults,
   };
-  await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, {
-    encoding: "utf-8",
+  await privateFileStore(path.dirname(filePath)).writeJson(path.basename(filePath), payload, {
+    trailingNewline: true,
   });
-  await fs.chmod(tmp, 0o600);
-  await fs.rename(tmp, filePath);
 }

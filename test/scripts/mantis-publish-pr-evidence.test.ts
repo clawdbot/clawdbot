@@ -93,6 +93,79 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     expect(body).toContain("- Overall: `true`");
   });
 
+  it("allows failure manifests to omit optional visual artifacts", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
+    writeFileSync(path.join(dir, "summary.json"), JSON.stringify({ status: "fail" }));
+    writeFileSync(path.join(dir, "report.md"), "bootstrap failed before screenshot");
+    const manifestPath = path.join(dir, "mantis-evidence.json");
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        id: "slack-desktop-smoke",
+        title: "Mantis Slack Desktop Smoke QA",
+        summary: "Mantis could not finish VM setup.",
+        scenario: "slack-openclaw-desktop-smoke",
+        comparison: {
+          candidate: {
+            expected: "Slack QA and VM gateway setup pass",
+            sha: "bbb",
+            status: "fail",
+          },
+          pass: false,
+        },
+        artifacts: [
+          {
+            alt: "Slack Web desktop screenshot from the Mantis VM",
+            inline: true,
+            kind: "desktopScreenshot",
+            label: "Slack desktop/VNC browser",
+            lane: "candidate",
+            path: "slack-desktop-smoke.png",
+            required: false,
+            targetPath: "slack-desktop.png",
+          },
+          {
+            kind: "metadata",
+            label: "Slack desktop summary",
+            lane: "run",
+            path: "summary.json",
+            targetPath: "summary.json",
+          },
+          {
+            kind: "report",
+            label: "Slack desktop report",
+            lane: "run",
+            path: "report.md",
+            targetPath: "report.md",
+          },
+        ],
+      }),
+    );
+
+    const manifest = loadEvidenceManifest(manifestPath);
+    expect(manifest.artifacts.map((artifact) => artifact.targetPath)).toEqual([
+      "summary.json",
+      "report.md",
+      "mantis-evidence.json",
+    ]);
+    const body = renderEvidenceComment({
+      artifactRoot: "mantis/slack/pr-1/run-1",
+      artifactUrl: "https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2",
+      manifest,
+      marker: "<!-- mantis-slack-desktop-smoke -->",
+      rawBase:
+        "https://raw.githubusercontent.com/openclaw/openclaw/qa-artifacts/mantis/slack/pr-1/run-1",
+      requestSource: "workflow_dispatch",
+      runUrl: "https://github.com/openclaw/openclaw/actions/runs/1",
+      treeUrl: "https://github.com/openclaw/openclaw/tree/qa-artifacts/mantis/slack/pr-1/run-1",
+    });
+
+    expect(body).toContain("Summary: Mantis could not finish VM setup.");
+    expect(body).toContain("- Overall: `false`");
+    expect(body).not.toContain("<img ");
+  });
+
   it("rejects artifact paths that escape the manifest directory", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
     const manifestPath = path.join(dir, "mantis-evidence.json");

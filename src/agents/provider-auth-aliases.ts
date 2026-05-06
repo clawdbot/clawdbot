@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   isWorkspacePluginAllowedByConfig,
@@ -118,11 +119,23 @@ export function resolveProviderAuthAliasMap(
   if (cached) {
     return cached;
   }
-  const snapshot = loadPluginMetadataSnapshot({
-    config: params?.config ?? {},
-    workspaceDir: params?.workspaceDir,
-    env,
-  });
+  const config = params?.config ?? {};
+  const snapshot =
+    params?.workspaceDir !== undefined
+      ? (getCurrentPluginMetadataSnapshot({
+          config,
+          workspaceDir: params.workspaceDir,
+          env,
+        }) ??
+        loadPluginMetadataSnapshot({
+          config,
+          workspaceDir: params.workspaceDir,
+          env,
+        }))
+      : loadPluginMetadataSnapshot({
+          config,
+          env,
+        });
   const preferredAliases = new Map<string, ProviderAuthAliasCandidate>();
   const aliases: Record<string, string> = Object.create(null) as Record<string, string>;
   for (const plugin of snapshot.plugins) {

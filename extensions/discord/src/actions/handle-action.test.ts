@@ -216,6 +216,38 @@ describe("handleDiscordMessageAction", () => {
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
+  it("maps thread-reply filePath to Discord threadReply with media read context", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("report"));
+
+    await handleDiscordMessageAction({
+      action: "thread-reply",
+      params: {
+        threadId: "thread-123",
+        message: "thread update",
+        filePath: "/tmp/agent-root/report.md",
+      },
+      cfg: {
+        channels: { discord: { token: "tok", actions: { threads: true } } },
+      } as OpenClawConfig,
+      mediaLocalRoots: ["/tmp/agent-root"],
+      mediaReadFile,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "threadReply",
+        channelId: "thread-123",
+        content: "thread update",
+        mediaUrl: "/tmp/agent-root/report.md",
+      }),
+      expect.any(Object),
+      {
+        mediaLocalRoots: ["/tmp/agent-root"],
+        mediaReadFile,
+      },
+    );
+  });
+
   it("forwards top-level components on sends", async () => {
     const components = { blocks: [{ type: "text", text: "Pick one" }] };
 

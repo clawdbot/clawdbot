@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
 import {
   collectInstalledGlobalPackageErrors,
@@ -50,15 +51,6 @@ type NpmBinShimBackup = {
 
 function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function removePathBestEffort(targetPath: string): Promise<void> {

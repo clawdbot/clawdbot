@@ -175,11 +175,11 @@ function parseNormalizedGatewayUrl(raw: string): string | null {
 function describeSecureMobilePairingFix(source?: string): string {
   const sourceNote = source ? ` Resolved source: ${source}.` : "";
   return (
-    "Mobile pairing over non-loopback networks requires a secure gateway URL (wss://) or Tailscale Serve/Funnel." +
+    "Tailscale and public mobile pairing require a secure gateway URL (wss://) or Tailscale Serve/Funnel." +
     sourceNote +
-    " Fix: prefer gateway.tailscale.mode=serve, or set " +
+    " Fix: use a private LAN address, prefer gateway.tailscale.mode=serve, or set " +
     "gateway.remote.url / plugins.entries.device-pair.config.publicUrl to a wss:// URL. " +
-    "ws:// setup codes are only valid for localhost/loopback or the Android emulator."
+    "ws:// setup codes are only valid for localhost/loopback, private LAN addresses, .local hosts, or the Android emulator."
   );
 }
 
@@ -256,6 +256,21 @@ function isPrivateIPv4(address: string): boolean {
   return false;
 }
 
+function isPrivateLanCleartextHost(host: string): boolean {
+  const normalized = normalizeHostForIpCheck(host);
+  if (normalized.endsWith(".local")) {
+    return true;
+  }
+  if (isPrivateIPv4(normalized)) {
+    return true;
+  }
+  const octets = parseIPv4Octets(normalized);
+  if (!octets) {
+    return false;
+  }
+  return octets[0] === 169 && octets[1] === 254;
+}
+
 function isTailnetIPv4(address: string): boolean {
   const octets = parseIPv4Octets(address);
   if (!octets) {
@@ -267,7 +282,9 @@ function isTailnetIPv4(address: string): boolean {
 
 function isMobilePairingCleartextAllowedHost(host: string): boolean {
   const normalized = normalizeHostForIpCheck(host);
-  return isLoopbackHost(normalized) || normalized === "10.0.2.2";
+  return (
+    isLoopbackHost(normalized) || normalized === "10.0.2.2" || isPrivateLanCleartextHost(normalized)
+  );
 }
 
 function validateMobilePairingUrl(url: string, source?: string): string | null {

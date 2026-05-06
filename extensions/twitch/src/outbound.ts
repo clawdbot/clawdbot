@@ -5,6 +5,12 @@
  * Supports text and media (URL) sending with markdown stripping and chunking.
  */
 
+import {
+  createMessageReceiptFromOutboundResults,
+  defineChannelMessageAdapter,
+  type ChannelMessageSendResult,
+  type MessageReceiptPartKind,
+} from "openclaw/plugin-sdk/channel-message";
 import { resolveTwitchAccountContext } from "./config.js";
 import { sendMessageTwitchInternal } from "./send.js";
 import type {
@@ -24,6 +30,14 @@ import { missingTargetError, normalizeTwitchChannel } from "./utils/twitch.js";
 export const twitchOutbound: ChannelOutboundAdapter = {
   /** Direct delivery mode - messages are sent immediately */
   deliveryMode: "direct",
+
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      media: true,
+      messageSendingHooks: true,
+    },
+  },
 
   /** Twitch chat message limit is 500 characters */
   textChunkLimit: 500,
@@ -143,6 +157,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
     return {
       channel: "twitch",
       messageId: result.messageId,
+      receipt: result.receipt,
       timestamp: Date.now(),
     };
   },
@@ -184,3 +199,44 @@ export const twitchOutbound: ChannelOutboundAdapter = {
     });
   },
 };
+
+function toTwitchMessageSendResult(
+  result: OutboundDeliveryResult,
+  kind: MessageReceiptPartKind,
+): ChannelMessageSendResult {
+  const receipt =
+    result.receipt ??
+    createMessageReceiptFromOutboundResults({
+      results: result.messageId ? [{ channel: "twitch", messageId: result.messageId }] : [],
+      kind,
+    });
+  return {
+    messageId: result.messageId || receipt.primaryPlatformMessageId,
+    receipt,
+  };
+}
+
+export const twitchMessageAdapter = defineChannelMessageAdapter({
+  id: "twitch",
+  durableFinal: {
+    capabilities: {
+      text: true,
+      media: true,
+      messageSendingHooks: true,
+    },
+  },
+  send: {
+    text: async (ctx) => {
+      if (!twitchOutbound.sendText) {
+        throw new Error("Twitch text sending is not available.");
+      }
+      return toTwitchMessageSendResult(await twitchOutbound.sendText(ctx), "text");
+    },
+    media: async (ctx) => {
+      if (!twitchOutbound.sendMedia) {
+        throw new Error("Twitch media sending is not available.");
+      }
+      return toTwitchMessageSendResult(await twitchOutbound.sendMedia(ctx), "media");
+    },
+  },
+});

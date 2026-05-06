@@ -769,7 +769,9 @@ describe("discoverOpenClawPlugins", () => {
           entry.level === "warn" &&
           entry.pluginId === "source-only-pack" &&
           entry.message.includes("requires compiled runtime output") &&
-          entry.message.includes("./dist/index.js"),
+          entry.message.includes("./dist/index.js") &&
+          entry.message.includes("plugin packaging issue") &&
+          entry.message.includes("disable/uninstall the plugin"),
       ),
     ).toBe(true);
   });

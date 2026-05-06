@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  FsSafeError,
+  resolveAbsolutePathForRead,
+  root,
+} from "openclaw/plugin-sdk/security-runtime";
 import { mimeFromExtension } from "../shared/mime.js";
 
 export const DIR_LIST_DEFAULT_MAX_ENTRIES = 200;
@@ -54,6 +59,17 @@ function clampMaxEntries(input: unknown): number {
 }
 
 function classifyFsError(err: unknown): DirListErrCode {
+  if (err instanceof FsSafeError) {
+    if (err.code === "not-found") {
+      return "NOT_FOUND";
+    }
+    if (err.code === "symlink") {
+      return "SYMLINK_REDIRECT";
+    }
+    if (err.code === "invalid-path") {
+      return "INVALID_PATH";
+    }
+  }
   const code = (err as { code?: string } | null)?.code;
   if (code === "ENOENT") {
     return "NOT_FOUND";
@@ -86,22 +102,31 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
 
   let canonical: string;
   try {
-    canonical = await fs.realpath(requestedPath);
+    canonical = (
+      await resolveAbsolutePathForRead(requestedPath, {
+        symlinks: followSymlinks ? "follow" : "reject",
+      })
+    ).canonicalPath;
   } catch (err) {
     const code = classifyFsError(err);
+    const canonicalPath =
+      err instanceof FsSafeError &&
+      err.cause &&
+      typeof err.cause === "object" &&
+      "canonicalPath" in err.cause &&
+      typeof err.cause.canonicalPath === "string"
+        ? err.cause.canonicalPath
+        : undefined;
     return {
       ok: false,
       code,
-      message: code === "NOT_FOUND" ? "path not found" : `realpath failed: ${String(err)}`,
-    };
-  }
-
-  if (!followSymlinks && canonical !== requestedPath) {
-    return {
-      ok: false,
-      code: "SYMLINK_REDIRECT",
-      message: `path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)`,
-      canonicalPath: canonical,
+      message:
+        code === "NOT_FOUND"
+          ? "path not found"
+          : code === "SYMLINK_REDIRECT"
+            ? "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)"
+            : `realpath failed: ${String(err)}`,
+      ...(canonicalPath ? { canonicalPath } : {}),
     };
   }
 
@@ -122,50 +147,39 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
     };
   }
 
-  let names: string[];
+  let listedEntries: { name: string; isDirectory: boolean; size: number; mtimeMs: number }[];
   try {
-    names = await fs.readdir(canonical, { encoding: "utf8" });
+    const dirRoot = await root(canonical);
+    listedEntries = await dirRoot.list(".", { withFileTypes: true });
   } catch (err) {
     const code = classifyFsError(err);
     return {
       ok: false,
       code,
-      message: `readdir failed: ${String(err)}`,
+      message: `list failed: ${String(err)}`,
       canonicalPath: canonical,
     };
   }
 
-  // Sort by name for stable pagination
-  names.sort((a, b) => a.localeCompare(b));
+  listedEntries.sort((a, b) => a.name.localeCompare(b.name));
 
-  const total = names.length;
-  const page = names.slice(offset, offset + maxEntries);
+  const total = listedEntries.length;
+  const page = listedEntries.slice(offset, offset + maxEntries);
   const truncated = offset + maxEntries < total;
   const nextPageToken = truncated ? String(offset + maxEntries) : undefined;
 
   const entries: DirListEntry[] = [];
-  for (const name of page) {
-    const entryPath = path.join(canonical, name);
-
-    let isDir = false;
-    let size = 0;
-    let mtime = 0;
-    try {
-      const s = await fs.stat(entryPath);
-      isDir = s.isDirectory();
-      size = isDir ? 0 : s.size;
-      mtime = s.mtimeMs;
-    } catch {
-      // stat may fail for broken symlinks; keep zeros and treat as file
-    }
+  for (const entry of page) {
+    const entryPath = path.join(canonical, entry.name);
+    const isDir = entry.isDirectory;
 
     entries.push({
-      name,
+      name: entry.name,
       path: entryPath,
-      size,
-      mimeType: isDir ? "inode/directory" : mimeFromExtension(name),
+      size: isDir ? 0 : entry.size,
+      mimeType: isDir ? "inode/directory" : mimeFromExtension(entry.name),
       isDir,
-      mtime,
+      mtime: entry.mtimeMs,
     });
   }
 

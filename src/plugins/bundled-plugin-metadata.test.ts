@@ -469,7 +469,7 @@ describe("bundled plugin metadata", () => {
     expect(
       resolveGatewayStartupPluginIdsFromRegistry({
         config: {},
-        env: process.env,
+        env: {},
         index,
         manifestRegistry,
         platform: "linux",

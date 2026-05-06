@@ -259,7 +259,7 @@ describe("gateway session utils", () => {
     expect(row.thinkingDefault).toBe("medium");
   });
 
-  test("session list memoizes repeated thinking enrichment per provider model", async () => {
+  test("async session list reuses thinking metadata for lightweight rows", async () => {
     const resolveThinkingProfile = vi.fn(() => ({
       levels: [{ id: "off" as const }, { id: "medium" as const }],
       defaultLevel: "medium" as const,
@@ -298,7 +298,16 @@ describe("gateway session utils", () => {
     });
 
     expect(result.sessions).toHaveLength(5);
-    expect(resolveThinkingProfile).toHaveBeenCalledTimes(3);
+    expect(
+      result.sessions.every((session) =>
+        session.thinkingLevels?.some((level) => level.id === "medium"),
+      ),
+    ).toBe(true);
+    expect(result.sessions.every((session) => session.thinkingOptions?.includes("medium"))).toBe(
+      true,
+    );
+    expect(result.sessions.every((session) => session.thinkingDefault === "medium")).toBe(true);
+    expect(resolveThinkingProfile).toHaveBeenCalled();
   });
 
   test("session list thinking cache preserves case-distinct model catalog entries", async () => {
@@ -319,7 +328,7 @@ describe("gateway session utils", () => {
         compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
       },
     ];
-    const result = await listSessionsFromStoreAsync({
+    const result = listSessionsFromStore({
       cfg,
       storePath: "",
       modelCatalog,
@@ -1289,7 +1298,10 @@ describe("listSessionsFromStore selected model display", () => {
         }),
       );
       expect(listed.sessions[0]?.agentRuntime).toEqual({ id: "pi", source: "implicit" });
+      expect(listed.sessions[0]?.thinkingLevel).toBeUndefined();
+      expect(listed.sessions[0]?.thinkingLevels?.length).toBeGreaterThan(0);
       expect(listed.sessions[0]?.thinkingOptions?.length).toBeGreaterThan(0);
+      expect(listed.sessions[0]?.thinkingDefault).toBeDefined();
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -1439,6 +1451,107 @@ describe("listSessionsFromStore selected model display", () => {
 
     expect(result.sessions[0]?.modelProvider).toBe("anthropic");
     expect(result.sessions[0]?.model).toBe("claude-opus-4-7");
+  });
+
+  test("uses qualified selected defaults for rows without runtime model metadata", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+          },
+        },
+        list: [
+          { id: "main", model: { primary: "anthropic/claude-sonnet-4-6" } },
+          {
+            id: "review",
+            model: { primary: "vercel-ai-gateway/anthropic/claude-haiku-4-5" },
+          },
+          { id: "alias", model: { primary: "anthropic/sonnet-4.6" } },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: 2,
+        } as SessionEntry,
+        "agent:review:review": {
+          sessionId: "sess-review",
+          updatedAt: 1,
+        } as SessionEntry,
+        "agent:alias:alias": {
+          sessionId: "sess-alias",
+          updatedAt: 0,
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(
+      result.sessions.map((session) => [session.key, session.modelProvider, session.model]),
+    ).toEqual([
+      ["agent:main:main", "anthropic", "claude-sonnet-4-6"],
+      ["agent:review:review", "vercel-ai-gateway", "anthropic/claude-haiku-4-5"],
+      ["agent:alias:alias", "anthropic", "claude-sonnet-4-6"],
+    ]);
+  });
+
+  test("uses persisted runtime model metadata before selected defaults", () => {
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.4" } },
+        list: [{ id: "main", model: { primary: "anthropic/claude-sonnet-4-6" } }],
+      },
+    } as OpenClawConfig;
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "openai-codex",
+          model: "gpt-5.5",
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.modelProvider).toBe("openai-codex");
+    expect(result.sessions[0]?.model).toBe("gpt-5.5");
+  });
+
+  test("uses complete model overrides without default-model fallback", () => {
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.4" } },
+        list: [{ id: "main", model: { primary: "anthropic/claude-sonnet-4-6" } }],
+      },
+    } as OpenClawConfig;
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "sonnet-4.6",
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.modelProvider).toBe("anthropic");
+    expect(result.sessions[0]?.model).toBe("claude-sonnet-4-6");
   });
 });
 

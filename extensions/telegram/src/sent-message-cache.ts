@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { replaceFileAtomicSync } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
@@ -119,10 +119,11 @@ function persistSentMessages(bucket: SentMessageBucket): void {
     fs.rmSync(persistedPath, { force: true });
     return;
   }
-  fs.mkdirSync(path.dirname(persistedPath), { recursive: true });
-  const tempPath = `${persistedPath}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(serialized), "utf-8");
-  fs.renameSync(tempPath, persistedPath);
+  replaceFileAtomicSync({
+    filePath: persistedPath,
+    content: JSON.stringify(serialized),
+    tempPrefix: ".telegram-sent-message-cache",
+  });
 }
 
 export function recordSentMessage(

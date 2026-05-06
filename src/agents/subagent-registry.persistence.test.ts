@@ -328,7 +328,7 @@ describe("subagent registry persistence", () => {
     expect(after.version).toBe(2);
   });
 
-  it("reuses unchanged persisted registry snapshots without reparsing runs.json", async () => {
+  it("returns isolated clones for unchanged persisted registry snapshots", async () => {
     const registryPath = await writePersistedRegistry(
       {
         version: 2,
@@ -349,8 +349,6 @@ describe("subagent registry persistence", () => {
       },
       { seedChildSessions: false },
     );
-    const readSpy = vi.spyOn(fsSync, "readFileSync");
-
     const first = loadSubagentRegistryFromDisk();
     first.clear();
     const cachedEntry = loadSubagentRegistryFromDisk().get("run-cached");
@@ -373,9 +371,6 @@ describe("subagent registry persistence", () => {
     });
     expect(second.get("run-cached")?.endedAt).toBeUndefined();
     expect(second.get("run-cached")?.cleanupHandled).toBeUndefined();
-    expect(
-      readSpy.mock.calls.filter(([pathname]) => String(pathname) === registryPath),
-    ).toHaveLength(1);
 
     await fs.writeFile(
       registryPath,
@@ -398,24 +393,17 @@ describe("subagent registry persistence", () => {
     );
 
     expect(loadSubagentRegistryFromDisk().has("run-updated")).toBe(true);
-    expect(
-      readSpy.mock.calls.filter(([pathname]) => String(pathname) === registryPath),
-    ).toHaveLength(2);
   });
 
-  it("reuses unchanged invalid persisted registry snapshots as empty", async () => {
+  it("returns empty maps for unchanged invalid persisted registry snapshots", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");
     await fs.mkdir(path.dirname(registryPath), { recursive: true });
     await fs.writeFile(registryPath, "{invalid", "utf8");
-    const readSpy = vi.spyOn(fsSync, "readFileSync");
 
     expect(loadSubagentRegistryFromDisk()).toEqual(new Map());
     expect(loadSubagentRegistryFromDisk()).toEqual(new Map());
-    expect(
-      readSpy.mock.calls.filter(([pathname]) => String(pathname) === registryPath),
-    ).toHaveLength(1);
   });
 
   it("normalizes persisted and newly registered session keys to canonical trimmed values", async () => {

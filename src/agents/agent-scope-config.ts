@@ -189,3 +189,10 @@ export function resolveAgentDir(
   const root = resolveStateDir(env);
   return path.join(root, "agents", id, "agent");
 }
+
+export function resolveDefaultAgentDir(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return resolveAgentDir(cfg, resolveDefaultAgentId(cfg), env);
+}

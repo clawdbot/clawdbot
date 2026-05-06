@@ -1,4 +1,6 @@
 export const PROOF_OVERRIDE_LABEL = "proof: override";
+export const PROOF_SUPPLIED_LABEL = "proof: supplied";
+export const PROOF_SUFFICIENT_LABEL = "proof: sufficient";
 export const NEEDS_REAL_BEHAVIOR_PROOF_LABEL = "triage: needs-real-behavior-proof";
 export const MOCK_ONLY_PROOF_LABEL = "triage: mock-only-proof";
 
@@ -75,6 +77,10 @@ function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function normalizeLineEndings(text = "") {
+  return text.replace(/\r\n?/g, "\n");
+}
+
 function labelNames(labels) {
   return new Set(
     (labels ?? [])
@@ -106,13 +112,14 @@ export function hasProofOverride(labels) {
 }
 
 export function extractRealBehaviorProofSection(body = "") {
+  const normalizedBody = normalizeLineEndings(body);
   const headingRegex = /^#{2,6}\s+real behavior proof\b[^\n]*$/gim;
-  const match = headingRegex.exec(body);
+  const match = headingRegex.exec(normalizedBody);
   if (!match) {
     return "";
   }
   const sectionStart = match.index + match[0].length;
-  const rest = body.slice(sectionStart);
+  const rest = normalizedBody.slice(sectionStart);
   const nextHeading = rest.match(/\n#{1,6}\s+\S/);
   return (nextHeading ? rest.slice(0, nextHeading.index) : rest).trim();
 }
@@ -129,7 +136,7 @@ function isAnyProofFieldLine(line) {
 }
 
 function extractFieldValue(section, field) {
-  const lines = section.split("\n");
+  const lines = normalizeLineEndings(section).split("\n");
   for (let index = 0; index < lines.length; index += 1) {
     const matchingName = field.names.find((name) => fieldLineRegex(name).test(lines[index]));
     if (!matchingName) {
@@ -151,7 +158,7 @@ function extractFieldValue(section, field) {
 }
 
 function stripProofFieldLabels(section) {
-  return section
+  return normalizeLineEndings(section)
     .split("\n")
     .map((line) => {
       if (!isAnyProofFieldLine(line)) {
@@ -274,6 +281,9 @@ export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {
 }
 
 export function labelsForRealBehaviorProof(evaluation) {
+  if (evaluation.status === "passed") {
+    return [PROOF_SUPPLIED_LABEL];
+  }
   if (evaluation.status === "mock_only") {
     return [MOCK_ONLY_PROOF_LABEL];
   }

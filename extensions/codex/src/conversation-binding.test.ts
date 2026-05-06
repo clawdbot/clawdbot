@@ -12,7 +12,7 @@ const agentRuntimeMocks = vi.hoisted(() => ({
   loadAuthProfileStoreForSecretsRuntime: vi.fn(),
   resolveApiKeyForProfile: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
-  resolveOpenClawAgentDir: vi.fn(() => "/agent"),
+  resolveDefaultAgentDir: vi.fn(() => "/agent"),
   resolvePersistedAuthProfileOwnerAgentDir: vi.fn(),
   resolveProviderIdForAuth: vi.fn((provider: string) => provider),
   saveAuthProfileStore: vi.fn(),
@@ -40,7 +40,7 @@ describe("codex conversation binding", () => {
     agentRuntimeMocks.loadAuthProfileStoreForSecretsRuntime.mockReset();
     agentRuntimeMocks.resolveApiKeyForProfile.mockReset();
     agentRuntimeMocks.resolveAuthProfileOrder.mockReset();
-    agentRuntimeMocks.resolveOpenClawAgentDir.mockClear();
+    agentRuntimeMocks.resolveDefaultAgentDir.mockClear();
     agentRuntimeMocks.resolvePersistedAuthProfileOwnerAgentDir.mockReset();
     agentRuntimeMocks.resolveProviderIdForAuth.mockClear();
     agentRuntimeMocks.saveAuthProfileStore.mockReset();
@@ -53,7 +53,7 @@ describe("codex conversation binding", () => {
       profiles: {},
     });
     agentRuntimeMocks.resolveAuthProfileOrder.mockReturnValue([]);
-    agentRuntimeMocks.resolveOpenClawAgentDir.mockReturnValue("/agent");
+    agentRuntimeMocks.resolveDefaultAgentDir.mockReturnValue("/agent");
     agentRuntimeMocks.resolveProviderIdForAuth.mockImplementation((provider: string) => provider);
   });
 

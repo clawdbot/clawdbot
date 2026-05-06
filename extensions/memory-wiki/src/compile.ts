@@ -4,6 +4,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   assessClaimFreshness,
@@ -768,12 +769,13 @@ async function refreshPageRelatedBlocks(params: {
   if (!params.config.render.createBacklinks) {
     return [];
   }
+  const root = await fsRoot(params.config.vault.path);
   const updatedFiles: string[] = [];
   for (const page of params.pages) {
     if (page.kind === "report") {
       continue;
     }
-    const original = await fs.readFile(page.absolutePath, "utf8");
+    const original = await root.readText(page.relativePath);
     const updated = withTrailingNewline(
       replaceManagedMarkdownBlock({
         original,
@@ -790,7 +792,7 @@ async function refreshPageRelatedBlocks(params: {
     if (updated === original) {
       continue;
     }
-    await fs.writeFile(page.absolutePath, updated, "utf8");
+    await root.write(page.relativePath, updated);
     updatedFiles.push(page.absolutePath);
   }
   return updatedFiles;
@@ -817,13 +819,15 @@ function renderSectionList(params: {
 }
 
 async function writeManagedMarkdownFile(params: {
-  filePath: string;
+  rootDir: string;
+  relativePath: string;
   title: string;
   startMarker: string;
   endMarker: string;
   body: string;
 }): Promise<boolean> {
-  const original = await fs.readFile(params.filePath, "utf8").catch(() => `# ${params.title}\n`);
+  const root = await fsRoot(params.rootDir);
+  const original = await root.readText(params.relativePath).catch(() => `# ${params.title}\n`);
   const updated = replaceManagedMarkdownBlock({
     original,
     heading: "## Generated",
@@ -835,7 +839,7 @@ async function writeManagedMarkdownFile(params: {
   if (rendered === original) {
     return false;
   }
-  await fs.writeFile(params.filePath, rendered, "utf8");
+  await root.write(params.relativePath, rendered);
   return true;
 }
 
@@ -846,8 +850,8 @@ async function writeDashboardPage(params: {
   pages: WikiPageSummary[];
   now: Date;
 }): Promise<boolean> {
-  const filePath = path.join(params.rootDir, params.definition.relativePath);
-  const original = await fs.readFile(filePath, "utf8").catch(() =>
+  const root = await fsRoot(params.rootDir);
+  const original = await root.readText(params.definition.relativePath).catch(() =>
     renderWikiMarkdown({
       frontmatter: {
         pageType: "report",
@@ -911,7 +915,7 @@ async function writeDashboardPage(params: {
       body: updatedBody,
     }),
   );
-  await fs.writeFile(filePath, rendered, "utf8");
+  await root.write(params.definition.relativePath, rendered);
   return true;
 }
 
@@ -1267,11 +1271,13 @@ async function writeAgentDigestArtifacts(params: {
     [agentDigestPath, agentDigest],
     [claimsDigestPath, claimsDigest],
   ] as const) {
-    const existing = await fs.readFile(filePath, "utf8").catch(() => "");
+    const relativePath = path.relative(params.rootDir, filePath);
+    const root = await fsRoot(params.rootDir);
+    const existing = await root.readText(relativePath).catch(() => "");
     if (existing === content) {
       continue;
     }
-    await fs.writeFile(filePath, content, "utf8");
+    await root.write(relativePath, content);
     updatedFiles.push(filePath);
   }
   return updatedFiles;
@@ -1303,7 +1309,8 @@ export async function compileMemoryWikiVault(
   const rootIndexPath = path.join(rootDir, "index.md");
   if (
     await writeManagedMarkdownFile({
-      filePath: rootIndexPath,
+      rootDir,
+      relativePath: "index.md",
       title: "Wiki Index",
       startMarker: "<!-- openclaw:wiki:index:start -->",
       endMarker: "<!-- openclaw:wiki:index:end -->",
@@ -1314,10 +1321,12 @@ export async function compileMemoryWikiVault(
   }
 
   for (const group of COMPILE_PAGE_GROUPS) {
-    const filePath = path.join(rootDir, group.dir, "index.md");
+    const relativePath = path.join(group.dir, "index.md").replace(/\\/g, "/");
+    const filePath = path.join(rootDir, relativePath);
     if (
       await writeManagedMarkdownFile({
-        filePath,
+        rootDir,
+        relativePath,
         title: group.heading,
         startMarker: `<!-- openclaw:wiki:${group.dir}:index:start -->`,
         endMarker: `<!-- openclaw:wiki:${group.dir}:index:end -->`,

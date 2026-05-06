@@ -9,6 +9,7 @@ import type {
   ModalInteraction,
   StringSelectMenuInteraction,
 } from "../internal/discord.js";
+import { createDiscordSendReceipt } from "../send.receipt.js";
 import {
   dispatchPluginInteractiveHandlerMock,
   dispatchReplyMock,
@@ -48,6 +49,14 @@ function getLastRecordedCtx(): Record<string, unknown> | undefined {
     | { ctx?: Record<string, unknown> }
     | undefined;
   return params?.ctx;
+}
+
+function discordTestSendResult(messageId: string, channelId = "dm-channel") {
+  return {
+    messageId,
+    channelId,
+    receipt: createDiscordSendReceipt({ platformMessageIds: [messageId], channelId, kind: "card" }),
+  };
 }
 
 describe("discord component interactions", () => {
@@ -254,10 +263,7 @@ describe("discord component interactions", () => {
   beforeEach(() => {
     editDiscordComponentMessageMock = vi
       .spyOn(sendComponents, "editDiscordComponentMessage")
-      .mockResolvedValue({
-        messageId: "msg-1",
-        channelId: "dm-channel",
-      });
+      .mockResolvedValue(discordTestSendResult("msg-1"));
     clearDiscordComponentEntries();
     resetDiscordComponentRuntimeMocks();
     lastDispatchCtx = undefined;

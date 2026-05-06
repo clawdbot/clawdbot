@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
@@ -10,24 +11,14 @@ function decoratedMarkerPath(userDataDir: string) {
 }
 
 function safeReadJson(filePath: string): Record<string, unknown> | null {
-  try {
-    if (!fs.existsSync(filePath)) {
-      return null;
-    }
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return null;
-    }
-    return parsed as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+  const parsed = loadJsonFile(filePath);
+  return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : null;
 }
 
 function safeWriteJson(filePath: string, data: Record<string, unknown>) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+  saveJsonFile(filePath, data);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

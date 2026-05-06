@@ -9,6 +9,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
+import { readDiscordComponentSpec } from "./components.js";
 
 let discordChannelActionsRuntimePromise:
   | Promise<typeof import("./channel-actions.runtime.js")>
@@ -174,6 +175,47 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       return channelId ? { to: `channel:${channelId}` } : null;
     }
     return null;
+  },
+  prepareSendPayload: ({ ctx, payload }) => {
+    if (ctx.action !== "send") {
+      return null;
+    }
+    const rawComponents = ctx.params.components;
+    if (typeof rawComponents === "function") {
+      return null;
+    }
+    const componentSpec =
+      rawComponents && typeof rawComponents === "object" && !Array.isArray(rawComponents)
+        ? readDiscordComponentSpec(rawComponents)
+        : undefined;
+    const nativeComponents = Array.isArray(rawComponents) ? rawComponents : undefined;
+    const embeds = Array.isArray(ctx.params.embeds) ? ctx.params.embeds : undefined;
+    if ((componentSpec || nativeComponents) && embeds?.length) {
+      return null;
+    }
+    const filename = normalizeOptionalString(ctx.params.filename);
+    if (!componentSpec && !nativeComponents && !embeds?.length && !filename) {
+      return payload;
+    }
+    const discordData =
+      payload.channelData?.discord &&
+      typeof payload.channelData.discord === "object" &&
+      !Array.isArray(payload.channelData.discord)
+        ? (payload.channelData.discord as Record<string, unknown>)
+        : {};
+    return {
+      ...payload,
+      channelData: {
+        ...payload.channelData,
+        discord: {
+          ...discordData,
+          ...(componentSpec ? { components: componentSpec } : {}),
+          ...(nativeComponents ? { components: nativeComponents } : {}),
+          ...(embeds?.length ? { embeds } : {}),
+          ...(filename ? { filename } : {}),
+        },
+      },
+    };
   },
   handleAction: async ({
     action,

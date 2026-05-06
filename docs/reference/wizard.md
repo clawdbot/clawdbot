@@ -92,7 +92,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
       - Requires a non-empty env var in the onboarding process environment.
       - Cannot be combined with `--gateway-token`.
     - Disable auth only if you fully trust every local process.
-    - Non‑loopback binds still require auth.
+    - Non-loopback binds still require auth.
 
   </Step>
   <Step title="Channels">
@@ -164,7 +164,7 @@ openclaw onboard --non-interactive \
   --skip-skills
 ```
 
-Add `--json` for a machine‑readable summary.
+Add `--json` for a machine-readable summary.
 
 Gateway token SecretRef in non-interactive mode:
 
@@ -200,7 +200,7 @@ openclaw agents add work \
 ## Gateway wizard RPC
 
 The Gateway exposes the onboarding flow over RPC (`wizard.start`, `wizard.next`, `wizard.cancel`, `wizard.status`).
-Clients (macOS app, Control UI) can render steps without re‑implementing onboarding logic.
+Clients (macOS app, Control UI) can render steps without re-implementing onboarding logic.
 
 ## Signal setup (signal-cli)
 

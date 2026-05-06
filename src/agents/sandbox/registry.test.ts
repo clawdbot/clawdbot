@@ -46,10 +46,10 @@ vi.mock("../../infra/json-files.js", async () => {
   );
   return {
     ...actual,
-    writeJsonAtomic: async (
+    writeJson: async (
       filePath: string,
       value: unknown,
-      options?: Parameters<typeof actual.writeJsonAtomic>[2],
+      options?: Parameters<typeof actual.writeJson>[2],
     ) => {
       const payload = JSON.stringify(value);
       const gate = writeGateState.active;
@@ -64,7 +64,7 @@ vi.mock("../../infra/json-files.js", async () => {
         }
         await gate.waitForRelease;
       }
-      await actual.writeJsonAtomic(filePath, value, options);
+      await actual.writeJson(filePath, value, options);
     },
   };
 });

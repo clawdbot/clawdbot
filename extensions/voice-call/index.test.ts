@@ -412,6 +412,37 @@ describe("voice-call plugin", () => {
     expect(respond.mock.calls[0]?.[0]).toBe(true);
   });
 
+  it("preserves explicit session keys on voicecall.start", async () => {
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.start") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({
+      params: {
+        mode: "conversation",
+        requesterSessionKey: "agent:main:discord:channel:general",
+        sessionKey: "voice:google-meet:meet-1",
+        to: "+15550001234",
+      },
+      respond,
+    });
+    expect(runtimeStub.manager.initiateCall).toHaveBeenCalledWith(
+      "+15550001234",
+      "voice:google-meet:meet-1",
+      {
+        dtmfSequence: undefined,
+        message: undefined,
+        mode: "conversation",
+        requesterSessionKey: "agent:main:discord:channel:general",
+      },
+    );
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+  });
+
   it("returns call status", async () => {
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.status") as

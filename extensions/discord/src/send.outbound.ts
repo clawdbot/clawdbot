@@ -11,6 +11,7 @@ import { resolveDiscordAccount } from "./accounts.js";
 import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { parseAndResolveRecipient } from "./recipient-resolution.js";
+import { createDiscordSendResult, type DiscordReceiptResultSource } from "./send.receipt.js";
 import {
   buildDiscordMessageRequest,
   buildDiscordSendError,
@@ -55,10 +56,7 @@ type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
 
 const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 
-type DiscordChannelMessageResult = {
-  id?: string | null;
-  channel_id?: string | null;
-};
+type DiscordChannelMessageResult = DiscordReceiptResultSource;
 
 async function sendDiscordThreadTextChunks(params: {
   rest: RequestClient;
@@ -105,11 +103,24 @@ function isForumLikeType(channelType?: number): boolean {
 function toDiscordSendResult(
   result: DiscordChannelMessageResult,
   fallbackChannelId: string,
+  params: {
+    kind?: Parameters<typeof createDiscordSendResult>[0]["kind"];
+    threadId?: string | number;
+    replyToId?: string;
+  } = {},
 ): DiscordSendResult {
-  return {
-    messageId: result.id || "unknown",
-    channelId: result.channel_id ?? fallbackChannelId,
+  const resultParams: Parameters<typeof createDiscordSendResult>[0] = {
+    result,
+    fallbackChannelId,
+    kind: params.kind ?? "text",
   };
+  if (params.threadId != null) {
+    resultParams.threadId = params.threadId;
+  }
+  if (params.replyToId) {
+    resultParams.replyToId = params.replyToId;
+  }
+  return createDiscordSendResult(resultParams);
 }
 
 async function resolveDiscordSendTarget(
@@ -278,10 +289,11 @@ export async function sendMessageDiscord(
         channel_id: resultChannelId,
       },
       channelId,
+      { kind: opts.mediaUrl ? "media" : "text", threadId },
     );
   }
 
-  let result: { id: string; channel_id: string } | { id: string | null; channel_id: string };
+  let result: DiscordChannelMessageResult;
   try {
     if (opts.mediaUrl) {
       result = await sendDiscordMedia(
@@ -333,7 +345,10 @@ export async function sendMessageDiscord(
     accountId: accountInfo.accountId,
     direction: "outbound",
   });
-  return toDiscordSendResult(result, channelId);
+  return toDiscordSendResult(result, channelId, {
+    kind: opts.mediaUrl ? "media" : opts.components || opts.embeds ? "card" : "text",
+    replyToId: opts.replyTo,
+  });
 }
 
 export async function sendStickerDiscord(
@@ -356,7 +371,7 @@ export async function sendStickerDiscord(
       }),
     "sticker",
   )) as { id: string; channel_id: string };
-  return toDiscordSendResult(res, channelId);
+  return toDiscordSendResult(res, channelId, { kind: "card" });
 }
 
 export async function sendPollDiscord(
@@ -384,7 +399,7 @@ export async function sendPollDiscord(
       }),
     "poll",
   )) as { id: string; channel_id: string };
-  return toDiscordSendResult(res, channelId);
+  return toDiscordSendResult(res, channelId, { kind: "card" });
 }
 
 async function resolveDiscordStructuredSendContext(

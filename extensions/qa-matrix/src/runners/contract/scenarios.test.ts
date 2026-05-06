@@ -331,6 +331,134 @@ describe("matrix live qa scenarios", () => {
     }
   });
 
+  it("waits for Matrix SAS device trust after verification completes", async () => {
+    const initiated = {
+      id: "driver-request",
+      transactionId: "tx-sas",
+    };
+    const incoming = {
+      canAccept: true,
+      id: "observer-request",
+      initiatedByMe: false,
+      pending: true,
+      transactionId: "tx-sas",
+    };
+    const ready = {
+      id: "driver-request",
+      phaseName: "ready",
+      transactionId: "tx-sas",
+    };
+    const sas = {
+      emoji: [["🐶", "Dog"]],
+    };
+    const initiatorSas = {
+      hasSas: true,
+      id: "driver-request",
+      sas,
+      transactionId: "tx-sas",
+    };
+    const recipientSas = {
+      hasSas: true,
+      id: "observer-request",
+      sas,
+      transactionId: "tx-sas",
+    };
+    const completedInitiator = {
+      completed: true,
+      id: "driver-request",
+      transactionId: "tx-sas",
+    };
+    const completedRecipient = {
+      completed: true,
+      id: "observer-request",
+      transactionId: "tx-sas",
+    };
+    const driverGetDeviceVerificationStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ verified: false })
+      .mockResolvedValueOnce({ verified: true });
+    const observerGetDeviceVerificationStatus = vi.fn().mockResolvedValue({ verified: true });
+    const driverStop = vi.fn().mockResolvedValue(undefined);
+    const observerStop = vi.fn().mockResolvedValue(undefined);
+
+    createMatrixQaE2eeScenarioClient
+      .mockResolvedValueOnce({
+        bootstrapOwnDeviceVerification: vi.fn().mockResolvedValue({
+          crossSigning: { published: true },
+          success: true,
+          verification: {
+            backupVersion: "1",
+            crossSigningVerified: true,
+            recoveryKeyStored: true,
+            signedByOwner: true,
+            verified: true,
+          },
+        }),
+        confirmVerificationSas: vi.fn().mockResolvedValue(completedInitiator),
+        getDeviceVerificationStatus: driverGetDeviceVerificationStatus,
+        getRecoveryKey: vi.fn().mockResolvedValue({ encodedPrivateKey: "driver-key" }),
+        listVerifications: vi
+          .fn()
+          .mockResolvedValueOnce([ready])
+          .mockResolvedValueOnce([initiatorSas])
+          .mockResolvedValueOnce([completedInitiator]),
+        requestVerification: vi.fn().mockResolvedValue(initiated),
+        resetRoomKeyBackup: vi.fn().mockResolvedValue({ success: true }),
+        startVerification: vi.fn().mockResolvedValue(initiatorSas),
+        stop: driverStop,
+      })
+      .mockResolvedValueOnce({
+        acceptVerification: vi.fn().mockResolvedValue(ready),
+        bootstrapOwnDeviceVerification: vi.fn().mockResolvedValue({
+          crossSigning: { published: true },
+          success: true,
+          verification: {
+            backupVersion: "1",
+            crossSigningVerified: true,
+            recoveryKeyStored: true,
+            signedByOwner: true,
+            verified: true,
+          },
+        }),
+        confirmVerificationSas: vi.fn().mockResolvedValue(completedRecipient),
+        getDeviceVerificationStatus: observerGetDeviceVerificationStatus,
+        getRecoveryKey: vi.fn().mockResolvedValue({ encodedPrivateKey: "observer-key" }),
+        listVerifications: vi
+          .fn()
+          .mockResolvedValueOnce([incoming])
+          .mockResolvedValueOnce([recipientSas])
+          .mockResolvedValueOnce([completedRecipient]),
+        resetRoomKeyBackup: vi.fn().mockResolvedValue({ success: true }),
+        stop: observerStop,
+      });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-e2ee-device-sas-verification",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(
+      runMatrixQaScenario(scenario!, {
+        ...matrixQaScenarioContext(),
+        driverDeviceId: "DRIVERDEVICE",
+        driverPassword: "driver-password",
+        observerDeviceId: "OBSERVERDEVICE",
+        observerPassword: "observer-password",
+        outputDir: "/tmp/matrix-qa",
+        timeoutMs: 80,
+      }),
+    ).resolves.toMatchObject({
+      artifacts: {
+        driverTrustsObserverDevice: true,
+        observerTrustsDriverDevice: true,
+      },
+    });
+
+    expect(driverGetDeviceVerificationStatus).toHaveBeenCalledTimes(2);
+    expect(driverStop).toHaveBeenCalledTimes(1);
+    expect(observerStop).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the Matrix CLI default profile on the full catalog", () => {
     const allIds = scenarioTesting.findMatrixQaScenarios().map((scenario) => scenario.id);
 
@@ -467,6 +595,112 @@ describe("matrix live qa scenarios", () => {
     });
     expect(waitForRoomEvent).toHaveBeenCalledTimes(3);
     expect(gatewayCall.mock.calls.at(-1)?.[0]).toBe("exec.approval.waitDecision");
+  });
+
+  it("reuses observed Matrix approval events across channel and DM target=both waits", async () => {
+    const context = matrixQaScenarioContext();
+    context.topology.rooms.push(
+      {
+        key: scenarioTesting.MATRIX_QA_DRIVER_DM_ROOM_KEY,
+        kind: "dm",
+        memberRoles: ["driver", "sut"],
+        memberUserIds: ["@driver:matrix-qa.test", "@sut:matrix-qa.test"],
+        name: "Driver DM",
+        requireMention: false,
+        roomId: "!driver-dm:matrix-qa.test",
+      },
+      {
+        key: scenarioTesting.MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY,
+        kind: "dm",
+        memberRoles: ["driver", "sut"],
+        memberUserIds: ["@driver:matrix-qa.test", "@sut:matrix-qa.test"],
+        name: "Driver shared DM",
+        requireMention: false,
+        roomId: "!driver-shared-dm:matrix-qa.test",
+      },
+    );
+    let approvalId = "";
+    const gatewayCall = vi.fn().mockImplementation(async (method: string, ...args: unknown[]) => {
+      if (method === "exec.approval.request") {
+        const payload = args.find(
+          (arg): arg is { id?: string } => typeof arg === "object" && arg !== null && "id" in arg,
+        );
+        approvalId = payload?.id ?? "";
+        return { id: approvalId, status: "accepted" };
+      }
+      if (method === "exec.approval.resolve") {
+        return { ok: true };
+      }
+      throw new Error(`unexpected gateway method ${method}`);
+    });
+    context.gatewayCall = gatewayCall;
+
+    const buildApprovalEvent = (eventId: string, roomId: string) =>
+      matrixQaMessageEvent({
+        approval: {
+          allowedDecisions: ["allow-once", "deny"],
+          hasCommandText: true,
+          id: approvalId,
+          kind: "exec",
+          state: "pending",
+          type: "approval.request",
+          version: 1,
+        },
+        body: "approval requested",
+        eventId,
+        kind: "message",
+        roomId,
+      });
+    const waitForRoomEvent = vi.fn().mockImplementation(async () => {
+      const channelApproval = buildApprovalEvent("$approval-both-channel", "!main:matrix-qa.test");
+      const dmApproval = buildApprovalEvent(
+        "$approval-both-dm",
+        "!driver-shared-dm:matrix-qa.test",
+      );
+      context.observedEvents.push(channelApproval, dmApproval, {
+        eventId: "$approval-both-option",
+        kind: "reaction",
+        reaction: {
+          eventId: "$approval-both-channel",
+          key: "✅",
+        },
+        roomId: "!main:matrix-qa.test",
+        sender: "@sut:matrix-qa.test",
+        type: "m.reaction",
+      });
+      return { event: channelApproval, since: "driver-sync-approval" };
+    });
+    const waitForOptionalRoomEvent = vi.fn().mockResolvedValue({
+      matched: false,
+      since: "driver-sync-late-window",
+    });
+    createMatrixQaClient
+      .mockReturnValueOnce({
+        primeRoom: vi.fn().mockResolvedValue("driver-sync-start"),
+        waitForOptionalRoomEvent,
+      })
+      .mockReturnValueOnce({
+        waitForRoomEvent,
+      });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-approval-channel-target-both",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, context)).resolves.toMatchObject({
+      artifacts: {
+        approvals: [
+          { eventId: "$approval-both-channel", roomId: "!main:matrix-qa.test" },
+          { eventId: "$approval-both-dm", roomId: "!driver-shared-dm:matrix-qa.test" },
+        ],
+      },
+    });
+
+    expect(waitForRoomEvent).toHaveBeenCalledTimes(1);
+    expect(gatewayCall.mock.calls.at(-1)?.[0]).toBe("exec.approval.resolve");
+    expect(gatewayCall.mock.calls.at(-1)?.[2]).toMatchObject({ expectFinal: false });
+    expect(createMatrixQaClient).toHaveBeenCalledTimes(3);
   });
 
   it("lets explicit Matrix scenario ids override the selected profile", () => {
@@ -2922,6 +3156,61 @@ describe("matrix live qa scenarios", () => {
     });
   });
 
+  it("accepts shortened Matrix tool progress error preview lines", async () => {
+    const previewEventId = "$tool-progress-error-short-preview";
+    const previewEvent = matrixQaMessageEvent({
+      kind: "notice",
+      eventId: previewEventId,
+      body: "Nautiling...\n`📖 Read: from…ng-matrix-tool-progress-target.txt`",
+    });
+    const { waitForRoomEvent } = mockMatrixQaRoomClient({
+      driverEventId: "$tool-progress-error-short-trigger",
+      events: [
+        {
+          event: previewEvent,
+          since: "driver-sync-preview",
+        },
+        {
+          event: ({ sendTextMessage }) =>
+            matrixQaMessageEvent({
+              kind: "notice",
+              eventId: "$tool-progress-error-short-final",
+              body: readMatrixQaReplyDirective(
+                sendTextMessage.mock.calls[0]?.[0]?.body,
+                "MATRIX_QA_TOOL_PROGRESS_ERROR_SHORT_FIXED",
+              ),
+              relatesTo: {
+                relType: "m.replace",
+                eventId: previewEventId,
+              },
+            }),
+          since: "driver-sync-next",
+        },
+      ],
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-room-tool-progress-error",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+      artifacts: {
+        previewBodyPreview: "Nautiling...\n`📖 Read: from…ng-matrix-tool-progress-target.txt`",
+        previewEventId,
+        reply: {
+          eventId: "$tool-progress-error-short-final",
+          relatesTo: {
+            eventId: previewEventId,
+            relType: "m.replace",
+          },
+        },
+      },
+    });
+
+    expect(waitForRoomEvent).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps Matrix-looking tool progress mentions inert in partial previews", async () => {
     const previewEventId = "$tool-progress-mention-preview";
     mockMatrixQaRoomClient({
@@ -3199,27 +3488,34 @@ describe("matrix live qa scenarios", () => {
   it("waits for a real Matrix image attachment after image generation", async () => {
     const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
     const sendTextMessage = vi.fn().mockResolvedValue("$image-generate-trigger");
-    const waitForRoomEvent = vi.fn().mockResolvedValue({
-      event: {
-        kind: "message",
-        roomId: "!media:matrix-qa.test",
-        eventId: "$sut-image",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        body: "Protocol note: generated the QA lighthouse image successfully.",
-        msgtype: "m.image",
-        attachment: {
-          kind: "image",
-          filename: "qa-lighthouse.png",
+    const waitForOptionalRoomEvent = vi
+      .fn()
+      .mockResolvedValueOnce({
+        matched: false,
+        since: "driver-sync-start",
+      })
+      .mockResolvedValueOnce({
+        event: {
+          kind: "message",
+          roomId: "!media:matrix-qa.test",
+          eventId: "$sut-image",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+          body: "Protocol note: generated the QA lighthouse image successfully.",
+          msgtype: "m.image",
+          attachment: {
+            kind: "image",
+            filename: "qa-lighthouse.png",
+          },
         },
-      },
-      since: "driver-sync-next",
-    });
+        matched: true,
+        since: "driver-sync-next",
+      });
 
     createMatrixQaClient.mockReturnValue({
       primeRoom,
       sendTextMessage,
-      waitForRoomEvent,
+      waitForOptionalRoomEvent,
     });
 
     const scenario = MATRIX_QA_SCENARIOS.find(
@@ -3273,7 +3569,7 @@ describe("matrix live qa scenarios", () => {
     });
 
     expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("Image generation check: generate a QA lighthouse image"),
+      body: expect.stringContaining("/tool image_generate action=generate"),
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!media:matrix-qa.test",
     });

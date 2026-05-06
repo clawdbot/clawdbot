@@ -3,6 +3,7 @@ import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { saveJsonFile } from "../infra/json-file.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveDefaultPluginNpmDir } from "../plugins/install-paths.js";
 import type { InstalledPluginIndexRecordStoreOptions } from "../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
@@ -36,12 +37,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function readJsonObject(filePath: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+  const parsed = tryReadJsonSync(filePath);
+  return isRecord(parsed) ? parsed : null;
 }
 
 function readStringMap(value: unknown): Record<string, string> {

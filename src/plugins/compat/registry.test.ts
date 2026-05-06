@@ -133,7 +133,7 @@ const knownDeprecatedSurfaceMarkers = [
   {
     code: "legacy-root-sdk-import",
     file: "src/plugin-sdk/compat.ts",
-    marker: "@deprecated Use `openclaw/plugin-sdk/channel-reply-pipeline`.",
+    marker: "@deprecated Use `openclaw/plugin-sdk/channel-message`.",
   },
   {
     code: "channel-route-key-aliases",

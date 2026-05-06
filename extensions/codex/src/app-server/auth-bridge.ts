@@ -6,7 +6,7 @@ import {
   resolveAuthProfileOrder,
   resolveProviderIdForAuth,
   resolveApiKeyForProfile,
-  resolveOpenClawAgentDir,
+  resolveDefaultAgentDir,
   resolvePersistedAuthProfileOwnerAgentDir,
   saveAuthProfileStore,
   type AuthProfileCredential,
@@ -82,7 +82,7 @@ export function resolveCodexAppServerAuthProfileIdForAgent(params: {
   agentDir?: string;
   config?: AuthProfileOrderConfig;
 }): string | undefined {
-  const agentDir = params.agentDir?.trim() || resolveOpenClawAgentDir();
+  const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
   return resolveCodexAppServerAuthProfileId({
     authProfileId: params.authProfileId,

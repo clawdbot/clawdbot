@@ -228,3 +228,11 @@ export function parseNpmPrefixSpec(raw: string): string | null {
   }
   return trimmed.slice("npm:".length).trim();
 }
+
+export function parseNpmPackPrefixPath(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("npm-pack:")) {
+    return null;
+  }
+  return trimmed.slice("npm-pack:".length).trim();
+}

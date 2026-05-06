@@ -941,6 +941,85 @@ describe("messaging tool media URL tracking", () => {
     ]);
   });
 
+  it("commits upload-file args as message delivery evidence", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-upload-file",
+      args: {
+        action: "upload-file",
+        channel: "discord",
+        to: "channel:123",
+        message: "track ready",
+        path: "/tmp/generated-song.mp3",
+      },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    expect(ctx.state.pendingMessagingMediaUrls.get("tool-upload-file")).toEqual([
+      "/tmp/generated-song.mp3",
+    ]);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-upload-file",
+      isError: false,
+      result: { ok: true },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/generated-song.mp3"]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        provider: "discord",
+        to: "channel:123",
+        text: "track ready",
+        mediaUrls: ["/tmp/generated-song.mp3"],
+      }),
+    ]);
+    expect(ctx.state.pendingMessagingMediaUrls.has("tool-upload-file")).toBe(false);
+  });
+
+  it("commits sendAttachment args as message delivery evidence", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-send-attachment",
+      args: {
+        action: "sendAttachment",
+        provider: "discord",
+        to: "channel:123",
+        content: "track ready",
+        filePath: "/tmp/generated-song.mp3",
+      },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-send-attachment",
+      isError: false,
+      result: { ok: true },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/generated-song.mp3"]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        provider: "discord",
+        to: "channel:123",
+        text: "track ready",
+        mediaUrls: ["/tmp/generated-song.mp3"],
+      }),
+    ]);
+  });
+
   it("trims messagingToolSentMediaUrls to 200 on commit (FIFO)", async () => {
     const { ctx } = createTestContext();
 

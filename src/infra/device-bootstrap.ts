@@ -11,12 +11,7 @@ import {
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
 import { resolvePairingPaths } from "./pairing-files.js";
-import {
-  createAsyncLock,
-  pruneExpiredPending,
-  readJsonFile,
-  writeJsonAtomic,
-} from "./pairing-files.js";
+import { createAsyncLock, pruneExpiredPending, tryReadJson, writeJson } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 export const DEVICE_BOOTSTRAP_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -164,7 +159,7 @@ function normalizeBootstrapPublicKey(publicKey: string): string {
 
 async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
   const bootstrapPath = resolveBootstrapPath(baseDir);
-  const rawState = (await readJsonFile<DeviceBootstrapStateFile>(bootstrapPath)) ?? {};
+  const rawState = (await tryReadJson<DeviceBootstrapStateFile>(bootstrapPath)) ?? {};
   const state: DeviceBootstrapStateFile = {};
   if (!rawState || typeof rawState !== "object" || Array.isArray(rawState)) {
     return state;
@@ -195,7 +190,7 @@ async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
 
 async function persistState(state: DeviceBootstrapStateFile, baseDir?: string): Promise<void> {
   const bootstrapPath = resolveBootstrapPath(baseDir);
-  await writeJsonAtomic(bootstrapPath, state);
+  await writeJson(bootstrapPath, state);
 }
 
 export async function issueDeviceBootstrapToken(

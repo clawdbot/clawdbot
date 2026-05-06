@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { setVerbose } from "../../globals.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { getVerboseFlag, isHelpOrVersionInvocation } from "../argv.js";
 import { resolveCliName } from "../cli-name.js";
 import {
@@ -15,6 +16,7 @@ import {
   resolvePluginInstallPreactionRequest,
 } from "../plugin-install-config-policy.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
+import { isParentDefaultHelpAction } from "./parent-default-help.js";
 
 function setProcessTitleForCommand(actionCommand: Command) {
   let current: Command = actionCommand;
@@ -61,11 +63,23 @@ function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
 }
 
+function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[]): boolean {
+  if (!isParentDefaultHelpAction(actionCommand)) {
+    return false;
+  }
+  const { commandPath } = resolveCliArgvInvocation(argv);
+  const [primary, extra] = commandPath;
+  if (extra !== undefined || !primary) {
+    return false;
+  }
+  return primary === actionCommand.name() || actionCommand.aliases().includes(primary);
+}
+
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
     const argv = process.argv;
-    if (isHelpOrVersionInvocation(argv)) {
+    if (isHelpOrVersionInvocation(argv) || isBareParentDefaultHelpInvocation(actionCommand, argv)) {
       return;
     }
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);

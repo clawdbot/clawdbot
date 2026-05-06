@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import { access, appendFile, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { QaProviderMode } from "./model-selection.js";
 import { resolveQaForwardedLiveEnv, resolveQaLiveProviderConfigPath } from "./providers/env.js";
@@ -432,7 +433,7 @@ export function renderQaMultipassGuestScript(
 }
 
 async function appendMultipassLog(logPath: string, message: string) {
-  await appendFile(logPath, message, "utf8");
+  await appendRegularFile({ filePath: logPath, content: message });
 }
 
 async function runMultipassCommand(logPath: string, args: string[], options: ExecFileOptions = {}) {

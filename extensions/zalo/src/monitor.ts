@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   resolveDirectDmAuthorizationOutcome,
   resolveSenderCommandAuthorizationWithRuntime,
@@ -41,6 +40,10 @@ import {
 import { resolveZaloProxyFetch } from "./proxy.js";
 import { getZaloRuntime } from "./runtime.js";
 export type { ZaloRuntimeEnv } from "./monitor.types.js";
+import {
+  prepareZaloDurableReplyPayload,
+  resolveZaloDurableReplyOptions,
+} from "./monitor-durable.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import {
   prepareHostedZaloMediaUrl,
@@ -640,11 +643,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     channel: "zalo",
     accountId: account.accountId,
   });
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-    cfg: config,
-    agentId: route.agentId,
-    channel: "zalo",
-    accountId: account.accountId,
+  const replyPipeline = {
     typing: {
       start: async () => {
         await sendChatAction(
@@ -657,7 +656,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
           ZALO_TYPING_TIMEOUT_MS,
         );
       },
-      onStartError: (err) => {
+      onStartError: (err: unknown) => {
         logTypingFailure({
           log: (message) => logVerbose(core, runtime, message),
           channel: "zalo",
@@ -667,7 +666,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
         });
       },
     },
-  });
+  };
 
   await core.channel.turn.run({
     channel: "zalo",
@@ -694,6 +693,18 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
         dispatchReplyWithBufferedBlockDispatcher:
           core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
         delivery: {
+          preparePayload: (payload) =>
+            prepareZaloDurableReplyPayload({
+              payload,
+              tableMode,
+              convertMarkdownTables: core.channel.text.convertMarkdownTables,
+            }),
+          durable: (payload, info) =>
+            resolveZaloDurableReplyOptions({
+              payload,
+              infoKind: info.kind,
+              chatId,
+            }),
           deliver: async (payload) => {
             await deliverZaloReply({
               payload,
@@ -710,8 +721,11 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
               accountId: account.accountId,
               statusSink,
               fetcher,
-              tableMode,
+              tableMode: "off",
             });
+          },
+          onDelivered: () => {
+            statusSink?.({ lastOutboundAt: Date.now() });
           },
           onError: (err, info) => {
             runtime.error?.(
@@ -719,10 +733,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
             );
           },
         },
-        dispatcherOptions: replyPipeline,
-        replyOptions: {
-          onModelSelected,
-        },
+        replyPipeline,
         record: {
           onRecordError: (err) => {
             runtime.error?.(`zalo: failed updating session meta: ${String(err)}`);

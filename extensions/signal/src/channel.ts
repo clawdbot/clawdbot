@@ -1,6 +1,7 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-message";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   attachChannelToResult,
@@ -92,6 +93,41 @@ async function sendSignalOutbound(params: {
     accountId: params.accountId ?? undefined,
   });
 }
+
+type SignalMessageContextExtras = {
+  deps?: { [channelId: string]: unknown };
+};
+
+const signalMessageAdapter = defineChannelMessageAdapter({
+  id: "signal",
+  durableFinal: {
+    capabilities: {
+      text: true,
+      media: true,
+    },
+  },
+  send: {
+    text: async (ctx) =>
+      await sendSignalOutbound({
+        cfg: ctx.cfg,
+        to: ctx.to,
+        text: ctx.text,
+        accountId: ctx.accountId ?? undefined,
+        deps: (ctx as typeof ctx & SignalMessageContextExtras).deps,
+      }),
+    media: async (ctx) =>
+      await sendSignalOutbound({
+        cfg: ctx.cfg,
+        to: ctx.to,
+        text: ctx.text,
+        mediaUrl: ctx.mediaUrl,
+        mediaLocalRoots: ctx.mediaLocalRoots,
+        mediaReadFile: ctx.mediaReadFile,
+        accountId: ctx.accountId ?? undefined,
+        deps: (ctx as typeof ctx & SignalMessageContextExtras).deps,
+      }),
+  },
+});
 
 function inferSignalTargetChatType(rawTo: string) {
   let to = rawTo.trim();
@@ -343,6 +379,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           });
         },
       },
+      message: signalMessageAdapter,
     },
     pairing: {
       text: {

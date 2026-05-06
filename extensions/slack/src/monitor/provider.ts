@@ -102,9 +102,15 @@ export function formatSlackSocketStartRetryMessage(params: {
   maxAttempts: number;
   delayMs: number;
   error: unknown;
+  sdkContext?: string;
 }) {
   const maxAttempts = params.maxAttempts > 0 ? String(params.maxAttempts) : "∞";
-  return `slack socket mode failed to start; retry ${params.attempt}/${maxAttempts} in ${Math.round(params.delayMs / 1000)}s reason="${formatUnknownError(params.error)}"`;
+  const reason = formatUnknownError(
+    params.error,
+    "Slack Socket Mode start failed without error detail",
+  );
+  const sdkContext = params.sdkContext?.trim() ? `; last SDK log: ${params.sdkContext.trim()}` : "";
+  return `slack socket mode failed to start; retry ${params.attempt}/${maxAttempts} in ${Math.round(params.delayMs / 1000)}s reason="${reason}${sdkContext}"`;
 }
 
 function parseApiAppIdFromAppToken(raw?: string) {
@@ -211,7 +217,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const clientOptions = resolveSlackWebClientOptions();
-  const { app, receiver } = createSlackBoltApp({
+  const { app, receiver, socketModeLogger } = createSlackBoltApp({
     interop: await getSlackBoltInterop(),
     slackMode,
     botToken,
@@ -549,6 +555,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
               maxAttempts: SLACK_SOCKET_RECONNECT_POLICY.maxAttempts,
               delayMs,
               error: err,
+              sdkContext: socketModeLogger.getLastMessage(),
             }),
           );
           try {

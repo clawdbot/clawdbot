@@ -118,6 +118,103 @@ const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts"
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
 const UNIT_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.unit-support.config.ts";
 const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
+
+const FULL_SUITE_CONFIG_WEIGHT = new Map([
+  [GATEWAY_VITEST_CONFIG, 180],
+  [GATEWAY_SERVER_VITEST_CONFIG, 180],
+  [GATEWAY_CORE_VITEST_CONFIG, 179],
+  [GATEWAY_CLIENT_VITEST_CONFIG, 178],
+  [GATEWAY_METHODS_VITEST_CONFIG, 177],
+  [COMMANDS_VITEST_CONFIG, 175],
+  ["test/vitest/vitest.agents-core.config.ts", 170],
+  ["test/vitest/vitest.agents-pi-embedded.config.ts", 169],
+  ["test/vitest/vitest.agents-support.config.ts", 168],
+  ["test/vitest/vitest.agents-tools.config.ts", 167],
+  [EXTENSION_VOICE_CALL_VITEST_CONFIG, 169],
+  [EXTENSIONS_VITEST_CONFIG, 168],
+  [EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG, 167],
+  ["test/vitest/vitest.runtime-config.config.ts", 166],
+  [CONTRACTS_CHANNEL_CONFIG_VITEST_CONFIG, 85],
+  [CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG, 60],
+  [CONTRACTS_CHANNEL_SESSION_VITEST_CONFIG, 50],
+  [CONTRACTS_CHANNEL_REGISTRY_VITEST_CONFIG, 35],
+  [CONTRACTS_PLUGIN_VITEST_CONFIG, 20],
+  ["test/vitest/vitest.tasks.config.ts", 165],
+  [CHANNEL_VITEST_CONFIG, 164],
+  [UNIT_FAST_VITEST_CONFIG, 160],
+  [AUTO_REPLY_REPLY_VITEST_CONFIG, 155],
+  [INFRA_VITEST_CONFIG, 145],
+  ["test/vitest/vitest.secrets.config.ts", 140],
+  [CRON_VITEST_CONFIG, 135],
+  ["test/vitest/vitest.wizard.config.ts", 130],
+  [UNIT_SRC_VITEST_CONFIG, 125],
+  [EXTENSION_MATRIX_VITEST_CONFIG, 100],
+  [EXTENSION_DISCORD_VITEST_CONFIG, 98],
+  [EXTENSION_PROVIDERS_VITEST_CONFIG, 96],
+  [EXTENSION_TELEGRAM_VITEST_CONFIG, 94],
+  [EXTENSION_WHATSAPP_VITEST_CONFIG, 92],
+  [AUTO_REPLY_CORE_VITEST_CONFIG, 90],
+  [CLI_VITEST_CONFIG, 86],
+  [MEDIA_VITEST_CONFIG, 84],
+  [PLUGINS_VITEST_CONFIG, 82],
+  [BUNDLED_VITEST_CONFIG, 80],
+  [EXTENSION_SLACK_VITEST_CONFIG, 78],
+  [COMMANDS_LIGHT_VITEST_CONFIG, 48],
+  [PLUGIN_SDK_VITEST_CONFIG, 46],
+  [AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG, 45],
+  [UNIT_UI_VITEST_CONFIG, 40],
+  [PLUGIN_SDK_LIGHT_VITEST_CONFIG, 38],
+  [DAEMON_VITEST_CONFIG, 36],
+  [BOUNDARY_VITEST_CONFIG, 34],
+  ["test/vitest/vitest.tooling.config.ts", 32],
+  [UNIT_SECURITY_VITEST_CONFIG, 30],
+  [UNIT_SUPPORT_VITEST_CONFIG, 28],
+  [EXTENSION_ZALO_VITEST_CONFIG, 24],
+  [EXTENSION_BLUEBUBBLES_VITEST_CONFIG, 22],
+  [EXTENSION_IRC_VITEST_CONFIG, 20],
+  [EXTENSION_FEISHU_VITEST_CONFIG, 18],
+  [EXTENSION_MATTERMOST_VITEST_CONFIG, 16],
+  [EXTENSION_MESSAGING_VITEST_CONFIG, 14],
+  [EXTENSION_IMESSAGE_VITEST_CONFIG, 13],
+  [EXTENSION_LINE_VITEST_CONFIG, 12],
+  [EXTENSION_SIGNAL_VITEST_CONFIG, 11],
+  [EXTENSION_ACPX_VITEST_CONFIG, 10],
+  [EXTENSION_DIFFS_VITEST_CONFIG, 8],
+  [EXTENSION_MEMORY_VITEST_CONFIG, 6],
+  [EXTENSION_MSTEAMS_VITEST_CONFIG, 4],
+]);
+
+function resolveConfigSortWeight(config, shardTimings) {
+  return shardTimings.get(config) ?? (FULL_SUITE_CONFIG_WEIGHT.get(config) ?? 0) * 1000;
+}
+
+function interleaveSlowAndFastSpecs(sortedSpecs) {
+  const ordered = [];
+  let slowIndex = 0;
+  let fastIndex = sortedSpecs.length - 1;
+  while (slowIndex <= fastIndex) {
+    ordered.push(sortedSpecs[slowIndex]);
+    slowIndex += 1;
+    if (slowIndex <= fastIndex) {
+      ordered.push(sortedSpecs[fastIndex]);
+      fastIndex -= 1;
+    }
+  }
+  return ordered;
+}
+
+export function orderFullSuiteSpecsForParallelRun(specs, shardTimings = new Map()) {
+  const sortedSpecs = specs.toSorted((a, b) => {
+    const weightDelta =
+      resolveConfigSortWeight(b.config, shardTimings) -
+      resolveConfigSortWeight(a.config, shardTimings);
+    if (weightDelta !== 0) {
+      return weightDelta;
+    }
+    return a.config.localeCompare(b.config);
+  });
+  return interleaveSlowAndFastSpecs(sortedSpecs);
+}
 const PROCESS_VITEST_CONFIG = "test/vitest/vitest.process.config.ts";
 const RUNTIME_CONFIG_VITEST_CONFIG = "test/vitest/vitest.runtime-config.config.ts";
 const SECRETS_VITEST_CONFIG = "test/vitest/vitest.secrets.config.ts";

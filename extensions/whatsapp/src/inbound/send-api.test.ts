@@ -3,6 +3,7 @@ import type {
   MiscMessageGenerationOptions,
   WAMessage,
 } from "@whiskeysockets/baileys";
+import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-message";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";
@@ -77,9 +78,9 @@ describe("createWebSendApi", () => {
     expect(res).toMatchObject({
       kind: "text",
       messageId: "msg-1",
-      messageIds: ["msg-1"],
       providerAccepted: true,
     });
+    expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toEqual(["msg-1"]);
     expect(recordChannelActivity).toHaveBeenCalledWith({
       channel: "whatsapp",
       accountId: "main",
@@ -190,9 +191,12 @@ describe("createWebSendApi", () => {
     expect(res).toMatchObject({
       kind: "media",
       messageId: "voice-1",
-      messageIds: ["voice-1", "voice-text-1"],
       providerAccepted: true,
     });
+    expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toEqual([
+      "voice-1",
+      "voice-text-1",
+    ]);
   });
 
   it("supports video media and gifPlayback option", async () => {
@@ -266,9 +270,9 @@ describe("createWebSendApi", () => {
     expect(res).toMatchObject({
       kind: "text",
       messageId: "unknown",
-      messageIds: [],
       providerAccepted: false,
     });
+    expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toEqual([]);
   });
 
   it("keeps direct-chat reactions without a participant key", async () => {

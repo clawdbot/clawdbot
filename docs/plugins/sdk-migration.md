@@ -19,18 +19,18 @@ the new architecture, this guide helps you migrate.
 The old plugin system provided two wide-open surfaces that let plugins import
 anything they needed from a single entry point:
 
-- **`openclaw/plugin-sdk/compat`** — a single import that re-exported dozens of
+- **`openclaw/plugin-sdk/compat`** - a single import that re-exported dozens of
   helpers. It was introduced to keep older hook-based plugins working while the
   new plugin architecture was being built.
-- **`openclaw/plugin-sdk/infra-runtime`** — a broad runtime helper barrel that
+- **`openclaw/plugin-sdk/infra-runtime`** - a broad runtime helper barrel that
   mixed system events, heartbeat state, delivery queues, fetch/proxy helpers,
   file helpers, approval types, and unrelated utilities.
-- **`openclaw/plugin-sdk/config-runtime`** — a broad config compatibility barrel
+- **`openclaw/plugin-sdk/config-runtime`** - a broad config compatibility barrel
   that still carries deprecated direct load/write helpers during the migration
   window.
-- **`openclaw/extension-api`** — a bridge that gave plugins direct access to
+- **`openclaw/extension-api`** - a bridge that gave plugins direct access to
   host-side helpers like the embedded agent runner.
-- **`api.registerEmbeddedExtensionFactory(...)`** — a removed Pi-only bundled
+- **`api.registerEmbeddedExtensionFactory(...)`** - a removed Pi-only bundled
   extension hook that could observe embedded-runner events such as
   `tool_result`.
 
@@ -55,9 +55,9 @@ registration behavior.
 
 The old approach caused problems:
 
-- **Slow startup** — importing one helper loaded dozens of unrelated modules
-- **Circular dependencies** — broad re-exports made it easy to create import cycles
-- **Unclear API surface** — no way to tell which exports were stable vs internal
+- **Slow startup** - importing one helper loaded dozens of unrelated modules
+- **Circular dependencies** - broad re-exports made it easy to create import cycles
+- **Unclear API surface** - no way to tell which exports were stable vs internal
 
 The modern plugin SDK fixes this: each import path (`openclaw/plugin-sdk/\<subpath\>`)
 is a small, self-contained module with a clear purpose and documented contract.
@@ -76,6 +76,116 @@ Current bundled provider examples:
   builders in its own `api.ts`
 - OpenRouter keeps provider builder and onboarding/config helpers in its own
   `api.ts`
+
+## Talk and realtime voice migration plan
+
+Realtime voice, telephony, meeting, and browser Talk code is moving from
+surface-local turn bookkeeping to a shared Talk session controller exported by
+`openclaw/plugin-sdk/realtime-voice`. The new controller owns the common Talk
+event envelope, active turn state, capture state, output-audio state, recent
+event history, and stale-turn rejection. Provider plugins should keep owning
+vendor-specific realtime sessions; surface plugins should keep owning capture,
+playback, telephony, and meeting quirks.
+
+This Talk migration is intentionally breaking-clean:
+
+1. Keep the shared controller/runtime primitives in
+   `plugin-sdk/realtime-voice`.
+2. Move bundled surfaces onto the shared controller: browser relay,
+   managed-room handoff, voice-call realtime, voice-call streaming STT, Google
+   Meet realtime, and native push-to-talk.
+3. Replace old Talk RPC families with the final `talk.session.*` and
+   `talk.client.*` API.
+4. Advertise one live Talk event channel in Gateway
+   `hello-ok.features.events`: `talk.event`.
+5. Delete the old realtime HTTP endpoint and any request-time instruction
+   override path.
+
+New code should not call `createTalkEventSequencer(...)` directly unless it is
+implementing a low-level adapter or test fixture. Prefer the shared controller
+so turn-scoped events cannot be emitted without a turn id, stale `turnEnd` /
+`turnCancel` calls cannot clear a newer active turn, and output-audio lifecycle
+events stay consistent across telephony, meetings, browser relay, managed-room
+handoff, and native Talk clients.
+
+The target public API shape is:
+
+```typescript
+// Gateway-owned Talk session API.
+await gateway.request("talk.session.create", {
+  mode: "realtime",
+  transport: "gateway-relay",
+  brain: "agent-consult",
+  sessionKey: "main",
+});
+await gateway.request("talk.session.appendAudio", { sessionId, audioBase64 });
+await gateway.request("talk.session.cancelOutput", { sessionId, reason: "barge-in" });
+await gateway.request("talk.session.submitToolResult", { sessionId, callId, result });
+await gateway.request("talk.session.close", { sessionId });
+
+// Client-owned provider session API.
+await gateway.request("talk.client.create", {
+  mode: "realtime",
+  transport: "webrtc",
+  brain: "agent-consult",
+  sessionKey: "main",
+});
+await gateway.request("talk.client.toolCall", { sessionKey, callId, name, args });
+```
+
+Browser-owned WebRTC/provider-websocket sessions use `talk.client.create`,
+because the browser owns the provider negotiation and media transport while the
+Gateway owns credentials, instructions, and tool policy. `talk.session.*` is the
+common Gateway-managed surface for gateway-relay realtime, gateway-relay
+transcription, and managed-room native STT/TTS sessions.
+
+Legacy configs that placed realtime selectors beside `talk.provider` /
+`talk.providers` should be repaired with `openclaw doctor --fix`; runtime Talk
+does not reinterpret speech/TTS provider config as realtime provider config.
+
+The supported `talk.session.create` combinations are intentionally small:
+
+| Mode            | Transport       | Brain           | Owner              | Notes                                                                                                              |
+| --------------- | --------------- | --------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `realtime`      | `gateway-relay` | `agent-consult` | Gateway            | Full-duplex provider audio bridged through the Gateway; tool calls are routed through the agent-consult tool.      |
+| `transcription` | `gateway-relay` | `none`          | Gateway            | Streaming STT only; callers send input audio and receive transcript events.                                        |
+| `stt-tts`       | `managed-room`  | `agent-consult` | Native/client room | Push-to-talk and walkie-talkie style rooms where the client owns capture/playback and the Gateway owns turn state. |
+| `stt-tts`       | `managed-room`  | `direct-tools`  | Native/client room | Admin-only room mode for trusted first-party surfaces that execute Gateway tool actions directly.                  |
+
+Removed method map:
+
+| Old                              | New                                                      |
+| -------------------------------- | -------------------------------------------------------- |
+| `talk.realtime.session`          | `talk.client.create`                                     |
+| `talk.realtime.toolCall`         | `talk.client.toolCall`                                   |
+| `talk.realtime.relayAudio`       | `talk.session.appendAudio`                               |
+| `talk.realtime.relayCancel`      | `talk.session.cancelOutput` or `talk.session.cancelTurn` |
+| `talk.realtime.relayToolResult`  | `talk.session.submitToolResult`                          |
+| `talk.realtime.relayStop`        | `talk.session.close`                                     |
+| `talk.transcription.session`     | `talk.session.create({ mode: "transcription" })`         |
+| `talk.transcription.relayAudio`  | `talk.session.appendAudio`                               |
+| `talk.transcription.relayCancel` | `talk.session.cancelTurn`                                |
+| `talk.transcription.relayStop`   | `talk.session.close`                                     |
+| `talk.handoff.create`            | `talk.session.create({ transport: "managed-room" })`     |
+| `talk.handoff.join`              | `talk.session.join`                                      |
+| `talk.handoff.revoke`            | `talk.session.close`                                     |
+
+The unified control vocabulary is also deliberately narrow:
+
+| Method                          | Applies to                                              | Contract                                                                                      |
+| ------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `talk.session.appendAudio`      | `realtime/gateway-relay`, `transcription/gateway-relay` | Append a base64 PCM audio chunk to the provider session owned by the same Gateway connection. |
+| `talk.session.startTurn`        | `stt-tts/managed-room`                                  | Start a managed-room user turn.                                                               |
+| `talk.session.endTurn`          | `stt-tts/managed-room`                                  | End the active turn after stale-turn validation.                                              |
+| `talk.session.cancelTurn`       | all Gateway-owned sessions                              | Cancel active capture/provider/agent/TTS work for a turn.                                     |
+| `talk.session.cancelOutput`     | `realtime/gateway-relay`                                | Stop assistant audio output without necessarily ending the user turn.                         |
+| `talk.session.submitToolResult` | `realtime/gateway-relay`                                | Complete a provider tool call emitted by the relay.                                           |
+| `talk.session.close`            | all unified sessions                                    | Stop relay sessions or revoke managed-room state, then forget the unified session id.         |
+
+Do not introduce provider or platform special cases in core to make this work.
+Core owns Talk session semantics. Provider plugins own vendor session setup.
+Voice-call and Google Meet own telephony/meeting adapters. Browser and native
+apps own device capture/playback UX.
 
 ## Compatibility policy
 
@@ -425,7 +535,7 @@ releases.
   | `plugin-sdk/approval-native-runtime` | Approval target helpers | Native approval target/account binding helpers |
   | `plugin-sdk/approval-reply-runtime` | Approval reply helpers | Exec/plugin approval reply payload helpers |
   | `plugin-sdk/channel-runtime-context` | Channel runtime-context helpers | Generic channel runtime-context register/get/watch helpers |
-  | `plugin-sdk/security-runtime` | Security helpers | Shared trust, DM gating, external-content, and secret-collection helpers |
+  | `plugin-sdk/security-runtime` | Security helpers | Shared trust, DM gating, root-bounded file/path helpers, external-content, and secret-collection helpers |
   | `plugin-sdk/ssrf-policy` | SSRF policy helpers | Host allowlist and private-network policy helpers |
   | `plugin-sdk/ssrf-runtime` | SSRF runtime helpers | Pinned-dispatcher, guarded fetch, SSRF policy helpers |
   | `plugin-sdk/system-event-runtime` | System event helpers | `enqueueSystemEvent`, `peekSystemEventEntries` |
@@ -497,7 +607,7 @@ releases.
   | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, validation helpers, and OpenAI-compatible TTS builder |
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types, registry helpers, and shared WebSocket session helper |
-  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, and bridge session helpers |
+  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, bridge session helpers, shared agent talk-back queues, transcript/event health, echo suppression, and fast context consult helpers |
   | `plugin-sdk/image-generation` | Image-generation helpers | Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
   | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
   | `plugin-sdk/music-generation` | Music-generation helpers | Music-generation provider/request/result types |
@@ -569,7 +679,7 @@ canonical replacement.
     `buildCommandsMessagePaginated`, `buildHelpMessage`.
 
     **New (`openclaw/plugin-sdk/command-status`)**: same signatures, same
-    exports — just imported from the narrower subpath. `command-auth`
+    exports - just imported from the narrower subpath. `command-auth`
     re-exports them as compat stubs.
 
     ```typescript
@@ -588,7 +698,7 @@ canonical replacement.
     `openclaw/plugin-sdk/channel-inbound` or
     `openclaw/plugin-sdk/channel-mention-gating`.
 
-    **New**: `resolveInboundMentionDecision({ facts, policy })` — returns a
+    **New**: `resolveInboundMentionDecision({ facts, policy })` - returns a
     single decision object instead of two split calls.
 
     Downstream channel plugins (Slack, Discord, Matrix, MS Teams) have already
@@ -604,7 +714,7 @@ canonical replacement.
 
     `channelActions*` helpers in `openclaw/plugin-sdk/channel-actions` are
     deprecated alongside raw "actions" channel exports. Expose capabilities
-    through the semantic `presentation` surface instead — channel plugins
+    through the semantic `presentation` surface instead - channel plugins
     declare what they render (cards, buttons, selects) rather than which raw
     action names they accept.
 
@@ -646,7 +756,7 @@ canonical replacement.
     | `ProviderDiscoveryResult` | `ProviderCatalogResult`   |
     | `ProviderPluginDiscovery` | `ProviderPluginCatalog`   |
 
-    Plus the legacy `ProviderCapabilities` static bag — provider plugins
+    Plus the legacy `ProviderCapabilities` static bag - provider plugins
     should use explicit provider hooks such as `buildReplayPolicy`,
     `normalizeToolSchemas`, and `wrapStreamFn` rather than a static object.
 
@@ -699,12 +809,12 @@ canonical replacement.
   </Accordion>
 
   <Accordion title="Memory plugin registration → registerMemoryCapability">
-    **Old**: three separate calls —
+    **Old**: three separate calls -
     `api.registerMemoryPromptSection(...)`,
     `api.registerMemoryFlushPlan(...)`,
     `api.registerMemoryRuntime(...)`.
 
-    **New**: one call on the memory-state API —
+    **New**: one call on the memory-state API -
     `registerMemoryCapability(pluginId, { promptBuilder, flushPlanResolver, runtime })`.
 
     Same slots, single registration call. Additive memory helpers
@@ -796,9 +906,9 @@ This is a temporary escape hatch, not a permanent solution.
 
 ## Related
 
-- [Getting Started](/plugins/building-plugins) — build your first plugin
-- [SDK Overview](/plugins/sdk-overview) — full subpath import reference
-- [Channel Plugins](/plugins/sdk-channel-plugins) — building channel plugins
-- [Provider Plugins](/plugins/sdk-provider-plugins) — building provider plugins
-- [Plugin Internals](/plugins/architecture) — architecture deep dive
-- [Plugin Manifest](/plugins/manifest) — manifest schema reference
+- [Getting Started](/plugins/building-plugins) - build your first plugin
+- [SDK Overview](/plugins/sdk-overview) - full subpath import reference
+- [Channel Plugins](/plugins/sdk-channel-plugins) - building channel plugins
+- [Provider Plugins](/plugins/sdk-provider-plugins) - building provider plugins
+- [Plugin Internals](/plugins/architecture) - architecture deep dive
+- [Plugin Manifest](/plugins/manifest) - manifest schema reference

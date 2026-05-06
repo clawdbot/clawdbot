@@ -90,6 +90,7 @@ import { collectOption } from "./program/helpers.js";
 type CapabilityTransport = "local" | "gateway";
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
+const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
 
 type CapabilityMetadata = {
   id: string;
@@ -659,11 +660,17 @@ async function runModelRun(params: {
         'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with agents.defaults.agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
       );
     }
+    const localModelRunSystemPrompt =
+      prepared.selection.provider === "openai-codex" ||
+      prepared.model.api === "openai-codex-responses"
+        ? LOCAL_MODEL_RUN_SYSTEM_PROMPT
+        : undefined;
     const result = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
       auth: prepared.auth,
       cfg,
       context: {
+        ...(localModelRunSystemPrompt ? { systemPrompt: localModelRunSystemPrompt } : {}),
         messages: [
           {
             role: "user",
@@ -681,8 +688,13 @@ async function runModelRun(params: {
     });
     const text = collectModelRunText(result.content);
     if (!text) {
+      const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
+      const detail =
+        typeof providerErrorMessage === "string" && providerErrorMessage.trim()
+          ? `: ${providerErrorMessage.trim()}`
+          : "";
       throw new Error(
-        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}".`,
+        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`,
       );
     }
     return {

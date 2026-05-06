@@ -1,9 +1,15 @@
+import {
+  verifyChannelMessageAdapterCapabilityProofs,
+  verifyChannelMessageReceiveAckPolicyAdapterProofs,
+} from "openclaw/plugin-sdk/channel-message";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../api.js";
+import { linePlugin } from "./channel.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { setLineRuntime } from "./runtime.js";
+import { createLineSendReceipt } from "./send-receipt.js";
 
 type LineRuntimeMocks = {
   pushMessageLine: ReturnType<typeof vi.fn>;
@@ -20,19 +26,24 @@ type LineRuntimeMocks = {
   resolveTextChunkLimit: ReturnType<typeof vi.fn>;
 };
 
+function lineResult(messageId: string, chatId = "c1") {
+  return {
+    messageId,
+    chatId,
+    receipt: createLineSendReceipt({ messageId, chatId, kind: "text" }),
+  };
+}
+
 function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
-  const pushMessageLine = vi.fn(async () => ({ messageId: "m-text", chatId: "c1" }));
-  const pushMessagesLine = vi.fn(async () => ({ messageId: "m-batch", chatId: "c1" }));
-  const pushFlexMessage = vi.fn(async () => ({ messageId: "m-flex", chatId: "c1" }));
-  const pushTemplateMessage = vi.fn(async () => ({ messageId: "m-template", chatId: "c1" }));
-  const pushLocationMessage = vi.fn(async () => ({ messageId: "m-loc", chatId: "c1" }));
-  const pushTextMessageWithQuickReplies = vi.fn(async () => ({
-    messageId: "m-quick",
-    chatId: "c1",
-  }));
+  const pushMessageLine = vi.fn(async () => lineResult("m-text"));
+  const pushMessagesLine = vi.fn(async () => lineResult("m-batch"));
+  const pushFlexMessage = vi.fn(async () => lineResult("m-flex"));
+  const pushTemplateMessage = vi.fn(async () => lineResult("m-template"));
+  const pushLocationMessage = vi.fn(async () => lineResult("m-loc"));
+  const pushTextMessageWithQuickReplies = vi.fn(async () => lineResult("m-quick"));
   const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
   const buildTemplateMessageFromPayload = vi.fn(() => ({ type: "buttons" }));
-  const sendMessageLine = vi.fn(async () => ({ messageId: "m-media", chatId: "c1" }));
+  const sendMessageLine = vi.fn(async () => lineResult("m-media"));
   const chunkMarkdownText = vi.fn((text: string) => [text]);
   const resolveTextChunkLimit = vi.fn(() => 123);
   const resolveLineAccount = vi.fn(
@@ -227,7 +238,8 @@ describe("line outbound sendPayload", () => {
       ["One", "Two"],
       { verbose: false, accountId: "default", cfg },
     );
-    expect(result).toEqual({ channel: "line", messageId: "m-quick", chatId: "c1" });
+    expect(result).toMatchObject({ channel: "line", messageId: "m-quick", chatId: "c1" });
+    expect(result.receipt?.primaryPlatformMessageId).toBe("m-quick");
   });
 
   it("sends media before quick-reply text so buttons stay visible", async () => {
@@ -468,6 +480,84 @@ describe("line outbound sendPayload", () => {
         cfg,
       }),
     ).rejects.toThrow(/require previewimageurl/i);
+  });
+
+  it("declares message adapter durable text and media with receipt proofs", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await expect(
+      verifyChannelMessageAdapterCapabilityProofs({
+        adapterName: "line",
+        adapter: linePlugin.message!,
+        proofs: {
+          text: async () => {
+            const result = await linePlugin.message?.send?.text?.({
+              cfg,
+              to: "line:user:U123",
+              text: "hello",
+              accountId: "primary",
+            });
+            expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:U123", "hello", {
+              verbose: false,
+              accountId: "primary",
+              cfg,
+            });
+            expect(result?.receipt.platformMessageIds).toEqual(["m-text"]);
+          },
+          media: async () => {
+            const result = await linePlugin.message?.send?.media?.({
+              cfg,
+              to: "line:user:U123",
+              text: "image",
+              mediaUrl: "https://example.com/image.jpg",
+              accountId: "primary",
+            });
+            expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:U123", "", {
+              verbose: false,
+              mediaUrl: "https://example.com/image.jpg",
+              accountId: "primary",
+              cfg,
+            });
+            expect(result?.receipt.platformMessageIds).toEqual(["m-media"]);
+          },
+          messageSendingHooks: () => {
+            expect(linePlugin.message?.send?.text).toBeTypeOf("function");
+          },
+        },
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        { capability: "text", status: "verified" },
+        { capability: "media", status: "verified" },
+        { capability: "messageSendingHooks", status: "verified" },
+      ]),
+    );
+  });
+
+  it("declares receive ack policies for deferred LINE webhook acknowledgement", async () => {
+    await expect(
+      verifyChannelMessageReceiveAckPolicyAdapterProofs({
+        adapterName: "line",
+        adapter: linePlugin.message!,
+        proofs: {
+          after_receive_record: () => {
+            expect(linePlugin.message?.receive?.supportedAckPolicies).toContain(
+              "after_receive_record",
+            );
+          },
+          after_agent_dispatch: () => {
+            expect(linePlugin.message?.receive?.defaultAckPolicy).toBe("after_agent_dispatch");
+          },
+        },
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        { policy: "after_receive_record", status: "verified" },
+        { policy: "after_agent_dispatch", status: "verified" },
+      ]),
+    );
   });
 });
 

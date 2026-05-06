@@ -1,7 +1,8 @@
+import "../infra/fs-safe-defaults.js";
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempDir } from "../infra/install-source-utils.js";
+import { replaceDirectoryAtomic } from "../infra/replace-file.js";
 import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
@@ -192,34 +193,12 @@ async function replaceManagedGitRepo(params: {
   stagedRepoDir: string;
   persistentRepoDir: string;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
-  const parentDir = path.dirname(params.persistentRepoDir);
-  const backupDir = path.join(parentDir, `.repo-backup-${process.pid}-${Date.now()}`);
-  let backupCreated = false;
-
   try {
-    await fs.mkdir(parentDir, { recursive: true });
-    try {
-      await fs.rename(params.persistentRepoDir, backupDir);
-      backupCreated = true;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw err;
-      }
-    }
-
-    try {
-      await fs.rename(params.stagedRepoDir, params.persistentRepoDir);
-    } catch (err) {
-      if (backupCreated) {
-        await fs.rename(backupDir, params.persistentRepoDir);
-        backupCreated = false;
-      }
-      throw err;
-    }
-
-    if (backupCreated) {
-      await fs.rm(backupDir, { recursive: true, force: true });
-    }
+    await replaceDirectoryAtomic({
+      stagedDir: params.stagedRepoDir,
+      targetDir: params.persistentRepoDir,
+      backupPrefix: ".repo-backup-",
+    });
     return { ok: true };
   } catch (err) {
     return {

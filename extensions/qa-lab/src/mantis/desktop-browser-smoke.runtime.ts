@@ -3,9 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 
 export type MantisDesktopBrowserSmokeOptions = {
+  browserProfileArchiveEnv?: string;
+  browserProfileDir?: string;
   browserUrl?: string;
   commandRunner?: CommandRunner;
   crabboxBin?: string;
@@ -20,6 +23,7 @@ export type MantisDesktopBrowserSmokeOptions = {
   provider?: string;
   repoRoot?: string;
   ttl?: string;
+  videoDurationSeconds?: number;
 };
 
 export type MantisDesktopBrowserSmokeResult = {
@@ -92,6 +96,9 @@ const CRABBOX_LEASE_ID_ENV = "OPENCLAW_MANTIS_CRABBOX_LEASE_ID";
 const CRABBOX_KEEP_ENV = "OPENCLAW_MANTIS_KEEP_VM";
 const CRABBOX_IDLE_TIMEOUT_ENV = "OPENCLAW_MANTIS_CRABBOX_IDLE_TIMEOUT";
 const CRABBOX_TTL_ENV = "OPENCLAW_MANTIS_CRABBOX_TTL";
+const BROWSER_PROFILE_ARCHIVE_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_TGZ_B64";
+const BROWSER_PROFILE_DIR_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_DIR";
+const DEFAULT_VIDEO_DURATION_SECONDS = 10;
 
 function trimToValue(value: string | undefined) {
   const trimmed = value?.trim();
@@ -146,15 +153,6 @@ async function defaultCommandRunner(
   });
 }
 
-async function pathExists(filePath: string) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function resolveCrabboxBin(params: {
   env: NodeJS.ProcessEnv;
   explicit?: string;
@@ -179,6 +177,21 @@ function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+function assertSafeEnvName(value: string, label: string) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(value)) {
+    throw new Error(`${label} must be an environment variable name.`);
+  }
+}
+
+function assertSafeRemoteProfileDir(value: string, label: string) {
+  if (!value.startsWith("/") && !value.startsWith("$HOME/") && !value.startsWith("~/")) {
+    throw new Error(`${label} must be an absolute path, ~/ path, or $HOME path.`);
+  }
+  if (value.includes("\n") || value.includes("\r") || value.includes("\0")) {
+    throw new Error(`${label} must not contain control characters.`);
+  }
+}
+
 function resolveRepoBoundFile(repoRoot: string, filePath: string, label: string) {
   const resolved = path.resolve(repoRoot, filePath);
   const relative = path.relative(repoRoot, resolved);
@@ -190,13 +203,22 @@ function resolveRepoBoundFile(repoRoot: string, filePath: string, label: string)
 
 function renderRemoteScript(params: {
   browserUrl: string;
+  browserProfileArchiveEnv: string;
+  browserProfileDir?: string;
   htmlBase64?: string;
   remoteOutputDir: string;
+  videoDurationSeconds: number;
 }) {
   const shellUrl = shellQuote(params.browserUrl);
   const shellUrlJson = shellQuote(JSON.stringify(params.browserUrl));
   const htmlBase64 = shellQuote(params.htmlBase64 ?? "");
   const shellOutputDir = shellQuote(params.remoteOutputDir);
+  const videoDurationSeconds = Math.max(1, Math.floor(params.videoDurationSeconds));
+  const profileArchiveEnv = params.browserProfileArchiveEnv;
+  const profileDir = shellQuote(
+    params.browserProfileDir ?? `${params.remoteOutputDir}/chrome-profile`,
+  );
+  const temporaryProfile = params.browserProfileDir ? "false" : "true";
   const inputModeJson = shellQuote(JSON.stringify(params.htmlBase64 ? "html-file" : "url"));
   const openedUrlJson = shellQuote(
     JSON.stringify(
@@ -221,8 +243,18 @@ if ! command -v scrot >/dev/null 2>&1; then
   sudo apt-get update -y >"$out/apt.log" 2>&1
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y scrot >>"$out/apt.log" 2>&1
 fi
-profile="$out/chrome-profile"
+profile=${profileDir}
+temporary_profile=${temporaryProfile}
 mkdir -p "$profile"
+profile_restored=false
+profile_archive_b64="\${${profileArchiveEnv}:-}"
+if [ -n "$profile_archive_b64" ]; then
+  profile_archive="$profile/openclaw-mantis-browser-profile.tgz"
+  printf '%s' "$profile_archive_b64" | base64 -d >"$profile_archive"
+  tar -xzf "$profile_archive" -C "$profile"
+  rm -f "$profile_archive"
+  profile_restored=true
+fi
 browser_bin=""
 for candidate in "\${BROWSER:-}" "\${CHROME_BIN:-}" google-chrome chromium chromium-browser; do
   if [ -n "$candidate" ] && command -v "$candidate" >/dev/null 2>&1; then
@@ -247,7 +279,7 @@ if command -v ffmpeg >/dev/null 2>&1; then
     *.*) ;;
     *) display_input="$display_input.0" ;;
   esac
-  ffmpeg -hide_banner -loglevel error -y -f x11grab -framerate 15 -i "$display_input" -t 10 -pix_fmt yuv420p "$out/desktop-browser-smoke.mp4" >"$out/ffmpeg.log" 2>&1 &
+  ffmpeg -hide_banner -loglevel error -y -f x11grab -framerate 15 -i "$display_input" -t ${videoDurationSeconds} -pix_fmt yuv420p "$out/desktop-browser-smoke.mp4" >"$out/ffmpeg.log" 2>&1 &
   video_pid=$!
 else
   echo "ffmpeg missing; video artifact skipped" >"$out/ffmpeg.log"
@@ -274,13 +306,19 @@ fi
 cleanup
 trap - EXIT
 sleep 1
-rm -rf "$profile" || true
+if [ "$temporary_profile" = "true" ]; then
+  rm -rf "$profile" || true
+fi
 cat >"$out/remote-metadata.json" <<MANTIS_REMOTE_METADATA
 {
   "browserUrl": $url_json,
   "browserBinary": "$browser_bin",
   "display": "$DISPLAY",
   "chromePid": $chrome_pid,
+  "browserProfileArchiveEnv": "${profileArchiveEnv}",
+  "browserProfileDir": "$profile",
+  "browserProfileRestored": $profile_restored,
+  "temporaryBrowserProfile": $temporary_profile,
   "inputMode": $input_mode_json,
   "openedUrl": $opened_url_json,
   "capturedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -491,6 +529,20 @@ export async function runMantisDesktopBrowserSmoke(
   const browserUrl = htmlFile
     ? pathToFileURL(htmlFile).toString()
     : (trimToValue(opts.browserUrl) ?? DEFAULT_BROWSER_URL);
+  const browserProfileArchiveEnv =
+    trimToValue(opts.browserProfileArchiveEnv) ??
+    trimToValue(env.OPENCLAW_MANTIS_BROWSER_PROFILE_ARCHIVE_ENV) ??
+    BROWSER_PROFILE_ARCHIVE_ENV;
+  assertSafeEnvName(browserProfileArchiveEnv, "Mantis browser profile archive env");
+  const browserProfileDir =
+    trimToValue(opts.browserProfileDir) ?? trimToValue(env[BROWSER_PROFILE_DIR_ENV]);
+  if (browserProfileDir) {
+    assertSafeRemoteProfileDir(browserProfileDir, "Mantis browser profile dir");
+  }
+  const videoDurationSeconds = Math.max(
+    1,
+    Math.floor(opts.videoDurationSeconds ?? DEFAULT_VIDEO_DURATION_SECONDS),
+  );
   const runner = opts.commandRunner ?? defaultCommandRunner;
   const explicitLeaseId = trimToValue(opts.leaseId) ?? trimToValue(env[CRABBOX_LEASE_ID_ENV]);
   const keepLease = opts.keepLease ?? isTruthyOptIn(env[CRABBOX_KEEP_ENV]);
@@ -535,7 +587,14 @@ export async function runMantisDesktopBrowserSmoke(
         "--no-sync",
         "--shell",
         "--",
-        renderRemoteScript({ browserUrl, htmlBase64, remoteOutputDir }),
+        renderRemoteScript({
+          browserProfileArchiveEnv,
+          browserProfileDir,
+          browserUrl,
+          htmlBase64,
+          remoteOutputDir,
+          videoDurationSeconds,
+        }),
       ],
       cwd: repoRoot,
       env,

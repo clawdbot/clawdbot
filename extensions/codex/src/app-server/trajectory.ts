@@ -6,6 +6,10 @@ import type {
   EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness";
 import { resolveUserPath } from "openclaw/plugin-sdk/agent-harness";
+import {
+  appendRegularFile,
+  resolveRegularFileAppendFlags,
+} from "openclaw/plugin-sdk/security-runtime";
 
 type CodexTrajectoryRecorder = {
   filePath: string;
@@ -39,13 +43,7 @@ type CodexTrajectoryOpenFlagConstants = Pick<
 export function resolveCodexTrajectoryAppendFlags(
   constants: CodexTrajectoryOpenFlagConstants = nodeFs.constants,
 ): number {
-  const noFollow = constants.O_NOFOLLOW;
-  return (
-    constants.O_CREAT |
-    constants.O_APPEND |
-    constants.O_WRONLY |
-    (typeof noFollow === "number" ? noFollow : 0)
-  );
+  return resolveRegularFileAppendFlags(constants);
 }
 
 export function resolveCodexTrajectoryPointerFlags(
@@ -60,78 +58,13 @@ export function resolveCodexTrajectoryPointerFlags(
   );
 }
 
-async function assertNoSymlinkParents(filePath: string): Promise<void> {
-  const resolvedDir = path.resolve(path.dirname(filePath));
-  const parsed = path.parse(resolvedDir);
-  const relativeParts = path.relative(parsed.root, resolvedDir).split(path.sep).filter(Boolean);
-  let current = parsed.root;
-  for (const part of relativeParts) {
-    current = path.join(current, part);
-    const stat = await fs.lstat(current);
-    if (stat.isSymbolicLink()) {
-      if (path.dirname(current) === parsed.root) {
-        continue;
-      }
-      throw new Error(`Refusing to write trajectory under symlinked directory: ${current}`);
-    }
-    if (!stat.isDirectory()) {
-      throw new Error(`Refusing to write trajectory under non-directory: ${current}`);
-    }
-  }
-}
-
-function verifyStableOpenedTrajectoryFile(params: {
-  preOpenStat?: nodeFs.Stats;
-  postOpenStat: nodeFs.Stats;
-  filePath: string;
-}): void {
-  if (!params.postOpenStat.isFile()) {
-    throw new Error(`Refusing to write trajectory to non-file: ${params.filePath}`);
-  }
-  if (params.postOpenStat.nlink > 1) {
-    throw new Error(`Refusing to write trajectory to hardlinked file: ${params.filePath}`);
-  }
-  const pre = params.preOpenStat;
-  if (pre && (pre.dev !== params.postOpenStat.dev || pre.ino !== params.postOpenStat.ino)) {
-    throw new Error(`Refusing to write trajectory after file changed: ${params.filePath}`);
-  }
-}
-
 async function safeAppendTrajectoryFile(filePath: string, line: string): Promise<void> {
-  await assertNoSymlinkParents(filePath);
-
-  let preOpenStat: nodeFs.Stats | undefined;
-  try {
-    const stat = await fs.lstat(filePath);
-    if (stat.isSymbolicLink()) {
-      throw new Error(`Refusing to write trajectory through symlink: ${filePath}`);
-    }
-    if (!stat.isFile()) {
-      throw new Error(`Refusing to write trajectory to non-file: ${filePath}`);
-    }
-    preOpenStat = stat;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw err;
-    }
-  }
-  const lineBytes = Buffer.byteLength(line, "utf8");
-  if ((preOpenStat?.size ?? 0) + lineBytes > TRAJECTORY_RUNTIME_FILE_MAX_BYTES) {
-    return;
-  }
-
-  const handle = await fs.open(filePath, resolveCodexTrajectoryAppendFlags(), 0o600);
-  try {
-    const stat = await handle.stat();
-    verifyStableOpenedTrajectoryFile({ preOpenStat, postOpenStat: stat, filePath });
-    if (stat.size + lineBytes > TRAJECTORY_RUNTIME_FILE_MAX_BYTES) {
-      return;
-    }
-    await handle.chmod(0o600);
-    await handle.appendFile(line, "utf8");
-  } finally {
-    await handle.close();
-  }
+  await appendRegularFile({
+    filePath,
+    content: line,
+    maxFileBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+    rejectSymlinkParents: true,
+  });
 }
 
 function boundedTrajectoryLine(event: Record<string, unknown>): string | undefined {

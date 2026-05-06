@@ -660,6 +660,164 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.itemLifecycle).toMatchObject({ compactionCount: 1 });
   });
 
+  it("synthesizes normalized tool progress for Codex-native tool items", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "ok",
+          exitCode: 0,
+          durationMs: 42,
+        },
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "item",
+      data: expect.objectContaining({
+        phase: "start",
+        kind: "command",
+        name: "bash",
+        itemId: "cmd-1",
+        suppressChannelProgress: true,
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: expect.objectContaining({
+        phase: "start",
+        name: "bash",
+        itemId: "cmd-1",
+        toolCallId: "cmd-1",
+        args: { command: "pnpm test extensions/codex", cwd: "/workspace" },
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: expect.objectContaining({
+        phase: "result",
+        name: "bash",
+        itemId: "cmd-1",
+        toolCallId: "cmd-1",
+        status: "completed",
+        isError: false,
+        result: expect.objectContaining({ exitCode: 0, durationMs: 42 }),
+      }),
+    });
+  });
+
+  it("marks declined Codex-native tool results as non-success", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-declined",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "declined",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "item",
+      data: expect.objectContaining({
+        phase: "end",
+        kind: "command",
+        name: "bash",
+        itemId: "cmd-declined",
+        status: "blocked",
+        suppressChannelProgress: true,
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: expect.objectContaining({
+        phase: "result",
+        name: "bash",
+        itemId: "cmd-declined",
+        toolCallId: "cmd-declined",
+        status: "blocked",
+        isError: true,
+      }),
+    });
+  });
+
+  it("leaves Codex dynamic tool item progress to item/tool/call normalization", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "dynamicToolCall",
+          id: "call-1",
+          namespace: null,
+          tool: "message",
+          arguments: { action: "send" },
+          status: "inProgress",
+          contentItems: null,
+          success: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "item",
+        data: expect.objectContaining({
+          phase: "start",
+          kind: "tool",
+          name: "message",
+          suppressChannelProgress: true,
+        }),
+      }),
+    );
+    expect(onAgentEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "tool",
+        data: expect.objectContaining({ phase: "start", name: "message" }),
+      }),
+    );
+  });
+
   it("emits verbose tool summaries through onToolResult", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({

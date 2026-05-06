@@ -2,10 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
 import { mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
+import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
+  withTempWorkspace,
   withTempDownloadPath,
 } from "openclaw/plugin-sdk/temp-path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
@@ -15,7 +18,11 @@ import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
+import {
+  assertFeishuMessageApiSuccess,
+  resolveFeishuReceiptKind,
+  toFeishuSendResult,
+} from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
@@ -399,6 +406,7 @@ export type UploadFileResult = {
 export type SendMediaResult = {
   messageId: string;
   chatId: string;
+  receipt: MessageReceipt;
   voiceIntentDegradedToFile?: boolean;
 };
 
@@ -415,10 +423,11 @@ export async function uploadImageFeishu(params: {
   const { cfg, image, imageType = "message", accountId } = params;
   const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
-  // SDK accepts Buffer directly or fs.ReadStream for file paths
-  // Using Readable.from(buffer) causes issues with form-data library
+  // SDK accepts Buffer directly. Keep string path support on this helper, but
+  // verify the path as a regular local file before uploading it.
   // See: https://github.com/larksuite/node-sdk/issues/121
-  const imageData = typeof image === "string" ? fs.createReadStream(image) : image;
+  const imageData =
+    typeof image === "string" ? (await readRegularFile({ filePath: image })).buffer : image;
 
   const response = await requestFeishuApi(
     () =>
@@ -469,10 +478,11 @@ export async function uploadFileFeishu(params: {
   const { cfg, file, fileName, fileType, duration, accountId } = params;
   const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
-  // SDK accepts Buffer directly or fs.ReadStream for file paths
-  // Using Readable.from(buffer) causes issues with form-data library
+  // SDK accepts Buffer directly. Keep string path support on this helper, but
+  // verify the path as a regular local file before uploading it.
   // See: https://github.com/larksuite/node-sdk/issues/121
-  const fileData = typeof file === "string" ? fs.createReadStream(file) : file;
+  const fileData =
+    typeof file === "string" ? (await readRegularFile({ filePath: file })).buffer : file;
 
   const safeFileName = sanitizeFileNameForUpload(fileName);
 
@@ -532,7 +542,7 @@ export async function sendImageFeishu(params: {
       { includeNestedErrorLogId: true },
     );
     assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
-    return toFeishuSendResult(response, receiveId);
+    return toFeishuSendResult(response, receiveId, "media");
   }
 
   const response = await requestFeishuApi(
@@ -549,7 +559,7 @@ export async function sendImageFeishu(params: {
     { includeNestedErrorLogId: true },
   );
   assertFeishuMessageApiSuccess(response, "Feishu image send failed");
-  return toFeishuSendResult(response, receiveId);
+  return toFeishuSendResult(response, receiveId, "media");
 }
 
 /**
@@ -589,7 +599,7 @@ export async function sendFileFeishu(params: {
       { includeNestedErrorLogId: true },
     );
     assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
-    return toFeishuSendResult(response, receiveId);
+    return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
   }
 
   const response = await requestFeishuApi(
@@ -606,7 +616,7 @@ export async function sendFileFeishu(params: {
     { includeNestedErrorLogId: true },
   );
   assertFeishuMessageApiSuccess(response, "Feishu file send failed");
-  return toFeishuSendResult(response, receiveId);
+  return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
 }
 
 /**
@@ -741,45 +751,42 @@ async function transcodeToFeishuVoiceOpus(params: {
   fileName: string;
   contentType?: string;
 }): Promise<{ buffer: Buffer; fileName: string; contentType: string }> {
-  const tempRoot = resolvePreferredOpenClawTmpDir();
-  await fs.promises.mkdir(tempRoot, { recursive: true, mode: 0o700 });
-  const tempDir = await fs.promises.mkdtemp(path.join(tempRoot, "feishu-voice-"));
-  try {
-    const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
-    const inputExt = ext && ext.length <= 12 ? ext : ".audio";
-    const inputPath = path.join(tempDir, `input${inputExt}`);
-    const outputPath = path.join(tempDir, FEISHU_VOICE_FILE_NAME);
-    await fs.promises.writeFile(inputPath, params.buffer, { mode: 0o600 });
-    await runFfmpeg([
-      "-hide_banner",
-      "-loglevel",
-      "error",
-      "-y",
-      "-i",
-      inputPath,
-      "-vn",
-      "-sn",
-      "-dn",
-      "-t",
-      String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-      "-ar",
-      String(FEISHU_VOICE_SAMPLE_RATE_HZ),
-      "-ac",
-      "1",
-      "-c:a",
-      "libopus",
-      "-b:a",
-      FEISHU_VOICE_BITRATE,
-      outputPath,
-    ]);
-    return {
-      buffer: await fs.promises.readFile(outputPath),
-      fileName: FEISHU_VOICE_FILE_NAME,
-      contentType: "audio/ogg",
-    };
-  } finally {
-    await fs.promises.rm(tempDir, { recursive: true, force: true });
-  }
+  return await withTempWorkspace(
+    { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-voice-" },
+    async (workspace) => {
+      const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
+      const inputExt = ext && ext.length <= 12 ? ext : ".audio";
+      const inputPath = await workspace.write(`input${inputExt}`, params.buffer);
+      const outputPath = workspace.path(FEISHU_VOICE_FILE_NAME);
+      await runFfmpeg([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        inputPath,
+        "-vn",
+        "-sn",
+        "-dn",
+        "-t",
+        String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
+        "-ar",
+        String(FEISHU_VOICE_SAMPLE_RATE_HZ),
+        "-ac",
+        "1",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        FEISHU_VOICE_BITRATE,
+        outputPath,
+      ]);
+      return {
+        buffer: await workspace.read(FEISHU_VOICE_FILE_NAME),
+        fileName: FEISHU_VOICE_FILE_NAME,
+        contentType: "audio/ogg",
+      };
+    },
+  );
 }
 
 async function prepareFeishuVoiceMedia(params: {

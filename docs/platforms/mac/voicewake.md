@@ -15,7 +15,7 @@ title: "Voice wake (macOS)"
 ## Runtime behavior (wake-word)
 
 - Speech recognizer lives in `VoiceWakeRuntime`.
-- Trigger only fires when there’s a **meaningful pause** between the wake word and the next word (~0.55s gap). The overlay/chime can start on the pause even before the command begins.
+- Trigger only fires when there's a **meaningful pause** between the wake word and the next word (~0.55s gap). The overlay/chime can start on the pause even before the command begins.
 - Silence windows: 2.0s when speech is flowing, 5.0s if only the trigger was heard.
 - Hard stop: 120s to prevent runaway sessions.
 - Debounce between sessions: 350ms.
@@ -29,7 +29,7 @@ title: "Voice wake (macOS)"
 
 ## Sticky overlay failure mode (previous)
 
-Previously, if the overlay got stuck visible and you manually closed it, Voice Wake could appear “dead” because the runtime’s restart attempt could be blocked by overlay visibility and no subsequent restart was scheduled.
+Previously, if the overlay got stuck visible and you manually closed it, Voice Wake could appear "dead" because the runtime's restart attempt could be blocked by overlay visibility and no subsequent restart was scheduled.
 
 Hardening:
 
@@ -50,7 +50,7 @@ Hardening:
 - **Hold Cmd+Fn to talk**: enables the push-to-talk monitor. Disabled on macOS < 26.
 - Language & mic pickers, live level meter, trigger-word table, tester (local-only; does not forward).
 - Mic picker preserves the last selection if a device disconnects, shows a disconnected hint, and temporarily falls back to the system default until it returns.
-- **Sounds**: chimes on trigger detect and on send; defaults to the macOS “Glass” system sound. You can pick any `NSSound`-loadable file (e.g. MP3/WAV/AIFF) for each event or choose **No Sound**.
+- **Sounds**: chimes on trigger detect and on send; defaults to the macOS "Glass" system sound. You can pick any `NSSound`-loadable file (e.g. MP3/WAV/AIFF) for each event or choose **No Sound**.
 
 ## Forwarding behavior
 

@@ -60,4 +60,58 @@ describe("extractMessagingToolSend", () => {
     expect(result?.provider).toBe("telegram");
     expect(result?.to).toBe("telegram:123");
   });
+
+  it("recognizes attachment-style message tool sends", () => {
+    const upload = extractMessagingToolSend("message", {
+      action: "upload-file",
+      channel: "discord",
+      to: "channel:123",
+      path: "/tmp/song.mp3",
+    });
+    const attachment = extractMessagingToolSend("message", {
+      action: "sendAttachment",
+      provider: "discord",
+      to: "channel:123",
+      filePath: "/tmp/song.mp3",
+    });
+    const effect = extractMessagingToolSend("message", {
+      action: "sendWithEffect",
+      provider: "discord",
+      to: "channel:123",
+      content: "done",
+    });
+
+    expect(upload).toMatchObject({
+      tool: "message",
+      provider: "discord",
+      to: "channel:123",
+    });
+    expect(attachment).toMatchObject({
+      tool: "message",
+      provider: "discord",
+      to: "channel:123",
+    });
+    expect(effect).toMatchObject({
+      tool: "message",
+      provider: "discord",
+      to: "channel:123",
+    });
+  });
+
+  it("keeps thread id evidence for thread replies", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "thread-reply",
+      provider: "discord",
+      to: "channel:123",
+      threadId: "456",
+      content: "done",
+    });
+
+    expect(result).toMatchObject({
+      tool: "message",
+      provider: "discord",
+      to: "channel:123",
+      threadId: "456",
+    });
+  });
 });

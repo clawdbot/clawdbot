@@ -6,8 +6,6 @@ read_when:
 title: Yuanbao
 ---
 
-# Yuanbao
-
 Tencent Yuanbao is Tencent's AI assistant platform. The OpenClaw channel plugin
 connects Yuanbao bots to OpenClaw over WebSocket so they can interact with users
 through direct messages and group chats.
@@ -53,10 +51,10 @@ Follow the prompts to enter your App ID and App Secret.
 
 Configure `dmPolicy` to control who can DM the bot:
 
-- `"pairing"` — unknown users receive a pairing code; approve via CLI
-- `"allowlist"` — only users listed in `allowFrom` can chat
-- `"open"` — allow all users (default)
-- `"disabled"` — disable all DMs
+- `"pairing"` - unknown users receive a pairing code; approve via CLI
+- `"allowlist"` - only users listed in `allowFrom` can chat
+- `"open"` - allow all users (default)
+- `"disabled"` - disable all DMs
 
 **Approve a pairing request:**
 
@@ -69,8 +67,8 @@ openclaw pairing approve yuanbao <CODE>
 
 **Mention requirement** (`channels.yuanbao.requireMention`):
 
-- `true` — require @mention (default)
-- `false` — respond without @mention
+- `true` - require @mention (default)
+- `false` - respond without @mention
 
 Replying to the bot's message in a group chat is treated as an implicit mention.
 
@@ -228,9 +226,9 @@ Replying to the bot's message in a group chat is treated as an implicit mention.
 
 ### Message limits
 
-- `maxChars` — single message max character count (default: `3000` chars)
-- `mediaMaxMb` — media upload/download limit (default: `20` MB)
-- `overflowPolicy` — behavior when message exceeds limit: `"split"` (default) or `"stop"`
+- `maxChars` - single message max character count (default: `3000` chars)
+- `mediaMaxMb` - media upload/download limit (default: `20` MB)
+- `overflowPolicy` - behavior when message exceeds limit: `"split"` (default) or `"stop"`
 
 ### Streaming
 
@@ -358,13 +356,13 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | ------------------------------------------ | ------------------------------------------------- | -------------------------------------- |
 | `channels.yuanbao.enabled`                 | Enable/disable the channel                        | `true`                                 |
 | `channels.yuanbao.defaultAccount`          | Default account for outbound routing              | `default`                              |
-| `channels.yuanbao.accounts.<id>.appKey`    | App Key (used for signing and ticket generation)  | —                                      |
-| `channels.yuanbao.accounts.<id>.appSecret` | App Secret (used for signing)                     | —                                      |
-| `channels.yuanbao.accounts.<id>.token`     | Pre-signed token (skips automatic ticket signing) | —                                      |
-| `channels.yuanbao.accounts.<id>.name`      | Account display name                              | —                                      |
+| `channels.yuanbao.accounts.<id>.appKey`    | App Key (used for signing and ticket generation)  | -                                      |
+| `channels.yuanbao.accounts.<id>.appSecret` | App Secret (used for signing)                     | -                                      |
+| `channels.yuanbao.accounts.<id>.token`     | Pre-signed token (skips automatic ticket signing) | -                                      |
+| `channels.yuanbao.accounts.<id>.name`      | Account display name                              | -                                      |
 | `channels.yuanbao.accounts.<id>.enabled`   | Enable/disable a specific account                 | `true`                                 |
 | `channels.yuanbao.dm.policy`               | DM policy                                         | `open`                                 |
-| `channels.yuanbao.dm.allowFrom`            | DM allowlist (user ID list)                       | —                                      |
+| `channels.yuanbao.dm.allowFrom`            | DM allowlist (user ID list)                       | -                                      |
 | `channels.yuanbao.requireMention`          | Require @mention in groups                        | `true`                                 |
 | `channels.yuanbao.overflowPolicy`          | Long message handling (`split` or `stop`)         | `split`                                |
 | `channels.yuanbao.replyToMode`             | Group reply-to strategy (`off`, `first`, `all`)   | `first`                                |
@@ -411,8 +409,8 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 
 ## Related
 
-- [Channels Overview](/channels) — all supported channels
-- [Pairing](/channels/pairing) — DM authentication and pairing flow
-- [Groups](/channels/groups) — group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) — session routing for messages
-- [Security](/gateway/security) — access model and hardening
+- [Channels Overview](/channels) - all supported channels
+- [Pairing](/channels/pairing) - DM authentication and pairing flow
+- [Groups](/channels/groups) - group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Security](/gateway/security) - access model and hardening

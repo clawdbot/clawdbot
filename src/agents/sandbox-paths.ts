@@ -108,10 +108,15 @@ function isManagedMediaPathUnderRoot(candidate: string): boolean {
     return false;
   }
   const mediaRoot = path.join(resolveConfigDir(), "media");
-  const relative = path.relative(path.resolve(mediaRoot), path.resolve(expanded));
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+  const resolvedMediaRoot = path.resolve(mediaRoot);
+  const resolvedExpanded = path.resolve(expanded);
+  if (
+    resolvedExpanded === resolvedMediaRoot ||
+    !isPathInside(resolvedMediaRoot, resolvedExpanded)
+  ) {
     return false;
   }
+  const relative = path.relative(resolvedMediaRoot, resolvedExpanded);
   const firstSegment = relative.split(path.sep)[0] ?? "";
   return MANAGED_MEDIA_SUBDIRS.has(firstSegment) || firstSegment.startsWith("tool-");
 }

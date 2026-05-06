@@ -7,8 +7,6 @@ read_when:
 title: "Ansible"
 ---
 
-# Ansible Installation
-
 Deploy OpenClaw to production servers with **[openclaw-ansible](https://github.com/openclaw/openclaw-ansible)** -- an automated installer with security-first architecture.
 
 <Info>

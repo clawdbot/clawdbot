@@ -4,6 +4,8 @@ import {
   MOCK_ONLY_PROOF_LABEL,
   NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
   PROOF_OVERRIDE_LABEL,
+  PROOF_SUFFICIENT_LABEL,
+  PROOF_SUPPLIED_LABEL,
   evaluateRealBehaviorProof,
   labelsForRealBehaviorProof,
 } from "./real-behavior-proof-policy.mjs";
@@ -150,6 +152,14 @@ export const managedLabelSpecs = {
     color: "C5DEF5",
     description: "Candidate: PR proof only shows tests, mocks, snapshots, lint, typecheck, or CI.",
   },
+  [PROOF_SUPPLIED_LABEL]: {
+    color: "C2E0C6",
+    description: "External PR includes structured after-fix real behavior proof.",
+  },
+  [PROOF_SUFFICIENT_LABEL]: {
+    color: "0E8A16",
+    description: "ClawSweeper judged the real behavior proof convincing.",
+  },
   [PROOF_OVERRIDE_LABEL]: {
     color: "C2E0C6",
     description: "Maintainer override for the external PR real behavior proof gate.",
@@ -218,7 +228,11 @@ const maintainerAuthorLabel = "maintainer";
 const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const privilegedRepositoryRoles = new Set(["admin", "maintain", "write"]);
 const candidateLabelValues = Object.values(candidateLabels);
-const proofCandidateLabelValues = [NEEDS_REAL_BEHAVIOR_PROOF_LABEL, MOCK_ONLY_PROOF_LABEL];
+const structuralProofLabelValues = [
+  NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
+  MOCK_ONLY_PROOF_LABEL,
+  PROOF_SUPPLIED_LABEL,
+];
 const noisyPrMessage =
   "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
 
@@ -759,8 +773,21 @@ async function addMissingLabels(github, context, core, issueNumber, labels, labe
   core.info(`Added candidate labels to #${issueNumber}: ${missingLabels.join(", ")}`);
 }
 
+function shouldRemoveProofSufficientLabel(context, proofEvaluation) {
+  if (proofEvaluation.status !== "passed") {
+    return true;
+  }
+  return ["edited", "synchronize"].includes(context.payload.action);
+}
+
 async function applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet) {
   const files = await listPullRequestFiles(github, context, pullRequest);
+  const proofEvaluation = evaluateRealBehaviorProof({
+    pullRequest: {
+      ...pullRequest,
+      labels: [...labelSet].map((name) => ({ name })),
+    },
+  });
   const classifiedLabels = classifyPullRequestCandidateLabels(
     {
       ...pullRequest,
@@ -768,9 +795,15 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
     },
     files,
   );
-  const staleProofLabels = proofCandidateLabelValues.filter(
+  const staleProofLabels = structuralProofLabelValues.filter(
     (label) => labelSet.has(label) && !classifiedLabels.includes(label),
   );
+  if (
+    labelSet.has(PROOF_SUFFICIENT_LABEL) &&
+    shouldRemoveProofSufficientLabel(context, proofEvaluation)
+  ) {
+    staleProofLabels.push(PROOF_SUFFICIENT_LABEL);
+  }
   await removeLabels(github, context, pullRequest.number, staleProofLabels, labelSet);
   await addMissingLabels(github, context, core, pullRequest.number, classifiedLabels, labelSet);
 }

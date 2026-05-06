@@ -98,11 +98,11 @@ openclaw channels login
 
 On macOS, Podman machine may make the browser appear non-local to the gateway.
 If the Control UI reports device-auth errors after launch, use the Tailscale guidance in
-[Podman + Tailscale](#podman--tailscale).
+[Podman and Tailscale](#podman--tailscale).
 
 <a id="podman--tailscale"></a>
 
-## Podman + Tailscale
+## Podman and Tailscale
 
 For HTTPS or remote browser access, follow the main Tailscale docs.
 

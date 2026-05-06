@@ -9,6 +9,13 @@ import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.
 import type { FinalizedMsgContext, MsgContext } from "../../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type {
+  DeliverOutboundPayloadsParams,
+  DurableFinalDeliveryRequirements,
+  OutboundDeliveryQueuePolicy,
+} from "../../infra/outbound/deliver.js";
+import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
+import type { MessageReceipt } from "../message/types.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
 
 export type ChannelTurnAdmission =
@@ -168,18 +175,54 @@ export type ChannelDeliveryInfo = {
   kind: ReplyDispatchKind;
 };
 
+export type ChannelDeliveryIntent = {
+  id: string;
+  kind: "outbound_queue";
+  queuePolicy: OutboundDeliveryQueuePolicy;
+};
+
 export type ChannelDeliveryResult = {
   messageIds?: string[];
+  receipt?: MessageReceipt;
   threadId?: string;
   replyToId?: string;
   visibleReplySent?: boolean;
+  deliveryIntent?: ChannelDeliveryIntent;
+};
+
+export type ChannelTurnDurableDeliveryOptions = Pick<
+  DeliverOutboundPayloadsParams,
+  "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
+> & {
+  to?: string | null;
+  replyToId?: string | null;
+  requiredCapabilities?: DurableFinalDeliveryRequirements;
 };
 
 export type ChannelTurnDeliveryAdapter = {
+  preparePayload?: (
+    payload: ReplyPayload,
+    info: ChannelDeliveryInfo,
+  ) => Promise<ReplyPayload> | ReplyPayload;
   deliver: (
     payload: ReplyPayload,
     info: ChannelDeliveryInfo,
   ) => Promise<ChannelDeliveryResult | void>;
+  durable?:
+    | false
+    | ChannelTurnDurableDeliveryOptions
+    | ((
+        payload: ReplyPayload,
+        info: ChannelDeliveryInfo,
+      ) =>
+        | false
+        | ChannelTurnDurableDeliveryOptions
+        | Promise<false | ChannelTurnDurableDeliveryOptions>);
+  onDelivered?: (
+    payload: ReplyPayload,
+    info: ChannelDeliveryInfo,
+    result: ChannelDeliveryResult | void,
+  ) => Promise<void> | void;
   onError?: (err: unknown, info: { kind: string }) => void;
 };
 
@@ -203,6 +246,11 @@ export type ChannelTurnDispatcherOptions = Omit<
   "deliver" | "onError"
 >;
 
+export type ChannelTurnReplyPipelineOptions = Omit<
+  CreateChannelReplyPipelineParams,
+  "cfg" | "agentId" | "channel" | "accountId"
+>;
+
 export type AssembledChannelTurn = {
   cfg: OpenClawConfig;
   channel: string;
@@ -214,6 +262,7 @@ export type AssembledChannelTurn = {
   recordInboundSession: RecordInboundSession;
   dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
   delivery: ChannelTurnDeliveryAdapter;
+  replyPipeline?: ChannelTurnReplyPipelineOptions;
   dispatcherOptions?: ChannelTurnDispatcherOptions;
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;

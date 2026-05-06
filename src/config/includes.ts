@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import { canUseBoundaryFileOpen, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
@@ -359,11 +359,11 @@ function isNotFoundError(error: unknown): boolean {
 export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): string {
   const ioFs = params.ioFs ?? fs;
   const maxBytes = params.maxBytes ?? MAX_INCLUDE_FILE_BYTES;
-  if (!canUseBoundaryFileOpen(ioFs)) {
+  if (!canUseRootFileOpen(ioFs)) {
     return ioFs.readFileSync(params.resolvedPath, "utf-8");
   }
 
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: params.resolvedPath,
     rootPath: params.rootRealDir,
     rootRealPath: params.rootRealDir,

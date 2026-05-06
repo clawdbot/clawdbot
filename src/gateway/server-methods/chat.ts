@@ -33,7 +33,7 @@ import {
   type SavedMedia,
   saveMediaBuffer,
 } from "../../media/store.js";
-import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
+import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-message.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -110,6 +110,7 @@ import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
+import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import {
   buildWebchatAssistantMessageFromReplyPayloads,
@@ -2247,7 +2248,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         ctx.MediaStaged = true;
       }
 
-      const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+      const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
         cfg,
         agentId,
         channel: INTERNAL_MESSAGE_CHANNEL,
@@ -2320,7 +2321,16 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
           return;
         }
-        const transcriptPayload = stripVisibleTextFromTtsSupplement(payload);
+        const [transcriptPayload] = await normalizeWebchatReplyMediaPathsForDisplay({
+          cfg,
+          sessionKey,
+          agentId,
+          accountId,
+          payloads: [stripVisibleTextFromTtsSupplement(payload)],
+        });
+        if (!transcriptPayload) {
+          return;
+        }
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
         const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
         const resolvedTranscriptPath = resolveTranscriptPath({
@@ -2499,11 +2509,18 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionKey,
               });
             } else {
-              const finalPayloads = appendedWebchatAgentMedia
+              const rawFinalPayloads = appendedWebchatAgentMedia
                 ? []
                 : deliveredReplies
                     .filter((entry) => entry.kind === "final")
                     .map((entry) => entry.payload);
+              const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
+                cfg,
+                sessionKey,
+                agentId,
+                accountId,
+                payloads: rawFinalPayloads,
+              });
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
               const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;

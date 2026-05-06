@@ -62,6 +62,15 @@ export type GoogleMeetChromeHealth = {
     type: string;
     detail?: string;
   }>;
+  recentTalkEvents?: Array<{
+    id: string;
+    type: string;
+    sessionId: string;
+    turnId?: string;
+    seq: number;
+    timestamp: string;
+    final?: boolean;
+  }>;
   manualActionRequired?: boolean;
   manualActionReason?: GoogleMeetManualActionReason;
   manualActionMessage?: string;

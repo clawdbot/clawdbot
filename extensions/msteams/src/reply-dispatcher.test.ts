@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const createChannelReplyPipelineMock = vi.hoisted(() => vi.fn());
+const createChannelMessageReplyPipelineMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const getMSTeamsRuntimeMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -20,7 +20,7 @@ const streamInstances = vi.hoisted(
 );
 
 vi.mock("../runtime-api.js", () => ({
-  createChannelReplyPipeline: createChannelReplyPipelineMock,
+  createChannelMessageReplyPipeline: createChannelMessageReplyPipelineMock,
   logTypingFailure: vi.fn(),
   resolveChannelMediaMaxBytes: vi.fn(() => 8 * 1024 * 1024),
 }));
@@ -82,7 +82,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       onCleanup: vi.fn(),
     };
 
-    createChannelReplyPipelineMock.mockReturnValue({
+    createChannelMessageReplyPipelineMock.mockReturnValue({
       onModelSelected: vi.fn(),
       typingCallbacks,
     });
@@ -203,7 +203,7 @@ describe("createMSTeamsReplyDispatcher", () => {
   it("passes a longer keepalive TTL so the loop survives long tool chains", () => {
     createDispatcher("personal");
 
-    const pipelineArgs = createChannelReplyPipelineMock.mock.calls[0]?.[0];
+    const pipelineArgs = createChannelMessageReplyPipelineMock.mock.calls[0]?.[0];
     expect(pipelineArgs?.typing?.keepaliveIntervalMs).toBeGreaterThan(3_000);
     expect(pipelineArgs?.typing?.keepaliveIntervalMs).toBeLessThanOrEqual(10_000);
     // Issue #59731 reports 60s+ tool chains — the default 60s TTL is too
@@ -213,7 +213,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("allows typing keepalive sends before any stream tokens arrive", async () => {
     createDispatcher("personal");
-    const pipelineArgs = createChannelReplyPipelineMock.mock.calls[0]?.[0];
+    const pipelineArgs = createChannelMessageReplyPipelineMock.mock.calls[0]?.[0];
     const sendTyping = pipelineArgs?.typing?.start as () => Promise<void>;
 
     // No onPartialReply has been called yet, so the stream is not active.
@@ -226,7 +226,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("suppresses typing keepalive sends while the stream card is actively chunking", async () => {
     createDispatcher("personal");
-    const pipelineArgs = createChannelReplyPipelineMock.mock.calls[0]?.[0];
+    const pipelineArgs = createChannelMessageReplyPipelineMock.mock.calls[0]?.[0];
     const sendTyping = pipelineArgs?.typing?.start as () => Promise<void>;
 
     // Simulate the stream actively receiving a partial chunk. While the
@@ -242,7 +242,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("resumes typing keepalive sends once the stream finalizes between tool rounds", async () => {
     createDispatcher("personal");
-    const pipelineArgs = createChannelReplyPipelineMock.mock.calls[0]?.[0];
+    const pipelineArgs = createChannelMessageReplyPipelineMock.mock.calls[0]?.[0];
     const sendTyping = pipelineArgs?.typing?.start as () => Promise<void>;
 
     // First segment: tokens flow, stream is active, typing is gated off.
@@ -271,7 +271,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("fires native typing in group chats (no stream) because the gate never applies", async () => {
     createDispatcher("groupchat");
-    const pipelineArgs = createChannelReplyPipelineMock.mock.calls[0]?.[0];
+    const pipelineArgs = createChannelMessageReplyPipelineMock.mock.calls[0]?.[0];
     const sendTyping = pipelineArgs?.typing?.start as () => Promise<void>;
 
     // In group chats we don't create a stream, so isStreamActive() always
@@ -284,7 +284,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("is a no-op for channel conversations (typing unsupported)", async () => {
     createDispatcher("channel");
-    const pipelineArgs = createChannelReplyPipelineMock.mock.calls[0]?.[0];
+    const pipelineArgs = createChannelMessageReplyPipelineMock.mock.calls[0]?.[0];
     const sendTyping = pipelineArgs?.typing?.start as () => Promise<void>;
 
     const contextSendActivity = getContextSendActivity();

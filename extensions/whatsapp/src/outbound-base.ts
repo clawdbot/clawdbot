@@ -89,6 +89,7 @@ type WhatsAppOutboundBaseCore = Pick<
   | "chunkerMode"
   | "textChunkLimit"
   | "sanitizeText"
+  | "deliveryCapabilities"
   | "pollMaxOptions"
   | "resolveTarget"
   | "sendText"
@@ -111,6 +112,7 @@ export function createWhatsAppOutboundBase({
   | "chunkerMode"
   | "textChunkLimit"
   | "sanitizeText"
+  | "deliveryCapabilities"
   | "pollMaxOptions"
   | "resolveTarget"
   | "sendPayload"
@@ -144,6 +146,13 @@ export function createWhatsAppOutboundBase({
     chunkerMode: "text",
     textChunkLimit: 4000,
     sanitizeText: ({ text }) => normalizeText(text),
+    deliveryCapabilities: {
+      durableFinal: {
+        text: true,
+        replyTo: true,
+        messageSendingHooks: true,
+      },
+    },
     pollMaxOptions: 12,
     resolveTarget,
     ...createAttachedChannelResultAdapter({

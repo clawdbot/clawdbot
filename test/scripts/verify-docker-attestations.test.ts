@@ -51,6 +51,11 @@ function createAttestation(
   };
 }
 
+function createAttestationWithoutArtifactType() {
+  const { artifactType: _artifactType, ...attestation } = createAttestation();
+  return attestation;
+}
+
 describe("verify-docker-attestations", () => {
   it("resolves digest refs from tagged image refs", () => {
     expect(imageRefForDigest("ghcr.io/openclaw/openclaw:2026.4.26", imageDigest)).toBe(
@@ -67,6 +72,17 @@ describe("verify-docker-attestations", () => {
       index: createIndex(),
       requiredPlatforms: [parsePlatform("linux/amd64")],
       inspectAttestation: () => createAttestation(),
+    });
+
+    expect(errors).toEqual([]);
+  });
+
+  it("accepts OCI attestation manifests without artifactType", () => {
+    const errors = collectDockerAttestationErrors({
+      imageRef: "ghcr.io/openclaw/openclaw:test",
+      index: createIndex(),
+      requiredPlatforms: [parsePlatform("linux/amd64")],
+      inspectAttestation: () => createAttestationWithoutArtifactType(),
     });
 
     expect(errors).toEqual([]);
@@ -98,6 +114,22 @@ describe("verify-docker-attestations", () => {
 
     expect(errors).toEqual([
       "ghcr.io/openclaw/openclaw:test: linux/amd64 missing predicate https://slsa.dev/provenance/v1",
+    ]);
+  });
+
+  it("reports an unexpected attestation manifest shape", () => {
+    const errors = collectDockerAttestationErrors({
+      imageRef: "ghcr.io/openclaw/openclaw:test",
+      index: createIndex(),
+      requiredPlatforms: [parsePlatform("linux/amd64")],
+      inspectAttestation: () => ({
+        ...createAttestation(),
+        artifactType: "application/vnd.example.invalid",
+      }),
+    });
+
+    expect(errors).toEqual([
+      `ghcr.io/openclaw/openclaw:test: linux/amd64 attestation ${attestationDigest} has unexpected manifest shape artifactType="application/vnd.example.invalid" mediaType="application/vnd.oci.image.manifest.v1+json"`,
     ]);
   });
 });

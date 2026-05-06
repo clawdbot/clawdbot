@@ -2,7 +2,10 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
-import { resolveSessionTranscriptFile } from "../../config/sessions/transcript.js";
+import {
+  readTailAssistantTextFromSessionTranscript,
+  resolveSessionTranscriptFile,
+} from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -45,6 +48,10 @@ export {
 
 const log = createSubsystemLogger("agents/agent-command");
 
+function normalizeTranscriptMirrorText(value: string): string {
+  return value.trim().replace(/\s+/gu, " ");
+}
+
 const ACP_TRANSCRIPT_USAGE = {
   input: 0,
   output: 0,
@@ -81,6 +88,7 @@ type PersistTextTurnTranscriptParams = {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
+  embeddedAssistantGapFill?: boolean;
   assistant: {
     api: string;
     provider: string;
@@ -217,22 +225,33 @@ async function persistTextTurnTranscript(
     }
 
     if (replyText) {
-      await appendSessionTranscriptMessage({
-        transcriptPath: sessionFile,
-        sessionId: params.sessionId,
-        cwd: params.sessionCwd,
-        config: params.config,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: replyText }],
-          api: params.assistant.api,
-          provider: params.assistant.provider,
-          model: params.assistant.model,
-          usage: resolveTranscriptUsage(params.assistant.usage),
-          stopReason: "stop",
-          timestamp: Date.now(),
-        },
-      });
+      let appendAssistant = true;
+      if (params.embeddedAssistantGapFill) {
+        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile);
+        const normalizedReply = normalizeTranscriptMirrorText(replyText);
+        const normalizedLatest = latest?.text ? normalizeTranscriptMirrorText(latest.text) : "";
+        if (normalizedLatest && normalizedLatest === normalizedReply) {
+          appendAssistant = false;
+        }
+      }
+      if (appendAssistant) {
+        await appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          sessionId: params.sessionId,
+          cwd: params.sessionCwd,
+          config: params.config,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: replyText }],
+            api: params.assistant.api,
+            provider: params.assistant.provider,
+            model: params.assistant.model,
+            usage: resolveTranscriptUsage(params.assistant.usage),
+            stopReason: "stop",
+            timestamp: Date.now(),
+          },
+        });
+      }
     }
   } finally {
     await lock.release();
@@ -296,14 +315,16 @@ export async function persistCliTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
+  embeddedAssistantGapFill?: boolean;
 }): Promise<SessionEntry | undefined> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
   const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
+  const gapFill = params.embeddedAssistantGapFill ?? false;
 
   return await persistTextTurnTranscript({
-    body: params.body,
-    transcriptBody: params.transcriptBody,
+    body: gapFill ? "" : params.body,
+    transcriptBody: gapFill ? undefined : params.transcriptBody,
     finalText: replyText,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -314,6 +335,7 @@ export async function persistCliTurnTranscript(params: {
     threadId: params.threadId,
     sessionCwd: params.sessionCwd,
     config: params.config,
+    embeddedAssistantGapFill: gapFill,
     assistant: {
       api: "cli",
       provider,

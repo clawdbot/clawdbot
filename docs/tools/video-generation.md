@@ -22,9 +22,9 @@ provider API key or configure `agents.defaults.videoGenerationModel`.
 
 OpenClaw treats video generation as three runtime modes:
 
-- `generate` — text-to-video requests with no reference media.
-- `imageToVideo` — request includes one or more reference images.
-- `videoToVideo` — request includes one or more reference videos.
+- `generate` - text-to-video requests with no reference media.
+- `imageToVideo` - request includes one or more reference images.
+- `videoToVideo` - request includes one or more reference videos.
 
 Providers can support any subset of those modes. The tool validates the
 active mode before submission and reports supported modes in `action=list`.
@@ -109,20 +109,20 @@ generation.
 | Provider              | Default model                   | Text | Image ref                                            | Video ref                                       | Auth                                     |
 | --------------------- | ------------------------------- | :--: | ---------------------------------------------------- | ----------------------------------------------- | ---------------------------------------- |
 | Alibaba               | `wan2.6-t2v`                    |  ✓   | Yes (remote URL)                                     | Yes (remote URL)                                | `MODELSTUDIO_API_KEY`                    |
-| BytePlus (1.0)        | `seedance-1-0-pro-250528`       |  ✓   | Up to 2 images (I2V models only; first + last frame) | —                                               | `BYTEPLUS_API_KEY`                       |
-| BytePlus Seedance 1.5 | `seedance-1-5-pro-251215`       |  ✓   | Up to 2 images (first + last frame via role)         | —                                               | `BYTEPLUS_API_KEY`                       |
+| BytePlus (1.0)        | `seedance-1-0-pro-250528`       |  ✓   | Up to 2 images (I2V models only; first + last frame) | -                                               | `BYTEPLUS_API_KEY`                       |
+| BytePlus Seedance 1.5 | `seedance-1-5-pro-251215`       |  ✓   | Up to 2 images (first + last frame via role)         | -                                               | `BYTEPLUS_API_KEY`                       |
 | BytePlus Seedance 2.0 | `dreamina-seedance-2-0-260128`  |  ✓   | Up to 9 reference images                             | Up to 3 videos                                  | `BYTEPLUS_API_KEY`                       |
-| ComfyUI               | `workflow`                      |  ✓   | 1 image                                              | —                                               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
-| DeepInfra             | `Pixverse/Pixverse-T2V`         |  ✓   | —                                                    | —                                               | `DEEPINFRA_API_KEY`                      |
+| ComfyUI               | `workflow`                      |  ✓   | 1 image                                              | -                                               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
+| DeepInfra             | `Pixverse/Pixverse-T2V`         |  ✓   | -                                                    | -                                               | `DEEPINFRA_API_KEY`                      |
 | fal                   | `fal-ai/minimax/video-01-live`  |  ✓   | 1 image; up to 9 with Seedance reference-to-video    | Up to 3 videos with Seedance reference-to-video | `FAL_KEY`                                |
 | Google                | `veo-3.1-fast-generate-preview` |  ✓   | 1 image                                              | 1 video                                         | `GEMINI_API_KEY`                         |
-| MiniMax               | `MiniMax-Hailuo-2.3`            |  ✓   | 1 image                                              | —                                               | `MINIMAX_API_KEY` or MiniMax OAuth       |
+| MiniMax               | `MiniMax-Hailuo-2.3`            |  ✓   | 1 image                                              | -                                               | `MINIMAX_API_KEY` or MiniMax OAuth       |
 | OpenAI                | `sora-2`                        |  ✓   | 1 image                                              | 1 video                                         | `OPENAI_API_KEY`                         |
-| OpenRouter            | `google/veo-3.1-fast`           |  ✓   | Up to 4 images (first/last frame or references)      | —                                               | `OPENROUTER_API_KEY`                     |
+| OpenRouter            | `google/veo-3.1-fast`           |  ✓   | Up to 4 images (first/last frame or references)      | -                                               | `OPENROUTER_API_KEY`                     |
 | Qwen                  | `wan2.6-t2v`                    |  ✓   | Yes (remote URL)                                     | Yes (remote URL)                                | `QWEN_API_KEY`                           |
 | Runway                | `gen4.5`                        |  ✓   | 1 image                                              | 1 video                                         | `RUNWAYML_API_SECRET`                    |
-| Together              | `Wan-AI/Wan2.2-T2V-A14B`        |  ✓   | 1 image                                              | —                                               | `TOGETHER_API_KEY`                       |
-| Vydra                 | `veo3`                          |  ✓   | 1 image (`kling`)                                    | —                                               | `VYDRA_API_KEY`                          |
+| Together              | `Wan-AI/Wan2.2-T2V-A14B`        |  ✓   | 1 image                                              | -                                               | `TOGETHER_API_KEY`                       |
+| Vydra                 | `veo3`                          |  ✓   | 1 image (`kling`)                                    | -                                               | `VYDRA_API_KEY`                          |
 | xAI                   | `grok-imagine-video`            |  ✓   | 1 first-frame image or up to 7 `reference_image`s    | 1 video                                         | `XAI_API_KEY`                            |
 
 Some providers accept additional or alternate API key env vars. See
@@ -139,18 +139,18 @@ the shared live sweep:
 | Provider   | `generate` | `imageToVideo` | `videoToVideo` | Shared live lanes today                                                                                                                  |
 | ---------- | :--------: | :------------: | :------------: | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | Alibaba    |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                               |
-| BytePlus   |     ✓      |       ✓        |       —        | `generate`, `imageToVideo`                                                                                                               |
-| ComfyUI    |     ✓      |       ✓        |       —        | Not in the shared sweep; workflow-specific coverage lives with Comfy tests                                                               |
-| DeepInfra  |     ✓      |       —        |       —        | `generate`; native DeepInfra video schemas are text-to-video in the bundled contract                                                     |
+| BytePlus   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                               |
+| ComfyUI    |     ✓      |       ✓        |       -        | Not in the shared sweep; workflow-specific coverage lives with Comfy tests                                                               |
+| DeepInfra  |     ✓      |       -        |       -        | `generate`; native DeepInfra video schemas are text-to-video in the bundled contract                                                     |
 | fal        |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` only when using Seedance reference-to-video                                                   |
 | Google     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; shared `videoToVideo` skipped because the current buffer-backed Gemini/Veo sweep does not accept that input  |
-| MiniMax    |     ✓      |       ✓        |       —        | `generate`, `imageToVideo`                                                                                                               |
+| MiniMax    |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                               |
 | OpenAI     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; shared `videoToVideo` skipped because this org/input path currently needs provider-side inpaint/remix access |
-| OpenRouter |     ✓      |       ✓        |       —        | `generate`, `imageToVideo`                                                                                                               |
+| OpenRouter |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                               |
 | Qwen       |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                               |
 | Runway     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                                      |
-| Together   |     ✓      |       ✓        |       —        | `generate`, `imageToVideo`                                                                                                               |
-| Vydra      |     ✓      |       ✓        |       —        | `generate`; shared `imageToVideo` skipped because bundled `veo3` is text-only and bundled `kling` requires a remote image URL            |
+| Together   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                               |
+| Vydra      |     ✓      |       ✓        |       -        | `generate`; shared `imageToVideo` skipped because bundled `veo3` is text-only and bundled `kling` requires a remote image URL            |
 | xAI        |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider currently needs a remote MP4 URL                                |
 
 ## Tool parameters
@@ -290,10 +290,10 @@ aggregated error includes the skip reason for each.
 
 OpenClaw resolves the model in this order:
 
-1. **`model` tool parameter** — if the agent specifies one in the call.
+1. **`model` tool parameter** - if the agent specifies one in the call.
 2. **`videoGenerationModel.primary`** from config.
 3. **`videoGenerationModel.fallbacks`** in order.
-4. **Auto-detection** — providers that have valid auth, starting with the
+4. **Auto-detection** - providers that have valid auth, starting with the
    current default provider, then remaining providers in alphabetical
    order.
 
@@ -336,7 +336,7 @@ only the explicit `model`, `primary`, and `fallbacks` entries.
     T2V model IDs are automatically switched to the corresponding I2V
     variant when an image is provided.
 
-    Supported `providerOptions` keys: `seed` (number), `draft` (boolean —
+    Supported `providerOptions` keys: `seed` (number), `draft` (boolean -
     forces 480p), `camera_fixed` (boolean).
 
   </Accordion>
@@ -363,7 +363,7 @@ only the explicit `model`, `primary`, and `fallbacks` entries.
 
     Uses the unified `content[]` API. Supports up to 9 reference images,
     3 reference videos, and 3 reference audios. All inputs must be remote
-    `https://` URLs. Set `role` on each asset — supported values:
+    `https://` URLs. Set `role` on each asset - supported values:
     `"first_frame"`, `"last_frame"`, `"reference_image"`,
     `"reference_video"`, `"reference_audio"`.
 
@@ -536,7 +536,7 @@ openclaw config set agents.defaults.videoGenerationModel.primary "qwen/wan2.6-t2
 ## Related
 
 - [Alibaba Model Studio](/providers/alibaba)
-- [Background tasks](/automation/tasks) — task tracking for async video generation
+- [Background tasks](/automation/tasks) - task tracking for async video generation
 - [BytePlus](/concepts/model-providers#byteplus-international)
 - [ComfyUI](/providers/comfy)
 - [Configuration reference](/gateway/config-agents#agent-defaults)

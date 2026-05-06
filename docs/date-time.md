@@ -6,8 +6,6 @@ read_when:
 title: "Date and time"
 ---
 
-# Date & Time
-
 OpenClaw defaults to **host-local time for transport timestamps** and **user timezone only in the system prompt**.
 Provider timestamps are preserved so tools keep their native semantics (current time is available via `session_status`).
 
@@ -62,7 +60,7 @@ You can override this behavior:
 [WhatsApp +1555 +30s 2026-01-18T05:19Z] follow-up
 ```
 
-## System prompt: Current Date & Time
+## System prompt: current date and time
 
 If the user timezone is known, the system prompt includes a dedicated
 **Current Date & Time** section with the **time zone only** (no clock/time format)

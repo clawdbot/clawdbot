@@ -18,11 +18,12 @@
  * capabilities instead of the text-only fallback.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
+import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const log = createSubsystemLogger("openrouter-model-capabilities");
@@ -89,14 +90,11 @@ function resolveDiskCachePath(): string {
 
 function writeDiskCache(map: Map<string, OpenRouterModelCapabilities>): void {
   try {
-    const cacheDir = resolveDiskCacheDir();
-    if (!existsSync(cacheDir)) {
-      mkdirSync(cacheDir, { recursive: true });
-    }
+    const cachePath = resolveDiskCachePath();
     const payload: DiskCachePayload = {
       models: Object.fromEntries(map),
     };
-    writeFileSync(resolveDiskCachePath(), JSON.stringify(payload), "utf-8");
+    privateFileStoreSync(dirname(cachePath)).writeJson(basename(cachePath), payload);
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
     log.debug(`Failed to write OpenRouter disk cache: ${message}`);

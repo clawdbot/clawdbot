@@ -125,7 +125,7 @@ export function buildMatrixQaImageUnderstandingPrompt(sutUserId: string) {
 }
 
 export function buildMatrixQaImageGenerationPrompt(sutUserId: string) {
-  return `${sutUserId} Image generation check: generate a QA lighthouse image and summarize it in one short sentence.`;
+  return `${sutUserId} /tool image_generate action=generate prompt="QA lighthouse image for Matrix delivery testing" size=1024x1024 count=1`;
 }
 
 export function hasMatrixQaExpectedColorReply(body: string | undefined) {

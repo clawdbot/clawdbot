@@ -267,7 +267,6 @@ export function createAcceptedWhatsAppSendResult(
   return {
     kind,
     messageId: id,
-    messageIds: [id],
     keys: [{ id }],
     providerAccepted: true,
   };

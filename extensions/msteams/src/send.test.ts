@@ -200,7 +200,7 @@ describe("sendMessageMSTeams", () => {
       kind: "image",
     });
 
-    await sendMessageMSTeams({
+    const result = await sendMessageMSTeams({
       cfg: {} as OpenClawConfig,
       to: "conversation:19:conversation@thread.tacv2",
       text: "hello",
@@ -226,6 +226,11 @@ describe("sendMessageMSTeams", () => {
         ],
       }),
     );
+    expect(result.receipt).toMatchObject({
+      primaryPlatformMessageId: "message-1",
+      platformMessageIds: ["message-1"],
+      parts: [expect.objectContaining({ platformMessageId: "message-1", kind: "media" })],
+    });
   });
 
   it("sends with provided cfg even when Teams runtime text helpers are unavailable", async () => {
@@ -238,15 +243,20 @@ describe("sendMessageMSTeams", () => {
     mockState.resolveMarkdownTableMode.mockReturnValue("off");
     mockState.convertMarkdownTables.mockReturnValue("hello");
 
-    await expect(
-      sendMessageMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: "conversation:19:conversation@thread.tacv2",
-        text: "hello",
-      }),
-    ).resolves.toEqual({
+    const result = await sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:conversation@thread.tacv2",
+      text: "hello",
+    });
+
+    expect(result).toMatchObject({
       messageId: "message-1",
       conversationId: "19:conversation@thread.tacv2",
+      receipt: {
+        primaryPlatformMessageId: "message-1",
+        platformMessageIds: ["message-1"],
+        parts: [expect.objectContaining({ platformMessageId: "message-1", kind: "text" })],
+      },
     });
 
     expect(mockState.resolveMarkdownTableMode).toHaveBeenCalledWith({

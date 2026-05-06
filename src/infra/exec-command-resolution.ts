@@ -359,13 +359,6 @@ export function matchAllowlist(
     return null;
   }
   const resolvedPath = resolution.resolvedPath;
-  // argPattern matching is currently Windows-only.  On other platforms every
-  // path-matched entry is treated as a match regardless of argPattern, which
-  // preserves the pre-existing behaviour.
-  // Use the caller-supplied target platform rather than process.platform so that
-  // a Linux gateway evaluating a Windows node command applies argPattern correctly.
-  const effectivePlatform = platform ?? process.platform;
-  const useArgPattern = normalizeLowercaseStringOrEmpty(effectivePlatform).startsWith("win");
   let pathOnlyMatch: ExecAllowlistEntry | null = null;
   for (const entry of entries) {
     const pattern = entry.pattern?.trim();
@@ -377,10 +370,6 @@ export function matchAllowlist(
       : pattern !== "*" && matchesExecutableBasenamePattern(pattern, resolution);
     if (!patternMatches) {
       continue;
-    }
-    if (!useArgPattern) {
-      // Non-Windows: first path match wins (legacy behaviour).
-      return entry;
     }
     if (!entry.argPattern) {
       if (!pathOnlyMatch) {

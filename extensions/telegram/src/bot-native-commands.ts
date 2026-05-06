@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Bot, Context } from "grammy";
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  buildConfiguredModelCatalog,
+  resolveAgentConfig,
+  resolveDefaultModelForAgent,
+  resolveThinkingDefault,
+} from "openclaw/plugin-sdk/agent-runtime";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import {
   resolveCommandAuthorization,
@@ -203,7 +208,7 @@ function resolveTelegramCommandMenuModelContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
-}): { provider?: string; model?: string } {
+}): { provider?: string; model?: string; thinkingLevel?: string } {
   if (!params.sessionKey.trim()) {
     return {};
   }
@@ -215,8 +220,13 @@ function resolveTelegramCommandMenuModelContext(params: {
     });
     const store = loadSessionStore(storePath);
     const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
+    const thinkingLevel = normalizeOptionalString(entry?.thinkingLevel);
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
-      return { provider: defaultModel.provider, model: defaultModel.model };
+      return {
+        provider: defaultModel.provider,
+        model: defaultModel.model,
+        ...(thinkingLevel ? { thinkingLevel } : {}),
+      };
     }
     const override = resolveStoredModelOverride({
       sessionEntry: entry,
@@ -228,6 +238,7 @@ function resolveTelegramCommandMenuModelContext(params: {
       return {
         provider: override.provider || defaultModel.provider,
         model: override.model,
+        ...(thinkingLevel ? { thinkingLevel } : {}),
       };
     }
     const provider =
@@ -238,10 +249,52 @@ function resolveTelegramCommandMenuModelContext(params: {
     return {
       ...(provider ? { provider } : {}),
       ...(model ? { model } : {}),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
     };
   } catch {
     return {};
   }
+}
+
+function resolveTelegramThinkMenuCurrentLevel(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  provider?: string;
+  model?: string;
+  thinkingLevel?: string;
+}): string {
+  const explicit = normalizeOptionalString(params.thinkingLevel);
+  if (explicit) {
+    return explicit;
+  }
+  const agentThinkingDefault = normalizeOptionalString(
+    resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault,
+  );
+  if (agentThinkingDefault) {
+    return agentThinkingDefault;
+  }
+  const defaultModel = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  return resolveThinkingDefault({
+    cfg: params.cfg,
+    provider: params.provider ?? defaultModel.provider,
+    model: params.model ?? defaultModel.model,
+    catalog: buildConfiguredModelCatalog({ cfg: params.cfg }),
+  });
+}
+
+function formatTelegramCommandArgMenuTitle(params: {
+  command: NonNullable<ReturnType<typeof findCommandByNativeName>>;
+  menu: NonNullable<ReturnType<typeof resolveCommandArgMenu>>;
+  currentThinkingLevel?: string;
+}): string {
+  const title = formatCommandArgMenuTitle({ command: params.command, menu: params.menu });
+  if (params.command.key !== "think" || !params.currentThinkingLevel) {
+    return title;
+  }
+  return `Current thinking level: ${params.currentThinkingLevel}.\n${title}`;
 }
 
 function resolveTelegramNativeReplyChannelData(
@@ -1006,7 +1059,18 @@ export const registerTelegramNativeCommands = ({
             })
           : null;
         if (menu && commandDefinition) {
-          const title = formatCommandArgMenuTitle({ command: commandDefinition, menu });
+          const title = formatTelegramCommandArgMenuTitle({
+            command: commandDefinition,
+            menu,
+            currentThinkingLevel:
+              commandDefinition.key === "think"
+                ? resolveTelegramThinkMenuCurrentLevel({
+                    cfg: runtimeCfg,
+                    agentId: route.agentId,
+                    ...menuModelContext,
+                  })
+                : undefined,
+          });
           const rows: Array<Array<{ text: string; callback_data: string }>> = [];
           for (let i = 0; i < menu.choices.length; i += 2) {
             const slice = menu.choices.slice(i, i + 2);
@@ -1115,9 +1179,9 @@ export const registerTelegramNativeCommands = ({
           skippedNonSilent: 0,
         };
 
-        const { createChannelReplyPipeline, deliverReplies } =
+        const { createChannelMessageReplyPipeline, deliverReplies } =
           await loadTelegramNativeCommandDeliveryRuntime();
-        const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+        const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
           cfg: executionCfg,
           agentId: route.agentId,
           channel: "telegram",

@@ -3,7 +3,7 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
-import { openBoundaryFile } from "../../infra/boundary-file-read.js";
+import { openRootFile } from "../../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -735,7 +735,7 @@ async function readWorkspaceContextForSummary(): Promise<string> {
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
 
   try {
-    const opened = await openBoundaryFile({
+    const opened = await openRootFile({
       absolutePath: agentsPath,
       rootPath: workspaceDir,
       boundaryLabel: "workspace root",

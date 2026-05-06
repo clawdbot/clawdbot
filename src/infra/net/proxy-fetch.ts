@@ -1,12 +1,7 @@
-import {
-  EnvHttpProxyAgent,
-  FormData as UndiciFormData,
-  ProxyAgent,
-  fetch as undiciFetch,
-} from "undici";
 import { logWarn } from "../../logger.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
+import { loadUndiciRuntimeDeps, type UndiciRuntimeDeps } from "./undici-runtime.js";
 
 export const PROXY_FETCH_PROXY_URL = Symbol.for("openclaw.proxyFetch.proxyUrl");
 type ProxyFetchWithMetadata = typeof fetch & {
@@ -22,7 +17,14 @@ function isFormDataLike(value: unknown): value is FormData {
   );
 }
 
-function appendFormDataEntry(target: UndiciFormData, key: string, value: FormDataEntryValue): void {
+type UndiciFormDataCtor = NonNullable<UndiciRuntimeDeps["FormData"]>;
+type UndiciFormDataInstance = InstanceType<UndiciFormDataCtor>;
+
+function appendFormDataEntry(
+  target: UndiciFormDataInstance,
+  key: string,
+  value: FormDataEntryValue,
+): void {
   if (typeof value === "string") {
     target.append(key, value);
     return;
@@ -35,7 +37,10 @@ function appendFormDataEntry(target: UndiciFormData, key: string, value: FormDat
   target.append(key, value);
 }
 
-function normalizeInitForUndici(init: RequestInit | undefined): RequestInit | undefined {
+function normalizeInitForUndici(
+  init: RequestInit | undefined,
+  UndiciFormData: UndiciFormDataCtor,
+): RequestInit | undefined {
   if (!init) {
     return init;
   }
@@ -58,8 +63,13 @@ function normalizeInitForUndici(init: RequestInit | undefined): RequestInit | un
  * Uses undici's ProxyAgent under the hood.
  */
 export function makeProxyFetch(proxyUrl: string): typeof fetch {
-  let agent: ProxyAgent | null = null;
-  const resolveAgent = (): ProxyAgent => {
+  const {
+    ProxyAgent,
+    FormData: UndiciFormData = globalThis.FormData as unknown as UndiciFormDataCtor,
+    fetch: undiciFetch,
+  } = loadUndiciRuntimeDeps();
+  let agent: InstanceType<UndiciRuntimeDeps["ProxyAgent"]> | null = null;
+  const resolveAgent = (): InstanceType<UndiciRuntimeDeps["ProxyAgent"]> => {
     if (!agent) {
       agent = new ProxyAgent(proxyUrl);
     }
@@ -69,7 +79,7 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
   // on stream/body internals. Single cast at the boundary keeps the rest type-safe.
   const proxyFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
     undiciFetch(input as string | URL, {
-      ...(normalizeInitForUndici(init) as Record<string, unknown>),
+      ...(normalizeInitForUndici(init, UndiciFormData) as Record<string, unknown>),
       dispatcher: resolveAgent(),
     }) as unknown as Promise<Response>) as ProxyFetchWithMetadata;
   Object.defineProperty(proxyFetch, PROXY_FETCH_PROXY_URL, {
@@ -104,10 +114,15 @@ export function resolveProxyFetchFromEnv(
     return undefined;
   }
   try {
+    const {
+      EnvHttpProxyAgent,
+      FormData: UndiciFormData = globalThis.FormData as unknown as UndiciFormDataCtor,
+      fetch: undiciFetch,
+    } = loadUndiciRuntimeDeps();
     const agent = new EnvHttpProxyAgent(proxyOptions);
     return ((input: RequestInfo | URL, init?: RequestInit) =>
       undiciFetch(input as string | URL, {
-        ...(normalizeInitForUndici(init) as Record<string, unknown>),
+        ...(normalizeInitForUndici(init, UndiciFormData) as Record<string, unknown>),
         dispatcher: agent,
       }) as unknown as Promise<Response>) as typeof fetch;
   } catch (err) {

@@ -337,6 +337,21 @@ describe("channel-streaming", () => {
         },
       ),
     ).toBe("🛠️ Exec");
+    expect(
+      formatChannelProgressDraftLine({
+        event: "item",
+        itemKind: "analysis",
+        title: "Reasoning",
+      }),
+    ).toBeUndefined();
+    expect(
+      formatChannelProgressDraftLine({
+        event: "item",
+        itemKind: "analysis",
+        title: "Reasoning",
+        progressText: "Reading the code path",
+      }),
+    ).toBe("Reading the code path");
   });
 
   it("starts progress drafts after five seconds or a second work event", async () => {

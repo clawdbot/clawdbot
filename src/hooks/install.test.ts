@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import JSZip from "jszip";
+import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
@@ -32,13 +34,23 @@ let tempDirIndex = 0;
 const sharedArchivePathByName = new Map<string, string>();
 
 const fixturesDir = path.resolve(process.cwd(), "test", "fixtures", "hooks-install");
-const zipHooksBuffer = fs.readFileSync(path.join(fixturesDir, "zip-hooks.zip"));
-const zipTraversalBuffer = fs.readFileSync(path.join(fixturesDir, "zip-traversal.zip"));
+const zipHooksBuffer = await createZipHookPackBuffer({
+  packageName: "@openclaw/zip-hooks",
+  hookName: "zip-hook",
+  hookDescription: "Zip hook",
+  heading: "Zip Hook",
+});
+const zipTraversalBuffer = await createZipBuffer([{ path: "../pwned.txt", contents: "pwned" }]);
 const tarHooksBuffer = fs.readFileSync(path.join(fixturesDir, "tar-hooks.tar"));
 const tarTraversalBuffer = fs.readFileSync(path.join(fixturesDir, "tar-traversal.tar"));
 const tarEvilIdBuffer = fs.readFileSync(path.join(fixturesDir, "tar-evil-id.tar"));
 const tarReservedIdBuffer = fs.readFileSync(path.join(fixturesDir, "tar-reserved-id.tar"));
-const npmPackHooksBuffer = fs.readFileSync(path.join(fixturesDir, "npm-pack-hooks.tgz"));
+const npmPackHooksBuffer = await createTarGzHookPackBuffer({
+  packageName: "@openclaw/test-hooks",
+  hookName: "one-hook",
+  hookDescription: "One hook",
+  heading: "One Hook",
+});
 
 function makeTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
@@ -108,6 +120,95 @@ function writeHookPackManifest(params: {
     }),
     "utf-8",
   );
+}
+
+async function createZipBuffer(entries: Array<{ path: string; contents: string }>) {
+  const zip = new JSZip();
+  for (const entry of entries) {
+    zip.file(entry.path, entry.contents);
+  }
+  return Buffer.from(await zip.generateAsync({ type: "nodebuffer", compression: "STORE" }));
+}
+
+function writeHookPackFiles(params: {
+  pkgDir: string;
+  packageName: string;
+  hookName: string;
+  hookDescription: string;
+  heading: string;
+}) {
+  writeHookPackManifest({
+    pkgDir: params.pkgDir,
+    hooks: [`./hooks/${params.hookName}`],
+  });
+  const hookDir = path.join(params.pkgDir, "hooks", params.hookName);
+  fs.mkdirSync(hookDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(hookDir, "HOOK.md"),
+    [
+      "---",
+      `name: ${params.hookName}`,
+      `description: ${params.hookDescription}`,
+      'metadata: {"openclaw":{"events":["command:new"]}}',
+      "---",
+      "",
+      `# ${params.heading}`,
+    ].join("\n"),
+    "utf-8",
+  );
+  fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n", "utf-8");
+
+  const manifestPath = path.join(params.pkgDir, "package.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+  manifest.name = params.packageName;
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest), "utf-8");
+}
+
+async function createZipHookPackBuffer(params: {
+  packageName: string;
+  hookName: string;
+  hookDescription: string;
+  heading: string;
+}) {
+  const packageJson = JSON.stringify({
+    name: params.packageName,
+    version: "0.0.1",
+    openclaw: { hooks: [`./hooks/${params.hookName}`] },
+  });
+  return createZipBuffer([
+    { path: "package/package.json", contents: packageJson },
+    {
+      path: `package/hooks/${params.hookName}/HOOK.md`,
+      contents: [
+        "---",
+        `name: ${params.hookName}`,
+        `description: ${params.hookDescription}`,
+        'metadata: {"openclaw":{"events":["command:new"]}}',
+        "---",
+        "",
+        `# ${params.heading}`,
+      ].join("\n"),
+    },
+    {
+      path: `package/hooks/${params.hookName}/handler.ts`,
+      contents: "export default async () => {};\n",
+    },
+  ]);
+}
+
+async function createTarGzHookPackBuffer(params: {
+  packageName: string;
+  hookName: string;
+  hookDescription: string;
+  heading: string;
+}) {
+  const workDir = path.join(fixtureRoot, "_generated", `pack-${randomUUID()}`);
+  const packageDir = path.join(workDir, "package");
+  fs.mkdirSync(packageDir, { recursive: true });
+  writeHookPackFiles({ pkgDir: packageDir, ...params });
+  const archivePath = path.join(workDir, "pack.tgz");
+  await tar.c({ cwd: workDir, file: archivePath, gzip: true }, ["package"]);
+  return fs.readFileSync(archivePath);
 }
 
 async function installArchiveFixture(params: { fileName: string; contents: Buffer }) {

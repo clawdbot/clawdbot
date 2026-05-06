@@ -6,7 +6,12 @@ read_when:
 title: "DigitalOcean"
 ---
 
-Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
+Run a persistent OpenClaw Gateway on a DigitalOcean Droplet (~$6/month for the 1 GB Basic plan).
+
+DigitalOcean is the simplest paid VPS path. If you prefer cheaper or free options:
+
+- [Hetzner](/install/hetzner) — €3.79/mo, more cores/RAM per dollar.
+- [Oracle Cloud](/install/oracle) — Always Free ARM (up to 4 OCPU, 24 GB RAM), but signup can be finicky and ARM-only.
 
 ## Prerequisites
 
@@ -100,6 +105,8 @@ Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
 
     Then open `https://<magicdns>/` from any device on your tailnet.
 
+    Tailscale Serve authenticates Control UI and WebSocket traffic via tailnet identity headers, which assumes the gateway host itself is trusted. HTTP API endpoints follow the gateway's normal auth mode (token/password) regardless. To require explicit shared-secret credentials over Serve, set `gateway.auth.allowTailscale: false` and use `gateway.auth.mode: "token"` or `"password"`.
+
     **Option C: Tailnet bind (no Serve)**
 
     ```bash
@@ -111,6 +118,30 @@ Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
 
   </Step>
 </Steps>
+
+## Persistence and backups
+
+OpenClaw state lives under:
+
+- `~/.openclaw/` — `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, and session data.
+- `~/.openclaw/workspace/` — the agent workspace (SOUL.md, memory, artifacts).
+
+These survive Droplet reboots. To take a portable snapshot:
+
+```bash
+openclaw backup create
+```
+
+DigitalOcean snapshots back the whole Droplet up; `openclaw backup create` is portable across hosts.
+
+## 1 GB RAM tips
+
+The $6 Droplet only has 1 GB RAM. To keep things smooth:
+
+- Make sure the swap step above is in `/etc/fstab` so it survives reboots.
+- Prefer API-based models (Claude, GPT) over local ones — local LLM inference does not fit in 1 GB.
+- Set `agents.defaults.model.primary` to a smaller model if you hit OOMs on large prompts.
+- Monitor with `free -h` and `htop`.
 
 ## Troubleshooting
 

@@ -1,7 +1,9 @@
+import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
+import { nostrPlugin } from "./channel.js";
 import { nostrOutboundAdapter, startNostrGatewayAccount } from "./gateway.js";
 import { setNostrRuntime } from "./runtime.js";
 import { TEST_RESOLVED_PRIVATE_KEY, buildResolvedNostrAccount } from "./test-fixtures.js";
@@ -122,6 +124,36 @@ describe("nostr outbound cfg threading", () => {
       accountId: "work",
     });
     expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello");
+
+    cleanup.stop();
+  });
+
+  it("backs declared message adapter capabilities with outbound sends", async () => {
+    installOutboundRuntime();
+    const { cleanup, sendDm } = await startOutboundAccount();
+    const adapter = nostrPlugin.message;
+    expect(adapter).toBeDefined();
+    expect(adapter!.send?.media).toBeUndefined();
+
+    await verifyChannelMessageAdapterCapabilityProofs({
+      adapterName: "nostrMessageAdapter",
+      adapter: adapter!,
+      proofs: {
+        text: async () => {
+          const result = await adapter!.send!.text!({
+            cfg: createCfg() as OpenClawConfig,
+            to: "NPUB123",
+            text: "hello",
+            accountId: "default",
+          });
+          expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello");
+          expect(result.receipt.parts[0]?.kind).toBe("text");
+        },
+        messageSendingHooks: () => {
+          expect(adapter!.send!.text).toBeTypeOf("function");
+        },
+      },
+    });
 
     cleanup.stop();
   });

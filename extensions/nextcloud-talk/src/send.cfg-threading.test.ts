@@ -1,7 +1,9 @@
+import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
 import {
   createSendCfgThreadingRuntime,
   expectProvidedCfgSkipsRuntimeLoad,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig as CoreConfig } from "openclaw/plugin-sdk/config-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -36,6 +38,7 @@ vi.mock("./send.runtime.js", () => {
   };
 });
 
+const { nextcloudTalkMessageAdapter } = await import("./message-adapter.js");
 const { sendMessageNextcloudTalk, sendReactionNextcloudTalk } = await import("./send.js");
 
 function expectProvidedMessageCfgThreading(cfg: unknown): void {
@@ -111,10 +114,25 @@ describe("nextcloud-talk send cfg threading", () => {
       direction: "outbound",
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       messageId: "12345",
       roomToken: "abc123",
       timestamp: 1_706_000_000,
+    });
+    expect(result.receipt).toMatchObject({
+      primaryPlatformMessageId: "12345",
+      platformMessageIds: ["12345"],
+      parts: [
+        {
+          platformMessageId: "12345",
+          kind: "text",
+          raw: {
+            channel: "nextcloud-talk",
+            conversationId: "abc123",
+            messageId: "12345",
+          },
+        },
+      ],
     });
   });
 
@@ -131,11 +149,92 @@ describe("nextcloud-talk send cfg threading", () => {
     });
 
     expectProvidedMessageCfgThreading(cfg);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       messageId: "12346",
       roomToken: "abc123",
       timestamp: 1_706_000_001,
     });
+  });
+
+  it("preserves reply ids in receipts", async () => {
+    const cfg = { source: "provided" } as const;
+    mockNextcloudMessageResponse(12347, 1_706_000_002);
+
+    const result = await sendMessageNextcloudTalk("room:abc123", "hello", {
+      cfg,
+      accountId: "work",
+      replyTo: "parent-1",
+    });
+
+    expect(result.receipt).toMatchObject({
+      replyToId: "parent-1",
+      parts: [
+        {
+          platformMessageId: "12347",
+          replyToId: "parent-1",
+        },
+      ],
+    });
+  });
+
+  it("declares message adapter durable text, media, and reply with receipt proofs", async () => {
+    const cfg = { source: "provided" } as const;
+    mockNextcloudMessageResponse(22345, 1_706_000_003);
+    mockNextcloudMessageResponse(22346, 1_706_000_004);
+    mockNextcloudMessageResponse(22347, 1_706_000_005);
+
+    await expect(
+      verifyChannelMessageAdapterCapabilityProofs({
+        adapterName: "nextcloud-talk",
+        adapter: nextcloudTalkMessageAdapter,
+        proofs: {
+          text: async () => {
+            const result = await nextcloudTalkMessageAdapter.send?.text?.({
+              cfg: cfg as CoreConfig,
+              to: "room:abc123",
+              text: "hello",
+              accountId: "work",
+            });
+            expect(result?.receipt.platformMessageIds).toEqual(["22345"]);
+          },
+          media: async () => {
+            const result = await nextcloudTalkMessageAdapter.send?.media?.({
+              cfg: cfg as CoreConfig,
+              to: "room:abc123",
+              text: "image",
+              mediaUrl: "https://example.com/image.png",
+              accountId: "work",
+            });
+            expect(result?.receipt.platformMessageIds).toEqual(["22346"]);
+            expect(fetchMock).toHaveBeenNthCalledWith(
+              2,
+              "https://nextcloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/abc123/message",
+              expect.objectContaining({
+                body: JSON.stringify({
+                  message: "image\n\nAttachment: https://example.com/image.png",
+                }),
+              }),
+            );
+          },
+          replyTo: async () => {
+            const result = await nextcloudTalkMessageAdapter.send?.text?.({
+              cfg: cfg as CoreConfig,
+              to: "room:abc123",
+              text: "threaded",
+              replyToId: "parent-1",
+              accountId: "work",
+            });
+            expect(result?.receipt.replyToId).toBe("parent-1");
+          },
+        },
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        { capability: "text", status: "verified" },
+        { capability: "media", status: "verified" },
+        { capability: "replyTo", status: "verified" },
+      ]),
+    );
   });
 
   it("fails hard for sendReaction when cfg is omitted", async () => {

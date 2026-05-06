@@ -401,6 +401,47 @@ describe("media store", () => {
       },
     },
     {
+      name: "reads media IDs through the media root boundary",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const saved = await store.saveMediaBuffer(Buffer.from("source bytes"), "text/plain");
+
+          const read = await store.readMediaBuffer(saved.id, "inbound");
+
+          await expect(fs.realpath(read.path)).resolves.toBe(await fs.realpath(saved.path));
+          expect(read.size).toBe("source bytes".length);
+          expect(read.buffer.toString("utf8")).toBe("source bytes");
+        });
+      },
+    },
+    {
+      name: "rejects oversized media ID reads before materializing the file",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const saved = await store.saveMediaBuffer(Buffer.from("too large"), "text/plain");
+
+          await expect(store.readMediaBuffer(saved.id, "inbound", 3)).rejects.toThrow(
+            "maximum is 3 bytes",
+          );
+        });
+      },
+    },
+    {
+      name: "rejects traversal media subdirs before reading IDs",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          const mediaDir = await store.ensureMediaDir();
+          const outsideDir = path.join(home, "outside-media-read");
+          await fs.mkdir(outsideDir, { recursive: true });
+          await fs.writeFile(path.join(outsideDir, "passwd"), "not media");
+
+          await expect(
+            store.readMediaBuffer("passwd", path.relative(mediaDir, outsideDir)),
+          ).rejects.toThrow("unsafe media subdir");
+        });
+      },
+    },
+    {
       name: "retries local-source writes when cleanup prunes the target directory",
       run: async () => {
         await expectRetryAfterPrunedWriteCase({

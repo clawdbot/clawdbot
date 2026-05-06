@@ -128,28 +128,33 @@ describe("outbound channel resolution", () => {
     ).toBe(plugin);
   });
 
-  it("does not load registries while resolving outbound plugins", async () => {
+  it("bootstraps configured channel plugins when the active registry is missing the target", async () => {
     const plugin = { id: "alpha" };
     getLoadedChannelPluginMock.mockReturnValueOnce(undefined).mockReturnValueOnce(plugin);
-    const channelResolution = await importChannelResolution("no-bootstrap");
+    const channelResolution = await importChannelResolution("bootstrap-missing-target");
 
     expect(
       channelResolution.resolveOutboundChannelPlugin({
         channel: "alpha",
         cfg: { channels: {} } as never,
+        allowBootstrap: true,
       }),
     ).toBe(plugin);
-    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
-
-    getChannelPluginMock.mockReturnValue(undefined);
-    channelResolution.resolveOutboundChannelPlugin({
-      channel: "alpha",
-      cfg: { channels: {} } as never,
-    });
-    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({ config: { channels: {} } });
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: { autoEnabled: true },
+        activationSourceConfig: { channels: {} },
+        autoEnabledReasons: {},
+        workspaceDir: "/tmp/workspace",
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
+      }),
+    );
   });
 
-  it("does not load when the active registry has other channels but not the requested one", async () => {
+  it("attempts activation when the active registry has other channels but not the requested one", async () => {
     getLoadedChannelPluginMock.mockReturnValue(undefined);
     getChannelPluginMock.mockReturnValue(undefined);
     getActivePluginRegistryMock.mockReturnValue({
@@ -164,47 +169,80 @@ describe("outbound channel resolution", () => {
       channelResolution.resolveOutboundChannelPlugin({
         channel: "alpha",
         cfg: { channels: {} } as never,
+        allowBootstrap: true,
       }),
     ).toBeUndefined();
-    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry registry loads after a missing outbound plugin", async () => {
     getChannelPluginMock.mockReturnValue(undefined);
-    resolveRuntimePluginRegistryMock.mockImplementationOnce(() => {
-      throw new Error("transient");
-    });
     const channelResolution = await importChannelResolution("bootstrap-retry");
 
     expect(
       channelResolution.resolveOutboundChannelPlugin({
         channel: "alpha",
         cfg: { channels: {} } as never,
+        allowBootstrap: true,
       }),
     ).toBeUndefined();
 
     channelResolution.resolveOutboundChannelPlugin({
       channel: "alpha",
       cfg: { channels: {} } as never,
+      allowBootstrap: true,
     });
-    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not load when the pinned channel registry version changes", async () => {
+  it("allows another activation attempt when the pinned channel registry version changes", async () => {
     getChannelPluginMock.mockReturnValue(undefined);
     const channelResolution = await importChannelResolution("channel-version-change");
 
     channelResolution.resolveOutboundChannelPlugin({
       channel: "alpha",
       cfg: { channels: {} } as never,
+      allowBootstrap: true,
     });
-    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
 
     getActivePluginChannelRegistryVersionMock.mockReturnValue(2);
     channelResolution.resolveOutboundChannelPlugin({
       channel: "alpha",
       cfg: { channels: {} } as never,
+      allowBootstrap: true,
     });
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("resolves message adapters through the activation-aware channel plugin path", async () => {
+    const message = { send: { text: vi.fn() } };
+    const plugin = { id: "alpha", message };
+    getLoadedChannelPluginMock.mockReturnValueOnce(undefined).mockReturnValueOnce(plugin);
+    const channelResolution = await importChannelResolution("message-adapter-bootstrap");
+
+    expect(
+      channelResolution.resolveOutboundChannelMessageAdapter({
+        channel: "alpha",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(message);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not bootstrap by default for outbound hot-path resolution", async () => {
+    const plugin = { id: "alpha" };
+    getLoadedChannelPluginMock.mockReturnValue(undefined);
+    getChannelPluginMock.mockReturnValue(plugin);
+    const channelResolution = await importChannelResolution("no-bootstrap-default");
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "alpha",
+        cfg: { channels: {} } as never,
+      }),
+    ).toBe(plugin);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 });

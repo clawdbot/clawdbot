@@ -3,12 +3,18 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as discordClientModule from "../client.js";
 import * as discordSendModule from "../send.js";
+import { createDiscordSendReceipt } from "../send.receipt.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 const DEFAULT_SEND_RESULT = {
   messageId: "msg-1",
   channelId: "thread-1",
+  receipt: createDiscordSendReceipt({
+    platformMessageIds: ["msg-1"],
+    channelId: "thread-1",
+    kind: "text",
+  }),
 };
 
 const restGet = vi.fn<(...args: unknown[]) => Promise<unknown>>();

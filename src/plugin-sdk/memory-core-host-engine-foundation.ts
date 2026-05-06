@@ -32,7 +32,7 @@ export type {
   MemoryQmdSearchMode,
 } from "../config/types.memory.js";
 export type { MemorySearchConfig } from "../config/types.tools.js";
-export { writeFileWithinRoot } from "../infra/fs-safe.js";
+export { root } from "../infra/fs-safe.js";
 export { createSubsystemLogger } from "../logging/subsystem.js";
 export { detectMime } from "../media/mime.js";
 export { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";

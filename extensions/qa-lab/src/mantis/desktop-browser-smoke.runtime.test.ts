@@ -94,6 +94,10 @@ describe("mantis desktop browser smoke runtime", () => {
     expect(remoteScript).toContain("${BROWSER:-}");
     expect(remoteScript).toContain("${CHROME_BIN:-}");
     expect(remoteScript).toContain("chromium-browser");
+    expect(remoteScript).toContain("${OPENCLAW_MANTIS_BROWSER_PROFILE_TGZ_B64:-}");
+    expect(remoteScript).toContain('"browserProfileRestored": $profile_restored');
+    expect(remoteScript).toContain('"temporaryBrowserProfile": $temporary_profile');
+    expect(remoteScript).toContain("-t 10");
     expect(remoteScript).toContain("base64 -d");
     expect(remoteScript).toContain("ffmpeg");
     expect(remoteScript).toContain('sudo apt-get update -y >>"$out/apt.log" 2>&1 || true');
@@ -132,6 +136,86 @@ describe("mantis desktop browser smoke runtime", () => {
         repoRoot,
       }),
     ).rejects.toThrow("Mantis desktop HTML file must be inside the repository");
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("restores a named browser profile archive env and honors the video duration", async () => {
+    const commands: { args: readonly string[]; command: string }[] = [];
+    const runner = vi.fn(async (command: string, args: readonly string[]) => {
+      commands.push({ command, args });
+      if (command === "/tmp/crabbox" && args[0] === "inspect") {
+        return {
+          stdout: `${JSON.stringify({
+            host: "203.0.113.10",
+            id: "cbx_existing",
+            provider: "hetzner",
+            sshKey: "/tmp/key",
+            sshUser: "crabbox",
+          })}\n`,
+          stderr: "",
+        };
+      }
+      if (command === "rsync") {
+        const outputDir = args.at(-1);
+        await fs.mkdir(outputDir as string, { recursive: true });
+        await fs.writeFile(path.join(outputDir as string, "desktop-browser-smoke.png"), "png");
+        await fs.writeFile(path.join(outputDir as string, "desktop-browser-smoke.mp4"), "mp4");
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    await expect(
+      runMantisDesktopBrowserSmoke({
+        browserProfileArchiveEnv: "MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64",
+        browserProfileDir: "$HOME/.config/openclaw-mantis/discord-viewer-chrome-profile",
+        commandRunner: runner,
+        crabboxBin: "/tmp/crabbox",
+        leaseId: "cbx_existing",
+        outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-profile",
+        repoRoot,
+        videoDurationSeconds: 24,
+      }),
+    ).resolves.toMatchObject({ status: "pass" });
+
+    const remoteScript = commands
+      .find((entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run")
+      ?.args.at(-1);
+    expect(remoteScript).toContain("${MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64:-}");
+    expect(remoteScript).toContain(
+      "profile='$HOME/.config/openclaw-mantis/discord-viewer-chrome-profile'",
+    );
+    expect(remoteScript).toContain("temporary_profile=false");
+    expect(remoteScript).toContain('tar -xzf "$profile_archive" -C "$profile"');
+    expect(remoteScript).toContain("-t 24");
+  });
+
+  it("rejects unsafe browser profile archive env names", async () => {
+    const runner = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      runMantisDesktopBrowserSmoke({
+        browserProfileArchiveEnv: "BAD-NAME",
+        commandRunner: runner,
+        crabboxBin: "/tmp/crabbox",
+        outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-profile",
+        repoRoot,
+      }),
+    ).rejects.toThrow("Mantis browser profile archive env must be an environment variable name");
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("rejects relative browser profile dirs", async () => {
+    const runner = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      runMantisDesktopBrowserSmoke({
+        browserProfileDir: "relative-profile",
+        commandRunner: runner,
+        crabboxBin: "/tmp/crabbox",
+        outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-profile",
+        repoRoot,
+      }),
+    ).rejects.toThrow("Mantis browser profile dir must be an absolute path");
     expect(runner).not.toHaveBeenCalled();
   });
 

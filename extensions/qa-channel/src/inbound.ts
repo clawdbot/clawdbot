@@ -1,5 +1,5 @@
+import { dispatchChannelMessageReplyWithBase } from "openclaw/plugin-sdk/channel-message";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
   buildAgentMediaPayload,
   saveMediaBuffer,
@@ -151,7 +151,7 @@ export async function handleQaInbound(params: {
     ...mediaPayload,
   });
 
-  await dispatchInboundReplyWithBase({
+  await dispatchChannelMessageReplyWithBase({
     cfg: params.config as OpenClawConfig,
     channel: params.channelId,
     accountId: params.account.accountId,

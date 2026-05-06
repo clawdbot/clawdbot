@@ -3,11 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallRealtimeFastContextConfig } from "./config.js";
 
 const mocks = vi.hoisted(() => ({
-  getActiveMemorySearchManager: vi.fn(),
+  resolveRealtimeVoiceFastContextConsult: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
-  getActiveMemorySearchManager: mocks.getActiveMemorySearchManager,
+vi.mock("openclaw/plugin-sdk/realtime-voice", () => ({
+  resolveRealtimeVoiceFastContextConsult: mocks.resolveRealtimeVoiceFastContextConsult,
 }));
 
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
@@ -36,16 +36,16 @@ function createLogger() {
 
 describe("resolveRealtimeFastContextConsult", () => {
   beforeEach(() => {
-    mocks.getActiveMemorySearchManager.mockReset();
+    mocks.resolveRealtimeVoiceFastContextConsult.mockReset();
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("falls back to the full consult when memory manager setup fails", async () => {
+  it("passes voice-call labels into the SDK fast context resolver", async () => {
     const logger = createLogger();
-    mocks.getActiveMemorySearchManager.mockRejectedValue(new Error("memory misconfigured"));
+    mocks.resolveRealtimeVoiceFastContextConsult.mockResolvedValue({ handled: false });
 
     await expect(
       resolveRealtimeFastContextConsult({
@@ -58,31 +58,17 @@ describe("resolveRealtimeFastContextConsult", () => {
       }),
     ).resolves.toEqual({ handled: false });
 
-    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining("memory misconfigured"));
-  });
-
-  it("returns a bounded miss when memory manager setup exceeds the fast context timeout", async () => {
-    vi.useFakeTimers();
-    const logger = createLogger();
-    mocks.getActiveMemorySearchManager.mockReturnValue(new Promise(() => {}));
-
-    const resultPromise = resolveRealtimeFastContextConsult({
+    expect(mocks.resolveRealtimeVoiceFastContextConsult).toHaveBeenCalledWith({
       cfg,
       agentId: "main",
       sessionKey: "voice:15550001234",
-      config: createFastContextConfig({ fallbackToConsult: false, timeoutMs: 25 }),
+      config: createFastContextConfig({ fallbackToConsult: true }),
       args: { question: "What do you remember?" },
       logger,
-    });
-
-    await vi.advanceTimersByTimeAsync(25);
-
-    await expect(resultPromise).resolves.toEqual({
-      handled: true,
-      result: {
-        text: expect.stringContaining("No relevant OpenClaw memory or session context"),
+      labels: {
+        audienceLabel: "caller",
+        contextName: "OpenClaw memory or session context",
       },
     });
-    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining("timed out after 25ms"));
   });
 });

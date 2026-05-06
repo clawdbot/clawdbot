@@ -229,6 +229,59 @@ describe("discordMessageActions", () => {
     ).toBeNull();
   });
 
+  it("prepares Discord send payload channel data for durable core delivery", async () => {
+    const prepared = await discordMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "discord",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: {
+          components: {
+            text: "Choose",
+            blocks: [
+              {
+                type: "actions",
+                buttons: [{ label: "Yes", callbackData: "yes" }],
+              },
+            ],
+          },
+          embeds: undefined,
+          filename: "photo.png",
+        },
+      },
+      to: "channel:123",
+      payload: { text: "hello", mediaUrl: "/tmp/photo.png" },
+    });
+
+    expect(prepared).toMatchObject({
+      text: "hello",
+      mediaUrl: "/tmp/photo.png",
+      channelData: {
+        discord: {
+          components: expect.objectContaining({ text: "Choose" }),
+          filename: "photo.png",
+        },
+      },
+    });
+  });
+
+  it("keeps non-serializable Discord component sends on the legacy action path", async () => {
+    const prepared = await discordMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "discord",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: {
+          components: () => [],
+        },
+      },
+      to: "channel:123",
+      payload: { text: "hello" },
+    });
+
+    expect(prepared).toBeNull();
+  });
+
   it("delegates action handling to the Discord action handler", async () => {
     const cfg = {
       channels: {

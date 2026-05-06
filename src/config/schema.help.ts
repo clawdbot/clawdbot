@@ -150,6 +150,21 @@ export const FIELD_HELP: Record<string, string> = {
     "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
   "talk.providers.*": "Provider-owned Talk config fields for the matching provider id.",
   "talk.providers.*.apiKey": "Provider API key for Talk mode.", // pragma: allowlist secret
+  "talk.realtime":
+    "Realtime Talk provider, model, voice, mode, transport, and brain strategy. Keep speech/TTS provider config in talk.provider and talk.providers.",
+  "talk.realtime.provider": "Active realtime voice provider id, such as openai or google.",
+  "talk.realtime.providers": "Provider-specific realtime voice settings keyed by provider id.",
+  "talk.realtime.providers.*": "Provider-owned realtime voice config for the matching provider id.",
+  "talk.realtime.providers.*.apiKey": "Provider API key for realtime Talk.", // pragma: allowlist secret
+  "talk.realtime.model":
+    "Realtime provider model id override for browser or Gateway-owned Talk sessions.",
+  "talk.realtime.voice":
+    "Realtime provider voice id override for browser or Gateway-owned Talk sessions.",
+  "talk.realtime.mode": "Talk execution mode: realtime, stt-tts, or transcription.",
+  "talk.realtime.transport":
+    "Talk byte/session transport: webrtc, provider-websocket, gateway-relay, or managed-room.",
+  "talk.realtime.brain":
+    "Talk reasoning strategy: agent-consult for Gateway-mediated agent help, direct-tools for owner-only tool calls, or none.",
   "talk.speechLocale":
     'BCP 47 locale id for Talk speech recognition on device nodes, for example "ru-RU". Leave unset to use each device default.',
   "talk.interruptOnSpeech":

@@ -4,7 +4,7 @@ import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-strea
 import { jsonResult, readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
 import { Type } from "typebox";
 import {
-  applyXaiModelCompat,
+  applyXaiRuntimeModelCompat,
   buildXaiImageGenerationProvider,
   normalizeXaiModelId,
   resolveXaiTransport,
@@ -194,7 +194,7 @@ export default defineSingleProviderPluginEntry({
         mode: "api-key" as const,
       };
     },
-    normalizeResolvedModel: ({ model }) => applyXaiModelCompat(model),
+    normalizeResolvedModel: ({ model }) => applyXaiRuntimeModelCompat(model),
     normalizeTransport: ({ provider, api, baseUrl }) =>
       resolveXaiTransport({ provider, api, baseUrl }),
     contributeResolvedModelCompat: ({ modelId, model }) =>

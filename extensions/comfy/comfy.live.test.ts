@@ -1,4 +1,4 @@
-import { resolveOpenClawAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -42,7 +42,7 @@ describeLive("comfy live", () => {
 
   beforeAll(async () => {
     cfg = withPluginsEnabled(getRuntimeConfig());
-    agentDir = resolveOpenClawAgentDir();
+    agentDir = resolveDefaultAgentDir(cfg as never);
     plugin.register(
       createTestPluginApi({
         config: cfg as never,

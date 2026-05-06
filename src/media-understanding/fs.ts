@@ -1,13 +1,5 @@
-import fs from "node:fs/promises";
+import { pathExists } from "../infra/fs-safe.js";
 
 export async function fileExists(filePath?: string | null): Promise<boolean> {
-  if (!filePath) {
-    return false;
-  }
-  try {
-    await fs.stat(filePath);
-    return true;
-  } catch {
-    return false;
-  }
+  return filePath ? await pathExists(filePath) : false;
 }

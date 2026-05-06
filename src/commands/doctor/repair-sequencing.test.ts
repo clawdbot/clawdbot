@@ -4,9 +4,16 @@ import { runDoctorRepairSequence } from "./repair-sequencing.js";
 
 const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
+  ensureAuthProfileStore: vi.fn(),
+  evaluateStoredCredentialEligibility: vi.fn(),
+  getInstalledPluginRecord: vi.fn(),
+  isInstalledPluginEnabled: vi.fn(),
+  loadInstalledPluginIndex: vi.fn(),
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
   maybeRepairStalePluginConfig: vi.fn(),
   repairMissingConfiguredPluginInstalls: vi.fn(),
+  resolveAuthProfileOrder: vi.fn(),
+  resolveProfileUnusableUntilForDisplay: vi.fn(),
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
@@ -19,6 +26,23 @@ vi.mock("../doctor-plugin-registry.js", () => ({
 
 vi.mock("./shared/missing-configured-plugin-install.js", () => ({
   repairMissingConfiguredPluginInstalls: mocks.repairMissingConfiguredPluginInstalls,
+}));
+
+vi.mock("../../agents/auth-profiles.js", () => ({
+  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  resolveAuthProfileOrder: mocks.resolveAuthProfileOrder,
+  resolveProfileUnusableUntilForDisplay: mocks.resolveProfileUnusableUntilForDisplay,
+}));
+
+vi.mock("../../agents/auth-profiles/credential-state.js", () => ({
+  evaluateStoredCredentialEligibility: mocks.evaluateStoredCredentialEligibility,
+}));
+
+vi.mock("../../plugins/installed-plugin-index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/installed-plugin-index.js")>()),
+  getInstalledPluginRecord: mocks.getInstalledPluginRecord,
+  isInstalledPluginEnabled: mocks.isInstalledPluginEnabled,
+  loadInstalledPluginIndex: mocks.loadInstalledPluginIndex,
 }));
 
 vi.mock("./shared/channel-doctor.js", () => ({
@@ -150,11 +174,24 @@ describe("doctor repair sequencing", () => {
       config: params.config,
       changes: [],
     }));
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      profiles: {},
+      usageStats: {},
+    });
+    mocks.evaluateStoredCredentialEligibility.mockReturnValue({
+      eligible: true,
+      reasonCode: "ok",
+    });
+    mocks.getInstalledPluginRecord.mockReturnValue(undefined);
+    mocks.isInstalledPluginEnabled.mockReturnValue(false);
+    mocks.loadInstalledPluginIndex.mockReturnValue({ plugins: [] });
     mocks.maybeRepairStaleManagedNpmBundledPlugins.mockReturnValue(false);
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
       warnings: [],
     });
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(null);
     mocks.maybeRepairStalePluginConfig.mockImplementation((cfg: OpenClawConfig) => ({
       config: cfg,
       changes: [],
@@ -358,6 +395,50 @@ describe("doctor repair sequencing", () => {
         "brave web search provider selected, enabled automatically.",
       ]),
     );
+  });
+
+  it("moves legacy Codex routes to PI before missing plugin install repair when Codex is not ready", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(
+      async (params: { cfg: OpenClawConfig }) => {
+        expect(params.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
+        expect(params.cfg.agents?.defaults?.agentRuntime).toEqual({ id: "pi" });
+        return {
+          changes: [],
+          warnings: [],
+        };
+      },
+    );
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          agents: {
+            defaults: {
+              model: "openai-codex/gpt-5.5",
+            },
+          },
+        } as OpenClawConfig,
+        candidate: {
+          agents: {
+            defaults: {
+              model: "openai-codex/gpt-5.5",
+            },
+          },
+        } as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+      env: {},
+    });
+
+    expect(result.state.pendingChanges).toBe(true);
+    expect(result.state.candidate.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(result.state.candidate.agents?.defaults?.agentRuntime).toEqual({ id: "pi" });
+    expect(result.changeNotes.join("\n")).toContain(
+      'agents.defaults.model: openai-codex/gpt-5.5 -> openai/gpt-5.5; set agentRuntime.id to "pi".',
+    );
+    expect(result.changeNotes.join("\n")).not.toContain("Installed missing configured plugin");
   });
 
   it("does not remove deferred configured plugins during the package update doctor pass", async () => {

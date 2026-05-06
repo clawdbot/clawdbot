@@ -837,7 +837,11 @@ function buildAttentionItems(host: SettingsAppHost) {
 
 export async function loadChannelsTab(host: SettingsHost) {
   const app = host as unknown as SettingsAppHost;
-  await Promise.all([loadChannels(app, true), loadConfigSchema(app), loadConfig(app)]);
+  await Promise.all([
+    loadChannels(app, true, { softTimeoutMs: 750 }),
+    loadConfigSchema(app),
+    loadConfig(app),
+  ]);
 }
 
 export async function loadCron(host: SettingsHost) {

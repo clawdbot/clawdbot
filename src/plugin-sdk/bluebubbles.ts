@@ -109,7 +109,7 @@ export type {
   ChannelMessageActionName,
 } from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
+export { createChannelReplyPipeline } from "./channel-reply-core.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { DmPolicy, GroupPolicy } from "../config/types.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";

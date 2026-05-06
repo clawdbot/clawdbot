@@ -42,10 +42,12 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
   config footprint move, so do not blindly copy stale replacement annotations
   into release notes.
 - Do not delete or rewrite beta tags after their matching npm package has been
-  published. If a pushed beta tag fails preflight before npm publish, delete and
-  recreate the tag and prerelease at the fixed commit so npm prerelease versions
-  stay contiguous. If a published beta needs a fix, commit the fix on the
-  release branch and increment to the next `-beta.N`.
+  published. If a pushed beta tag fails before npm publish, the version is not
+  consumed: keep the same `-beta.N`, delete/recreate or force-move the git tag
+  and prerelease to the fixed commit, and rerun preflight. Do not increment to
+  the next beta number until the matching npm package has actually published.
+  If a published beta needs a fix, commit the fix on the release branch and
+  increment to the next `-beta.N`.
 - For a beta release train, run the fast local preflight first, publish the
   beta to npm `beta`, then run the expensive published-package roster focused
   on install/update/Docker/Parallels/NPM Telegram. If anything fails, fix it on

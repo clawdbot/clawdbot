@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
-import { fileExists } from "./archive.js";
 import { formatErrorMessage } from "./errors.js";
+import { pathExists } from "./fs-safe.js";
 import { assertCanonicalPathWithinBase, resolveSafeInstallDir } from "./install-safe-path.js";
 
 export async function resolveCanonicalInstallTarget(params: {
@@ -37,7 +37,7 @@ export async function ensureInstallTargetAvailable(params: {
   targetDir: string;
   alreadyExistsError: string;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (params.mode === "install" && (await fileExists(params.targetDir))) {
+  if (params.mode === "install" && (await pathExists(params.targetDir))) {
     return { ok: false, error: params.alreadyExistsError };
   }
   return { ok: true };

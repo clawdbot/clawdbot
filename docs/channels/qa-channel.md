@@ -7,7 +7,7 @@ read_when:
   - You are iterating on end-to-end QA automation
 ---
 
-`qa-channel` is a bundled synthetic message transport for automated OpenClaw QA. It is not a production channel — it exists to exercise the same channel plugin boundary used by real transports while keeping state deterministic and fully inspectable.
+`qa-channel` is a bundled synthetic message transport for automated OpenClaw QA. It is not a production channel - it exists to exercise the same channel plugin boundary used by real transports while keeping state deterministic and fully inspectable.
 
 ## What it does
 
@@ -38,20 +38,20 @@ read_when:
 
 Account keys:
 
-- `enabled` — master toggle for this account.
-- `name` — optional display label.
-- `baseUrl` — synthetic bus URL.
-- `botUserId` — Matrix-style bot user id used in target grammar.
-- `botDisplayName` — display name for outbound messages.
-- `pollTimeoutMs` — long-poll wait window. Integer between 100 and 30000.
-- `allowFrom` — sender allowlist (user ids or `"*"`).
-- `defaultTo` — fallback target when none is supplied.
-- `actions.messages` / `actions.reactions` / `actions.search` / `actions.threads` — per-action tool gating.
+- `enabled` - master toggle for this account.
+- `name` - optional display label.
+- `baseUrl` - synthetic bus URL.
+- `botUserId` - Matrix-style bot user id used in target grammar.
+- `botDisplayName` - display name for outbound messages.
+- `pollTimeoutMs` - long-poll wait window. Integer between 100 and 30000.
+- `allowFrom` - sender allowlist (user ids or `"*"`).
+- `defaultTo` - fallback target when none is supplied.
+- `actions.messages` / `actions.reactions` / `actions.search` / `actions.threads` - per-action tool gating.
 
 Multi-account keys at the top level:
 
-- `accounts` — record of named per-account overrides keyed by account id.
-- `defaultAccount` — preferred account id when multiple are configured.
+- `accounts` - record of named per-account overrides keyed by account id.
+- `defaultAccount` - preferred account id when multiple are configured.
 
 ## Runners
 
@@ -81,8 +81,8 @@ Builds the QA site, starts the Docker-backed gateway + QA Lab stack, and prints 
 
 ## Related
 
-- [QA overview](/concepts/qa-e2e-automation) — overall stack, transport adapters, scenario authoring
-- [Matrix QA](/concepts/qa-matrix) — example live-transport runner that drives a real channel
+- [QA overview](/concepts/qa-e2e-automation) - overall stack, transport adapters, scenario authoring
+- [Matrix QA](/concepts/qa-matrix) - example live-transport runner that drives a real channel
 - [Pairing](/channels/pairing)
 - [Groups](/channels/groups)
 - [Channels overview](/channels)

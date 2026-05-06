@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { formatUnknownError } from "./errors.js";
 import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
@@ -256,7 +256,11 @@ async function handleFeedbackInvoke(
     });
     const safeKey = route.sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
     const transcriptFile = path.join(storePath, `${safeKey}.jsonl`);
-    await fs.appendFile(transcriptFile, JSON.stringify(feedbackEvent) + "\n", "utf-8").catch(() => {
+    await appendRegularFile({
+      filePath: transcriptFile,
+      content: `${JSON.stringify(feedbackEvent)}\n`,
+      rejectSymlinkParents: true,
+    }).catch(() => {
       // Best effort — transcript dir may not exist yet
     });
   } catch {
@@ -455,7 +459,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     try {
       await handleTeamsMessage(context as MSTeamsTurnContext);
     } catch (err) {
-      deps.runtime.error?.(`msteams handler failed: ${formatUnknownError(err)}`);
+      deps.runtime.error(`msteams handler failed: ${formatUnknownError(err)}`);
     }
     await next();
   });
@@ -516,7 +520,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     try {
       await handleReaction(context as MSTeamsTurnContext, "added");
     } catch (err) {
-      deps.runtime.error?.(`msteams reaction handler failed: ${String(err)}`);
+      deps.runtime.error(`msteams reaction handler failed: ${String(err)}`);
     }
     await next();
   });
@@ -525,7 +529,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     try {
       await handleReaction(context as MSTeamsTurnContext, "removed");
     } catch (err) {
-      deps.runtime.error?.(`msteams reaction handler failed: ${String(err)}`);
+      deps.runtime.error(`msteams reaction handler failed: ${String(err)}`);
     }
     await next();
   });

@@ -41,7 +41,28 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
-class TalkModeManager(
+data class TalkPttStartPayload(
+  val captureId: String,
+) {
+  fun toJson(): String = """{"captureId":"$captureId"}"""
+}
+
+data class TalkPttStopPayload(
+  val captureId: String,
+  val transcript: String?,
+  val status: String,
+) {
+  fun toJson(): String =
+    buildJsonObject {
+      put("captureId", JsonPrimitive(captureId))
+      if (transcript != null) {
+        put("transcript", JsonPrimitive(transcript))
+      }
+      put("status", JsonPrimitive(status))
+    }.toString()
+}
+
+class TalkModeManager internal constructor(
   private val context: Context,
   private val scope: CoroutineScope,
   private val session: GatewaySession,
@@ -49,6 +70,8 @@ class TalkModeManager(
   private val isConnected: () -> Boolean,
   private val onBeforeSpeak: suspend () -> Unit = {},
   private val onAfterSpeak: suspend () -> Unit = {},
+  private val talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(session = session),
+  private val talkAudioPlayer: TalkAudioPlaying = TalkAudioPlayer(context),
 ) {
   companion object {
     private const val tag = "TalkMode"
@@ -60,9 +83,6 @@ class TalkModeManager(
 
   private val mainHandler = Handler(Looper.getMainLooper())
   private val json = Json { ignoreUnknownKeys = true }
-  private val talkSpeakClient = TalkSpeakClient(session = session, json = json)
-  private val talkAudioPlayer = TalkAudioPlayer(context)
-
   private val _isEnabled = MutableStateFlow(false)
   val isEnabled: StateFlow<Boolean> = _isEnabled
 
@@ -82,6 +102,10 @@ class TalkModeManager(
   private var restartJob: Job? = null
   private var stopRequested = false
   private var listeningMode = false
+  private var activePttCaptureId: String? = null
+  private var pttAutoStopEnabled = false
+  private var pttTimeoutJob: Job? = null
+  private var pttCompletion: CompletableDeferred<TalkPttStopPayload>? = null
 
   private var silenceJob: Job? = null
   private var silenceWindowMs = TalkDefaults.defaultSilenceTimeoutMs
@@ -154,6 +178,127 @@ class TalkModeManager(
       Log.d(tag, "disabled")
       stop()
     }
+  }
+
+  suspend fun beginPushToTalk(): TalkPttStartPayload {
+    if (!isConnected()) {
+      _statusText.value = "Gateway not connected"
+      throw IllegalStateException("UNAVAILABLE: Gateway not connected")
+    }
+    activePttCaptureId?.let { return TalkPttStartPayload(captureId = it) }
+
+    stopSpeaking(resetInterrupt = false)
+    pttTimeoutJob?.cancel()
+    pttTimeoutJob = null
+    pttAutoStopEnabled = false
+    pttCompletion = null
+    silenceJob?.cancel()
+    silenceJob = null
+    listeningMode = false
+    finalizeInFlight = false
+    stopRequested = false
+    lastTranscript = ""
+    lastHeardAtMs = null
+
+    val micOk =
+      ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+        PackageManager.PERMISSION_GRANTED
+    if (!micOk) {
+      _statusText.value = "Microphone permission required"
+      throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
+    }
+    if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+      _statusText.value = "Speech recognizer unavailable"
+      throw IllegalStateException("UNAVAILABLE: Speech recognizer unavailable")
+    }
+
+    val captureId = UUID.randomUUID().toString()
+    activePttCaptureId = captureId
+    withContext(Dispatchers.Main) {
+      recognizer?.cancel()
+      recognizer?.destroy()
+      recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { it.setRecognitionListener(listener) }
+      startListeningInternal(markListening = true)
+    }
+    _statusText.value = "Listening (PTT)"
+    return TalkPttStartPayload(captureId = captureId)
+  }
+
+  suspend fun endPushToTalk(): TalkPttStopPayload {
+    val captureId = activePttCaptureId ?: UUID.randomUUID().toString()
+    if (activePttCaptureId == null) {
+      return finishPushToTalk(TalkPttStopPayload(captureId = captureId, transcript = null, status = "idle"))
+    }
+
+    clearPushToTalkRecognition()
+    val transcript = lastTranscript.trim()
+    lastTranscript = ""
+    lastHeardAtMs = null
+
+    if (transcript.isEmpty()) {
+      _statusText.value = if (_isEnabled.value) "Listening" else "Ready"
+      if (_isEnabled.value) {
+        start()
+      }
+      return finishPushToTalk(TalkPttStopPayload(captureId = captureId, transcript = null, status = "empty"))
+    }
+
+    if (!isConnected()) {
+      _statusText.value = "Gateway not connected"
+      if (_isEnabled.value) {
+        start()
+      }
+      return finishPushToTalk(TalkPttStopPayload(captureId = captureId, transcript = transcript, status = "offline"))
+    }
+
+    _statusText.value = "Thinking…"
+    scope.launch {
+      finalizeTranscript(transcript)
+    }
+    return finishPushToTalk(TalkPttStopPayload(captureId = captureId, transcript = transcript, status = "queued"))
+  }
+
+  suspend fun cancelPushToTalk(): TalkPttStopPayload {
+    val captureId = activePttCaptureId ?: UUID.randomUUID().toString()
+    if (activePttCaptureId == null) {
+      return finishPushToTalk(TalkPttStopPayload(captureId = captureId, transcript = null, status = "idle"))
+    }
+
+    clearPushToTalkRecognition()
+    lastTranscript = ""
+    lastHeardAtMs = null
+    _statusText.value = if (_isEnabled.value) "Listening" else "Ready"
+    if (_isEnabled.value) {
+      start()
+    }
+    return finishPushToTalk(TalkPttStopPayload(captureId = captureId, transcript = null, status = "cancelled"))
+  }
+
+  suspend fun runPushToTalkOnce(maxDurationMs: Long = 12_000L): TalkPttStopPayload {
+    if (pttCompletion != null) {
+      cancelPushToTalk()
+    }
+    if (activePttCaptureId != null) {
+      return TalkPttStopPayload(
+        captureId = activePttCaptureId ?: UUID.randomUUID().toString(),
+        transcript = null,
+        status = "busy",
+      )
+    }
+
+    beginPushToTalk()
+    val completion = CompletableDeferred<TalkPttStopPayload>()
+    pttCompletion = completion
+    pttAutoStopEnabled = true
+    startSilenceMonitor()
+    pttTimeoutJob =
+      scope.launch {
+        delay(maxDurationMs)
+        if (pttAutoStopEnabled && activePttCaptureId != null) {
+          endPushToTalk()
+        }
+      }
+    return completion.await()
   }
 
   /**
@@ -335,6 +480,12 @@ class TalkModeManager(
     stopRequested = true
     finalizeInFlight = false
     listeningMode = false
+    activePttCaptureId = null
+    pttAutoStopEnabled = false
+    pttCompletion?.cancel()
+    pttCompletion = null
+    pttTimeoutJob?.cancel()
+    pttTimeoutJob = null
     restartJob?.cancel()
     restartJob = null
     silenceJob?.cancel()
@@ -434,7 +585,7 @@ class TalkModeManager(
     silenceJob?.cancel()
     silenceJob =
       scope.launch {
-        while (_isEnabled.value) {
+        while (_isEnabled.value || pttAutoStopEnabled) {
           delay(200)
           checkSilence()
         }
@@ -448,6 +599,12 @@ class TalkModeManager(
     val lastHeard = lastHeardAtMs ?: return
     val elapsed = SystemClock.elapsedRealtime() - lastHeard
     if (elapsed < silenceWindowMs) return
+    if (activePttCaptureId != null) {
+      if (pttAutoStopEnabled) {
+        scope.launch { endPushToTalk() }
+      }
+      return
+    }
     if (finalizeInFlight) return
     finalizeInFlight = true
     scope.launch {
@@ -523,6 +680,27 @@ class TalkModeManager(
     if (_isEnabled.value) {
       start()
     }
+  }
+
+  private suspend fun clearPushToTalkRecognition() {
+    pttTimeoutJob?.cancel()
+    pttTimeoutJob = null
+    pttAutoStopEnabled = false
+    activePttCaptureId = null
+    _isListening.value = false
+    listeningMode = false
+    clearListenWatchdog()
+    withContext(Dispatchers.Main) {
+      recognizer?.cancel()
+      recognizer?.destroy()
+      recognizer = null
+    }
+  }
+
+  private fun finishPushToTalk(payload: TalkPttStopPayload): TalkPttStopPayload {
+    pttCompletion?.complete(payload)
+    pttCompletion = null
+    return payload
   }
 
   private suspend fun subscribeChatIfNeeded(
@@ -656,20 +834,7 @@ class TalkModeManager(
     }
   }
 
-  private fun extractTextFromChatEventMessage(messageEl: JsonElement?): String? {
-    val msg = messageEl?.asObjectOrNull() ?: return null
-    val content = msg["content"] as? JsonArray ?: return null
-    return content
-      .mapNotNull { entry ->
-        entry
-          .asObjectOrNull()
-          ?.get("text")
-          ?.asStringOrNull()
-          ?.trim()
-      }.filter { it.isNotEmpty() }
-      .joinToString("\n")
-      .takeIf { it.isNotBlank() }
-  }
+  private fun extractTextFromChatEventMessage(messageEl: JsonElement?): String? = ChatEventText.assistantTextFromMessage(messageEl)
 
   private suspend fun waitForAssistantText(
     session: GatewaySession,
@@ -729,17 +894,16 @@ class TalkModeManager(
     _lastAssistantText.value = cleaned
     ensurePlaybackActive(playbackToken)
 
-    _statusText.value = "Speaking…"
-    _isSpeaking.value = true
+    _statusText.value = "Generating voice…"
+    _isSpeaking.value = false
     lastSpokenText = cleaned
-    ensureInterruptListener()
-    requestAudioFocusForTts()
 
     try {
       val started = SystemClock.elapsedRealtime()
       when (val result = talkSpeakClient.synthesize(text = cleaned, directive = directive)) {
         is TalkSpeakResult.Success -> {
           ensurePlaybackActive(playbackToken)
+          markAudioPlaybackStarting(playbackToken)
           talkAudioPlayer.play(result.audio)
           ensurePlaybackActive(playbackToken)
           Log.d(tag, "talk.speak ok durMs=${SystemClock.elapsedRealtime() - started}")
@@ -789,8 +953,6 @@ class TalkModeManager(
       shouldResumeAfterSpeak = true
       onBeforeSpeak()
       ensurePlaybackActive(playbackToken)
-      _isSpeaking.value = true
-      _statusText.value = "Speaking…"
       block()
     } finally {
       synchronized(ttsJobLock) {
@@ -888,6 +1050,7 @@ class TalkModeManager(
           }
         },
       )
+      markAudioPlaybackStarting(playbackToken)
       val result = engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
       if (result != TextToSpeech.SUCCESS) {
         throw IllegalStateException("TextToSpeech start failed")
@@ -903,6 +1066,14 @@ class TalkModeManager(
         }
       }
     }
+  }
+
+  private fun markAudioPlaybackStarting(playbackToken: Long) {
+    ensurePlaybackActive(playbackToken)
+    _statusText.value = "Speaking…"
+    _isSpeaking.value = true
+    ensureInterruptListener()
+    requestAudioFocusForTts()
   }
 
   fun stopTts() {

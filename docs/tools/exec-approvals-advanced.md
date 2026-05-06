@@ -106,7 +106,7 @@ automatically.
 | ---------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------- |
 | Goal             | Auto-allow narrow stdin filters                        | Explicitly trust specific executables                                              |
 | Match type       | Executable name + safe-bin argv policy                 | Resolved executable path glob, or bare command-name glob for PATH-invoked commands |
-| Argument scope   | Restricted by safe-bin profile and literal-token rules | Path match only; arguments are otherwise your responsibility                       |
+| Argument scope   | Restricted by safe-bin profile and literal-token rules | Path match by default; optional `argPattern` can restrict parsed argv              |
 | Typical examples | `head`, `tail`, `tr`, `wc`                             | `jq`, `python3`, `node`, `ffmpeg`, custom CLIs                                     |
 | Best use         | Low-risk text transforms in pipelines                  | Any tool with broader behavior or side effects                                     |
 

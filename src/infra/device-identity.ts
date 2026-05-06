@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { privateFileStoreSync } from "./private-file-store.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -19,10 +19,6 @@ type StoredIdentity = {
 
 function resolveDefaultIdentityPath(): string {
   return path.join(resolveStateDir(), "identity", "device.json");
-}
-
-function ensureDir(filePath: string) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
@@ -66,46 +62,41 @@ export function loadOrCreateDeviceIdentity(
   filePath: string = resolveDefaultIdentityPath(),
 ): DeviceIdentity {
   try {
-    if (fs.existsSync(filePath)) {
-      const raw = fs.readFileSync(filePath, "utf8");
-      const parsed = JSON.parse(raw) as StoredIdentity;
-      if (
-        parsed?.version === 1 &&
-        typeof parsed.deviceId === "string" &&
-        typeof parsed.publicKeyPem === "string" &&
-        typeof parsed.privateKeyPem === "string"
-      ) {
-        const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
-        if (derivedId && derivedId !== parsed.deviceId) {
-          const updated: StoredIdentity = {
-            ...parsed,
-            deviceId: derivedId,
-          };
-          fs.writeFileSync(filePath, `${JSON.stringify(updated, null, 2)}\n`, { mode: 0o600 });
-          try {
-            fs.chmodSync(filePath, 0o600);
-          } catch {
-            // best-effort
-          }
-          return {
-            deviceId: derivedId,
-            publicKeyPem: parsed.publicKeyPem,
-            privateKeyPem: parsed.privateKeyPem,
-          };
-        }
+    const parsed = privateFileStoreSync(path.dirname(filePath)).readJsonIfExists<StoredIdentity>(
+      path.basename(filePath),
+    );
+    if (
+      parsed?.version === 1 &&
+      typeof parsed.deviceId === "string" &&
+      typeof parsed.publicKeyPem === "string" &&
+      typeof parsed.privateKeyPem === "string"
+    ) {
+      const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
+      if (derivedId && derivedId !== parsed.deviceId) {
+        const updated: StoredIdentity = {
+          ...parsed,
+          deviceId: derivedId,
+        };
+        privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), updated, {
+          trailingNewline: true,
+        });
         return {
-          deviceId: parsed.deviceId,
+          deviceId: derivedId,
           publicKeyPem: parsed.publicKeyPem,
           privateKeyPem: parsed.privateKeyPem,
         };
       }
+      return {
+        deviceId: parsed.deviceId,
+        publicKeyPem: parsed.publicKeyPem,
+        privateKeyPem: parsed.privateKeyPem,
+      };
     }
   } catch {
     // fall through to regenerate
   }
 
   const identity = generateIdentity();
-  ensureDir(filePath);
   const stored: StoredIdentity = {
     version: 1,
     deviceId: identity.deviceId,
@@ -113,12 +104,9 @@ export function loadOrCreateDeviceIdentity(
     privateKeyPem: identity.privateKeyPem,
     createdAtMs: Date.now(),
   };
-  fs.writeFileSync(filePath, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // best-effort
-  }
+  privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), stored, {
+    trailingNewline: true,
+  });
   return identity;
 }
 
@@ -126,13 +114,12 @@ export function loadDeviceIdentityIfPresent(
   filePath: string = resolveDefaultIdentityPath(),
 ): DeviceIdentity | null {
   try {
-    if (!fs.existsSync(filePath)) {
-      return null;
-    }
-    const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as StoredIdentity;
+    const parsed = privateFileStoreSync(path.dirname(filePath)).readJsonIfExists<StoredIdentity>(
+      path.basename(filePath),
+    );
     if (
-      parsed?.version !== 1 ||
+      !parsed ||
+      parsed.version !== 1 ||
       typeof parsed.deviceId !== "string" ||
       typeof parsed.publicKeyPem !== "string" ||
       typeof parsed.privateKeyPem !== "string"

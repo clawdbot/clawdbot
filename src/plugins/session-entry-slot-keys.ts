@@ -73,6 +73,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pendingFinalDeliveryLastError",
   "pendingFinalDeliveryText",
   "pendingFinalDeliveryContext",
+  "pendingFinalDeliveryIntentId",
   "totalTokensFresh",
   "estimatedCostUsd",
   "cacheRead",

@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChannelType } from "../internal/discord.js";
+import { ChannelType, MessageType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
@@ -964,6 +964,95 @@ describe("preflightDiscordMessage", () => {
     const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
 
     expect(result).not.toBeNull();
+  });
+
+  it("routes ordinary guild text control commands through authorization instead of dropping them", async () => {
+    const channelId = "channel-text-control-command";
+    const guildId = "guild-text-control-command";
+    const message = createDiscordMessage({
+      id: "m-text-control-command",
+      channelId,
+      content: "/steer keep digging",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      allowFrom: ["discord:user-1"],
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.baseText).toBe("/steer keep digging");
+    expect(result?.commandAuthorized).toBe(true);
+    expect(result?.shouldRequireMention).toBe(true);
+    expect(result?.shouldBypassMention).toBe(true);
+  });
+
+  it("still drops Discord native command echo messages", async () => {
+    const channelId = "channel-native-command-echo";
+    const guildId = "guild-native-command-echo";
+    const message = createDiscordMessage({
+      id: "m-native-command-echo",
+      channelId,
+      content: "/steer keep digging",
+      type: MessageType.ChatInputCommand,
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      allowFrom: ["discord:user-1"],
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
   });
 
   it("does not mask mention gating when bot id is missing but mention patterns can detect", async () => {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { readJsonFile, readJsonFileSync } from "../infra/json-files.js";
+import { tryReadJson, tryReadJsonSync } from "../infra/json-files.js";
 import { resolveDefaultPluginNpmDir, validatePluginId } from "./install-paths.js";
 import {
   resolveInstalledPluginIndexStorePath,
@@ -34,12 +34,8 @@ function readRecordMap(value: unknown): Record<string, PluginInstallRecord> | nu
 }
 
 function readJsonObjectFileSync(filePath: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+  const parsed = tryReadJsonSync(filePath);
+  return isRecord(parsed) ? parsed : null;
 }
 
 function readStringRecord(value: unknown): Record<string, string> {
@@ -141,11 +137,14 @@ function mergeRecoveredManagedNpmInstallRecords(
 function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(
   index: unknown,
 ): Record<string, PluginInstallRecord> | null {
-  if (!isRecord(index) || !Array.isArray(index.plugins)) {
+  if (!isRecord(index)) {
     return null;
   }
   if (Object.prototype.hasOwnProperty.call(index, "installRecords")) {
     return readRecordMap(index.installRecords) ?? {};
+  }
+  if (!Array.isArray(index.plugins)) {
+    return null;
   }
   const records: Record<string, PluginInstallRecord> = {};
   for (const entry of index.plugins) {
@@ -160,14 +159,14 @@ function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(
 export async function readPersistedInstalledPluginIndexInstallRecords(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<Record<string, PluginInstallRecord> | null> {
-  const parsed = await readJsonFile<unknown>(resolveInstalledPluginIndexStorePath(options));
+  const parsed = await tryReadJson<unknown>(resolveInstalledPluginIndexStorePath(options));
   return extractPluginInstallRecordsFromPersistedInstalledPluginIndex(parsed);
 }
 
 export function readPersistedInstalledPluginIndexInstallRecordsSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): Record<string, PluginInstallRecord> | null {
-  const parsed = readJsonFileSync(resolveInstalledPluginIndexStorePath(options));
+  const parsed = tryReadJsonSync(resolveInstalledPluginIndexStorePath(options));
   return extractPluginInstallRecordsFromPersistedInstalledPluginIndex(parsed);
 }
 

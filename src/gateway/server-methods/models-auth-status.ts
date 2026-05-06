@@ -1,4 +1,4 @@
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
+import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
 import {
   type AuthHealthSummary,
   type AuthProfileHealthStatus,
@@ -291,7 +291,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = context.getRuntimeConfig();
-      const agentDir = resolveOpenClawAgentDir();
+      const agentDir = resolveDefaultAgentDir(cfg);
       const store = ensureAuthProfileStore(agentDir, {
         externalCli: externalCliDiscoveryForConfigStatus({ cfg }),
       });

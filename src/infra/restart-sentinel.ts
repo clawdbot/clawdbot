@@ -3,7 +3,7 @@ import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { writeJsonAtomic } from "./json-files.js";
+import { writeJson } from "./json-files.js";
 
 export type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -84,7 +84,7 @@ export async function writeRestartSentinel(
 ) {
   const filePath = resolveRestartSentinelPath(env);
   const data: RestartSentinel = { version: 1, payload };
-  await writeJsonAtomic(filePath, data, { trailingNewline: true, ensureDirMode: 0o700 });
+  await writeJson(filePath, data, { trailingNewline: true, dirMode: 0o700 });
   return filePath;
 }
 

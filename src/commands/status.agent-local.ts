@@ -1,10 +1,10 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { pathExists } from "../infra/fs-safe.js";
 
 export type AgentLocalStatus = {
   id: string;
@@ -24,15 +24,6 @@ type AgentLocalStatusesResult = {
   bootstrapPendingCount: number;
 };
 
-async function fileExists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export async function getAgentLocalStatuses(
   cfg: OpenClawConfig,
 ): Promise<AgentLocalStatusesResult> {
@@ -51,7 +42,7 @@ export async function getAgentLocalStatuses(
     })();
 
     const bootstrapPath = workspaceDir != null ? path.join(workspaceDir, "BOOTSTRAP.md") : null;
-    const bootstrapPending = bootstrapPath != null ? await fileExists(bootstrapPath) : null;
+    const bootstrapPending = bootstrapPath != null ? await pathExists(bootstrapPath) : null;
 
     const sessionsPath = resolveStorePath(cfg.session?.store, { agentId });
     const store = readSessionStoreReadOnly(sessionsPath);

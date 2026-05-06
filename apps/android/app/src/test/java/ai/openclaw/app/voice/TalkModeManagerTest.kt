@@ -9,7 +9,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -78,7 +81,54 @@ class TalkModeManagerTest {
     assertEquals(1L, playbackGeneration(manager).get())
   }
 
-  private fun createManager(): TalkModeManager {
+  @Test
+  fun nonPendingUserFinalDoesNotUseAllResponseTts() {
+    val manager = createManager()
+
+    manager.ttsOnAllResponses = true
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-user", text = "do not speak", role = "user"))
+
+    assertEquals(0L, playbackGeneration(manager).get())
+  }
+
+  @Test
+  fun textReadyDoesNotEnterSpeakingUntilAudioPlaybackStarts() =
+    runTest {
+      val talkSpeakClient = FakeTalkSpeechSynthesizer()
+      val talkAudioPlayer = FakeTalkAudioPlayer()
+      val manager = createManager(talkSpeakClient = talkSpeakClient, talkAudioPlayer = talkAudioPlayer)
+
+      val job = launch { manager.speakAssistantReply("hello") }
+      talkSpeakClient.requested.await()
+
+      assertEquals("Generating voice…", manager.statusText.value)
+      assertFalse(manager.isSpeaking.value)
+
+      talkSpeakClient.result.complete(
+        TalkSpeakResult.Success(
+          TalkSpeakAudio(
+            bytes = byteArrayOf(1, 2, 3),
+            provider = "test",
+            outputFormat = "mp3_44100_128",
+            voiceCompatible = true,
+            mimeType = "audio/mpeg",
+            fileExtension = ".mp3",
+          ),
+        ),
+      )
+      talkAudioPlayer.started.await()
+
+      assertEquals("Speaking…", manager.statusText.value)
+      assertTrue(manager.isSpeaking.value)
+
+      talkAudioPlayer.finished.complete(Unit)
+      job.join()
+    }
+
+  private fun createManager(
+    talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(),
+    talkAudioPlayer: TalkAudioPlaying? = null,
+  ): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
     val session =
@@ -96,6 +146,8 @@ class TalkModeManagerTest {
       session = session,
       supportsChatSubscribe = false,
       isConnected = { true },
+      talkSpeakClient = talkSpeakClient,
+      talkAudioPlayer = talkAudioPlayer ?: TalkAudioPlayer(app),
     )
   }
 
@@ -124,6 +176,7 @@ class TalkModeManagerTest {
   private fun chatFinalPayload(
     runId: String,
     text: String,
+    role: String = "assistant",
   ): String =
     """
     {
@@ -131,13 +184,41 @@ class TalkModeManagerTest {
       "sessionKey": "main",
       "state": "final",
       "message": {
-        "role": "assistant",
+        "role": "$role",
         "content": [
           { "type": "text", "text": "$text" }
         ]
       }
     }
     """.trimIndent()
+}
+
+private class FakeTalkSpeechSynthesizer : TalkSpeechSynthesizing {
+  val requested = CompletableDeferred<Unit>()
+  val result = CompletableDeferred<TalkSpeakResult>()
+
+  override suspend fun synthesize(
+    text: String,
+    directive: TalkDirective?,
+  ): TalkSpeakResult {
+    requested.complete(Unit)
+    return result.await()
+  }
+}
+
+private class FakeTalkAudioPlayer : TalkAudioPlaying {
+  val started = CompletableDeferred<Unit>()
+  val finished = CompletableDeferred<Unit>()
+  var stopped = false
+
+  override suspend fun play(audio: TalkSpeakAudio) {
+    started.complete(Unit)
+    finished.await()
+  }
+
+  override fun stop() {
+    stopped = true
+  }
 }
 
 private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {

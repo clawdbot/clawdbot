@@ -62,6 +62,44 @@ describe("createTelegramUpdateTracker", () => {
     } satisfies Partial<TelegramUpdateTrackerState>);
   });
 
+  it("can persist offsets only after successful agent dispatch", async () => {
+    const onAcceptedUpdateId = vi.fn();
+    const tracker = createTelegramUpdateTracker({
+      initialUpdateId: 100,
+      ackPolicy: "after_agent_dispatch",
+      onAcceptedUpdateId,
+    });
+
+    const update101 = tracker.beginUpdate(updateCtx(101));
+    if (!update101.accepted) {
+      throw new Error("expected update 101 to be accepted");
+    }
+    await flushTrackerMicrotasks();
+    expect(onAcceptedUpdateId).not.toHaveBeenCalled();
+
+    tracker.finishUpdate(update101.update, { completed: false });
+    await flushTrackerMicrotasks();
+    expect(onAcceptedUpdateId).not.toHaveBeenCalled();
+    expect(tracker.getState()).toMatchObject({
+      failedUpdateIds: [101],
+      highestPersistedAcceptedUpdateId: 100,
+    } satisfies Partial<TelegramUpdateTrackerState>);
+
+    const retry = tracker.beginUpdate(updateCtx(101));
+    if (!retry.accepted) {
+      throw new Error("expected update 101 retry to be accepted");
+    }
+    tracker.finishUpdate(retry.update, { completed: true });
+    await flushTrackerMicrotasks();
+
+    expect(onAcceptedUpdateId).toHaveBeenCalledWith(101);
+    expect(tracker.getState()).toMatchObject({
+      failedUpdateIds: [],
+      highestPersistedAcceptedUpdateId: 101,
+      safeCompletedUpdateId: 101,
+    } satisfies Partial<TelegramUpdateTrackerState>);
+  });
+
   it("skips restart replays once the accepted offset is restored", async () => {
     const onAcceptedUpdateId = vi.fn();
     const firstProcess = createTelegramUpdateTracker({

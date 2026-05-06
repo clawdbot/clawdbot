@@ -25,7 +25,7 @@ type EnsureConfiguredBindingRouteReadyFn =
 type GetAgentScopedMediaLocalRootsFn =
   typeof import("./bot-native-commands.runtime.js").getAgentScopedMediaLocalRoots;
 type CreateChannelReplyPipelineFn =
-  typeof import("./bot-native-commands.delivery.runtime.js").createChannelReplyPipeline;
+  typeof import("./bot-native-commands.delivery.runtime.js").createChannelMessageReplyPipeline;
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
 type NativeCommandHarness = {
@@ -57,7 +57,7 @@ const replyPipelineMocks = vi.hoisted(() => {
     dispatchReplyWithBufferedBlockDispatcher: vi.fn(
       (async () => dispatchReplyResult) as DispatchReplyWithBufferedBlockDispatcherFn,
     ),
-    createChannelReplyPipeline: vi.fn((() => ({
+    createChannelMessageReplyPipeline: vi.fn((() => ({
       onModelSelected: () => {},
       responsePrefixContextProvider: () => undefined,
     })) as unknown as CreateChannelReplyPipelineFn),
@@ -84,7 +84,7 @@ vi.mock("./bot-native-commands.runtime.js", () => ({
   getAgentScopedMediaLocalRoots: replyPipelineMocks.getAgentScopedMediaLocalRoots,
 }));
 vi.mock("./bot-native-commands.delivery.runtime.js", () => ({
-  createChannelReplyPipeline: replyPipelineMocks.createChannelReplyPipeline,
+  createChannelMessageReplyPipeline: replyPipelineMocks.createChannelMessageReplyPipeline,
   deliverReplies: deliveryMocks.deliverReplies,
   emitTelegramMessageSentHooks: vi.fn(),
 }));

@@ -1,12 +1,17 @@
 import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { selectAgentHarness } from "../agents/harness/selection.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionStore, resolveSessionTotalTokens } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
@@ -30,10 +35,12 @@ type SessionRow = SessionDisplayRow & {
   agentId: string;
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   agentRuntime: ReturnType<typeof resolveAgentRuntimeMetadata>;
+  runtimeLabel: string;
 };
 
 const AGENT_PAD = 10;
 const KIND_PAD = 6;
+const RUNTIME_PAD = 18;
 const TOKENS_PAD = 20;
 const DEFAULT_SESSIONS_LIMIT = 100;
 const TOP_N_SELECTION_LIMIT = 200;
@@ -162,6 +169,64 @@ const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
   return theme.muted(label);
 };
 
+function resolveSessionRuntimeLabel(params: {
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  agentRuntime: ReturnType<typeof resolveAgentRuntimeMetadata>;
+  modelProvider: string;
+  model: string;
+  agentId: string;
+  sessionKey: string;
+}): string {
+  const explicitRuntime =
+    normalizeOptionalLowercaseString(params.entry.agentRuntimeOverride) ??
+    normalizeOptionalLowercaseString(params.entry.agentHarnessId) ??
+    (params.agentRuntime.source === "implicit"
+      ? undefined
+      : normalizeOptionalLowercaseString(params.agentRuntime.id));
+  if (explicitRuntime && explicitRuntime !== "auto" && explicitRuntime !== "default") {
+    return resolveAgentRuntimeLabel({
+      config: params.cfg,
+      sessionEntry: params.entry,
+      resolvedHarness: explicitRuntime,
+      fallbackProvider: params.modelProvider,
+    });
+  }
+
+  let resolvedHarness: string | undefined;
+  try {
+    const selected = selectAgentHarness({
+      provider: params.modelProvider,
+      modelId: params.model,
+      config: params.cfg,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      agentHarnessId: params.entry.agentHarnessId,
+    });
+    const id = normalizeOptionalLowercaseString(selected.id);
+    resolvedHarness = id && id !== "pi" ? id : undefined;
+  } catch {
+    resolvedHarness = undefined;
+  }
+  return resolveAgentRuntimeLabel({
+    config: params.cfg,
+    sessionEntry: params.entry,
+    resolvedHarness,
+    fallbackProvider: params.modelProvider,
+  });
+}
+
+function formatRuntimeCell(runtimeLabel: string, rich: boolean): string {
+  const label = runtimeLabel.padEnd(RUNTIME_PAD);
+  return rich ? theme.info(label) : label;
+}
+
+function toJsonSessionRow(row: SessionRow): Omit<SessionRow, "runtimeLabel"> {
+  const { runtimeLabel, ...jsonRow } = row;
+  void runtimeLabel;
+  return jsonRow;
+}
+
 export async function sessionsCommand(
   opts: {
     json?: boolean;
@@ -225,10 +290,21 @@ export async function sessionsCommand(
       .map(([key, entry]) => {
         const row = toSessionDisplayRow(key, entry);
         const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
+        const modelRef = resolveSessionDisplayModelRef(cfg, row);
+        const agentRuntime = resolveAgentRuntimeMetadata(cfg, agentId);
         return Object.assign({}, row, {
           agentId,
-          agentRuntime: resolveAgentRuntimeMetadata(cfg, agentId),
+          agentRuntime,
           kind: classifySessionKey(row.key, store[row.key]),
+          runtimeLabel: resolveSessionRuntimeLabel({
+            cfg,
+            entry,
+            agentRuntime,
+            modelProvider: modelRef.provider,
+            model: modelRef.model,
+            agentId,
+            sessionKey: row.key,
+          }),
         });
       });
   });
@@ -254,7 +330,8 @@ export async function sessionsCommand(
       hasMore,
       activeMinutes: activeMinutes ?? null,
       sessions: await Promise.all(
-        rows.map(async (r) => {
+        rows.map(async (row) => {
+          const r = toJsonSessionRow(row);
           const modelRef = resolveSessionDisplayModelRef(cfg, r);
           return {
             ...r,
@@ -306,6 +383,7 @@ export async function sessionsCommand(
     "Key".padEnd(SESSION_KEY_PAD),
     "Age".padEnd(SESSION_AGE_PAD),
     "Model".padEnd(SESSION_MODEL_PAD),
+    "Runtime".padEnd(RUNTIME_PAD),
     "Tokens (ctx %)".padEnd(TOKENS_PAD),
     "Flags",
   ].join(" ");
@@ -329,6 +407,7 @@ export async function sessionsCommand(
       formatSessionKeyCell(row.key, rich),
       formatSessionAgeCell(row.updatedAt, rich),
       formatSessionModelCell(model, rich),
+      formatRuntimeCell(row.runtimeLabel, rich),
       formatTokensCell(total, contextTokens ?? null, rich),
       formatSessionFlagsCell(row, rich),
     ].join(" ");
@@ -336,3 +415,7 @@ export async function sessionsCommand(
     runtime.log(line.trimEnd());
   }
 }
+
+export const __testing = {
+  parseSessionsLimit,
+} as const;

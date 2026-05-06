@@ -1,4 +1,6 @@
+import { deliverInboundReplyWithMessageSendContext } from "openclaw/plugin-sdk/channel-message";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   type DeliverableWhatsAppOutboundPayload,
   normalizeWhatsAppOutboundPayload,
@@ -9,13 +11,13 @@ import type { WebInboundMsg } from "../types.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
 import {
-  createChannelReplyPipeline,
+  createChannelMessageReplyPipeline,
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContext,
   getAgentScopedMediaLocalRoots,
   jidToE164,
   logVerbose,
-  resolveChannelSourceReplyDeliveryMode,
+  resolveChannelMessageSourceReplyDeliveryMode,
   resolveChunkMode,
   resolveIdentityNamePrefix,
   resolveInboundLastRouteSessionKey,
@@ -33,7 +35,7 @@ import {
 
 type ReplyLifecycleKind = "tool" | "block" | "final";
 type ChannelReplyOnModelSelected = NonNullable<
-  ReturnType<typeof createChannelReplyPipeline>["onModelSelected"]
+  ReturnType<typeof createChannelMessageReplyPipeline>["onModelSelected"]
 >;
 
 type WhatsAppDispatchPipeline = {
@@ -318,7 +320,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
     typeof params.context.ChatType === "string" ? params.context.ChatType : params.msg.chatType;
   const sourceReplyDeliveryMode =
     sourceReplyChatType === "group" || sourceReplyChatType === "channel"
-      ? resolveChannelSourceReplyDeliveryMode({
+      ? resolveChannelMessageSourceReplyDeliveryMode({
           cfg: params.cfg,
           ctx: {
             ChatType: sourceReplyChatType,
@@ -360,6 +362,39 @@ export async function dispatchWhatsAppBufferedReply(params: {
         const reply = resolveSendableOutboundReplyParts(normalizedDeliveryPayload);
         if (!reply.hasMedia && !reply.text.trim()) {
           return;
+        }
+        if (!reply.hasMedia) {
+          const durable = await deliverInboundReplyWithMessageSendContext({
+            cfg: params.cfg,
+            channel: "whatsapp",
+            accountId: params.route.accountId,
+            agentId: params.route.agentId,
+            ctxPayload: params.context as FinalizedMsgContext,
+            payload: normalizedDeliveryPayload,
+            info,
+            to: params.msg.from,
+            formatting: {
+              textLimit,
+              tableMode,
+              chunkMode,
+            },
+          });
+          if (durable.status === "failed") {
+            throw durable.error;
+          }
+          if (durable.status === "handled_visible") {
+            didSendReply = true;
+            const shouldLog = normalizedDeliveryPayload.text ? true : undefined;
+            params.rememberSentText(normalizedDeliveryPayload.text, {
+              combinedBody: params.context.Body as string | undefined,
+              combinedBodySessionKey: params.route.sessionKey,
+              logVerboseMessage: shouldLog,
+            });
+            return;
+          }
+          if (durable.status === "handled_no_send") {
+            return;
+          }
         }
         const delivery = await params.deliverReply({
           replyResult: normalizedDeliveryPayload,

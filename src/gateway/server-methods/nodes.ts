@@ -66,6 +66,7 @@ import {
   respondUnavailableOnThrow,
   safeParseJson,
 } from "./nodes.helpers.js";
+import type { GatewayRequestContext } from "./shared-types.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export {
@@ -78,6 +79,13 @@ const NODE_WAKE_THROTTLE_MS = 15_000;
 const NODE_WAKE_NUDGE_THROTTLE_MS = 10 * 60_000;
 const NODE_PENDING_ACTION_TTL_MS = 10 * 60_000;
 const NODE_PENDING_ACTION_MAX_PER_NODE = 64;
+const TALK_PTT_COMMANDS = new Set([
+  "talk.ptt.start",
+  "talk.ptt.stop",
+  "talk.ptt.cancel",
+  "talk.ptt.once",
+]);
+const talkPttEventSeqBySessionId = new Map<string, number>();
 
 type NodeWakeNudgeAttempt = {
   sent: boolean;
@@ -259,6 +267,8 @@ function resolveAllowedPendingNodeActions(params: {
   const allowlist = resolveNodeCommandAllowlist(params.cfg, {
     platform: connect?.client?.platform,
     deviceFamily: connect?.client?.deviceFamily,
+    caps: connect?.caps,
+    commands: declaredCommands,
   });
   const allowed = pending.filter((entry) => {
     const result = isNodeCommandAllowed({
@@ -302,6 +312,69 @@ function toPendingParamsJSON(params: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function emitTalkPttNodeEvent(params: {
+  context: Pick<GatewayRequestContext, "broadcast">;
+  nodeId: string;
+  command: string;
+  payload: unknown;
+}): void {
+  if (!TALK_PTT_COMMANDS.has(params.command)) {
+    return;
+  }
+  const payloadObj =
+    typeof params.payload === "object" && params.payload !== null
+      ? (params.payload as Record<string, unknown>)
+      : {};
+  const captureId = normalizeOptionalString(payloadObj.captureId) ?? randomUUID();
+  const sessionId = `node:${params.nodeId}:talk:${captureId}`;
+  const seq = (talkPttEventSeqBySessionId.get(sessionId) ?? 0) + 1;
+  talkPttEventSeqBySessionId.set(sessionId, seq);
+  while (talkPttEventSeqBySessionId.size > 2048) {
+    const oldest = talkPttEventSeqBySessionId.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    talkPttEventSeqBySessionId.delete(oldest);
+  }
+
+  const type =
+    params.command === "talk.ptt.start"
+      ? "capture.started"
+      : params.command === "talk.ptt.cancel"
+        ? "capture.cancelled"
+        : params.command === "talk.ptt.once"
+          ? "capture.once"
+          : "capture.stopped";
+  const final = params.command !== "talk.ptt.start";
+  const talkEvent = {
+    id: `${sessionId}:${seq}`,
+    type,
+    sessionId,
+    captureId,
+    seq,
+    timestamp: new Date().toISOString(),
+    mode: "stt-tts",
+    transport: "managed-room",
+    brain: "agent-consult",
+    final,
+    payload: {
+      nodeId: params.nodeId,
+      command: params.command,
+      status: normalizeOptionalString(payloadObj.status) ?? undefined,
+      transcript: normalizeOptionalString(payloadObj.transcript) ?? undefined,
+    },
+  };
+  params.context.broadcast(
+    "talk.event",
+    {
+      nodeId: params.nodeId,
+      command: params.command,
+      talkEvent,
+    },
+    { dropIfSlow: true },
+  );
 }
 
 export async function maybeWakeNodeWithApns(
@@ -1078,6 +1151,15 @@ export const nodeHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        const payload = policyResult.payloadJSON
+          ? safeParseJson(policyResult.payloadJSON)
+          : policyResult.payload;
+        emitTalkPttNodeEvent({
+          context,
+          nodeId,
+          command,
+          payload,
+        });
         respond(
           true,
           {
@@ -1151,6 +1233,12 @@ export const nodeHandlers: GatewayRequestHandlers = {
         return;
       }
       const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
+      emitTalkPttNodeEvent({
+        context,
+        nodeId,
+        command,
+        payload,
+      });
       respond(
         true,
         {
@@ -1228,6 +1316,9 @@ function buildNodeCommandRejectionHint(
     return `node command not allowed: the node (platform: ${platform}) does not support "${command}"`;
   }
   if (reason === "command not allowlisted") {
+    if (command.startsWith("talk.")) {
+      return `node command not allowed: "${command}" requires a trusted Talk-capable node`;
+    }
     return `node command not allowed: "${command}" is not in the allowlist for platform "${platform}"`;
   }
   if (reason === "node did not declare commands") {

@@ -253,6 +253,84 @@ describe("collectMissingPluginInstallPayloads", () => {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("keeps disabled trusted official npm records eligible for payload repair when requested", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
+    const missingDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "codex");
+    try {
+      await expect(
+        collectMissingPluginInstallPayloads({
+          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
+          skipDisabledPlugins: true,
+          syncOfficialPluginInstalls: true,
+          config: {
+            plugins: {
+              entries: {
+                codex: {
+                  enabled: false,
+                },
+              },
+            },
+          },
+          records: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex@2026.5.3",
+              resolvedName: "@openclaw/codex",
+              resolvedSpec: "@openclaw/codex@2026.5.3",
+              installPath: missingDir,
+            },
+          },
+        }),
+      ).resolves.toEqual([
+        {
+          pluginId: "codex",
+          installPath: missingDir,
+          reason: "missing-package-dir",
+        },
+      ]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps disabled trusted official ClawHub records eligible for payload repair when requested", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
+    const missingDir = path.join(tmpDir, "state", "clawhub", "diagnostics-otel");
+    try {
+      await expect(
+        collectMissingPluginInstallPayloads({
+          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
+          skipDisabledPlugins: true,
+          syncOfficialPluginInstalls: true,
+          config: {
+            plugins: {
+              entries: {
+                "diagnostics-otel": {
+                  enabled: false,
+                },
+              },
+            },
+          },
+          records: {
+            "diagnostics-otel": {
+              source: "clawhub",
+              spec: "clawhub:@openclaw/diagnostics-otel@2026.5.3",
+              installPath: missingDir,
+            },
+          },
+        }),
+      ).resolves.toEqual([
+        {
+          pluginId: "diagnostics-otel",
+          installPath: missingDir,
+          reason: "missing-package-dir",
+        },
+      ]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("shouldUseLegacyProcessRestartAfterUpdate", () => {

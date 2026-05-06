@@ -1,0 +1,23 @@
+{
+  "version": "2.0.0",
+  "options": {
+    "env": {
+      "OUTPUT_SOURCE_MAPS": "1"
+    }
+  },
+  "tasks": [
+    {
+      "label": "debug:rebuild",
+      "type": "shell",
+      "command": "pnpm clean:dist && pnpm build",
+      "group": "none",
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    }
+  ]
+}

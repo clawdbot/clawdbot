@@ -13,7 +13,7 @@ import {
   unwrapKnownDispatchWrapperInvocation,
   unwrapKnownShellMultiplexerInvocation,
 } from "../infra/exec-wrapper-resolution.js";
-import { sameFileIdentity } from "../infra/file-identity.js";
+import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import {
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,

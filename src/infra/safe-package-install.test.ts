@@ -7,6 +7,7 @@ describe("safe npm install helpers", () => {
       createSafeNpmInstallArgs({
         omitDev: true,
         ignoreWorkspaces: true,
+        legacyPeerDeps: true,
         loglevel: "error",
         noAudit: true,
         noFund: true,
@@ -15,6 +16,7 @@ describe("safe npm install helpers", () => {
       "install",
       "--omit=dev",
       "--loglevel=error",
+      "--legacy-peer-deps",
       "--ignore-scripts",
       "--workspaces=false",
       "--no-audit",
@@ -28,6 +30,8 @@ describe("safe npm install helpers", () => {
         {
           PATH: "/usr/bin:/bin",
           NPM_CONFIG_IGNORE_SCRIPTS: "false",
+          NPM_CONFIG_LEGACY_PEER_DEPS: "false",
+          NPM_CONFIG_STRICT_PEER_DEPS: "true",
           npm_config_global: "true",
           npm_config_include_workspace_root: "true",
           npm_config_ignore_scripts: "false",
@@ -64,8 +68,23 @@ describe("safe npm install helpers", () => {
       npm_config_package_lock: "false",
       npm_config_progress: "false",
       npm_config_save: "false",
+      npm_config_strict_peer_deps: "false",
       npm_config_workspaces: "false",
       npm_config_yes: "true",
+    });
+  });
+
+  it("does not inherit host legacy peer dependency mode by default", () => {
+    expect(
+      createSafeNpmInstallEnv({
+        PATH: "/usr/bin:/bin",
+        npm_config_legacy_peer_deps: "true",
+        npm_config_strict_peer_deps: "true",
+      }),
+    ).toMatchObject({
+      PATH: "/usr/bin:/bin",
+      npm_config_legacy_peer_deps: "false",
+      npm_config_strict_peer_deps: "false",
     });
   });
 

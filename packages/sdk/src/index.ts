@@ -27,6 +27,8 @@ export type {
   ArtifactsListResult,
   ConnectableOpenClawTransport,
   EnvironmentSelection,
+  EnvironmentSummary,
+  EnvironmentsListResult,
   GatewayEvent,
   GatewayRequestOptions,
   JsonObject,

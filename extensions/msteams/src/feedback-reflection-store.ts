@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import path from "node:path";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 
 /** Default cooldown between reflections per session (5 minutes). */
 export const DEFAULT_COOLDOWN_MS = 300_000;
@@ -93,8 +93,7 @@ export async function storeSessionLearning(params: {
     learnings = learnings.slice(-10);
   }
 
-  await fs.mkdir(path.dirname(learningsFile), { recursive: true });
-  await fs.writeFile(learningsFile, JSON.stringify(learnings, null, 2), "utf-8");
+  await writeJsonFileAtomically(learningsFile, learnings);
   if (!exists && legacyLearningsFile !== learningsFile) {
     await fs.rm(legacyLearningsFile, { force: true }).catch(() => undefined);
   }

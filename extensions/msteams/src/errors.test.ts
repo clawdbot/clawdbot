@@ -70,6 +70,36 @@ describe("msteams errors", () => {
     ).toContain("expired the content stream");
   });
 
+  it("classifies transport-level network errors and provides smba egress hint (#77674)", () => {
+    const econnrefused = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    const enotfound = Object.assign(new Error("getaddrinfo ENOTFOUND smba.trafficmanager.net"), {
+      code: "ENOTFOUND",
+    });
+    const etimedout = Object.assign(new Error("ETIMEDOUT"), { code: "ETIMEDOUT" });
+
+    expect(classifyMSTeamsSendError(econnrefused)).toMatchObject({
+      kind: "network",
+      errorCode: "ECONNREFUSED",
+    });
+    expect(classifyMSTeamsSendError(enotfound)).toMatchObject({
+      kind: "network",
+      errorCode: "ENOTFOUND",
+    });
+    expect(classifyMSTeamsSendError(etimedout)).toMatchObject({
+      kind: "network",
+      errorCode: "ETIMEDOUT",
+    });
+
+    // Hints for network errors must mention smba (Connector endpoint) and egress
+    expect(formatMSTeamsSendErrorHint({ kind: "network" })).toContain("smba");
+    expect(formatMSTeamsSendErrorHint({ kind: "network" })).toContain("egress");
+  });
+
+  it("still classifies HTTP errors as unknown when no status code and no network code", () => {
+    expect(classifyMSTeamsSendError(new Error("unexpected error")).kind).toBe("unknown");
+    expect(classifyMSTeamsSendError(null)).toMatchObject({ kind: "unknown" });
+  });
+
   describe("isRevokedProxyError", () => {
     it("returns true for revoked proxy TypeError", () => {
       expect(

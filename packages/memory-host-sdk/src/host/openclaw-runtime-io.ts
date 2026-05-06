@@ -4,6 +4,7 @@ export {
   DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS,
   applyWindowsSpawnProgramPolicy,
   configureSqliteWalMaintenance,
+  root,
   createSubsystemLogger,
   detectMime,
   estimateStringChars,
@@ -21,7 +22,6 @@ export {
   shouldIgnoreWarning,
   splitShellArgs,
   truncateUtf16Safe,
-  writeFileWithinRoot,
 } from "./openclaw-runtime.js";
 
 export type {

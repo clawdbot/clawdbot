@@ -7,12 +7,19 @@ read_when:
 title: "Inferrs"
 ---
 
-[inferrs](https://github.com/ericcurtin/inferrs) can serve local models behind an
-OpenAI-compatible `/v1` API. OpenClaw works with `inferrs` through the generic
-`openai-completions` path.
+[inferrs](https://github.com/ericcurtin/inferrs) can serve local models behind an OpenAI-compatible `/v1` API. OpenClaw works with `inferrs` through the generic `openai-completions` path.
 
-`inferrs` is currently best treated as a custom self-hosted OpenAI-compatible
-backend, not a dedicated OpenClaw provider plugin.
+| Property           | Value                                                              |
+| ------------------ | ------------------------------------------------------------------ |
+| Provider id        | `inferrs` (custom; configure under `models.providers.inferrs`)     |
+| Plugin             | none — `inferrs` is not a bundled OpenClaw provider plugin         |
+| Auth env var       | Optional. Any value works if your inferrs server has no auth       |
+| API                | OpenAI-compatible (`openai-completions`)                           |
+| Suggested base URL | `http://127.0.0.1:8080/v1` (or wherever your inferrs server lives) |
+
+<Note>
+  `inferrs` is currently best treated as a custom self-hosted OpenAI-compatible backend, not a dedicated OpenClaw provider plugin. You configure it through `models.providers.inferrs` rather than an onboarding choice flag. If you need a true bundled plugin with auto-discovery, see [SGLang](/providers/sglang) or [vLLM](/providers/vllm).
+</Note>
 
 ## Getting started
 

@@ -27,6 +27,11 @@ const hoisted = await vi.hoisted(async () => {
         await actualAccess(file);
       },
     ),
+    statMock: vi.fn(
+      async (file: fs.PathLike, actualStat: (path: fs.PathLike) => Promise<unknown>) => {
+        return await actualStat(file);
+      },
+    ),
   };
 });
 
@@ -59,6 +64,7 @@ vi.mock("node:fs/promises", async () => {
   const mockedFs = {
     ...actual,
     access: (file: fs.PathLike) => hoisted.accessMock(file, actual.access),
+    stat: (file: fs.PathLike) => hoisted.statMock(file, actual.stat),
   };
   return {
     ...mockedFs,
@@ -67,6 +73,7 @@ vi.mock("node:fs/promises", async () => {
 });
 
 const tempDirs: string[] = [];
+const mockedSessionFile = "/tmp/target-store/session.jsonl";
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-export-command-"));
@@ -173,9 +180,20 @@ describe("buildExportTrajectoryReply", () => {
         await actualAccess(file);
       },
     );
+    hoisted.statMock.mockImplementation(
+      async (file: fs.PathLike, actualStat: (path: fs.PathLike) => Promise<unknown>) => {
+        if (file.toString() === "/tmp/target-store/session.jsonl") {
+          return {};
+        }
+        return await actualStat(file);
+      },
+    );
+    fs.mkdirSync(path.dirname(mockedSessionFile), { recursive: true });
+    fs.writeFileSync(mockedSessionFile, "{}\n");
   });
 
   afterEach(() => {
+    fs.rmSync(mockedSessionFile, { force: true });
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -238,12 +256,21 @@ describe("buildExportTrajectoryReply", () => {
 
   it("does not echo absolute session paths when the transcript is missing", async () => {
     const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
+    fs.rmSync(mockedSessionFile, { force: true });
     hoisted.accessMock.mockImplementation(
       async (file: fs.PathLike, actualAccess: (path: fs.PathLike) => Promise<void>) => {
         if (file.toString() === "/tmp/target-store/session.jsonl") {
           throw Object.assign(new Error("missing"), { code: "ENOENT" });
         }
         await actualAccess(file);
+      },
+    );
+    hoisted.statMock.mockImplementation(
+      async (file: fs.PathLike, actualStat: (path: fs.PathLike) => Promise<unknown>) => {
+        if (file.toString() === "/tmp/target-store/session.jsonl") {
+          throw Object.assign(new Error("missing"), { code: "ENOENT" });
+        }
+        return await actualStat(file);
       },
     );
 

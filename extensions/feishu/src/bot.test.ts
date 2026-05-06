@@ -2514,6 +2514,75 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("hydrates missing native topic thread_id before routing starter events", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "msg-native-topic-first",
+      chatId: "oc-group",
+      chatType: "topic_group",
+      content: "topic starter",
+      contentType: "text",
+      threadId: "omt_native_topic",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic",
+              replyInThread: "enabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const firstTurn: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-init" } },
+      message: {
+        message_id: "msg-native-topic-first",
+        chat_id: "oc-group",
+        chat_type: "topic_group",
+        message_type: "text",
+        content: JSON.stringify({ text: "create native topic" }),
+      },
+    };
+    const secondTurn: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-init" } },
+      message: {
+        message_id: "msg-native-topic-second",
+        chat_id: "oc-group",
+        chat_type: "topic_group",
+        thread_id: "omt_native_topic",
+        message_type: "text",
+        content: JSON.stringify({ text: "follow up in same native topic" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event: firstTurn });
+    await dispatchMessage({ cfg, event: secondTurn });
+
+    expect(mockGetMessageFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "msg-native-topic-first",
+      }),
+    );
+    expect(mockResolveAgentRoute).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:omt_native_topic" },
+      }),
+    );
+    expect(mockResolveAgentRoute).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:omt_native_topic" },
+      }),
+    );
+  });
+
   it("replies to the topic root when handling a message inside an existing topic", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 

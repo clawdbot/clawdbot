@@ -4,8 +4,11 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  deliverInboundReplyWithMessageSendContext,
+  createChannelMessageReplyPipeline,
+} from "openclaw/plugin-sdk/channel-message";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
@@ -41,7 +44,7 @@ import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
-import { deliverReplies } from "./deliver.js";
+import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   buildIMessageInboundContext,
@@ -402,7 +405,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       );
     }
 
-    const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+    const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
       cfg,
       agentId: decision.route.agentId,
       channel: "imessage",
@@ -412,10 +415,33 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const dispatcher = createReplyDispatcher({
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
-      deliver: async (payload) => {
+      deliver: async (payload, info) => {
         const target = ctxPayload.To;
         if (!target) {
           runtime.error?.(danger("imessage: missing delivery target"));
+          return;
+        }
+        const durable = await deliverInboundReplyWithMessageSendContext({
+          cfg,
+          channel: "imessage",
+          accountId: accountInfo.accountId,
+          agentId: decision.route.agentId,
+          ctxPayload,
+          payload,
+          info,
+          to: target,
+          deps: {
+            imessage: createIMessageEchoCachingSend({
+              client: getActiveClient(),
+              accountId: accountInfo.accountId,
+              sentMessageCache,
+            }),
+          },
+        });
+        if (durable.status === "failed") {
+          throw durable.error;
+        }
+        if (durable.status === "handled_visible" || durable.status === "handled_no_send") {
           return;
         }
         await deliverReplies({

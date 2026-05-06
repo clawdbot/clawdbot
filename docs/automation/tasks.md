@@ -14,7 +14,7 @@ Looking for scheduling? See [Automation and tasks](/automation) for choosing the
 
 Background tasks track work that runs **outside your main conversation session**: ACP runs, subagent spawns, isolated cron job executions, and CLI-initiated operations.
 
-Tasks do **not** replace sessions, cron jobs, or heartbeats — they are the **activity ledger** that records what detached work happened, when, and whether it succeeded.
+Tasks do **not** replace sessions, cron jobs, or heartbeats - they are the **activity ledger** that records what detached work happened, when, and whether it succeeded.
 
 <Note>
 Not every agent run creates a task. Heartbeat turns and normal interactive chat do not. All cron executions, ACP spawns, subagent spawns, and CLI agent commands do.
@@ -22,7 +22,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 
 ## TL;DR
 
-- Tasks are **records**, not schedulers — cron and heartbeat decide _when_ work runs, tasks track _what happened_.
+- Tasks are **records**, not schedulers - cron and heartbeat decide _when_ work runs, tasks track _what happened_.
 - ACP, subagents, all cron jobs, and CLI operations create tasks. Heartbeat turns do not.
 - Each task moves through `queued → running → terminal` (succeeded, failed, timed_out, cancelled, or lost).
 - Cron tasks stay live while the cron runtime still owns the job; if the
@@ -100,7 +100,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 
 <AccordionGroup>
   <Accordion title="Notify defaults for cron and media">
-    Main-session cron tasks use `silent` notify policy by default — they create records for tracking but do not generate notifications. Isolated cron tasks also default to `silent` but are more visible because they run in their own session.
+    Main-session cron tasks use `silent` notify policy by default - they create records for tracking but do not generate notifications. Isolated cron tasks also default to `silent` but are more visible because they run in their own session.
 
     Session-backed `music_generate` and `video_generate` runs also use `silent` notify policy. They still create task records, but completion is handed back to the original agent session as an internal wake so the agent can write the follow-up message and attach the finished media itself. Group/channel completions follow the normal visible-reply policy, so the agent uses the message tool when source delivery requires it. If the completion agent fails to produce message-tool delivery evidence in a tool-only route, OpenClaw sends the completion fallback directly to the original channel instead of leaving the media private.
 
@@ -109,7 +109,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
     While a session-backed `video_generate` task is still active, the tool also acts as a guardrail: repeated `video_generate` calls in that same session return the active task status instead of starting a second concurrent generation. Use `action: "status"` when you want an explicit progress/status lookup from the agent side.
   </Accordion>
   <Accordion title="What does not create tasks">
-    - Heartbeat turns — main-session; see [Heartbeat](/gateway/heartbeat)
+    - Heartbeat turns - main-session; see [Heartbeat](/gateway/heartbeat)
     - Normal interactive chat turns
     - Direct `/command` responses
 
@@ -140,7 +140,7 @@ stateDiagram-v2
 | `cancelled` | Stopped by the operator via `openclaw tasks cancel`                        |
 | `lost`      | The runtime lost authoritative backing state after a 5-minute grace period |
 
-Transitions happen automatically — when the associated agent run ends, the task status updates to match.
+Transitions happen automatically - when the associated agent run ends, the task status updates to match.
 
 Agent run completion is authoritative for active task records. A successful detached run finalizes as `succeeded`, ordinary run errors finalize as `failed`, and timeout or abort outcomes finalize as `timed_out`. If an operator already cancelled the task, or the runtime already recorded a stronger terminal state such as `failed`, `timed_out`, or `lost`, a later success signal does not downgrade that terminal status.
 
@@ -161,12 +161,12 @@ Agent run completion is authoritative for active task records. A successful deta
 
 When a task reaches a terminal state, OpenClaw notifies you. There are two delivery paths:
 
-**Direct delivery** — if the task has a channel target (the `requesterOrigin`), the completion message goes straight to that channel (Telegram, Discord, Slack, etc.). For subagent completions, OpenClaw also preserves bound thread/topic routing when available and can fill a missing `to` / account from the requester session's stored route (`lastChannel` / `lastTo` / `lastAccountId`) before giving up on direct delivery.
+**Direct delivery** - if the task has a channel target (the `requesterOrigin`), the completion message goes straight to that channel (Telegram, Discord, Slack, etc.). For subagent completions, OpenClaw also preserves bound thread/topic routing when available and can fill a missing `to` / account from the requester session's stored route (`lastChannel` / `lastTo` / `lastAccountId`) before giving up on direct delivery.
 
-**Session-queued delivery** — if direct delivery fails or no origin is set, the update is queued as a system event in the requester's session and surfaces on the next heartbeat.
+**Session-queued delivery** - if direct delivery fails or no origin is set, the update is queued as a system event in the requester's session and surfaces on the next heartbeat.
 
 <Tip>
-Task completion triggers an immediate heartbeat wake so you see the result quickly — you do not have to wait for the next scheduled heartbeat tick.
+Task completion triggers an immediate heartbeat wake so you see the result quickly - you do not have to wait for the next scheduled heartbeat tick.
 </Tip>
 
 That means the usual workflow is push-based: start detached work once, then let the runtime wake or notify you on completion. Poll task state only when you need debugging, intervention, or an explicit audit.
@@ -177,7 +177,7 @@ Control how much you hear about each task:
 
 | Policy                | What is delivered                                                       |
 | --------------------- | ----------------------------------------------------------------------- |
-| `done_only` (default) | Only terminal state (succeeded, failed, etc.) — **this is the default** |
+| `done_only` (default) | Only terminal state (succeeded, failed, etc.) - **this is the default** |
 | `state_changes`       | Every state transition and progress update                              |
 | `silent`              | Nothing at all                                                          |
 
@@ -290,9 +290,9 @@ Tasks: 3 queued · 2 running · 1 issues
 
 The summary reports:
 
-- **active** — count of `queued` + `running`
-- **failures** — count of `failed` + `timed_out` + `lost`
-- **byRuntime** — breakdown by `acp`, `subagent`, `cron`, `cli`
+- **active** - count of `queued` + `running`
+- **failures** - count of `failed` + `timed_out` + `lost`
+- **byRuntime** - breakdown by `acp`, `subagent`, `cron`, `cli`
 
 Both `/status` and the `session_status` tool use a cleanup-aware task snapshot: active tasks are preferred, stale completed rows are hidden, and recent failures only surface when no active work remains. This keeps the status card focused on what matters right now.
 
@@ -343,13 +343,13 @@ A sweeper runs every **60 seconds** and handles four things:
 
   </Accordion>
   <Accordion title="Tasks and cron">
-    A cron job **definition** lives in `~/.openclaw/cron/jobs.json`; runtime execution state lives beside it in `~/.openclaw/cron/jobs-state.json`. **Every** cron execution creates a task record — both main-session and isolated. Main-session cron tasks default to `silent` notify policy so they track without generating notifications.
+    A cron job **definition** lives in `~/.openclaw/cron/jobs.json`; runtime execution state lives beside it in `~/.openclaw/cron/jobs-state.json`. **Every** cron execution creates a task record - both main-session and isolated. Main-session cron tasks default to `silent` notify policy so they track without generating notifications.
 
     See [Cron Jobs](/automation/cron-jobs).
 
   </Accordion>
   <Accordion title="Tasks and heartbeat">
-    Heartbeat runs are main-session turns — they do not create task records. When a task completes, it can trigger a heartbeat wake so you see the result promptly.
+    Heartbeat runs are main-session turns - they do not create task records. When a task completes, it can trigger a heartbeat wake so you see the result promptly.
 
     See [Heartbeat](/gateway/heartbeat).
 
@@ -358,14 +358,14 @@ A sweeper runs every **60 seconds** and handles four things:
     A task may reference a `childSessionKey` (where work runs) and a `requesterSessionKey` (who started it). Sessions are conversation context; tasks are activity tracking on top of that.
   </Accordion>
   <Accordion title="Tasks and agent runs">
-    A task's `runId` links to the agent run doing the work. Agent lifecycle events (start, end, error) automatically update the task status — you do not need to manage the lifecycle manually.
+    A task's `runId` links to the agent run doing the work. Agent lifecycle events (start, end, error) automatically update the task status - you do not need to manage the lifecycle manually.
   </Accordion>
 </AccordionGroup>
 
 ## Related
 
-- [Automation & Tasks](/automation) — all automation mechanisms at a glance
-- [CLI: Tasks](/cli/tasks) — CLI command reference
-- [Heartbeat](/gateway/heartbeat) — periodic main-session turns
-- [Scheduled Tasks](/automation/cron-jobs) — scheduling background work
-- [Task Flow](/automation/taskflow) — flow orchestration above tasks
+- [Automation & Tasks](/automation) - all automation mechanisms at a glance
+- [CLI: Tasks](/cli/tasks) - CLI command reference
+- [Heartbeat](/gateway/heartbeat) - periodic main-session turns
+- [Scheduled Tasks](/automation/cron-jobs) - scheduling background work
+- [Task Flow](/automation/taskflow) - flow orchestration above tasks

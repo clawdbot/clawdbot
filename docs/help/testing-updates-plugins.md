@@ -172,7 +172,7 @@ targets the shipped npm package instead.
 Release checks call Package Acceptance with the package/update/restart/plugin set:
 
 ```text
-doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update
+doctor-switch update-channel-switch update-corrupt-plugin upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update
 ```
 
 When release soak is enabled, they also pass:
@@ -183,10 +183,10 @@ published_upgrade_survivor_scenarios=reported-issues
 telegram_mode=mock-openai
 ```
 
-This keeps package migration, update channel switching, stale plugin dependency
-cleanup, offline plugin coverage, plugin update behavior, and Telegram package
-QA on the same resolved artifact without making the default release package gate
-walk every published release.
+This keeps package migration, update channel switching, corrupt managed-plugin
+tolerance, stale plugin dependency cleanup, offline plugin coverage, plugin
+update behavior, and Telegram package QA on the same resolved artifact without
+making the default release package gate walk every published release.
 
 `last-stable-4` resolves to the four latest stable npm-published OpenClaw
 releases. Release package acceptance pins `2026.4.23` as the first plugin-update

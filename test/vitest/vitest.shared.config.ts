@@ -147,6 +147,10 @@ export const sharedVitestConfig = {
         find: "@openclaw/slack/api.js",
         replacement: path.join(repoRoot, "extensions", "slack", "api.ts"),
       },
+      {
+        find: "@openclaw/whatsapp/api.js",
+        replacement: path.join(repoRoot, "extensions", "whatsapp", "api.ts"),
+      },
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),

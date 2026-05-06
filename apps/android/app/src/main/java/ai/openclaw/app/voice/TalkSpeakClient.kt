@@ -28,12 +28,19 @@ internal sealed interface TalkSpeakResult {
   ) : TalkSpeakResult
 }
 
+internal interface TalkSpeechSynthesizing {
+  suspend fun synthesize(
+    text: String,
+    directive: TalkDirective?,
+  ): TalkSpeakResult
+}
+
 internal class TalkSpeakClient(
   private val session: GatewaySession? = null,
   private val json: Json = Json { ignoreUnknownKeys = true },
   private val requestDetailed: (suspend (String, String, Long) -> GatewaySession.RpcResult)? = null,
-) {
-  suspend fun synthesize(
+) : TalkSpeechSynthesizing {
+  override suspend fun synthesize(
     text: String,
     directive: TalkDirective?,
   ): TalkSpeakResult {

@@ -663,6 +663,7 @@ describe("createChatSession", () => {
       {
         agentId: "ops",
         parentSessionKey: "agent:ops:main",
+        emitCommandHooks: true,
       },
       {
         activeMinutes: 0,

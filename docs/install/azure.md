@@ -7,8 +7,6 @@ read_when:
 title: "Azure"
 ---
 
-# OpenClaw on Azure Linux VM
-
 This guide sets up an Azure Linux VM with the Azure CLI, applies Network Security Group (NSG) hardening, configures Azure Bastion for SSH access, and installs OpenClaw.
 
 ## What you will do

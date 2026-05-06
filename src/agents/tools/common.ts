@@ -1,10 +1,10 @@
-import fs from "node:fs/promises";
 import type {
   AgentTool,
   AgentToolResult,
   AgentToolUpdateCallback,
 } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "typebox";
+import { readLocalFileSafely } from "../../infra/fs-safe.js";
 import { detectMime } from "../../media/mime.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
@@ -345,7 +345,7 @@ export async function imageResultFromFile(params: {
   details?: Record<string, unknown>;
   imageSanitization?: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
-  const buf = await fs.readFile(params.path);
+  const buf = (await readLocalFileSafely({ filePath: params.path })).buffer;
   const mimeType = (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
   return await imageResult({
     label: params.label,

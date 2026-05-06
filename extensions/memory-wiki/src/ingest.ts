@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
@@ -15,13 +16,6 @@ type IngestMemoryWikiSourceResult = {
   created: boolean;
   indexUpdatedFiles: string[];
 };
-
-function pathExists(filePath: string): Promise<boolean> {
-  return fs
-    .access(filePath)
-    .then(() => true)
-    .catch(() => false);
-}
 
 function resolveSourceTitle(sourcePath: string, explicitTitle?: string): string {
   if (explicitTitle?.trim()) {

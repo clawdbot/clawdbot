@@ -38,6 +38,7 @@ For copy-paste install, list, uninstall, update, and publishing examples, see
 
     # From npm
     openclaw plugins install npm:@acme/openclaw-plugin
+    openclaw plugins install npm-pack:./openclaw-plugin-1.2.3.tgz
 
     # From git
     openclaw plugins install git:github.com/acme/openclaw-plugin@v1.0.0
@@ -92,8 +93,8 @@ If you prefer chat-native control, enable `commands.plugins: true` and use:
 ```
 
 The install path uses the same resolver as the CLI: local path/archive, explicit
-`clawhub:<pkg>`, explicit `npm:<pkg>`, explicit `git:<repo>`, or bare package
-spec through npm.
+`clawhub:<pkg>`, explicit `npm:<pkg>`, explicit `npm-pack:<path.tgz>`,
+explicit `git:<repo>`, or bare package spec through npm.
 
 If config is invalid, install normally fails closed and points you at
 `openclaw doctor --fix`. The only recovery exception is a narrow bundled-plugin
@@ -126,6 +127,34 @@ Use `openclaw plugins list --json` to see the static `dependencyStatus` for each
 visible plugin without importing runtime code or repairing dependencies.
 See [Plugin dependency resolution](/plugins/dependency-resolution) for the
 install-time lifecycle.
+
+### Blocked plugin path ownership
+
+If plugin diagnostics say
+`blocked plugin candidate: suspicious ownership (... uid=1000, expected uid=0 or root)`
+and config validation follows with `plugin present but blocked`, OpenClaw found
+plugin files owned by a different Unix user than the process that is loading
+them. Keep the plugin config in place; fix the filesystem ownership or run
+OpenClaw as the same user that owns the state directory.
+
+For Docker installs, the official image runs as `node` (uid `1000`), so the
+host bind-mounted OpenClaw config and workspace directories should normally be
+owned by uid `1000`:
+
+```bash
+sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
+```
+
+If you intentionally run OpenClaw as root, repair the managed plugin root to
+root ownership instead:
+
+```bash
+sudo chown -R root:root /path/to/openclaw-config/npm
+```
+
+After fixing ownership, rerun `openclaw doctor --fix` or
+`openclaw plugins registry --refresh` so the persisted plugin registry matches
+the repaired files.
 
 For npm installs, mutable selectors such as `latest` or a dist-tag are resolved
 before installation and then pinned to the exact verified version in OpenClaw's
@@ -163,6 +192,12 @@ peer such as `src/index.ts` to `dist/index.js`.
 Packaged installs must ship that JavaScript runtime output. The TypeScript
 source fallback is for source checkouts and local development paths, not for
 npm packages installed into OpenClaw's managed plugin root.
+
+If a managed package warning says it `requires compiled runtime output for
+TypeScript entry ...`, the package was published without the JavaScript files
+OpenClaw needs at runtime. That is a plugin packaging issue, not a local config
+problem. Update or reinstall the plugin after the publisher republishes compiled
+JavaScript, or disable/uninstall that plugin until a fixed package is available.
 
 Use `openclaw.runtimeExtensions` when published runtime files do not live at the
 same paths as the source entries. When present, `runtimeExtensions` must contain
@@ -223,8 +258,8 @@ current OpenClaw or a local checkout until a newer npm package is published.
   </Accordion>
 
   <Accordion title="Memory plugins">
-    - `memory-core` — bundled memory search (default via `plugins.slots.memory`)
-    - `memory-lancedb` — LanceDB-backed long-term memory with auto-recall/capture (set `plugins.slots.memory = "memory-lancedb"`)
+    - `memory-core` - bundled memory search (default via `plugins.slots.memory`)
+    - `memory-lancedb` - LanceDB-backed long-term memory with auto-recall/capture (set `plugins.slots.memory = "memory-lancedb"`)
 
     See [Memory LanceDB](/plugins/memory-lancedb) for OpenAI-compatible
     embedding setup, Ollama examples, recall limits, and troubleshooting.
@@ -236,8 +271,8 @@ current OpenClaw or a local checkout until a newer npm package is published.
   </Accordion>
 
   <Accordion title="Other">
-    - `browser` — bundled browser plugin for the browser tool, `openclaw browser` CLI, `browser.request` gateway method, browser runtime, and default browser control service (enabled by default; disable before replacing it)
-    - `copilot-proxy` — VS Code Copilot Proxy bridge (disabled by default)
+    - `browser` - bundled browser plugin for the browser tool, `openclaw browser` CLI, `browser.request` gateway method, browser runtime, and default browser control service (enabled by default; disable before replacing it)
+    - `copilot-proxy` - VS Code Copilot Proxy bridge (disabled by default)
 
   </Accordion>
 </AccordionGroup>
@@ -310,7 +345,7 @@ OpenClaw scans for plugins in this order (first match wins):
 
 <Steps>
   <Step title="Config paths">
-    `plugins.load.paths` — explicit file or directory paths. Paths that point
+    `plugins.load.paths` - explicit file or directory paths. Paths that point
     back at OpenClaw's own packaged bundled plugin directories are ignored;
     run `openclaw doctor --fix` to remove those stale aliases.
   </Step>
@@ -680,9 +715,9 @@ For full typed hook behavior, see [SDK overview](/plugins/sdk-overview#hook-deci
 
 ## Related
 
-- [Building plugins](/plugins/building-plugins) — create your own plugin
-- [Plugin bundles](/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
-- [Plugin manifest](/plugins/manifest) — manifest schema
-- [Registering tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
-- [Plugin internals](/plugins/architecture) — capability model and load pipeline
-- [Community plugins](/plugins/community) — third-party listings
+- [Building plugins](/plugins/building-plugins) - create your own plugin
+- [Plugin bundles](/plugins/bundles) - Codex/Claude/Cursor bundle compatibility
+- [Plugin manifest](/plugins/manifest) - manifest schema
+- [Registering tools](/plugins/building-plugins#registering-agent-tools) - add agent tools in a plugin
+- [Plugin internals](/plugins/architecture) - capability model and load pipeline
+- [Community plugins](/plugins/community) - third-party listings

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolveUserPath } from "../utils.js";
@@ -86,6 +87,14 @@ function maybeLocalPathFromSource(source: string): string | null {
   return null;
 }
 
+async function resolvePathForContainment(candidate: string): Promise<string> {
+  try {
+    return await fs.realpath(candidate);
+  } catch {
+    return path.resolve(candidate);
+  }
+}
+
 async function resolveInboundMediaUri(
   normalizedSource: string,
 ): Promise<InboundMediaReference | null> {
@@ -148,9 +157,16 @@ export async function resolveInboundMediaReference(
     return null;
   }
 
-  const inboundDir = path.resolve(getMediaDir(), "inbound");
-  const resolvedPath = path.resolve(localPath);
-  const rel = path.relative(inboundDir, resolvedPath);
+  const rawInboundDir = path.resolve(getMediaDir(), "inbound");
+  const rawResolvedPath = path.resolve(localPath);
+  const rawRel = path.relative(rawInboundDir, rawResolvedPath);
+  const rel =
+    rawRel && !rawRel.startsWith("..") && !path.isAbsolute(rawRel)
+      ? rawRel
+      : path.relative(
+          await resolvePathForContainment(rawInboundDir),
+          await resolvePathForContainment(localPath),
+        );
   if (!rel || rel.startsWith("..") || path.isAbsolute(rel) || rel.includes(path.sep)) {
     return null;
   }

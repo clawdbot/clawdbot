@@ -14,6 +14,12 @@ media capabilities are tool-driven: the agent decides when to use them based
 on the conversation, and each tool only appears when at least one backing
 provider is configured.
 
+Live speech uses the Talk session contract instead of the one-shot media tool
+path. Talk has three modes: provider-native `realtime`, local or streaming
+`stt-tts`, and `transcription` for observe-only speech capture. Those modes
+share provider catalogs, event envelopes, and cancellation semantics with
+telephony, meetings, browser realtime, and native push-to-talk clients.
+
 ## Capabilities
 
 <CardGroup cols={2}>
@@ -110,6 +116,11 @@ Deepgram, ElevenLabs, Mistral, OpenAI, and xAI also register Voice Call
 streaming STT providers, so live phone audio can be forwarded to the selected
 vendor without waiting for a completed recording.
 
+For live user conversations, prefer [Talk mode](/nodes/talk). Batch audio
+attachments stay on the media path; browser realtime, native push-to-talk,
+telephony, and meeting audio should use Talk events and the session-scoped
+catalogs returned by the Gateway.
+
 ## Provider mappings (how vendors split across surfaces)
 
 <AccordionGroup>
@@ -144,3 +155,4 @@ vendor without waiting for a completed recording.
 - [Text-to-speech](/tools/tts)
 - [Media understanding](/nodes/media-understanding)
 - [Audio nodes](/nodes/audio)
+- [Talk mode](/nodes/talk)

@@ -640,6 +640,7 @@ export async function maybeRecoverSuspiciousConfigRead(params: {
   let restoreError: unknown;
   try {
     await params.deps.fs.promises.copyFile(backupPath, params.configPath);
+    await params.deps.fs.promises.chmod?.(params.configPath, 0o600).catch(() => {});
     restoredFromBackup = true;
   } catch (error) {
     restoreError = error;
@@ -747,6 +748,9 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
   let restoreError: unknown;
   try {
     params.deps.fs.copyFileSync(backupPath, params.configPath);
+    try {
+      params.deps.fs.chmodSync?.(params.configPath, 0o600);
+    } catch {}
     restoredFromBackup = true;
   } catch (error) {
     restoreError = error;

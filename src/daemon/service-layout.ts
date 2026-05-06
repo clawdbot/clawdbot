@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathExists } from "../infra/fs-safe.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
 import type { GatewayServiceCommandConfig } from "./service-types.js";
 
@@ -61,15 +62,6 @@ async function tryRealpath(value: string | undefined): Promise<string | undefine
     return await fs.realpath(resolved);
   } catch {
     return resolved;
-  }
-}
-
-async function pathExists(candidate: string): Promise<boolean> {
-  try {
-    await fs.access(candidate);
-    return true;
-  } catch {
-    return false;
   }
 }
 

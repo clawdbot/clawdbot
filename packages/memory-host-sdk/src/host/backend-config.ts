@@ -17,6 +17,7 @@ import {
   type SessionSendPolicyConfig,
   splitShellArgs,
 } from "./config-utils.js";
+import { isPathInside } from "./fs-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
 
 export type ResolvedMemoryBackendConfig = {
@@ -143,11 +144,10 @@ function canonicalizePathForContainment(rawPath: string): string {
 }
 
 function isPathInsideRoot(candidatePath: string, rootPath: string): boolean {
-  const relative = path.relative(
+  return isPathInside(
     canonicalizePathForContainment(rootPath),
     canonicalizePathForContainment(candidatePath),
   );
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function ensureUniqueName(base: string, existing: Set<string>): string {

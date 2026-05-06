@@ -36,9 +36,22 @@ describe("method scope resolution", () => {
     ["tools.invoke", ["operator.write"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
+    ["environments.list", ["operator.read"]],
+    ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
+    ["talk.client.create", ["operator.write"]],
+    ["talk.client.toolCall", ["operator.write"]],
+    ["talk.session.create", ["operator.write"]],
+    ["talk.session.join", ["operator.write"]],
+    ["talk.session.appendAudio", ["operator.write"]],
+    ["talk.session.startTurn", ["operator.write"]],
+    ["talk.session.endTurn", ["operator.write"]],
+    ["talk.session.cancelTurn", ["operator.write"]],
+    ["talk.session.cancelOutput", ["operator.write"]],
+    ["talk.session.submitToolResult", ["operator.write"]],
+    ["talk.session.close", ["operator.write"]],
     ["update.status", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],
@@ -92,6 +105,30 @@ describe("operator scope authorization", () => {
       allowed: false,
       missingScope: "operator.write",
     });
+  });
+
+  it("allows operator.write clients to use unified Talk sessions", () => {
+    for (const method of [
+      "talk.client.create",
+      "talk.client.toolCall",
+      "talk.session.create",
+      "talk.session.join",
+      "talk.session.appendAudio",
+      "talk.session.startTurn",
+      "talk.session.endTurn",
+      "talk.session.cancelTurn",
+      "talk.session.cancelOutput",
+      "talk.session.submitToolResult",
+      "talk.session.close",
+    ]) {
+      expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+        allowed: true,
+      });
+      expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
+        allowed: false,
+        missingScope: "operator.write",
+      });
+    }
   });
 
   it("requires admin for browser.request", () => {

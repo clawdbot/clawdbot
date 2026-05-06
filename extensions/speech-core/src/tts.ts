@@ -1,13 +1,4 @@
-import { randomBytes } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  mkdtempSync,
-  renameSync,
-  unlinkSync,
-} from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { resolveChannelTtsVoiceDelivery } from "openclaw/plugin-sdk/channel-targets";
 import type {
@@ -30,7 +21,8 @@ import {
   selectApplicableRuntimeConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
+import { tempWorkspaceSync, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
+import { privateFileStoreSync } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -566,24 +558,12 @@ function readPrefs(prefsPath: string): TtsUserPrefs {
 }
 
 function atomicWriteFileSync(filePath: string, content: string): void {
-  const tmpPath = `${filePath}.tmp.${Date.now()}.${randomBytes(8).toString("hex")}`;
-  writeFileSync(tmpPath, content, { mode: 0o600 });
-  try {
-    renameSync(tmpPath, filePath);
-  } catch (err) {
-    try {
-      unlinkSync(tmpPath);
-    } catch {
-      // ignore
-    }
-    throw err;
-  }
+  privateFileStoreSync(path.dirname(filePath)).writeText(path.basename(filePath), content);
 }
 
 function updatePrefs(prefsPath: string, update: (prefs: TtsUserPrefs) => void): void {
   const prefs = readPrefs(prefsPath);
   update(prefs);
-  mkdirSync(path.dirname(prefsPath), { recursive: true });
   atomicWriteFileSync(prefsPath, JSON.stringify(prefs, null, 2));
 }
 
@@ -1136,12 +1116,12 @@ export async function textToSpeech(params: {
     outputFormat = transcoded.outputFormat;
   }
 
-  const tempRoot = resolvePreferredOpenClawTmpDir();
-  mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
-  const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-  const audioPath = path.join(tempDir, `voice-${Date.now()}${fileExtension}`);
-  writeFileSync(audioPath, audioBuffer);
-  scheduleCleanup(tempDir);
+  const temp = tempWorkspaceSync({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "tts-",
+  });
+  const audioPath = temp.write(`voice-${Date.now()}${fileExtension}`, audioBuffer);
+  scheduleCleanup(temp.dir);
 
   return {
     success: true,

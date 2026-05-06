@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -9,7 +9,7 @@ import type {
   SpeechSynthesisRequest,
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const log = createSubsystemLogger("tts-local-cli");
 
@@ -326,7 +326,11 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
 
       log.debug(`synthesize: text=${req.text.slice(0, 50)}...`);
 
-      const tempDir = mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-tts-"));
+      const temp = await tempWorkspace({
+        rootDir: resolvePreferredOpenClawTmpDir(),
+        prefix: "openclaw-cli-tts-",
+      });
+      const tempDir = temp.dir;
 
       try {
         const result = await runCli({
@@ -351,7 +355,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
             const inputFile =
               result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
             if (!result.audioPath) {
-              writeFileSync(inputFile, result.buffer);
+              await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
             }
             buffer = await convertAudio(inputFile, tempDir, "opus");
             format = "opus";
@@ -365,7 +369,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
             const inputFile =
               result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
             if (!result.audioPath) {
-              writeFileSync(inputFile, result.buffer);
+              await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
             }
             buffer = await convertAudio(inputFile, tempDir, desired);
             format = desired;
@@ -383,9 +387,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
           voiceCompatible: req.target === "voice-note" && format === "opus",
         };
       } finally {
-        try {
-          rmSync(tempDir, { recursive: true, force: true });
-        } catch {}
+        await temp.cleanup();
       }
     },
 
@@ -397,7 +399,11 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
 
       log.debug(`synthesizeTelephony: text=${req.text.slice(0, 50)}...`);
 
-      const tempDir = mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-tts-"));
+      const temp = await tempWorkspace({
+        rootDir: resolvePreferredOpenClawTmpDir(),
+        prefix: "openclaw-cli-tts-",
+      });
+      const tempDir = temp.dir;
 
       try {
         const result = await runCli({
@@ -415,7 +421,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
         const inputFile =
           result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
         if (!result.audioPath) {
-          writeFileSync(inputFile, result.buffer);
+          await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
         }
 
         // Convert to raw 16kHz mono PCM for telephony (no WAV headers)
@@ -427,9 +433,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
           sampleRate: 16000,
         };
       } finally {
-        try {
-          rmSync(tempDir, { recursive: true, force: true });
-        } catch {}
+        await temp.cleanup();
       }
     },
   };

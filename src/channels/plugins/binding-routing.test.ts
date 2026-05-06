@@ -118,6 +118,28 @@ describe("runtime conversation binding route", () => {
     expect(result.boundSessionKey).toBeUndefined();
     expect(result.route).toBe(route);
   });
+
+  it("ignores runtime bindings that target isolated cron run sessions", () => {
+    const route = createRoute();
+    const binding = createBinding({
+      targetSessionKey: "agent:youtube:cron:monthly-report:run:closed-run-1",
+    });
+    const { touch } = registerAdapter(binding);
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route,
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+    });
+
+    expect(touch).not.toHaveBeenCalled();
+    expect(result.bindingRecord).toBeNull();
+    expect(result.boundSessionKey).toBeUndefined();
+    expect(result.route).toBe(route);
+  });
 });
 
 describe("ensureConfiguredBindingRouteReady", () => {

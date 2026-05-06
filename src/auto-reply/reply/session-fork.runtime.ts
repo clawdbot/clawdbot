@@ -19,6 +19,7 @@ import {
   type SessionEntry as StoreSessionEntry,
 } from "../../config/sessions/types.js";
 import { readLatestRecentSessionUsageFromTranscriptAsync } from "../../gateway/session-utils.fs.js";
+import { readRegularFile } from "../../infra/fs-safe.js";
 
 type ForkSourceTranscript = {
   cwd: string;
@@ -169,7 +170,7 @@ function collectBranchLabels(params: {
 async function readForkSourceTranscript(
   parentSessionFile: string,
 ): Promise<ForkSourceTranscript | null> {
-  const raw = await fs.readFile(parentSessionFile, "utf-8");
+  const raw = (await readRegularFile({ filePath: parentSessionFile })).buffer.toString("utf-8");
   const fileEntries = parseSessionEntries(raw);
   migrateSessionEntries(fileEntries);
   const header =
@@ -281,15 +282,6 @@ async function writeBranchedSession(params: {
   return { sessionId, sessionFile };
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
-
 export async function forkSessionFromParentRuntime(params: {
   parentEntry: StoreSessionEntry;
   agentId: string;
@@ -300,7 +292,7 @@ export async function forkSessionFromParentRuntime(params: {
     params.parentEntry,
     { agentId: params.agentId, sessionsDir: params.sessionsDir },
   );
-  if (!parentSessionFile || !(await fileExists(parentSessionFile))) {
+  if (!parentSessionFile) {
     return null;
   }
   try {

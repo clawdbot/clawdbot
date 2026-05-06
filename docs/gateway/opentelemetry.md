@@ -139,11 +139,11 @@ Set `diagnostics.otel.captureContent.*` to `true` only when your collector and
 retention policy are approved for prompt, response, tool, or system-prompt
 text. Each subkey is opt-in independently:
 
-- `inputMessages` — user prompt content.
-- `outputMessages` — model response content.
-- `toolInputs` — tool argument payloads.
-- `toolOutputs` — tool result payloads.
-- `systemPrompt` — assembled system/developer prompt.
+- `inputMessages` - user prompt content.
+- `outputMessages` - model response content.
+- `toolInputs` - tool argument payloads.
+- `toolOutputs` - tool result payloads.
+- `systemPrompt` - assembled system/developer prompt.
 
 When any subkey is enabled, model and tool spans get bounded, redacted
 `openclaw.content.*` attributes for that class only.
@@ -302,7 +302,7 @@ to them directly without OTLP export.
 
 **Model usage**
 
-- `model.usage` — tokens, cost, duration, context, provider/model/channel,
+- `model.usage` - tokens, cost, duration, context, provider/model/channel,
   session ids. `usage` is provider/turn accounting for cost and telemetry;
   `context.used` is the current prompt/context snapshot and can be lower than
   provider `usage.total` when cached input or tool-loop calls are involved.
@@ -322,7 +322,7 @@ to them directly without OTLP export.
 
 **Harness lifecycle**
 
-- `harness.run.started` / `harness.run.completed` / `harness.run.error` —
+- `harness.run.started` / `harness.run.completed` / `harness.run.error` -
   per-run lifecycle for the agent harness. Includes `harnessId`, optional
   `pluginId`, provider/model/channel, and run id. Completion adds
   `durationMs`, `outcome`, optional `resultClassification`, `yieldDetected`,
@@ -332,7 +332,7 @@ to them directly without OTLP export.
 
 **Exec**
 
-- `exec.process.completed` — terminal outcome, duration, target, mode, exit
+- `exec.process.completed` - terminal outcome, duration, target, mode, exit
   code, and failure kind. Command text and working directories are not
   included.
 
@@ -380,8 +380,8 @@ You can also leave `diagnostics-otel` out of `plugins.allow`, or run
 
 ## Related
 
-- [Logging](/logging) — file logs, console output, CLI tailing, and the Control UI Logs tab
-- [Gateway logging internals](/gateway/logging) — WS log styles, subsystem prefixes, and console capture
-- [Diagnostics flags](/diagnostics/flags) — targeted debug-log flags
-- [Diagnostics export](/gateway/diagnostics) — operator support-bundle tool (separate from OTEL export)
-- [Configuration reference](/gateway/configuration-reference#diagnostics) — full `diagnostics.*` field reference
+- [Logging](/logging) - file logs, console output, CLI tailing, and the Control UI Logs tab
+- [Gateway logging internals](/gateway/logging) - WS log styles, subsystem prefixes, and console capture
+- [Diagnostics flags](/diagnostics/flags) - targeted debug-log flags
+- [Diagnostics export](/gateway/diagnostics) - operator support-bundle tool (separate from OTEL export)
+- [Configuration reference](/gateway/configuration-reference#diagnostics) - full `diagnostics.*` field reference

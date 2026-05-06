@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -7,7 +7,7 @@ import {
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
@@ -151,24 +151,22 @@ async function downloadGeneratedVideo(params: {
   file: unknown;
   index: number;
 }): Promise<GeneratedVideoAsset> {
-  const tempDir = await mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-google-video-"),
+  return await withTempWorkspace(
+    { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-google-video-" },
+    async ({ dir: tempDir }) => {
+      const downloadPath = path.join(tempDir, `video-${params.index + 1}.mp4`);
+      await params.client.files.download({
+        file: params.file as never,
+        downloadPath,
+      });
+      const buffer = await readFile(downloadPath);
+      return {
+        buffer,
+        mimeType: "video/mp4",
+        fileName: `video-${params.index + 1}.mp4`,
+      };
+    },
   );
-  const downloadPath = path.join(tempDir, `video-${params.index + 1}.mp4`);
-  try {
-    await params.client.files.download({
-      file: params.file as never,
-      downloadPath,
-    });
-    const buffer = await readFile(downloadPath);
-    return {
-      buffer,
-      mimeType: "video/mp4",
-      fileName: `video-${params.index + 1}.mp4`,
-    };
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 }
 
 function resolveGoogleGeneratedVideoDownloadUrl(params: {

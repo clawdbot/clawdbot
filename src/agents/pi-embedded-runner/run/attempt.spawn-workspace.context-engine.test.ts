@@ -145,6 +145,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       contextEngine: createContextEngineBootstrapAndAssemble(),
       sessionKey,
       tempPaths,
+      trajectory: true,
       attemptOverrides: {
         prompt: [
           "visible ask",
@@ -389,6 +390,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
             },
           },
         } as OpenClawConfig,
+        disableTools: false,
         prompt: "visible ask",
         transcriptPrompt: "visible ask",
         trigger: "user",
@@ -471,6 +473,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       contextEngine: createContextEngineBootstrapAndAssemble(),
       sessionKey,
       tempPaths,
+      trajectory: true,
       attemptOverrides: {
         prompt: [
           "what does this mean?",
@@ -565,6 +568,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       contextEngine: createContextEngineBootstrapAndAssemble(),
       sessionKey,
       tempPaths,
+      trajectory: true,
       attemptOverrides: {
         prompt: "internal heartbeat event",
         transcriptPrompt: "",
@@ -608,6 +612,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       contextEngine: createContextEngineBootstrapAndAssemble(),
       sessionKey,
       tempPaths,
+      trajectory: true,
       attemptOverrides: {
         prompt: "  \n\t  ",
       },

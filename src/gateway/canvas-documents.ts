@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { resolveStateDir } from "../config/paths.js";
+import { root as fsRoot, sanitizeUntrustedFileName } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
 
 type CanvasDocumentKind = "html_bundle" | "url_embed" | "document" | "image" | "video_asset";
@@ -74,10 +75,25 @@ function escapeHtml(value: string): string {
 function normalizeLogicalPath(value: string): string {
   const normalized = value.replaceAll("\\", "/").replace(/^\/+/, "");
   const parts = normalized.split("/").filter(Boolean);
-  if (parts.length === 0 || parts.some((part) => part === "." || part === "..")) {
+  if (
+    parts.length === 0 ||
+    parts.some(
+      (part) => part === "." || part === ".." || part.includes(":") || hasControlCharacter(part),
+    )
+  ) {
     throw new Error("canvas document logicalPath invalid");
   }
   return parts.join("/");
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code < 0x20 || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function canvasDocumentId(): string {
@@ -172,16 +188,17 @@ export function resolveCanvasHttpPathToLocalPath(
   }
 }
 
-async function writeManifest(rootDir: string, manifest: CanvasDocumentManifest): Promise<void> {
-  await fs.writeFile(
-    path.join(rootDir, "manifest.json"),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-    "utf8",
-  );
+type CanvasDocumentRoot = Awaited<ReturnType<typeof fsRoot>>;
+
+async function writeManifest(
+  root: CanvasDocumentRoot,
+  manifest: CanvasDocumentManifest,
+): Promise<void> {
+  await root.writeJson("manifest.json", manifest, { space: 2 });
 }
 
 async function copyAssets(
-  rootDir: string,
+  root: CanvasDocumentRoot,
   assets: CanvasDocumentAsset[] | undefined,
   workspaceDir: string,
 ): Promise<CanvasDocumentManifest["assets"]> {
@@ -193,9 +210,7 @@ async function copyAssets(
       : path.isAbsolute(asset.sourcePath)
         ? path.resolve(asset.sourcePath)
         : path.resolve(workspaceDir, asset.sourcePath);
-    const destination = path.join(rootDir, logicalPath);
-    await fs.mkdir(path.dirname(destination), { recursive: true });
-    await fs.copyFile(sourcePath, destination);
+    await root.copyIn(logicalPath, sourcePath);
     copied.push({
       logicalPath,
       ...(asset.contentType ? { contentType: asset.contentType } : {}),
@@ -206,6 +221,7 @@ async function copyAssets(
 
 async function materializeEntrypoint(
   rootDir: string,
+  root: CanvasDocumentRoot,
   input: CanvasDocumentCreateInput,
   workspaceDir: string,
 ): Promise<Pick<CanvasDocumentManifest, "entryUrl" | "localEntrypoint" | "externalUrl">> {
@@ -215,7 +231,7 @@ async function materializeEntrypoint(
   }
   if (entrypoint.type === "html") {
     const fileName = "index.html";
-    await fs.writeFile(path.join(rootDir, fileName), entrypoint.value, "utf8");
+    await root.write(fileName, entrypoint.value);
     return {
       localEntrypoint: fileName,
       entryUrl: buildCanvasDocumentEntryUrl(path.basename(rootDir), fileName),
@@ -224,7 +240,7 @@ async function materializeEntrypoint(
   if (entrypoint.type === "url") {
     if (input.kind === "document" && isPdfPathLike(entrypoint.value)) {
       const fileName = "index.html";
-      await fs.writeFile(path.join(rootDir, fileName), buildPdfWrapper(entrypoint.value), "utf8");
+      await root.write(fileName, buildPdfWrapper(entrypoint.value));
       return {
         localEntrypoint: fileName,
         externalUrl: entrypoint.value,
@@ -244,23 +260,23 @@ async function materializeEntrypoint(
       : path.resolve(workspaceDir, entrypoint.value);
 
   if (input.kind === "image" || input.kind === "video_asset") {
-    const copiedName = path.basename(resolvedPath);
-    await fs.copyFile(resolvedPath, path.join(rootDir, copiedName));
+    const copiedName = sanitizeUntrustedFileName(path.basename(resolvedPath), "asset");
+    await root.copyIn(copiedName, resolvedPath);
     const wrapper =
       input.kind === "image"
         ? `<!doctype html><html><body style="margin:0;background:#0f172a;display:flex;align-items:center;justify-content:center;"><img src="${escapeHtml(copiedName)}" style="max-width:100%;max-height:100vh;object-fit:contain;" /></body></html>`
         : `<!doctype html><html><body style="margin:0;background:#0f172a;"><video src="${escapeHtml(copiedName)}" controls autoplay style="width:100%;height:100vh;object-fit:contain;background:#000;"></video></body></html>`;
-    await fs.writeFile(path.join(rootDir, "index.html"), wrapper, "utf8");
+    await root.write("index.html", wrapper);
     return {
       localEntrypoint: "index.html",
       entryUrl: buildCanvasDocumentEntryUrl(path.basename(rootDir), "index.html"),
     };
   }
 
-  const fileName = path.basename(resolvedPath);
-  await fs.copyFile(resolvedPath, path.join(rootDir, fileName));
+  const fileName = sanitizeUntrustedFileName(path.basename(resolvedPath), "document");
+  await root.copyIn(fileName, resolvedPath);
   if (input.kind === "document" && isPdfPathLike(fileName)) {
-    await fs.writeFile(path.join(rootDir, "index.html"), buildPdfWrapper(fileName), "utf8");
+    await root.write("index.html", buildPdfWrapper(fileName));
     return {
       localEntrypoint: "index.html",
       entryUrl: buildCanvasDocumentEntryUrl(path.basename(rootDir), "index.html"),
@@ -284,8 +300,9 @@ export async function createCanvasDocument(
   });
   await fs.rm(rootDir, { recursive: true, force: true }).catch(() => undefined);
   await fs.mkdir(rootDir, { recursive: true });
-  const assets = await copyAssets(rootDir, input.assets, workspaceDir);
-  const entry = await materializeEntrypoint(rootDir, input, workspaceDir);
+  const root = await fsRoot(rootDir);
+  const assets = await copyAssets(root, input.assets, workspaceDir);
+  const entry = await materializeEntrypoint(rootDir, root, input, workspaceDir);
   const manifest: CanvasDocumentManifest = {
     id,
     kind: input.kind,
@@ -300,7 +317,7 @@ export async function createCanvasDocument(
     ...(entry.externalUrl ? { externalUrl: entry.externalUrl } : {}),
     assets,
   };
-  await writeManifest(rootDir, manifest);
+  await writeManifest(root, manifest);
   return manifest;
 }
 

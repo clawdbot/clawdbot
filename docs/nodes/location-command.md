@@ -19,7 +19,7 @@ OS permissions are multi-level. We can expose a selector in-app, but the OS stil
 
 - iOS/macOS may expose **While Using** or **Always** in system prompts/Settings.
 - Android app currently supports foreground location only.
-- Precise location is a separate grant (iOS 14+ “Precise”, Android “fine” vs “coarse”).
+- Precise location is a separate grant (iOS 14+ "Precise", Android "fine" vs "coarse").
 
 Selector in UI drives our requested mode; actual grant lives in OS settings.
 
@@ -91,9 +91,9 @@ Errors (stable codes):
 
 ## UX copy (suggested)
 
-- Off: “Location sharing is disabled.”
-- While Using: “Only when OpenClaw is open.”
-- Precise: “Use precise GPS location. Toggle off to share approximate location.”
+- Off: "Location sharing is disabled."
+- While Using: "Only when OpenClaw is open."
+- Precise: "Use precise GPS location. Toggle off to share approximate location."
 
 ## Related
 

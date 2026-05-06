@@ -114,6 +114,25 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     vi.unstubAllEnvs();
   });
 
+  it("declares realtime Talk capabilities for catalog selection", () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+
+    expect(provider.capabilities).toEqual({
+      transports: ["webrtc", "gateway-relay"],
+      inputAudioFormats: [
+        { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 },
+        { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
+      ],
+      outputAudioFormats: [
+        { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 },
+        { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
+      ],
+      supportsBrowserSession: true,
+      supportsBargeIn: true,
+      supportsToolCalls: true,
+    });
+  });
+
   it("adds OpenClaw attribution headers to native realtime websocket requests", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const provider = buildOpenAIRealtimeVoiceProvider();
@@ -192,7 +211,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
     expect(session).toMatchObject({
       provider: "openai",
-      transport: "webrtc-sdp",
+      transport: "webrtc",
       clientSecret: "client-secret-123",
       offerUrl: "https://api.openai.com/v1/realtime/calls",
     });

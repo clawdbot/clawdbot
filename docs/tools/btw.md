@@ -136,6 +136,17 @@ In that case, ask normally in the main session instead of using BTW.
 
 ## Related
 
-- [Slash commands](/tools/slash-commands)
-- [Thinking Levels](/tools/thinking)
-- [Session](/concepts/session)
+<CardGroup cols={2}>
+  <Card title="Slash commands" href="/tools/slash-commands" icon="terminal">
+    Native command catalog and chat directives.
+  </Card>
+  <Card title="Thinking levels" href="/tools/thinking" icon="brain">
+    Reasoning effort levels for the side-question model call.
+  </Card>
+  <Card title="Session" href="/concepts/session" icon="comments">
+    Session keys, history, and persistence semantics.
+  </Card>
+  <Card title="Steer command" href="/tools/steer" icon="arrow-right">
+    Inject a steering message into the active run without ending it.
+  </Card>
+</CardGroup>

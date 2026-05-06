@@ -74,7 +74,14 @@ const uninstallPlugin: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledPlugins: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledHookPacks: AsyncUnknownMock = vi.fn();
 export const promptYesNo: AsyncUnknownMock = vi.fn();
+export class PromptInputClosedError extends Error {
+  constructor() {
+    super("Prompt input closed before an answer was received.");
+    this.name = "PromptInputClosedError";
+  }
+}
 export const installPluginFromNpmSpec: AsyncUnknownMock = vi.fn();
+export const installPluginFromNpmPackArchive: AsyncUnknownMock = vi.fn();
 export const installPluginFromPath: AsyncUnknownMock = vi.fn();
 export const installPluginFromClawHub: AsyncUnknownMock = vi.fn();
 export const parseClawHubPluginSpec: Mock<ParseClawHubPluginSpecFn> = vi.fn();
@@ -455,6 +462,7 @@ vi.mock("../hooks/update.js", () => ({
 }));
 
 vi.mock("./prompt.js", () => ({
+  PromptInputClosedError,
   promptYesNo: ((...args: Parameters<(typeof import("./prompt.js"))["promptYesNo"]>) =>
     invokeMock<
       Parameters<(typeof import("./prompt.js"))["promptYesNo"]>,
@@ -478,6 +486,16 @@ vi.mock("../plugins/install.js", () => ({
       installPluginFromNpmSpec,
       ...args,
     )) as (typeof import("../plugins/install.js"))["installPluginFromNpmSpec"],
+  installPluginFromNpmPackArchive: ((
+    ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>,
+      ReturnType<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>
+    >(
+      installPluginFromNpmPackArchive,
+      ...args,
+    )) as (typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"],
   installPluginFromPath: ((
     ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromPath"]>
   ) =>
@@ -643,6 +661,7 @@ export function resetPluginsCliTestState() {
   installPluginFromGitSpec.mockReset();
   parseGitPluginSpec.mockReset();
   installPluginFromNpmSpec.mockReset();
+  installPluginFromNpmPackArchive.mockReset();
   installPluginFromPath.mockReset();
   installPluginFromClawHub.mockReset();
   parseClawHubPluginSpec.mockReset();

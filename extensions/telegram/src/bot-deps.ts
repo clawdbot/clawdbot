@@ -1,4 +1,7 @@
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import {
+  createChannelMessageReplyPipeline,
+  deliverInboundReplyWithMessageSendContext,
+} from "openclaw/plugin-sdk/channel-message";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import { buildModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
@@ -32,9 +35,10 @@ export type TelegramBotDeps = {
   resolveExecApproval?: typeof resolveTelegramExecApproval;
   createTelegramDraftStream?: typeof createTelegramDraftStream;
   deliverReplies?: typeof deliverReplies;
+  deliverInboundReplyWithMessageSendContext?: typeof deliverInboundReplyWithMessageSendContext;
   emitInternalMessageSentHook?: typeof emitInternalMessageSentHook;
   editMessageTelegram?: typeof editMessageTelegram;
-  createChannelReplyPipeline?: typeof createChannelReplyPipeline;
+  createChannelMessageReplyPipeline?: typeof createChannelMessageReplyPipeline;
 };
 
 export const defaultTelegramBotDeps: TelegramBotDeps = {
@@ -83,13 +87,16 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   get deliverReplies() {
     return deliverReplies;
   },
+  get deliverInboundReplyWithMessageSendContext() {
+    return deliverInboundReplyWithMessageSendContext;
+  },
   get emitInternalMessageSentHook() {
     return emitInternalMessageSentHook;
   },
   get editMessageTelegram() {
     return editMessageTelegram;
   },
-  get createChannelReplyPipeline() {
-    return createChannelReplyPipeline;
+  get createChannelMessageReplyPipeline() {
+    return createChannelMessageReplyPipeline;
   },
 };

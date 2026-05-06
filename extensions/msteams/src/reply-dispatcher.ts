@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-streaming";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
-  createChannelReplyPipeline,
+  createChannelMessageReplyPipeline,
   logTypingFailure,
   resolveChannelMediaMaxBytes,
   type OpenClawConfig,
@@ -118,7 +118,7 @@ export function createMSTeamsReplyDispatcher(params: {
       }
     : async () => {};
 
-  const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
+  const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "msteams",

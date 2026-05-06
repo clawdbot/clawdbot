@@ -4,6 +4,7 @@ import type { OpenClawPluginService } from "openclaw/plugin-sdk/core";
 import { listDevicePairing } from "openclaw/plugin-sdk/device-bootstrap";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 const NOTIFY_STATE_FILE = "device-pair-notify.json";
@@ -145,9 +146,12 @@ async function readNotifyState(filePath: string): Promise<NotifyStateFile> {
 }
 
 async function writeNotifyState(filePath: string, state: NotifyStateFile): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
   const content = JSON.stringify(state, null, 2);
-  await fs.writeFile(filePath, `${content}\n`, "utf8");
+  await replaceFileAtomic({
+    filePath,
+    content: `${content}\n`,
+    tempPrefix: ".device-pair-notify",
+  });
 }
 
 function notifySubscriberKey(subscriber: {

@@ -98,7 +98,7 @@ PR D is the proof layer. It should not be the reason runtime-correctness PRs are
 
 ### PR B
 
-- auth/proxy/runtime failures stop collapsing into generic “model failed” handling
+- auth/proxy/runtime failures stop collapsing into generic "model failed" handling
 - `/elevated full` is only described as available when it is actually available
 - blocked reasons are visible to both the model and the user-facing runtime
 

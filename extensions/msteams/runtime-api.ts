@@ -26,7 +26,7 @@ export {
   resolveSenderScopedGroupPolicy,
   resolveToolsBySender,
 } from "openclaw/plugin-sdk/channel-policy";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 export {
   PAIRING_APPROVED_MESSAGE,
   buildProbeChannelStatusSummary,

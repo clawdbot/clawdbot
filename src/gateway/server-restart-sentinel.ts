@@ -34,8 +34,8 @@ import {
 } from "../infra/session-delivery-queue.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { recordChannelMessageReplyDispatch } from "../plugin-sdk/channel-message.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
-import { recordInboundSessionAndDispatchReply } from "../plugin-sdk/inbound-reply-dispatch.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import {
   deliveryContextFromSession,
@@ -272,7 +272,7 @@ async function deliverQueuedSessionDelivery(params: {
     config: cfg,
   });
   let dispatchError: unknown;
-  await recordInboundSessionAndDispatchReply({
+  await recordChannelMessageReplyDispatch({
     cfg,
     channel: route.channel,
     accountId: route.accountId,

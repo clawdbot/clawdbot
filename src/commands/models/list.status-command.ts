@@ -1,5 +1,4 @@
 import path from "node:path";
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import {
   resolveAgentDir,
   resolveAgentExplicitModelPrimary,
@@ -45,7 +44,7 @@ import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { colorize, theme } from "../../terminal/theme.js";
-import { shortenHomePath } from "../../utils.js";
+import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
 import { type AuthProbeSummary } from "./list.probe.js";
@@ -59,6 +58,11 @@ import {
 
 type ProviderUsageRuntime = typeof import("../../infra/provider-usage.js");
 type ProgressRuntime = typeof import("../../cli/progress.js");
+
+function resolveEnvAgentDirOverride(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
+  return override ? resolveUserPath(override, env) : undefined;
+}
 type TerminalTableRuntime = typeof import("../../terminal/table.js");
 type ListProbeRuntime = typeof import("./list.probe.js");
 
@@ -173,8 +177,10 @@ export async function modelsStatusCommand(
   const configPath = createConfigIO().configPath;
   const cfg = await loadModelsConfig({ commandName: "models status", runtime });
   const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
-  const agentDir = agentId ? resolveAgentDir(cfg, agentId) : resolveOpenClawAgentDir();
   const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
+  const agentDir = agentId
+    ? resolveAgentDir(cfg, agentId)
+    : (resolveEnvAgentDirOverride() ?? resolveAgentDir(cfg, workspaceAgentId));
   const workspaceDir =
     resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
   const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;

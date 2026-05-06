@@ -1,4 +1,4 @@
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 import { deliverReplies, emitTelegramMessageSentHooks } from "./bot/delivery.js";
 
-export { createChannelReplyPipeline, deliverReplies, emitTelegramMessageSentHooks };
+export { createChannelMessageReplyPipeline, deliverReplies, emitTelegramMessageSentHooks };

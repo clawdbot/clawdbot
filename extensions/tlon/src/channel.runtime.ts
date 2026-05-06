@@ -138,6 +138,15 @@ export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 10000,
   resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      media: true,
+      replyTo: true,
+      thread: true,
+      messageSendingHooks: true,
+    },
+  },
   sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) => {
     const { account, parsed } = resolveOutboundContext({ cfg, accountId, to });
     return withHttpPokeAccountApi(account, async (api) => {
@@ -182,6 +191,7 @@ export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
           fromShip,
           toShip: parsed.ship,
           story,
+          kind: "media",
         });
       }
       return await sendGroupMessageWithStory({
@@ -191,6 +201,7 @@ export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
         channelName: parsed.channelName,
         story,
         replyToId: resolveReplyId(replyToId, threadId),
+        kind: "media",
       });
     });
   },

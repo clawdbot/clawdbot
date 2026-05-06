@@ -6,9 +6,7 @@ read_when:
 title: "Tools invoke API"
 ---
 
-# Tools Invoke (HTTP)
-
-OpenClaw’s Gateway exposes a simple HTTP endpoint for invoking a single tool directly. It is always enabled and uses Gateway auth plus tool policy. Like the OpenAI-compatible `/v1/*` surface, shared-secret bearer auth is treated as trusted operator access for the whole gateway.
+OpenClaw's Gateway exposes a simple HTTP endpoint for invoking a single tool directly. It is always enabled and uses Gateway auth plus tool policy. Like the OpenAI-compatible `/v1/*` surface, shared-secret bearer auth is treated as trusted operator access for the whole gateway.
 
 - `POST /tools/invoke`
 - Same port as the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/tools/invoke`
@@ -103,19 +101,19 @@ Important boundary notes:
 
 Gateway HTTP also applies a hard deny list by default (even if session policy allows the tool):
 
-- `exec` — direct command execution (RCE surface)
-- `spawn` — arbitrary child process creation (RCE surface)
-- `shell` — shell command execution (RCE surface)
-- `fs_write` — arbitrary file mutation on the host
-- `fs_delete` — arbitrary file deletion on the host
-- `fs_move` — arbitrary file move/rename on the host
-- `apply_patch` — patch application can rewrite arbitrary files
-- `sessions_spawn` — session orchestration; spawning agents remotely is RCE
-- `sessions_send` — cross-session message injection
-- `cron` — persistent automation control plane
-- `gateway` — gateway control plane; prevents reconfiguration via HTTP
-- `nodes` — node command relay can reach system.run on paired hosts
-- `whatsapp_login` — interactive setup requiring terminal QR scan; hangs on HTTP
+- `exec` - direct command execution (RCE surface)
+- `spawn` - arbitrary child process creation (RCE surface)
+- `shell` - shell command execution (RCE surface)
+- `fs_write` - arbitrary file mutation on the host
+- `fs_delete` - arbitrary file deletion on the host
+- `fs_move` - arbitrary file move/rename on the host
+- `apply_patch` - patch application can rewrite arbitrary files
+- `sessions_spawn` - session orchestration; spawning agents remotely is RCE
+- `sessions_send` - cross-session message injection
+- `cron` - persistent automation control plane
+- `gateway` - gateway control plane; prevents reconfiguration via HTTP
+- `nodes` - node command relay can reach system.run on paired hosts
+- `whatsapp_login` - interactive setup requiring terminal QR scan; hangs on HTTP
 
 You can customize this deny list via `gateway.tools`:
 

@@ -69,17 +69,17 @@ streaming and the provider also includes it in the completed reply.
 
 Block chunking is implemented by `EmbeddedBlockChunker`:
 
-- **Low bound:** don’t emit until buffer >= `minChars` (unless forced).
+- **Low bound:** don't emit until buffer >= `minChars` (unless forced).
 - **High bound:** prefer splits before `maxChars`; if forced, split at `maxChars`.
 - **Break preference:** `paragraph` → `newline` → `sentence` → `whitespace` → hard break.
 - **Code fences:** never split inside fences; when forced at `maxChars`, close + reopen the fence to keep Markdown valid.
 
-`maxChars` is clamped to the channel `textChunkLimit`, so you can’t exceed per-channel caps.
+`maxChars` is clamped to the channel `textChunkLimit`, so you can't exceed per-channel caps.
 
 ## Coalescing (merge streamed blocks)
 
 When block streaming is enabled, OpenClaw can **merge consecutive block chunks**
-before sending them out. This reduces “single-line spam” while still providing
+before sending them out. This reduces "single-line spam" while still providing
 progressive output.
 
 - Coalescing waits for **idle gaps** (`idleMs`) before flushing.
@@ -98,7 +98,7 @@ block replies (after the first block). This makes multi-bubble responses feel
 more natural.
 
 - Config: `agents.defaults.humanDelay` (override per agent via `agents.list[].humanDelay`).
-- Modes: `off` (default), `natural` (800–2500ms), `custom` (`minMs`/`maxMs`).
+- Modes: `off` (default), `natural` (800-2500ms), `custom` (`minMs`/`maxMs`).
 - Applies only to **block replies**, not final replies or tool summaries.
 
 ## "Stream chunks or everything"
@@ -160,7 +160,9 @@ Legacy key migration:
 Telegram:
 
 - Uses `sendMessage` + `editMessageText` preview updates across DMs and group/topics.
-- Sends a fresh final message instead of editing in place when a preview has been visible for about one minute, then cleans up the preview so Telegram's timestamp reflects reply completion.
+- Final text edits the active preview in place; long finals reuse that message for the first chunk and send only the remaining chunks.
+- `progress` mode keeps tool progress in an editable status draft, clears that draft at completion, and sends the final answer through normal delivery.
+- If the final edit fails before the completed text is confirmed, OpenClaw uses normal final delivery and cleans up the stale preview.
 - Preview streaming is skipped when Telegram block streaming is explicitly enabled (to avoid double-streaming).
 - `/reasoning stream` can write reasoning to a transient preview that is deleted after final delivery.
 
@@ -193,7 +195,7 @@ Matrix:
 
 ### Tool-progress preview updates
 
-Preview streaming can also include **tool-progress** updates — short status lines like "searching the web", "reading file", or "calling tool" — that appear in the same preview message while tools are running, ahead of the final reply. This keeps multi-step tool turns visually alive rather than silent between the first thinking preview and the final answer.
+Preview streaming can also include **tool-progress** updates - short status lines like "searching the web", "reading file", or "calling tool" - that appear in the same preview message while tools are running, ahead of the final reply. This keeps multi-step tool turns visually alive rather than silent between the first thinking preview and the final answer.
 
 Supported surfaces:
 
@@ -242,7 +244,8 @@ Use the same shape under another compact progress channel key, for example `chan
 
 ## Related
 
-- [Progress drafts](/concepts/progress-drafts) — visible work-in-progress messages that update during long turns
-- [Messages](/concepts/messages) — message lifecycle and delivery
-- [Retry](/concepts/retry) — retry behavior on delivery failure
-- [Channels](/channels) — per-channel streaming support
+- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) - target shared preview, edit, stream, and finalization design
+- [Progress drafts](/concepts/progress-drafts) - visible work-in-progress messages that update during long turns
+- [Messages](/concepts/messages) - message lifecycle and delivery
+- [Retry](/concepts/retry) - retry behavior on delivery failure
+- [Channels](/channels) - per-channel streaming support

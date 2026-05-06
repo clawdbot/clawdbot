@@ -434,7 +434,10 @@ describe("sendStickerDiscord", () => {
       token: "t",
       content: "hiya",
     });
-    expect(res).toEqual({ messageId: "msg1", channelId: "789" });
+    expect(res).toMatchObject({ messageId: "msg1", channelId: "789" });
+    expect(res.receipt.parts[0]).toEqual(
+      expect.objectContaining({ platformMessageId: "msg1", kind: "card" }),
+    );
     expect(postMock).toHaveBeenCalledWith(
       Routes.channelMessages("789"),
       expect.objectContaining({
@@ -467,7 +470,10 @@ describe("sendPollDiscord", () => {
         token: "t",
       },
     );
-    expect(res).toEqual({ messageId: "msg1", channelId: "789" });
+    expect(res).toMatchObject({ messageId: "msg1", channelId: "789" });
+    expect(res.receipt.parts[0]).toEqual(
+      expect.objectContaining({ platformMessageId: "msg1", kind: "card" }),
+    );
     expect(postMock).toHaveBeenCalledWith(
       Routes.channelMessages("789"),
       expect.objectContaining({
@@ -548,9 +554,13 @@ describe("retry rate limits", () => {
         retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
       });
 
-      await expect(promise).resolves.toEqual({
+      await expect(promise).resolves.toMatchObject({
         messageId: "msg1",
         channelId: "789",
+        receipt: expect.objectContaining({
+          primaryPlatformMessageId: "msg1",
+          platformMessageIds: ["msg1"],
+        }),
       });
       expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(1);
     } finally {
@@ -598,7 +608,8 @@ describe("retry rate limits", () => {
       retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
     });
 
-    expect(result).toEqual({ messageId: "msg1", channelId: "789" });
+    expect(result).toMatchObject({ messageId: "msg1", channelId: "789" });
+    expect(result.receipt.platformMessageIds).toEqual(["msg1"]);
     expect(postMock).toHaveBeenCalledTimes(2);
   });
 

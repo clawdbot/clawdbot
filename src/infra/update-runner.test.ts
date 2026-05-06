@@ -326,6 +326,28 @@ describe("runGatewayUpdate", () => {
     expect(calls.some((call) => call.includes("rebase"))).toBe(false);
   });
 
+  it.each([
+    { name: "upstream", options: {} },
+    { name: "target ref", options: { devTargetRef: "main" } },
+  ] as const)("stops dev update when fetch fails before resolving $name", async ({ options }) => {
+    await setupGitCheckout();
+    const fetchCommand = `git -C ${tempDir} fetch --all --prune --tags`;
+    const { runner, calls } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [fetchCommand]: {
+        code: 1,
+        stderr: "! [rejected] v2026.5.3 -> v2026.5.3 (would clobber existing tag)",
+      },
+    });
+
+    const result = await runWithRunner(runner, options);
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("fetch-failed");
+    expect(calls).toContain(fetchCommand);
+    expect(calls.slice(calls.indexOf(fetchCommand) + 1)).toEqual([]);
+  });
+
   it("aborts rebase on failure", async () => {
     await setupGitCheckout();
     const { runner, calls } = createRunner({
@@ -592,9 +614,105 @@ describe("runGatewayUpdate", () => {
     expect(calls.some((call) => call.startsWith("npm install --prefix "))).toBe(true);
     expect(calls).toContain("pnpm install");
     expect(calls).toContain("pnpm build");
-    expect(calls).toContain("pnpm lint");
+    expect(calls).not.toContain("pnpm lint");
     expect(calls).toContain("pnpm ui:build");
     expect(pnpmEnvPaths.some((value) => value.includes("openclaw-update-pnpm-"))).toBe(true);
+  });
+
+  it("runs dev preflight lint in constrained mode when explicitly enabled", async () => {
+    await setupGitPackageManagerFixture();
+    const calls: string[] = [];
+    const lintEnv: NodeJS.ProcessEnv[] = [];
+    const upstreamSha = "upstream123";
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+
+    const runCommand = async (
+      argv: string[],
+      options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
+    ) => {
+      const key = argv.join(" ");
+      calls.push(key);
+
+      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
+        return { stdout: tempDir, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse HEAD`) {
+        return { stdout: "abc123", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
+        return { stdout: "main", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
+        return { stdout: "origin/main", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
+        return { stdout: upstreamSha, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`) {
+        return { stdout: `${upstreamSha}\n`, stderr: "", code: 0 };
+      }
+      if (key === "pnpm --version") {
+        return { stdout: "10.0.0", stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.endsWith(` ${upstreamSha}`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith("git -C /tmp/") &&
+        preflightPrefixPattern.test(key) &&
+        key.includes(" checkout --detach ") &&
+        key.endsWith(upstreamSha)
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm install" || key === "pnpm build" || key === "pnpm ui:build") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm lint") {
+        lintEnv.push(options?.env ?? {});
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} worktree prune`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rebase ${upstreamSha}`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === doctorCommand) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await withEnvAsync({ OPENCLAW_UPDATE_PREFLIGHT_LINT: "1" }, async () =>
+      runWithCommand(runCommand, { channel: "dev" }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(calls).toContain("pnpm lint");
+    expect(lintEnv).toHaveLength(1);
+    expect(lintEnv[0]).toMatchObject({
+      OPENCLAW_LOCAL_CHECK: "1",
+      OPENCLAW_LOCAL_CHECK_MODE: "throttled",
+      OPENCLAW_OXLINT_SHARDS_SERIAL: "1",
+    });
   });
 
   it("retries windows pnpm git installs with --ignore-scripts for dev updates", async () => {

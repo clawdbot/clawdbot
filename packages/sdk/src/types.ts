@@ -40,6 +40,18 @@ export type EnvironmentSelection =
   | { type: "managed"; provider: string; repo?: string; ref?: string }
   | { type: "ephemeral"; provider: string; repo?: string; ref?: string };
 
+export type EnvironmentSummary = {
+  id: string;
+  type: "local" | "gateway" | "node" | "managed" | "ephemeral" | (string & {});
+  label?: string;
+  status: "available" | "unavailable" | "starting" | "stopping" | "error";
+  capabilities?: string[];
+};
+
+export type EnvironmentsListResult = {
+  environments: EnvironmentSummary[];
+};
+
 export type WorkspaceSelection = {
   cwd?: string;
   repo?: string;

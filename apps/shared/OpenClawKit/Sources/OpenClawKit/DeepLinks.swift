@@ -116,7 +116,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             return nil
         }
         let tls = payload.tls ?? true
-        if !tls, !LoopbackHost.isLoopbackHost(host) {
+        if !tls, !LoopbackHost.isLocalNetworkHost(host) {
             return nil
         }
         return GatewayConnectDeepLink(
@@ -143,7 +143,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             return nil
         }
         let tls = scheme == "wss" || scheme == "https"
-        if !tls, !LoopbackHost.isLoopbackHost(hostname) {
+        if !tls, !LoopbackHost.isLocalNetworkHost(hostname) {
             return nil
         }
         return GatewayConnectDeepLink(
@@ -254,7 +254,7 @@ public enum DeepLinkParser {
             }
             let port = query["port"].flatMap { Int($0) } ?? 18789
             let tls = (query["tls"] as NSString?)?.boolValue ?? false
-            if !tls, !LoopbackHost.isLoopbackHost(hostParam) {
+            if !tls, !LoopbackHost.isLocalNetworkHost(hostParam) {
                 return nil
             }
             return .gateway(

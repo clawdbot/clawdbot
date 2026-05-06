@@ -39,10 +39,9 @@ function createTempAuthDir(prefix: string) {
 function mockFsOpenForCredsWrites(params?: {
   onTempWrite?: (filePath: string) => Promise<void> | void;
 }) {
-  const open = fs.open.bind(fs);
+  const writeFile = fs.writeFile.bind(fs);
   const tempHandles: Array<{
     filePath: string;
-    writeFile: ReturnType<typeof vi.fn>;
     sync: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
   }> = [];
@@ -51,13 +50,20 @@ function mockFsOpenForCredsWrites(params?: {
     sync: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
   }> = [];
+  const tempWrites: string[] = [];
+  const writeFileSpy = vi
+    .spyOn(fs, "writeFile")
+    .mockImplementation(async (filePath, data, opts) => {
+      if (typeof filePath === "string" && filePath.includes(".creds.")) {
+        tempWrites.push(filePath);
+        await params?.onTempWrite?.(filePath);
+      }
+      return await writeFile(filePath as never, data as never, opts as never);
+    });
   const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-    if (typeof filePath === "string" && flags === "w" && filePath.includes(".creds.")) {
+    if (typeof filePath === "string" && flags === "r+" && filePath.includes(".creds.")) {
       const handle = {
         filePath,
-        writeFile: vi.fn(async () => {
-          await params?.onTempWrite?.(filePath);
-        }),
         sync: vi.fn(async () => {}),
         close: vi.fn(async () => {}),
       };
@@ -73,13 +79,18 @@ function mockFsOpenForCredsWrites(params?: {
       dirHandles.push(handle);
       return handle as never;
     }
-    return open(filePath as never, flags as never, mode as never);
+    throw new Error(
+      `unexpected fs.open call: ${String(filePath)} ${String(flags)} ${String(mode)}`,
+    );
   });
   return {
     openSpy,
+    writeFileSpy,
+    tempWrites,
     tempHandles,
     dirHandles,
     restore() {
+      writeFileSpy.mockRestore();
       openSpy.mockRestore();
     },
   };
@@ -184,10 +195,10 @@ describe("web session", () => {
     expect(typeof passedLogger?.trace).toBe("function");
     await emitCredsUpdate(authDir);
 
-    expect(openMock.openSpy).toHaveBeenCalledWith(
+    expect(openMock.writeFileSpy).toHaveBeenCalledWith(
       expect.stringContaining(path.join(authDir, ".creds.")),
-      "w",
-      0o600,
+      expect.any(String),
+      expect.objectContaining({ mode: 0o600, flag: "wx" }),
     );
     openMock.restore();
   });
@@ -355,6 +366,7 @@ describe("web session", () => {
 
     await createWaSocket(false, false);
     await emitCredsUpdate();
+    await waitForCredsSaveQueue();
 
     expect(creds.copySpy).not.toHaveBeenCalled();
     expect(openMock.tempHandles).toHaveLength(1);
@@ -470,6 +482,7 @@ describe("web session", () => {
 
     await createWaSocket(false, false);
     await emitCredsUpdate();
+    await waitForCredsSaveQueue();
 
     expect(creds.copySpy).toHaveBeenCalledTimes(1);
     const args = creds.copySpy.mock.calls[0] ?? [];
@@ -487,31 +500,42 @@ describe("web session", () => {
     const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
     const chmodSpy = vi.spyOn(fs, "chmod").mockResolvedValue(undefined);
 
-    await writeCredsJsonAtomically("/tmp/openclaw-oauth/whatsapp/default", {
-      me: { id: "123@s.whatsapp.net" },
-    });
+    try {
+      await writeCredsJsonAtomically("/tmp/openclaw-oauth/whatsapp/default", {
+        me: { id: "123@s.whatsapp.net" },
+      });
 
-    expect(openMock.tempHandles).toHaveLength(1);
-    expect(openMock.tempHandles[0]?.writeFile).toHaveBeenCalledTimes(1);
-    expect(openMock.tempHandles[0]?.sync).toHaveBeenCalledTimes(1);
-    expect(openMock.tempHandles[0]?.close).toHaveBeenCalledTimes(1);
-    expect(renameSpy).toHaveBeenCalledTimes(1);
-    expect(rmSpy).not.toHaveBeenCalled();
-    expect(chmodSpy).toHaveBeenCalledOnce();
-    expect(openMock.dirHandles).toHaveLength(1);
-    expect(openMock.dirHandles[0]?.sync).toHaveBeenCalledTimes(1);
-    const writePath = openMock.tempHandles[0]?.filePath;
-    const renameArgs = renameSpy.mock.calls[0] ?? [];
-    expect(typeof writePath).toBe("string");
-    expect(writePath).toContain(".creds.");
-    expect(String(renameArgs[1] ?? "")).toContain(
-      path.join("/tmp", "openclaw-oauth", "whatsapp", "default", "creds.json"),
-    );
-
-    openMock.restore();
-    renameSpy.mockRestore();
-    rmSpy.mockRestore();
-    chmodSpy.mockRestore();
+      expect(openMock.writeFileSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          path.join("/tmp", "openclaw-oauth", "whatsapp", "default", ".creds."),
+        ),
+        expect.any(String),
+        expect.objectContaining({ mode: 0o600, flag: "wx" }),
+      );
+      expect(openMock.tempHandles).toHaveLength(1);
+      expect(openMock.tempHandles[0]?.sync).toHaveBeenCalledTimes(1);
+      expect(openMock.tempHandles[0]?.close).toHaveBeenCalledTimes(1);
+      expect(renameSpy).toHaveBeenCalledTimes(1);
+      expect(rmSpy).not.toHaveBeenCalled();
+      expect(chmodSpy).toHaveBeenCalledWith(
+        path.join("/tmp", "openclaw-oauth", "whatsapp", "default", "creds.json"),
+        0o600,
+      );
+      expect(openMock.dirHandles).toHaveLength(1);
+      expect(openMock.dirHandles[0]?.sync).toHaveBeenCalledTimes(1);
+      const writePath = openMock.tempHandles[0]?.filePath;
+      const renameArgs = renameSpy.mock.calls[0] ?? [];
+      expect(typeof writePath).toBe("string");
+      expect(writePath).toContain(".creds.");
+      expect(String(renameArgs[1] ?? "")).toContain(
+        path.join("/tmp", "openclaw-oauth", "whatsapp", "default", "creds.json"),
+      );
+    } finally {
+      openMock.restore();
+      renameSpy.mockRestore();
+      rmSpy.mockRestore();
+      chmodSpy.mockRestore();
+    }
   });
 
   it("keeps the previous creds.json valid if the atomic rename fails", async () => {

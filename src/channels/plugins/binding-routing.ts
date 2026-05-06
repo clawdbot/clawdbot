@@ -8,6 +8,7 @@ import {
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveConfiguredBinding } from "./binding-registry.js";
 import { ensureConfiguredBindingTargetReady } from "./binding-targets.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
@@ -119,6 +120,16 @@ export function resolveRuntimeConversationBindingRoute(
   );
   const boundSessionKey = bindingRecord?.targetSessionKey?.trim();
   if (!bindingRecord || !boundSessionKey) {
+    return {
+      bindingRecord: null,
+      route: params.route,
+    };
+  }
+
+  if (isCronRunSessionKey(boundSessionKey)) {
+    logVerbose(
+      `ignored runtime conversation binding ${bindingRecord.bindingId} to isolated cron run session ${boundSessionKey}`,
+    );
     return {
       bindingRecord: null,
       route: params.route,

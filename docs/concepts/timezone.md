@@ -1,95 +1,47 @@
 ---
-summary: "Timezone handling for agents, envelopes, and prompts"
+summary: "Where timezones show up in OpenClaw — envelopes, tool payloads, system prompt"
 read_when:
-  - You need to understand how timestamps are normalized for the model
-  - Configuring the user timezone for system prompts
+  - You want a quick mental model for timezone handling
+  - You are deciding where to set or override a timezone
 title: "Timezones"
 ---
 
-OpenClaw standardizes timestamps so the model sees a **single reference time**.
+OpenClaw standardizes timestamps so the model sees a **single reference time** instead of a mix of provider-local clocks. There are three surfaces where timezones show up, each with its own purpose:
 
-## Message envelopes (local by default)
+## Three timezone surfaces
 
-Inbound messages are wrapped in an envelope like:
+| Surface           | What it shows                                                                                           | Default                               | Configured via                                          |
+| ----------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------- |
+| Message envelopes | Wraps inbound channel messages: `[Signal +1555 2026-01-18 00:19 PST] hello`                             | Host-local                            | `agents.defaults.envelopeTimezone`                      |
+| Tool payloads     | Channel `readMessages`-style tools return raw provider time + normalized `timestampMs` / `timestampUtc` | UTC fields always present             | Not configurable — preserves provider-native timestamps |
+| System prompt     | A small `Current Date & Time` block with the **time zone only** (no clock value, for cache stability)   | Host timezone if `userTimezone` unset | `agents.defaults.userTimezone`                          |
 
-```
-[Provider ... 2026-01-05 16:26 PST] message text
-```
+The system prompt deliberately omits the live clock to keep prompt caching stable across turns. When the agent needs the current time, it calls `session_status`.
 
-The timestamp in the envelope is **host-local by default**, with minutes precision.
-
-You can override this with:
+## Setting the user timezone
 
 ```json5
 {
   agents: {
     defaults: {
-      envelopeTimezone: "local", // "utc" | "local" | "user" | IANA timezone
-      envelopeTimestamp: "on", // "on" | "off"
-      envelopeElapsed: "on", // "on" | "off"
+      userTimezone: "America/Chicago",
     },
   },
 }
 ```
 
-- `envelopeTimezone: "utc"` uses UTC.
-- `envelopeTimezone: "user"` uses `agents.defaults.userTimezone` (falls back to host timezone).
-- Use an explicit IANA timezone (e.g., `"Europe/Vienna"`) for a fixed offset.
-- `envelopeTimestamp: "off"` removes absolute timestamps from envelope headers.
-- `envelopeElapsed: "off"` removes elapsed time suffixes (the `+2m` style).
+If `userTimezone` is unset, OpenClaw resolves the host timezone at runtime (no config write). `agents.defaults.timeFormat` (`auto` | `12` | `24`) controls 12h/24h rendering in envelopes and downstream surfaces, not in the system prompt section.
 
-### Examples
+## When to override
 
-**Local (default):**
+- **Use UTC envelopes** (`envelopeTimezone: "utc"`) when you want stable timestamps across hosts in different regions, or when you want UTC-aligned logs to match diagnostics output.
+- **Use a fixed IANA zone** (e.g. `"Europe/Vienna"`) when the gateway host is in one zone but the user is in another and you want envelopes to read in the user's zone regardless of host migration.
+- **Set `envelopeTimestamp: "off"`** for low-token envelopes when timestamp context is not useful for the conversation.
 
-```
-[Signal Alice +1555 2026-01-18 00:19 PST] hello
-```
-
-**Fixed timezone:**
-
-```
-[Signal Alice +1555 2026-01-18 06:19 GMT+1] hello
-```
-
-**Elapsed time:**
-
-```
-[Signal Alice +1555 +2m 2026-01-18T05:19Z] follow-up
-```
-
-## Tool payloads (raw provider data + normalized fields)
-
-Tool calls (`channels.discord.readMessages`, `channels.slack.readMessages`, etc.) return **raw provider timestamps**.
-We also attach normalized fields for consistency:
-
-- `timestampMs` (UTC epoch milliseconds)
-- `timestampUtc` (ISO 8601 UTC string)
-
-Raw provider fields are preserved.
-
-## User timezone for the system prompt
-
-Set `agents.defaults.userTimezone` to tell the model the user's local time zone. If it is
-unset, OpenClaw resolves the **host timezone at runtime** (no config write).
-
-```json5
-{
-  agents: { defaults: { userTimezone: "America/Chicago" } },
-}
-```
-
-The system prompt includes:
-
-- `Current Date & Time` section with local time and timezone
-- `Time format: 12-hour` or `24-hour`
-
-You can control the prompt format with `agents.defaults.timeFormat` (`auto` | `12` | `24`).
-
-See [Date & Time](/date-time) for the full behavior and examples.
+For the full behavior reference, examples per provider, and elapsed-time formatting, see [Date & Time](/date-time).
 
 ## Related
 
-- [Heartbeat](/gateway/heartbeat) — active hours use timezone for scheduling
-- [Cron Jobs](/automation/cron-jobs) — cron expressions use timezone for scheduling
-- [Date & Time](/date-time) — full date/time behavior and examples
+- [Date & Time](/date-time) — full envelope/tool/prompt behavior and examples.
+- [Heartbeat](/gateway/heartbeat) — active hours use timezone for scheduling.
+- [Cron Jobs](/automation/cron-jobs) — cron expressions use timezone for scheduling.

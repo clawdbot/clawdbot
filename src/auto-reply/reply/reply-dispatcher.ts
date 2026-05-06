@@ -29,7 +29,7 @@ type ReplyDispatchSkipHandler = (
 type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
   info: { kind: ReplyDispatchKind },
-) => Promise<void>;
+) => Promise<unknown>;
 
 export type ReplyDispatchBeforeDeliver = (
   payload: ReplyPayload,

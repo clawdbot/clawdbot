@@ -6,16 +6,21 @@ read_when:
 title: "SGLang"
 ---
 
-SGLang can serve open-source models via an **OpenAI-compatible** HTTP API.
-OpenClaw can connect to SGLang using the `openai-completions` API.
+SGLang serves open-weight models via an OpenAI-compatible HTTP API. OpenClaw connects to SGLang using the `openai-completions` provider family with auto-discovery of available models.
 
-OpenClaw can also **auto-discover** available models from SGLang when you opt
-in with `SGLANG_API_KEY` (any value works if your server does not enforce auth)
-and you do not define an explicit `models.providers.sglang` entry.
+| Property                  | Value                                                        |
+| ------------------------- | ------------------------------------------------------------ |
+| Provider id               | `sglang`                                                     |
+| Plugin                    | bundled, `enabledByDefault: true`                            |
+| Auth env var              | `SGLANG_API_KEY` (any non-empty value if server has no auth) |
+| Onboarding flag           | `--auth-choice sglang`                                       |
+| API                       | OpenAI-compatible (`openai-completions`)                     |
+| Default base URL          | `http://127.0.0.1:30000/v1`                                  |
+| Default model placeholder | `sglang/Qwen/Qwen3-8B`                                       |
+| Streaming usage           | Yes (`supportsStreamingUsage: true`)                         |
+| Pricing                   | Marked external-free (`modelPricing.external: false`)        |
 
-OpenClaw treats `sglang` as a local OpenAI-compatible provider that supports
-streamed usage accounting, so status/context token counts can update from
-`stream_options.include_usage` responses.
+OpenClaw also **auto-discovers** available models from SGLang when you opt in with `SGLANG_API_KEY` and you do not define an explicit `models.providers.sglang` entry — see [Model discovery (implicit provider)](#model-discovery-implicit-provider) below.
 
 ## Getting started
 

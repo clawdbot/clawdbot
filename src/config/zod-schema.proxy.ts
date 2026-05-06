@@ -10,17 +10,19 @@ function isHttpProxyUrl(value: string): boolean {
   }
 }
 
+export const ProxyLoopbackModeSchema = z.enum(["gateway-only", "proxy", "block"]);
+
 export const ProxyConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
     proxyUrl: z
-      .string()
       .url()
       .refine(isHttpProxyUrl, {
         message: "proxyUrl must use http://",
       })
       .register(sensitive)
       .optional(),
+    loopbackMode: ProxyLoopbackModeSchema.optional(),
   })
   .strict()
   .optional();

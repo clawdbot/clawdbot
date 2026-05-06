@@ -21,7 +21,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
@@ -596,20 +595,7 @@ class MicCaptureManager(
         PackageManager.PERMISSION_GRANTED
     )
 
-  private fun parseAssistantText(payload: JsonObject): String? {
-    val message = payload["message"].asObjectOrNull() ?: return null
-    if (message["role"].asStringOrNull() != "assistant") return null
-    val content = message["content"] as? JsonArray ?: return null
-
-    val parts =
-      content.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        if (obj["type"].asStringOrNull() != "text") return@mapNotNull null
-        obj["text"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-      }
-    if (parts.isEmpty()) return null
-    return parts.joinToString("\n")
-  }
+  private fun parseAssistantText(payload: JsonObject): String? = ChatEventText.assistantTextFromPayload(payload)
 
   private val listener =
     object : RecognitionListener {

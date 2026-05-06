@@ -2,6 +2,7 @@ import {
   resolveOutboundMediaUrls,
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
+  type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -38,7 +39,7 @@ import {
 import {
   DM_GROUP_ACCESS_REASON,
   createChannelPairingController,
-  createChannelReplyPipeline,
+  deriveDurableFinalDeliveryRequirements,
   evictOldHistoryKeys,
   evaluateSupplementalContextVisibility,
   logAckFailure,
@@ -1541,6 +1542,45 @@ async function processMessageAfterDedupe(
       .replace(/[ \t]+/g, " ")
       .trim();
   };
+  const resolveReplyToMessageGuidForPayload = (payload: { replyToId?: string | null }): string => {
+    const rawReplyToId =
+      privateApiEnabled && typeof payload.replyToId === "string" ? payload.replyToId.trim() : "";
+    if (!rawReplyToId) {
+      return "";
+    }
+    return (
+      resolveBlueBubblesMessageId(rawReplyToId, {
+        requireKnownShortId: true,
+        chatContext: {
+          chatGuid: chatGuidForActions ?? chatGuid,
+          chatIdentifier,
+          chatId,
+        },
+      }) || ""
+    );
+  };
+  const prepareBlueBubblesReplyPayload = (payload: ReplyPayload): ReplyPayload => {
+    const tableMode = core.channel.text.resolveMarkdownTableMode({
+      cfg: config,
+      channel: "bluebubbles",
+      accountId: account.accountId,
+    });
+    const text = sanitizeReplyDirectiveText(
+      core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+    );
+    return {
+      ...payload,
+      text,
+      ...(typeof payload.replyToId === "string" && !privateApiEnabled ? { replyToId: "" } : {}),
+    };
+  };
+  const canUseDurableBlueBubblesFinalDelivery = (payload: { text?: string }): boolean => {
+    const textLimit =
+      account.config.textChunkLimit && account.config.textChunkLimit > 0
+        ? account.config.textChunkLimit
+        : DEFAULT_TEXT_LIMIT;
+    return (payload.text ?? "").length <= textLimit;
+  };
 
   // History: in-memory rolling map with bounded API backfill retries
   const historyLimit = isGroup
@@ -1728,42 +1768,36 @@ async function processMessageAfterDedupe(
     }, typingRestartDelayMs);
   };
   try {
-    const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
-      cfg: config,
-      agentId: route.agentId,
-      channel: "bluebubbles",
-      accountId: account.accountId,
-      typingCallbacks: {
-        onReplyStart: async () => {
-          if (!chatGuidForActions) {
-            return;
-          }
-          if (!baseUrl || !password) {
-            return;
-          }
-          streamingActive = true;
-          clearTypingRestartTimer();
-          try {
-            await sendBlueBubblesTyping(chatGuidForActions, true, {
-              cfg: config,
-              accountId: account.accountId,
-            });
-          } catch (err) {
-            runtime.error?.(`[bluebubbles] typing start failed: ${sanitizeForLog(err)}`);
-          }
-        },
-        onIdle: () => {
-          if (!chatGuidForActions) {
-            return;
-          }
-          if (!baseUrl || !password) {
-            return;
-          }
-          // Intentionally no-op for block streaming. We stop typing in finally
-          // after the run completes to avoid flicker between paragraph blocks.
-        },
+    const typingCallbacks = {
+      onReplyStart: async () => {
+        if (!chatGuidForActions) {
+          return;
+        }
+        if (!baseUrl || !password) {
+          return;
+        }
+        streamingActive = true;
+        clearTypingRestartTimer();
+        try {
+          await sendBlueBubblesTyping(chatGuidForActions, true, {
+            cfg: config,
+            accountId: account.accountId,
+          });
+        } catch (err) {
+          runtime.error?.(`[bluebubbles] typing start failed: ${sanitizeForLog(err)}`);
+        }
       },
-    });
+      onIdle: () => {
+        if (!chatGuidForActions) {
+          return;
+        }
+        if (!baseUrl || !password) {
+          return;
+        }
+        // Intentionally no-op for block streaming. We stop typing in finally
+        // after the run completes to avoid flicker between paragraph blocks.
+      },
+    };
     await core.channel.turn.run({
       channel: "bluebubbles",
       accountId: account.accountId,
@@ -1789,6 +1823,76 @@ async function processMessageAfterDedupe(
           dispatchReplyWithBufferedBlockDispatcher:
             core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
           delivery: {
+            preparePayload: (payload) => prepareBlueBubblesReplyPayload(payload),
+            durable: (payload, info) => {
+              if (info.kind !== "final" || !canUseDurableBlueBubblesFinalDelivery(payload)) {
+                return false;
+              }
+              const replyToMessageGuid = resolveReplyToMessageGuidForPayload(payload);
+              return {
+                to: outboundTarget,
+                replyToId:
+                  typeof payload.replyToId === "string" ? payload.replyToId.trim() || null : null,
+                deps: {
+                  bluebubblesMessageLifecycle: {
+                    beforeSendAttempt: (ctx: { kind: string; text?: string }) => {
+                      const snippet =
+                        ctx.kind === "media"
+                          ? (ctx.text ?? "").trim() || "<media:attachment>"
+                          : (ctx.text ?? "").trim();
+                      return rememberPendingOutboundMessageId({
+                        accountId: account.accountId,
+                        sessionKey: route.sessionKey,
+                        outboundTarget,
+                        chatGuid: chatGuidForActions ?? chatGuid,
+                        chatIdentifier,
+                        chatId,
+                        snippet,
+                      });
+                    },
+                    afterSendSuccess: (ctx: {
+                      kind: string;
+                      text?: string;
+                      result?: { messageId?: string };
+                      attemptToken?: unknown;
+                    }) => {
+                      const snippet =
+                        ctx.kind === "media"
+                          ? (ctx.text ?? "").trim() || "<media:attachment>"
+                          : (ctx.text ?? "").trim();
+                      if (
+                        maybeEnqueueOutboundMessageId(ctx.result?.messageId, snippet) &&
+                        typeof ctx.attemptToken === "number"
+                      ) {
+                        forgetPendingOutboundMessageId(ctx.attemptToken);
+                      }
+                    },
+                    afterSendFailure: (ctx: { attemptToken?: unknown }) => {
+                      if (typeof ctx.attemptToken === "number") {
+                        forgetPendingOutboundMessageId(ctx.attemptToken);
+                      }
+                    },
+                  },
+                },
+                requiredCapabilities: deriveDurableFinalDeliveryRequirements({
+                  payload,
+                  replyToId: replyToMessageGuid || null,
+                  afterSendSuccess: true,
+                }),
+              };
+            },
+            onDelivered: (_payload, info, result) => {
+              if (!result?.deliveryIntent) {
+                return;
+              }
+              if (result.visibleReplySent === true) {
+                sentMessage = true;
+                statusSink?.({ lastOutboundAt: Date.now() });
+                if (info.kind === "block") {
+                  restartTypingSoon();
+                }
+              }
+            },
             deliver: async (payload, info) => {
               const rawReplyToId =
                 privateApiEnabled && typeof payload.replyToId === "string"
@@ -1932,13 +2036,14 @@ async function processMessageAfterDedupe(
               runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${sanitizeForLog(err)}`);
             },
           },
+          replyPipeline: {
+            typingCallbacks,
+          },
           dispatcherOptions: {
-            ...replyPipeline,
-            onReplyStart: typingCallbacks?.onReplyStart,
-            onIdle: typingCallbacks?.onIdle,
+            onReplyStart: typingCallbacks.onReplyStart,
+            onIdle: typingCallbacks.onIdle,
           },
           replyOptions: {
-            onModelSelected,
             disableBlockStreaming:
               typeof account.config.blockStreaming === "boolean"
                 ? !account.config.blockStreaming

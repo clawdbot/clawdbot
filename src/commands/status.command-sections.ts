@@ -326,6 +326,7 @@ export function buildStatusSessionsRows(params: {
         Kind: "",
         Age: "",
         Model: "",
+        Runtime: "",
         Tokens: "",
         ...(params.verbose ? { Cache: "" } : {}),
       },
@@ -336,6 +337,7 @@ export function buildStatusSessionsRows(params: {
     Kind: sess.kind,
     Age: sess.updatedAt && sess.age != null ? params.formatTimeAgo(sess.age) : "no activity",
     Model: sess.model ?? "unknown",
+    Runtime: sess.runtime ?? "unknown",
     Tokens: params.formatTokensCompact(sess),
     ...(params.verbose
       ? { Cache: params.formatPromptCacheCompact(sess) || params.muted("—") }

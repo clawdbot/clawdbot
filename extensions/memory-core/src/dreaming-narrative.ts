@@ -13,6 +13,7 @@ import {
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { pathExists, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
   loadSessionStore,
   resolveStorePath,
@@ -488,29 +489,14 @@ async function assertSafeDreamsPath(dreamsPath: string): Promise<void> {
 
 async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promise<void> {
   await assertSafeDreamsPath(dreamsPath);
-  const existing = await fs.stat(dreamsPath).catch((err: NodeJS.ErrnoException) => {
-    if (err.code === "ENOENT") {
-      return null;
-    }
-    throw err;
+  await replaceFileAtomic({
+    filePath: dreamsPath,
+    content,
+    mode: 0o600,
+    preserveExistingMode: true,
+    tempPrefix: `${path.basename(dreamsPath)}.dreams`,
+    throwOnCleanupError: true,
   });
-  const mode = existing?.mode ?? 0o600;
-  const tempPath = `${dreamsPath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tempPath, content, { encoding: "utf-8", flag: "wx", mode });
-  await fs.chmod(tempPath, mode).catch(() => undefined);
-  try {
-    await fs.rename(tempPath, dreamsPath);
-    await fs.chmod(dreamsPath, mode).catch(() => undefined);
-  } catch (err) {
-    const cleanupError = await fs.rm(tempPath, { force: true }).catch((rmErr) => rmErr);
-    if (cleanupError) {
-      throw new Error(
-        `Atomic DREAMS.md write failed (${formatErrorMessage(err)}); cleanup also failed (${formatErrorMessage(cleanupError)})`,
-        { cause: err },
-      );
-    }
-    throw err;
-  }
 }
 
 async function updateDreamsFile<T>(params: {
@@ -710,15 +696,6 @@ export async function appendNarrativeEntry(params: {
 
 // ── Orchestrator ───────────────────────────────────────────────────────
 
-async function safePathExists(pathname: string): Promise<boolean> {
-  try {
-    await fs.stat(pathname);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function normalizeComparablePath(pathname: string): string {
   return process.platform === "win32" ? pathname.toLowerCase() : pathname;
 }
@@ -814,7 +791,7 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       if (!isDreamingSessionStoreKey(key)) {
         continue;
       }
-      if (!normalizedSessionFile || !(await safePathExists(normalizedSessionFile))) {
+      if (!normalizedSessionFile || !(await pathExists(normalizedSessionFile))) {
         needsStoreUpdate = true;
       }
     }
@@ -834,7 +811,7 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
           if (!isDreamingSessionStoreKey(key)) {
             continue;
           }
-          if (!normalizedSessionFile || !(await safePathExists(normalizedSessionFile))) {
+          if (!normalizedSessionFile || !(await pathExists(normalizedSessionFile))) {
             delete lockedStore[key];
             prunedForAgent += 1;
           }

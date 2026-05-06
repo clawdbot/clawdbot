@@ -3,7 +3,7 @@ export { logAckFailure, logTypingFailure } from "openclaw/plugin-sdk/channel-fee
 export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 export { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { deriveDurableFinalDeliveryRequirements } from "openclaw/plugin-sdk/channel-message";
 export {
   DM_GROUP_ACCESS_REASON,
   readStoreAllowFromForDmPolicy,

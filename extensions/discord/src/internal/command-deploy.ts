@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { ApplicationCommandType, type APIApplicationCommand } from "discord-api-types/v10";
+import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import {
   createApplicationCommand,
   deleteApplicationCommand,
@@ -147,9 +147,10 @@ export class DiscordCommandDeployer {
       return;
     }
     try {
-      const raw = await fs.readFile(storePath, "utf8");
-      const parsed = JSON.parse(raw) as { hashes?: unknown };
-      if (!parsed.hashes || typeof parsed.hashes !== "object") {
+      const parsed = await privateFileStore(path.dirname(storePath)).readJsonIfExists<{
+        hashes?: unknown;
+      }>(path.basename(storePath));
+      if (!parsed?.hashes || typeof parsed.hashes !== "object") {
         return;
       }
       for (const [key, value] of Object.entries(parsed.hashes)) {
@@ -168,24 +169,17 @@ export class DiscordCommandDeployer {
       return;
     }
     try {
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
-      const tmpPath = `${storePath}.${process.pid}.${Date.now()}.tmp`;
-      await fs.writeFile(
-        tmpPath,
-        `${JSON.stringify(
-          {
-            version: 1,
-            updatedAt: new Date().toISOString(),
-            hashes: Object.fromEntries(
-              [...this.hashes.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
-            ),
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
+      await privateFileStore(path.dirname(storePath)).writeJson(
+        path.basename(storePath),
+        {
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          hashes: Object.fromEntries(
+            [...this.hashes.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
+          ),
+        },
+        { trailingNewline: true },
       );
-      await fs.rename(tmpPath, storePath);
     } catch {
       // The cache is only an optimization to avoid redundant Discord writes.
     }

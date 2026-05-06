@@ -12,11 +12,16 @@ const PROVIDER_RUNTIME_CANDIDATES = [
 ] as const;
 
 let providerRuntimeModule: ProviderRuntimeModule | undefined;
+let providerRuntimeLoadAttempted = false;
 
 function loadProviderRuntime(): ProviderRuntimeModule | null {
   if (providerRuntimeModule) {
     return providerRuntimeModule;
   }
+  if (providerRuntimeLoadAttempted) {
+    return null;
+  }
+  providerRuntimeLoadAttempted = true;
   for (const candidate of PROVIDER_RUNTIME_CANDIDATES) {
     try {
       providerRuntimeModule = require(candidate) as ProviderRuntimeModule;

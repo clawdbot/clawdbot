@@ -275,6 +275,17 @@ function isCommandProgressItem(input: Extract<ChannelProgressDraftLineInput, { e
   return itemKind === "command" || isCommandToolName(input.name);
 }
 
+function isEmptyReasoningProgressItem(
+  input: Extract<ChannelProgressDraftLineInput, { event: "item" }>,
+  meta: string | undefined,
+): boolean {
+  return (
+    !meta &&
+    normalizeOptionalLowercaseString(input.itemKind) === "analysis" &&
+    normalizeOptionalLowercaseString(input.title) === "reasoning"
+  );
+}
+
 function patchMetas(input: Extract<ChannelProgressDraftLineInput, { event: "patch" }>): string[] {
   const fileMetas = [...(input.added ?? []), ...(input.modified ?? []), ...(input.deleted ?? [])];
   return compactStrings([input.summary, ...fileMetas, input.title]);
@@ -346,6 +357,9 @@ export function buildChannelProgressDraftLine(
         (options?.commandText === "status" && isCommandProgressItem(input)
           ? undefined
           : input.progressText);
+      if (isEmptyReasoningProgressItem(input, meta)) {
+        return undefined;
+      }
       if (name) {
         return buildNamedProgressLine(input.event, name, [meta], options, {
           status: input.status,

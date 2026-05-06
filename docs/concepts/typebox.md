@@ -5,10 +5,6 @@ read_when:
 title: "TypeBox"
 ---
 
-# TypeBox as protocol source of truth
-
-Last updated: 2026-01-10
-
 TypeBox is a TypeScript-first schema library. We use it to define the **Gateway
 WebSocket protocol** (handshake, request/response, server events). Those schemas
 drive **runtime validation**, **JSON Schema export**, and **Swift codegen** for
@@ -68,7 +64,7 @@ Authoritative advertised **discovery** inventory lives in
 ## Current pipeline
 
 - `pnpm protocol:gen`
-  - writes JSON Schema (draft‑07) to `dist/protocol.schema.json`
+  - writes JSON Schema (draft-07) to `dist/protocol.schema.json`
 - `pnpm protocol:gen:swift`
   - generates Swift gateway models
 - `pnpm protocol:check`

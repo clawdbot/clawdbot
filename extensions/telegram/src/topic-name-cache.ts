@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import path from "node:path";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { replaceFileAtomicSync } from "openclaw/plugin-sdk/security-runtime";
 
 const MAX_ENTRIES = 2_048;
 const TOPIC_NAME_CACHE_STATE_KEY = Symbol.for("openclaw.telegramTopicNameCacheState");
@@ -146,10 +146,11 @@ function persistTopicStore(persistedPath: string, store: TopicNameStore): void {
     fs.rmSync(persistedPath, { force: true });
     return;
   }
-  fs.mkdirSync(path.dirname(persistedPath), { recursive: true });
-  const tempPath = `${persistedPath}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(Object.fromEntries(store)), "utf-8");
-  fs.renameSync(tempPath, persistedPath);
+  replaceFileAtomicSync({
+    filePath: persistedPath,
+    content: JSON.stringify(Object.fromEntries(store)),
+    tempPrefix: ".telegram-topic-name-cache",
+  });
 }
 
 export function updateTopicName(

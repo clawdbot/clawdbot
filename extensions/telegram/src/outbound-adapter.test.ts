@@ -1,3 +1,4 @@
+import { verifyDurableFinalCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageTelegramMock = vi.fn();
@@ -123,6 +124,28 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-buttons", chatId: "12345" });
   });
 
+  it("forwards silent delivery options to Telegram sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-silent", chatId: "12345" });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "quiet",
+      payload: { text: "quiet" },
+      silent: true,
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "quiet",
+      expect.objectContaining({
+        silent: true,
+      }),
+    );
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-silent", chatId: "12345" });
+  });
+
   it("forwards audioAsVoice payload media to Telegram voice sends", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-voice", chatId: "12345" });
 
@@ -147,6 +170,116 @@ describe("telegramOutbound", () => {
       }),
     );
     expect(result).toEqual({ channel: "telegram", messageId: "tg-voice", chatId: "12345" });
+  });
+
+  it("backs declared durable final capabilities with delivery proofs", async () => {
+    const proveText = async () => {
+      sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-text", chatId: "12345" });
+      await telegramOutbound.sendText!({
+        cfg: {} as never,
+        to: "12345",
+        text: "hello",
+        deps: { sendTelegram: sendMessageTelegramMock },
+      });
+      expect(sendMessageTelegramMock).toHaveBeenLastCalledWith(
+        "12345",
+        "hello",
+        expect.objectContaining({ textMode: "html" }),
+      );
+    };
+    const proveMedia = async () => {
+      sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-media", chatId: "12345" });
+      await telegramOutbound.sendMedia!({
+        cfg: {} as never,
+        to: "12345",
+        text: "caption",
+        mediaUrl: "https://example.com/a.png",
+        deps: { sendTelegram: sendMessageTelegramMock },
+      });
+      expect(sendMessageTelegramMock).toHaveBeenLastCalledWith(
+        "12345",
+        "caption",
+        expect.objectContaining({ mediaUrl: "https://example.com/a.png" }),
+      );
+    };
+    const provePayload = async () => {
+      sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-payload", chatId: "12345" });
+      await telegramOutbound.sendPayload!({
+        cfg: {} as never,
+        to: "12345",
+        text: "",
+        payload: { text: "payload" },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      });
+      expect(sendMessageTelegramMock).toHaveBeenLastCalledWith(
+        "12345",
+        "payload",
+        expect.any(Object),
+      );
+    };
+    const proveReplyThreadSilent = async () => {
+      sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-thread", chatId: "12345" });
+      await telegramOutbound.sendText!({
+        cfg: {} as never,
+        to: "12345",
+        text: "threaded",
+        replyToId: "900",
+        threadId: "12",
+        silent: true,
+        deps: { sendTelegram: sendMessageTelegramMock },
+      });
+      expect(sendMessageTelegramMock).toHaveBeenLastCalledWith(
+        "12345",
+        "threaded",
+        expect.objectContaining({
+          replyToMessageId: 900,
+          messageThreadId: 12,
+          silent: true,
+        }),
+      );
+    };
+    const proveBatch = async () => {
+      sendMessageTelegramMock
+        .mockResolvedValueOnce({ messageId: "tg-batch-1", chatId: "12345" })
+        .mockResolvedValueOnce({ messageId: "tg-batch-2", chatId: "12345" });
+      await telegramOutbound.sendPayload!({
+        cfg: {} as never,
+        to: "12345",
+        text: "",
+        payload: {
+          text: "batch",
+          mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+        },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      });
+      expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+        "12345",
+        "batch",
+        expect.objectContaining({ mediaUrl: "https://example.com/a.png" }),
+      );
+      expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+        "12345",
+        "",
+        expect.objectContaining({ mediaUrl: "https://example.com/b.png" }),
+      );
+    };
+
+    await verifyDurableFinalCapabilityProofs({
+      adapterName: "telegramOutbound",
+      capabilities: telegramOutbound.deliveryCapabilities?.durableFinal,
+      proofs: {
+        text: proveText,
+        media: proveMedia,
+        payload: provePayload,
+        silent: proveReplyThreadSilent,
+        replyTo: proveReplyThreadSilent,
+        thread: proveReplyThreadSilent,
+        messageSendingHooks: () => {
+          expect(telegramOutbound.sendText).toBeTypeOf("function");
+        },
+        batch: proveBatch,
+      },
+    });
   });
 
   it("passes delivery pin notify requests to Telegram pinning", async () => {

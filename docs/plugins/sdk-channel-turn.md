@@ -312,17 +312,23 @@ The kernel does not call the platform directly. The channel hands the kernel a `
 type ChannelTurnDeliveryAdapter = {
   deliver(payload: ReplyPayload, info: ChannelDeliveryInfo): Promise<ChannelDeliveryResult | void>;
   onError?(err: unknown, info: { kind: string }): void;
+  durable?: false | DurableInboundReplyDeliveryOptions;
 };
 
 type ChannelDeliveryResult = {
   messageIds?: string[];
+  receipt?: MessageReceipt;
   threadId?: string;
   replyToId?: string;
   visibleReplySent?: boolean;
 };
 ```
 
-`deliver` is called once per buffered reply chunk. Return platform message ids when the channel has them so the dispatcher can preserve thread anchors and edit later chunks. For observe-only turns, return `{ visibleReplySent: false }` or use `createNoopChannelTurnDeliveryAdapter()`.
+`deliver` is called once per buffered reply chunk. During the message-lifecycle migration, assembled channel-turn delivery is channel-owned by default: an omitted `durable` field means the kernel must call `deliver` directly and must not route through generic outbound delivery. Set `durable` only after the channel has been audited to prove the generic send path preserves the old delivery behavior, including reply/thread targets, media handling, sent-message/self-echo caches, status cleanup, and returned message ids. `durable: false` remains a compatibility spelling for "use the channel-owned callback", but unmigrated channels should not need to add it. Return platform message ids when the channel has them so the dispatcher can preserve thread anchors and edit later chunks; newer delivery paths should also return `receipt` so recovery, preview finalization, and duplicate suppression can move off `messageIds`. For observe-only turns, return `{ visibleReplySent: false }` or use `createNoopChannelTurnDeliveryAdapter()`.
+
+Channels using `runPrepared` with a fully channel-owned dispatcher do not have a `ChannelTurnDeliveryAdapter`. Those dispatchers are not durable by default. They should keep their direct delivery path until they explicitly opt in to the new send context with a complete target, replay-safe adapter, receipt contract, and channel side-effect hooks.
+
+Public compatibility helpers such as `recordInboundSessionAndDispatchReply`, `dispatchInboundReplyWithBase`, and direct-DM helpers must stay behavior-preserving during migration. They should not call generic durable delivery before caller-owned `deliver` or `reply` callbacks.
 
 ## Record options
 
@@ -388,6 +394,7 @@ Backward compatibility rules apply: new fact fields are additive, admission kind
 
 ## Related
 
+- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) for the planned send/receive/live lifecycle that will wrap this kernel
 - [Building channel plugins](/plugins/sdk-channel-plugins) for the broader channel plugin contract
 - [Plugin runtime helpers](/plugins/sdk-runtime) for other `runtime.*` surfaces
 - [Plugin internals](/plugins/architecture-internals) for load pipeline and registry mechanics

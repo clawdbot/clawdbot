@@ -250,6 +250,11 @@ describe("discord live qa runtime", () => {
     expect(
       __testing.findScenario(["discord-status-reactions-tool-only"]).map((scenario) => scenario.id),
     ).toEqual(["discord-status-reactions-tool-only"]);
+    expect(
+      __testing
+        .findScenario(["discord-thread-reply-filepath-attachment"])
+        .map((scenario) => scenario.id),
+    ).toEqual(["discord-thread-reply-filepath-attachment"]);
   });
 
   it("collects the status reaction sequence across timeline snapshots", () => {
@@ -321,6 +326,31 @@ describe("discord live qa runtime", () => {
     expect(html).toContain("Discord status reactions");
     expect(html).toContain("Expected: 👀 → 🤔 → 👍");
     expect(html).toContain("Seen: 👀 → 🤔");
+  });
+
+  it("renders a human-readable thread attachment artifact", () => {
+    const html = __testing.renderDiscordThreadReplyAttachmentHtml({
+      attachmentFilenames: [],
+      expectedAttachmentFilename: "mantis-thread-report.md",
+      messageContent: "Mantis thread attachment reply",
+      scenarioTitle: "Discord thread reply preserves filePath attachment",
+      status: "fail",
+      threadName: "mantis-thread-filepath-1234",
+    });
+
+    expect(html).toContain("Attachment missing");
+    expect(html).toContain("No attachments on the SUT thread reply");
+    expect(html).toContain("mantis-thread-report.md");
+  });
+
+  it("builds Discord Web message URLs for logged-in Mantis capture", () => {
+    expect(
+      __testing.buildDiscordWebMessageUrl({
+        guildId: "111111111111111111",
+        messageId: "333333333333333333",
+        threadId: "222222222222222222",
+      }),
+    ).toBe("https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333");
   });
 
   it("waits for the Discord account to become connected, not just running", async () => {

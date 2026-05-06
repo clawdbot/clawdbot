@@ -6,8 +6,6 @@ read_when:
 title: "Provider directory"
 ---
 
-# Model Providers
-
 OpenClaw can use many LLM providers. Pick a provider, authenticate, then set the
 default model as `provider/model`.
 

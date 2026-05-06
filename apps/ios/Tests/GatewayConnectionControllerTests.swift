@@ -36,6 +36,7 @@ import UIKit
             #expect(caps.contains(OpenClawCapability.camera.rawValue))
             #expect(caps.contains(OpenClawCapability.location.rawValue))
             #expect(caps.contains(OpenClawCapability.voiceWake.rawValue))
+            #expect(caps.contains(OpenClawCapability.talk.rawValue))
         }
     }
 

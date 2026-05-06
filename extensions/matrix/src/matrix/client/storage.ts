@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -105,10 +106,10 @@ function resolveStorageRootMtimeMs(rootDir: string): number {
 function readStoredRootMetadata(rootDir: string): StoredRootMetadata {
   const metadata: StoredRootMetadata = {};
 
-  try {
-    const parsed = JSON.parse(
-      fs.readFileSync(path.join(rootDir, STORAGE_META_FILENAME), "utf8"),
-    ) as Partial<StoredRootMetadata>;
+  const parsed = loadJsonFile<Partial<StoredRootMetadata>>(
+    path.join(rootDir, STORAGE_META_FILENAME),
+  );
+  if (parsed) {
     if (typeof parsed.homeserver === "string" && parsed.homeserver.trim()) {
       metadata.homeserver = parsed.homeserver.trim();
     }
@@ -130,19 +131,17 @@ function readStoredRootMetadata(rootDir: string): StoredRootMetadata {
     if (typeof parsed.createdAt === "string" && parsed.createdAt.trim()) {
       metadata.createdAt = parsed.createdAt.trim();
     }
-  } catch {
-    // ignore missing or malformed storage metadata
   }
 
-  try {
-    const parsed = JSON.parse(
-      fs.readFileSync(path.join(rootDir, STARTUP_VERIFICATION_FILENAME), "utf8"),
-    ) as { deviceId?: unknown };
-    if (!metadata.deviceId && typeof parsed.deviceId === "string" && parsed.deviceId.trim()) {
-      metadata.deviceId = parsed.deviceId.trim();
-    }
-  } catch {
-    // ignore missing or malformed verification state
+  const verification = loadJsonFile<{ deviceId?: unknown }>(
+    path.join(rootDir, STARTUP_VERIFICATION_FILENAME),
+  );
+  if (
+    !metadata.deviceId &&
+    typeof verification?.deviceId === "string" &&
+    verification.deviceId.trim()
+  ) {
+    metadata.deviceId = verification.deviceId.trim();
   }
 
   return metadata;
@@ -473,8 +472,7 @@ function writeStoredRootMetadata(
   },
 ): boolean {
   try {
-    fs.mkdirSync(path.dirname(metaPath), { recursive: true });
-    fs.writeFileSync(metaPath, JSON.stringify(payload, null, 2), "utf-8");
+    saveJsonFile(metaPath, payload);
     return true;
   } catch {
     return false;

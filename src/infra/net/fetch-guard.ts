@@ -1,6 +1,5 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
-import { captureHttpExchange } from "../../proxy-capture/runtime.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { hasProxyEnvConfigured, shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
@@ -95,6 +94,11 @@ type GuardedFetchPresetOptions = Omit<
 >;
 
 const DEFAULT_MAX_REDIRECTS = 3;
+const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
 
 export function withStrictGuardedFetchMode(params: GuardedFetchPresetOptions): GuardedFetchOptions {
   return { ...params, mode: GUARDED_FETCH_MODE.STRICT };
@@ -230,6 +234,36 @@ export function retainSafeHeadersForCrossOriginRedirectHeaders(
   headers?: HeadersInit,
 ): Record<string, string> | undefined {
   return retainSafeRedirectHeaders(headers);
+}
+
+async function captureGuardedFetchExchange(params: {
+  url: string;
+  method: string;
+  requestHeaders?: Headers | Record<string, string> | undefined;
+  requestBody?: BodyInit | Buffer | string | null;
+  response: Response;
+  transport?: "http" | "sse";
+  capture: GuardedFetchOptions["capture"];
+  auditContext?: string;
+}): Promise<void> {
+  if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
+    return;
+  }
+  const { captureHttpExchange } = await import("../../proxy-capture/runtime.js");
+  captureHttpExchange({
+    url: params.url,
+    method: params.method,
+    requestHeaders: params.requestHeaders,
+    requestBody: params.requestBody,
+    response: params.response,
+    transport: params.transport,
+    flowId: params.capture?.flowId,
+    meta: {
+      captureOrigin: "guarded-fetch",
+      ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+      ...params.capture?.meta,
+    },
+  });
 }
 
 function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestInit | undefined {
@@ -433,23 +467,17 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);
 
-      if (params.capture !== false) {
-        captureHttpExchange({
-          url: parsedUrl.toString(),
-          method: currentInit?.method ?? "GET",
-          requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
-          requestBody:
-            (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
-          response,
-          transport: "http",
-          flowId: params.capture?.flowId,
-          meta: {
-            captureOrigin: "guarded-fetch",
-            ...(params.auditContext ? { auditContext: params.auditContext } : {}),
-            ...params.capture?.meta,
-          },
-        });
-      }
+      await captureGuardedFetchExchange({
+        url: parsedUrl.toString(),
+        method: currentInit?.method ?? "GET",
+        requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
+        requestBody:
+          (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
+        response,
+        transport: "http",
+        capture: params.capture,
+        auditContext: params.auditContext,
+      });
 
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");

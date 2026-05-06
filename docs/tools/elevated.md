@@ -102,13 +102,27 @@ Allowlist entry formats:
 
 ## What elevated does not control
 
-- **Tool policy**: if `exec` is denied by tool policy, elevated cannot override it
+- **Tool policy**: if `exec` is denied by tool policy, elevated cannot override it.
 - **Host selection policy**: elevated does not turn `auto` into a free cross-host override. It uses the configured/session exec target rules, choosing `node` only when the target is already `node`.
-- **Separate from `/exec`**: the `/exec` directive adjusts per-session exec defaults for authorized senders and does not require elevated mode
+- **Separate from `/exec`**: the `/exec` directive adjusts per-session exec defaults for authorized senders and does not require elevated mode.
+
+<Note>
+  The bash chat command (`!` prefix; `/bash` alias) is a separate gate that requires `tools.elevated` to be enabled in addition to its own `tools.bash.enabled` flag. Disabling elevated locks `!` shell commands out as well.
+</Note>
 
 ## Related
 
-- [Exec tool](/tools/exec) — shell command execution
-- [Exec approvals](/tools/exec-approvals) — approval and allowlist system
-- [Sandboxing](/gateway/sandboxing) — sandbox configuration
-- [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)
+<CardGroup cols={2}>
+  <Card title="Exec tool" href="/tools/exec" icon="terminal">
+    Shell command execution from the agent.
+  </Card>
+  <Card title="Exec approvals" href="/tools/exec-approvals" icon="shield">
+    Approval and allowlist system for `exec`.
+  </Card>
+  <Card title="Sandboxing" href="/gateway/sandboxing" icon="box">
+    Gateway-level sandbox configuration.
+  </Card>
+  <Card title="Sandbox vs Tool Policy vs Elevated" href="/gateway/sandbox-vs-tool-policy-vs-elevated" icon="scale-balanced">
+    How the three gates compose during a tool call.
+  </Card>
+</CardGroup>

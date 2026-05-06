@@ -40,6 +40,8 @@ export type AgentItemEventData = {
   error?: string;
   summary?: string;
   progressText?: string;
+  /** Preserve item telemetry while letting channel progress render a sibling tool event instead. */
+  suppressChannelProgress?: boolean;
   approvalId?: string;
   approvalSlug?: string;
 };

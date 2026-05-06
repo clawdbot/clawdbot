@@ -2392,6 +2392,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   overflow: hidden;
+  contain: layout paint;
 }
 
 .data-table-toolbar {
@@ -2431,7 +2432,10 @@
 
 .data-table-container {
   overflow: auto;
-  max-height: 70vh;
+  max-height: min(70vh, 860px);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+  -webkit-overflow-scrolling: touch;
 }
 
 .data-table {
@@ -2582,6 +2586,209 @@
 .session-token-cell {
   min-width: 112px;
   white-space: nowrap;
+}
+
+.session-compaction-col {
+  width: 152px;
+  min-width: 132px;
+}
+
+.session-compaction-cell {
+  display: grid;
+  min-width: 0;
+}
+
+.session-compaction-trigger {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 7px 9px;
+  color: var(--text);
+  text-align: left;
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.session-compaction-trigger:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.session-compaction-trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.session-compaction-count {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 650;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-checkpoint-details-row td {
+  padding: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 34%),
+    var(--surface-2, rgba(127, 127, 127, 0.05));
+}
+
+.session-details-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.session-details-panel__hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 90%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.session-details-panel__eyebrow {
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.session-details-panel__title {
+  max-width: min(720px, 72vw);
+  overflow: hidden;
+  font-weight: 700;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-details-panel__subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.session-details-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 10px;
+}
+
+.session-detail-stat {
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--card) 86%, transparent);
+}
+
+.session-detail-stat__label {
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.session-detail-stat__value {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-details-section {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+}
+
+.session-details-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-details-section__title {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.session-details-empty {
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.session-checkpoint-list {
+  display: grid;
+  gap: 10px;
+}
+
+.session-checkpoint-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+}
+
+.session-checkpoint-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.session-checkpoint-card__header strong,
+.session-checkpoint-card__delta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-checkpoint-card__delta {
+  flex: 0 1 auto;
+  font-size: 12px;
+}
+
+.session-checkpoint-card__summary {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.session-checkpoint-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 /* Checkbox column */

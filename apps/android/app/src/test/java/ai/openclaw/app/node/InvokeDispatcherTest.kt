@@ -1,11 +1,13 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
+import ai.openclaw.app.protocol.OpenClawTalkCommand
 import android.content.Context
 import android.content.pm.PackageManager
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -208,6 +210,27 @@ class InvokeDispatcherTest {
       assertEquals("INVALID_REQUEST: unknown command", result.error?.message)
     }
 
+  @Test
+  fun handleInvoke_routesTalkPttCommands() =
+    runTest {
+      val talk = InvokeDispatcherFakeTalkHandler()
+      val dispatcher = newDispatcher(talkHandler = talk)
+
+      val start = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
+      val stop = dispatcher.handleInvoke(OpenClawTalkCommand.PttStop.rawValue, null)
+      val cancel = dispatcher.handleInvoke(OpenClawTalkCommand.PttCancel.rawValue, null)
+      val once = dispatcher.handleInvoke(OpenClawTalkCommand.PttOnce.rawValue, null)
+
+      assertEquals("""{"captureId":"start"}""", start.payloadJson)
+      assertEquals("""{"status":"stop"}""", stop.payloadJson)
+      assertEquals("""{"status":"cancel"}""", cancel.payloadJson)
+      assertEquals("""{"status":"once"}""", once.payloadJson)
+      assertEquals(
+        listOf("start", "stop", "cancel", "once"),
+        talk.calls,
+      )
+    }
+
   private fun newDispatcher(
     cameraEnabled: Boolean = false,
     locationEnabled: Boolean = false,
@@ -219,6 +242,7 @@ class InvokeDispatcherTest {
     debugBuild: Boolean = false,
     motionActivityAvailable: Boolean = false,
     motionPedometerAvailable: Boolean = false,
+    talkHandler: TalkHandler = InvokeDispatcherFakeTalkHandler(),
   ): InvokeDispatcher {
     val appContext = RuntimeEnvironment.getApplication()
     shadowOf(appContext.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, smsTelephonyAvailable)
@@ -238,6 +262,7 @@ class InvokeDispatcherTest {
           stateProvider = InvokeDispatcherFakeNotificationsStateProvider(),
         ),
       systemHandler = SystemHandler.forTesting(InvokeDispatcherFakeSystemNotificationPoster()),
+      talkHandler = talkHandler,
       photosHandler = PhotosHandler.forTesting(appContext, InvokeDispatcherFakePhotosDataSource()),
       contactsHandler = ContactsHandler.forTesting(appContext, InvokeDispatcherFakeContactsDataSource()),
       calendarHandler = CalendarHandler.forTesting(appContext, InvokeDispatcherFakeCalendarDataSource()),
@@ -310,6 +335,30 @@ private class InvokeDispatcherFakeSystemNotificationPoster : SystemNotificationP
   override fun isAuthorized(): Boolean = true
 
   override fun post(request: SystemNotifyRequest) = Unit
+}
+
+private class InvokeDispatcherFakeTalkHandler : TalkHandler {
+  val calls = mutableListOf<String>()
+
+  override suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult {
+    calls.add("start")
+    return GatewaySession.InvokeResult.ok("""{"captureId":"start"}""")
+  }
+
+  override suspend fun handlePttStop(paramsJson: String?): GatewaySession.InvokeResult {
+    calls.add("stop")
+    return GatewaySession.InvokeResult.ok("""{"status":"stop"}""")
+  }
+
+  override suspend fun handlePttCancel(paramsJson: String?): GatewaySession.InvokeResult {
+    calls.add("cancel")
+    return GatewaySession.InvokeResult.ok("""{"status":"cancel"}""")
+  }
+
+  override suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult {
+    calls.add("once")
+    return GatewaySession.InvokeResult.ok("""{"status":"once"}""")
+  }
 }
 
 private class InvokeDispatcherFakePhotosDataSource : PhotosDataSource {

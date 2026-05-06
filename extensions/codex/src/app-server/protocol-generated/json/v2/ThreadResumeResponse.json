@@ -15,86 +15,36 @@
     "activePermissionProfile": {
       "description": "Named or implicit built-in profile that produced the active permissions, when known.",
       "default": null,
-      "anyOf": [
-        {
-          "$ref": "#/definitions/ActivePermissionProfile"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "anyOf": [{ "$ref": "#/definitions/ActivePermissionProfile" }, { "type": "null" }]
     },
-    "approvalPolicy": {
-      "$ref": "#/definitions/AskForApproval"
-    },
+    "approvalPolicy": { "$ref": "#/definitions/AskForApproval" },
     "approvalsReviewer": {
       "description": "Reviewer currently used for approval requests on this thread.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/ApprovalsReviewer"
-        }
-      ]
+      "allOf": [{ "$ref": "#/definitions/ApprovalsReviewer" }]
     },
-    "cwd": {
-      "$ref": "#/definitions/AbsolutePathBuf"
-    },
+    "cwd": { "$ref": "#/definitions/AbsolutePathBuf" },
     "instructionSources": {
       "description": "Instruction source files currently loaded for this thread.",
       "default": [],
       "type": "array",
-      "items": {
-        "$ref": "#/definitions/AbsolutePathBuf"
-      }
+      "items": { "$ref": "#/definitions/AbsolutePathBuf" }
     },
-    "model": {
-      "type": "string"
-    },
-    "modelProvider": {
-      "type": "string"
-    },
+    "model": { "type": "string" },
+    "modelProvider": { "type": "string" },
     "permissionProfile": {
       "description": "Full active permissions for this thread. `activePermissionProfile` carries display/provenance metadata for this runtime profile.",
       "default": null,
-      "anyOf": [
-        {
-          "$ref": "#/definitions/PermissionProfile"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "anyOf": [{ "$ref": "#/definitions/PermissionProfile" }, { "type": "null" }]
     },
     "reasoningEffort": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/ReasoningEffort"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "anyOf": [{ "$ref": "#/definitions/ReasoningEffort" }, { "type": "null" }]
     },
     "sandbox": {
       "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/SandboxPolicy"
-        }
-      ]
+      "allOf": [{ "$ref": "#/definitions/SandboxPolicy" }]
     },
-    "serviceTier": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/ServiceTier"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "thread": {
-      "$ref": "#/definitions/Thread"
-    }
+    "serviceTier": { "anyOf": [{ "$ref": "#/definitions/ServiceTier" }, { "type": "null" }] },
+    "thread": { "$ref": "#/definitions/Thread" }
   },
   "definitions": {
     "AbsolutePathBuf": {
@@ -118,9 +68,7 @@
           "description": "Bounded user-requested modifications applied on top of the named profile, if any.",
           "default": [],
           "type": "array",
-          "items": {
-            "$ref": "#/definitions/ActivePermissionProfileModification"
-          }
+          "items": { "$ref": "#/definitions/ActivePermissionProfileModification" }
         }
       }
     },
@@ -131,9 +79,7 @@
           "type": "object",
           "required": ["path", "type"],
           "properties": {
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
+            "path": { "$ref": "#/definitions/AbsolutePathBuf" },
             "type": {
               "type": "string",
               "enum": ["additionalWritableRoot"],
@@ -144,9 +90,7 @@
         }
       ]
     },
-    "AgentPath": {
-      "type": "string"
-    },
+    "AgentPath": { "type": "string" },
     "ApprovalsReviewer": {
       "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
       "type": "string",
@@ -154,10 +98,7 @@
     },
     "AskForApproval": {
       "oneOf": [
-        {
-          "type": "string",
-          "enum": ["untrusted", "on-failure", "on-request", "never"]
-        },
+        { "type": "string", "enum": ["untrusted", "on-failure", "on-request", "never"] },
         {
           "type": "object",
           "required": ["granular"],
@@ -166,23 +107,11 @@
               "type": "object",
               "required": ["mcp_elicitations", "rules", "sandbox_approval"],
               "properties": {
-                "mcp_elicitations": {
-                  "type": "boolean"
-                },
-                "request_permissions": {
-                  "default": false,
-                  "type": "boolean"
-                },
-                "rules": {
-                  "type": "boolean"
-                },
-                "sandbox_approval": {
-                  "type": "boolean"
-                },
-                "skill_approval": {
-                  "default": false,
-                  "type": "boolean"
-                }
+                "mcp_elicitations": { "type": "boolean" },
+                "request_permissions": { "default": false, "type": "boolean" },
+                "rules": { "type": "boolean" },
+                "sandbox_approval": { "type": "boolean" },
+                "skill_approval": { "default": false, "type": "boolean" }
               }
             }
           },
@@ -195,16 +124,8 @@
       "type": "object",
       "required": ["end", "start"],
       "properties": {
-        "end": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0.0
-        },
-        "start": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0.0
-        }
+        "end": { "type": "integer", "format": "uint", "minimum": 0 },
+        "start": { "type": "integer", "format": "uint", "minimum": 0 }
       }
     },
     "CodexErrorInfo": {
@@ -232,11 +153,7 @@
             "httpConnectionFailed": {
               "type": "object",
               "properties": {
-                "httpStatusCode": {
-                  "type": ["integer", "null"],
-                  "format": "uint16",
-                  "minimum": 0.0
-                }
+                "httpStatusCode": { "type": ["integer", "null"], "format": "uint16", "minimum": 0 }
               }
             }
           },
@@ -251,11 +168,7 @@
             "responseStreamConnectionFailed": {
               "type": "object",
               "properties": {
-                "httpStatusCode": {
-                  "type": ["integer", "null"],
-                  "format": "uint16",
-                  "minimum": 0.0
-                }
+                "httpStatusCode": { "type": ["integer", "null"], "format": "uint16", "minimum": 0 }
               }
             }
           },
@@ -270,11 +183,7 @@
             "responseStreamDisconnected": {
               "type": "object",
               "properties": {
-                "httpStatusCode": {
-                  "type": ["integer", "null"],
-                  "format": "uint16",
-                  "minimum": 0.0
-                }
+                "httpStatusCode": { "type": ["integer", "null"], "format": "uint16", "minimum": 0 }
               }
             }
           },
@@ -289,11 +198,7 @@
             "responseTooManyFailedAttempts": {
               "type": "object",
               "properties": {
-                "httpStatusCode": {
-                  "type": ["integer", "null"],
-                  "format": "uint16",
-                  "minimum": 0.0
-                }
+                "httpStatusCode": { "type": ["integer", "null"], "format": "uint16", "minimum": 0 }
               }
             }
           },
@@ -308,11 +213,7 @@
             "activeTurnNotSteerable": {
               "type": "object",
               "required": ["turnKind"],
-              "properties": {
-                "turnKind": {
-                  "$ref": "#/definitions/NonSteerableTurnKind"
-                }
-              }
+              "properties": { "turnKind": { "$ref": "#/definitions/NonSteerableTurnKind" } }
             }
           },
           "additionalProperties": false,
@@ -324,12 +225,8 @@
       "type": "object",
       "required": ["status"],
       "properties": {
-        "message": {
-          "type": ["string", "null"]
-        },
-        "status": {
-          "$ref": "#/definitions/CollabAgentStatus"
-        }
+        "message": { "type": ["string", "null"] },
+        "status": { "$ref": "#/definitions/CollabAgentStatus" }
       }
     },
     "CollabAgentStatus": {
@@ -358,20 +255,10 @@
           "type": "object",
           "required": ["command", "name", "path", "type"],
           "properties": {
-            "command": {
-              "type": "string"
-            },
-            "name": {
-              "type": "string"
-            },
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "type": "string",
-              "enum": ["read"],
-              "title": "ReadCommandActionType"
-            }
+            "command": { "type": "string" },
+            "name": { "type": "string" },
+            "path": { "$ref": "#/definitions/AbsolutePathBuf" },
+            "type": { "type": "string", "enum": ["read"], "title": "ReadCommandActionType" }
           },
           "title": "ReadCommandAction"
         },
@@ -379,12 +266,8 @@
           "type": "object",
           "required": ["command", "type"],
           "properties": {
-            "command": {
-              "type": "string"
-            },
-            "path": {
-              "type": ["string", "null"]
-            },
+            "command": { "type": "string" },
+            "path": { "type": ["string", "null"] },
             "type": {
               "type": "string",
               "enum": ["listFiles"],
@@ -397,20 +280,10 @@
           "type": "object",
           "required": ["command", "type"],
           "properties": {
-            "command": {
-              "type": "string"
-            },
-            "path": {
-              "type": ["string", "null"]
-            },
-            "query": {
-              "type": ["string", "null"]
-            },
-            "type": {
-              "type": "string",
-              "enum": ["search"],
-              "title": "SearchCommandActionType"
-            }
+            "command": { "type": "string" },
+            "path": { "type": ["string", "null"] },
+            "query": { "type": ["string", "null"] },
+            "type": { "type": "string", "enum": ["search"], "title": "SearchCommandActionType" }
           },
           "title": "SearchCommandAction"
         },
@@ -418,14 +291,8 @@
           "type": "object",
           "required": ["command", "type"],
           "properties": {
-            "command": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "enum": ["unknown"],
-              "title": "UnknownCommandActionType"
-            }
+            "command": { "type": "string" },
+            "type": { "type": "string", "enum": ["unknown"], "title": "UnknownCommandActionType" }
           },
           "title": "UnknownCommandAction"
         }
@@ -445,9 +312,7 @@
           "type": "object",
           "required": ["text", "type"],
           "properties": {
-            "text": {
-              "type": "string"
-            },
+            "text": { "type": "string" },
             "type": {
               "type": "string",
               "enum": ["inputText"],
@@ -460,9 +325,7 @@
           "type": "object",
           "required": ["imageUrl", "type"],
           "properties": {
-            "imageUrl": {
-              "type": "string"
-            },
+            "imageUrl": { "type": "string" },
             "type": {
               "type": "string",
               "enum": ["inputImage"],
@@ -473,28 +336,16 @@
         }
       ]
     },
-    "DynamicToolCallStatus": {
-      "type": "string",
-      "enum": ["inProgress", "completed", "failed"]
-    },
-    "FileSystemAccessMode": {
-      "type": "string",
-      "enum": ["read", "write", "none"]
-    },
+    "DynamicToolCallStatus": { "type": "string", "enum": ["inProgress", "completed", "failed"] },
+    "FileSystemAccessMode": { "type": "string", "enum": ["read", "write", "none"] },
     "FileSystemPath": {
       "oneOf": [
         {
           "type": "object",
           "required": ["path", "type"],
           "properties": {
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "type": "string",
-              "enum": ["path"],
-              "title": "PathFileSystemPathType"
-            }
+            "path": { "$ref": "#/definitions/AbsolutePathBuf" },
+            "type": { "type": "string", "enum": ["path"], "title": "PathFileSystemPathType" }
           },
           "title": "PathFileSystemPath"
         },
@@ -502,9 +353,7 @@
           "type": "object",
           "required": ["pattern", "type"],
           "properties": {
-            "pattern": {
-              "type": "string"
-            },
+            "pattern": { "type": "string" },
             "type": {
               "type": "string",
               "enum": ["glob_pattern"],
@@ -517,14 +366,8 @@
           "type": "object",
           "required": ["type", "value"],
           "properties": {
-            "type": {
-              "type": "string",
-              "enum": ["special"],
-              "title": "SpecialFileSystemPathType"
-            },
-            "value": {
-              "$ref": "#/definitions/FileSystemSpecialPath"
-            }
+            "type": { "type": "string", "enum": ["special"], "title": "SpecialFileSystemPathType" },
+            "value": { "$ref": "#/definitions/FileSystemSpecialPath" }
           },
           "title": "SpecialFileSystemPath"
         }
@@ -534,12 +377,8 @@
       "type": "object",
       "required": ["access", "path"],
       "properties": {
-        "access": {
-          "$ref": "#/definitions/FileSystemAccessMode"
-        },
-        "path": {
-          "$ref": "#/definitions/FileSystemPath"
-        }
+        "access": { "$ref": "#/definitions/FileSystemAccessMode" },
+        "path": { "$ref": "#/definitions/FileSystemPath" }
       }
     },
     "FileSystemSpecialPath": {
@@ -547,75 +386,43 @@
         {
           "type": "object",
           "required": ["kind"],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": ["root"]
-            }
-          },
+          "properties": { "kind": { "type": "string", "enum": ["root"] } },
           "title": "RootFileSystemSpecialPath"
         },
         {
           "type": "object",
           "required": ["kind"],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": ["minimal"]
-            }
-          },
+          "properties": { "kind": { "type": "string", "enum": ["minimal"] } },
           "title": "MinimalFileSystemSpecialPath"
         },
         {
           "type": "object",
           "required": ["kind"],
           "properties": {
-            "kind": {
-              "type": "string",
-              "enum": ["project_roots"]
-            },
-            "subpath": {
-              "type": ["string", "null"]
-            }
+            "kind": { "type": "string", "enum": ["project_roots"] },
+            "subpath": { "type": ["string", "null"] }
           },
           "title": "KindFileSystemSpecialPath"
         },
         {
           "type": "object",
           "required": ["kind"],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": ["tmpdir"]
-            }
-          },
+          "properties": { "kind": { "type": "string", "enum": ["tmpdir"] } },
           "title": "TmpdirFileSystemSpecialPath"
         },
         {
           "type": "object",
           "required": ["kind"],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": ["slash_tmp"]
-            }
-          },
+          "properties": { "kind": { "type": "string", "enum": ["slash_tmp"] } },
           "title": "SlashTmpFileSystemSpecialPath"
         },
         {
           "type": "object",
           "required": ["kind", "path"],
           "properties": {
-            "kind": {
-              "type": "string",
-              "enum": ["unknown"]
-            },
-            "path": {
-              "type": "string"
-            },
-            "subpath": {
-              "type": ["string", "null"]
-            }
+            "kind": { "type": "string", "enum": ["unknown"] },
+            "path": { "type": "string" },
+            "subpath": { "type": ["string", "null"] }
           }
         }
       ]
@@ -624,106 +431,55 @@
       "type": "object",
       "required": ["diff", "kind", "path"],
       "properties": {
-        "diff": {
-          "type": "string"
-        },
-        "kind": {
-          "$ref": "#/definitions/PatchChangeKind"
-        },
-        "path": {
-          "type": "string"
-        }
+        "diff": { "type": "string" },
+        "kind": { "$ref": "#/definitions/PatchChangeKind" },
+        "path": { "type": "string" }
       }
     },
     "GitInfo": {
       "type": "object",
       "properties": {
-        "branch": {
-          "type": ["string", "null"]
-        },
-        "originUrl": {
-          "type": ["string", "null"]
-        },
-        "sha": {
-          "type": ["string", "null"]
-        }
+        "branch": { "type": ["string", "null"] },
+        "originUrl": { "type": ["string", "null"] },
+        "sha": { "type": ["string", "null"] }
       }
     },
     "HookPromptFragment": {
       "type": "object",
       "required": ["hookRunId", "text"],
-      "properties": {
-        "hookRunId": {
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        }
-      }
+      "properties": { "hookRunId": { "type": "string" }, "text": { "type": "string" } }
     },
     "McpToolCallError": {
       "type": "object",
       "required": ["message"],
-      "properties": {
-        "message": {
-          "type": "string"
-        }
-      }
+      "properties": { "message": { "type": "string" } }
     },
     "McpToolCallResult": {
       "type": "object",
       "required": ["content"],
       "properties": {
         "_meta": true,
-        "content": {
-          "type": "array",
-          "items": true
-        },
+        "content": { "type": "array", "items": true },
         "structuredContent": true
       }
     },
-    "McpToolCallStatus": {
-      "type": "string",
-      "enum": ["inProgress", "completed", "failed"]
-    },
+    "McpToolCallStatus": { "type": "string", "enum": ["inProgress", "completed", "failed"] },
     "MemoryCitation": {
       "type": "object",
       "required": ["entries", "threadIds"],
       "properties": {
-        "entries": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/MemoryCitationEntry"
-          }
-        },
-        "threadIds": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
+        "entries": { "type": "array", "items": { "$ref": "#/definitions/MemoryCitationEntry" } },
+        "threadIds": { "type": "array", "items": { "type": "string" } }
       }
     },
     "MemoryCitationEntry": {
       "type": "object",
       "required": ["lineEnd", "lineStart", "note", "path"],
       "properties": {
-        "lineEnd": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "lineStart": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "note": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        }
+        "lineEnd": { "type": "integer", "format": "uint32", "minimum": 0 },
+        "lineStart": { "type": "integer", "format": "uint32", "minimum": 0 },
+        "note": { "type": "string" },
+        "path": { "type": "string" }
       }
     },
     "MessagePhase": {
@@ -741,14 +497,8 @@
         }
       ]
     },
-    "NetworkAccess": {
-      "type": "string",
-      "enum": ["restricted", "enabled"]
-    },
-    "NonSteerableTurnKind": {
-      "type": "string",
-      "enum": ["review", "compact"]
-    },
+    "NetworkAccess": { "type": "string", "enum": ["restricted", "enabled"] },
+    "NonSteerableTurnKind": { "type": "string", "enum": ["review", "compact"] },
     "PatchApplyStatus": {
       "type": "string",
       "enum": ["inProgress", "completed", "failed", "declined"]
@@ -759,11 +509,7 @@
           "type": "object",
           "required": ["type"],
           "properties": {
-            "type": {
-              "type": "string",
-              "enum": ["add"],
-              "title": "AddPatchChangeKindType"
-            }
+            "type": { "type": "string", "enum": ["add"], "title": "AddPatchChangeKindType" }
           },
           "title": "AddPatchChangeKind"
         },
@@ -771,11 +517,7 @@
           "type": "object",
           "required": ["type"],
           "properties": {
-            "type": {
-              "type": "string",
-              "enum": ["delete"],
-              "title": "DeletePatchChangeKindType"
-            }
+            "type": { "type": "string", "enum": ["delete"], "title": "DeletePatchChangeKindType" }
           },
           "title": "DeletePatchChangeKind"
         },
@@ -783,14 +525,8 @@
           "type": "object",
           "required": ["type"],
           "properties": {
-            "move_path": {
-              "type": ["string", "null"]
-            },
-            "type": {
-              "type": "string",
-              "enum": ["update"],
-              "title": "UpdatePatchChangeKindType"
-            }
+            "move_path": { "type": ["string", "null"] },
+            "type": { "type": "string", "enum": ["update"], "title": "UpdatePatchChangeKindType" }
           },
           "title": "UpdatePatchChangeKind"
         }
@@ -803,12 +539,8 @@
           "type": "object",
           "required": ["fileSystem", "network", "type"],
           "properties": {
-            "fileSystem": {
-              "$ref": "#/definitions/PermissionProfileFileSystemPermissions"
-            },
-            "network": {
-              "$ref": "#/definitions/PermissionProfileNetworkPermissions"
-            },
+            "fileSystem": { "$ref": "#/definitions/PermissionProfileFileSystemPermissions" },
+            "network": { "$ref": "#/definitions/PermissionProfileNetworkPermissions" },
             "type": {
               "type": "string",
               "enum": ["managed"],
@@ -835,9 +567,7 @@
           "type": "object",
           "required": ["network", "type"],
           "properties": {
-            "network": {
-              "$ref": "#/definitions/PermissionProfileNetworkPermissions"
-            },
+            "network": { "$ref": "#/definitions/PermissionProfileNetworkPermissions" },
             "type": {
               "type": "string",
               "enum": ["external"],
@@ -856,15 +586,9 @@
           "properties": {
             "entries": {
               "type": "array",
-              "items": {
-                "$ref": "#/definitions/FileSystemSandboxEntry"
-              }
+              "items": { "$ref": "#/definitions/FileSystemSandboxEntry" }
             },
-            "globScanMaxDepth": {
-              "type": ["integer", "null"],
-              "format": "uint",
-              "minimum": 1.0
-            },
+            "globScanMaxDepth": { "type": ["integer", "null"], "format": "uint", "minimum": 1 },
             "type": {
               "type": "string",
               "enum": ["restricted"],
@@ -890,11 +614,7 @@
     "PermissionProfileNetworkPermissions": {
       "type": "object",
       "required": ["enabled"],
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        }
-      }
+      "properties": { "enabled": { "type": "boolean" } }
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -919,15 +639,8 @@
           "type": "object",
           "required": ["type"],
           "properties": {
-            "networkAccess": {
-              "default": false,
-              "type": "boolean"
-            },
-            "type": {
-              "type": "string",
-              "enum": ["readOnly"],
-              "title": "ReadOnlySandboxPolicyType"
-            }
+            "networkAccess": { "default": false, "type": "boolean" },
+            "type": { "type": "string", "enum": ["readOnly"], "title": "ReadOnlySandboxPolicyType" }
           },
           "title": "ReadOnlySandboxPolicy"
         },
@@ -937,11 +650,7 @@
           "properties": {
             "networkAccess": {
               "default": "restricted",
-              "allOf": [
-                {
-                  "$ref": "#/definitions/NetworkAccess"
-                }
-              ]
+              "allOf": [{ "$ref": "#/definitions/NetworkAccess" }]
             },
             "type": {
               "type": "string",
@@ -955,18 +664,9 @@
           "type": "object",
           "required": ["type"],
           "properties": {
-            "excludeSlashTmp": {
-              "default": false,
-              "type": "boolean"
-            },
-            "excludeTmpdirEnvVar": {
-              "default": false,
-              "type": "boolean"
-            },
-            "networkAccess": {
-              "default": false,
-              "type": "boolean"
-            },
+            "excludeSlashTmp": { "default": false, "type": "boolean" },
+            "excludeTmpdirEnvVar": { "default": false, "type": "boolean" },
+            "networkAccess": { "default": false, "type": "boolean" },
             "type": {
               "type": "string",
               "enum": ["workspaceWrite"],
@@ -975,44 +675,28 @@
             "writableRoots": {
               "default": [],
               "type": "array",
-              "items": {
-                "$ref": "#/definitions/AbsolutePathBuf"
-              }
+              "items": { "$ref": "#/definitions/AbsolutePathBuf" }
             }
           },
           "title": "WorkspaceWriteSandboxPolicy"
         }
       ]
     },
-    "ServiceTier": {
-      "type": "string",
-      "enum": ["fast", "flex"]
-    },
+    "ServiceTier": { "type": "string", "enum": ["fast", "flex"] },
     "SessionSource": {
       "oneOf": [
-        {
-          "type": "string",
-          "enum": ["cli", "vscode", "exec", "appServer", "unknown"]
-        },
+        { "type": "string", "enum": ["cli", "vscode", "exec", "appServer", "unknown"] },
         {
           "type": "object",
           "required": ["custom"],
-          "properties": {
-            "custom": {
-              "type": "string"
-            }
-          },
+          "properties": { "custom": { "type": "string" } },
           "additionalProperties": false,
           "title": "CustomSessionSource"
         },
         {
           "type": "object",
           "required": ["subAgent"],
-          "properties": {
-            "subAgent": {
-              "$ref": "#/definitions/SubAgentSource"
-            }
-          },
+          "properties": { "subAgent": { "$ref": "#/definitions/SubAgentSource" } },
           "additionalProperties": false,
           "title": "SubAgentSessionSource"
         }
@@ -1020,10 +704,7 @@
     },
     "SubAgentSource": {
       "oneOf": [
-        {
-          "type": "string",
-          "enum": ["review", "compact", "memory_consolidation"]
-        },
+        { "type": "string", "enum": ["review", "compact", "memory_consolidation"] },
         {
           "type": "object",
           "required": ["thread_spawn"],
@@ -1032,32 +713,14 @@
               "type": "object",
               "required": ["depth", "parent_thread_id"],
               "properties": {
-                "agent_nickname": {
-                  "default": null,
-                  "type": ["string", "null"]
-                },
+                "agent_nickname": { "default": null, "type": ["string", "null"] },
                 "agent_path": {
                   "default": null,
-                  "anyOf": [
-                    {
-                      "$ref": "#/definitions/AgentPath"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                  "anyOf": [{ "$ref": "#/definitions/AgentPath" }, { "type": "null" }]
                 },
-                "agent_role": {
-                  "default": null,
-                  "type": ["string", "null"]
-                },
-                "depth": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "parent_thread_id": {
-                  "$ref": "#/definitions/ThreadId"
-                }
+                "agent_role": { "default": null, "type": ["string", "null"] },
+                "depth": { "type": "integer", "format": "int32" },
+                "parent_thread_id": { "$ref": "#/definitions/ThreadId" }
               }
             }
           },
@@ -1067,11 +730,7 @@
         {
           "type": "object",
           "required": ["other"],
-          "properties": {
-            "other": {
-              "type": "string"
-            }
-          },
+          "properties": { "other": { "type": "string" } },
           "additionalProperties": false,
           "title": "OtherSubAgentSource"
         }
@@ -1083,11 +742,7 @@
       "properties": {
         "byteRange": {
           "description": "Byte range in the parent `text` buffer that this element occupies.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/ByteRange"
-            }
-          ]
+          "allOf": [{ "$ref": "#/definitions/ByteRange" }]
         },
         "placeholder": {
           "description": "Optional human-readable placeholder for the element, displayed in the UI.",
@@ -1130,11 +785,7 @@
         },
         "cwd": {
           "description": "Working directory captured for the thread.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            }
-          ]
+          "allOf": [{ "$ref": "#/definitions/AbsolutePathBuf" }]
         },
         "ephemeral": {
           "description": "Whether the thread is ephemeral and should not be materialized on disk.",
@@ -1146,26 +797,14 @@
         },
         "gitInfo": {
           "description": "Optional Git metadata captured when the thread was created.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/GitInfo"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "anyOf": [{ "$ref": "#/definitions/GitInfo" }, { "type": "null" }]
         },
-        "id": {
-          "type": "string"
-        },
+        "id": { "type": "string" },
         "modelProvider": {
           "description": "Model provider used for this thread (for example, 'openai').",
           "type": "string"
         },
-        "name": {
-          "description": "Optional user-facing thread title.",
-          "type": ["string", "null"]
-        },
+        "name": { "description": "Optional user-facing thread title.", "type": ["string", "null"] },
         "path": {
           "description": "[UNSTABLE] Path to the thread on disk.",
           "type": ["string", "null"]
@@ -1176,26 +815,16 @@
         },
         "source": {
           "description": "Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.).",
-          "allOf": [
-            {
-              "$ref": "#/definitions/SessionSource"
-            }
-          ]
+          "allOf": [{ "$ref": "#/definitions/SessionSource" }]
         },
         "status": {
           "description": "Current runtime status for the thread.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/ThreadStatus"
-            }
-          ]
+          "allOf": [{ "$ref": "#/definitions/ThreadStatus" }]
         },
         "turns": {
           "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
           "type": "array",
-          "items": {
-            "$ref": "#/definitions/Turn"
-          }
+          "items": { "$ref": "#/definitions/Turn" }
         },
         "updatedAt": {
           "description": "Unix timestamp (in seconds) when the thread was last updated.",
@@ -1204,28 +833,16 @@
         }
       }
     },
-    "ThreadActiveFlag": {
-      "type": "string",
-      "enum": ["waitingOnApproval", "waitingOnUserInput"]
-    },
-    "ThreadId": {
-      "type": "string"
-    },
+    "ThreadActiveFlag": { "type": "string", "enum": ["waitingOnApproval", "waitingOnUserInput"] },
+    "ThreadId": { "type": "string" },
     "ThreadItem": {
       "oneOf": [
         {
           "type": "object",
           "required": ["content", "id", "type"],
           "properties": {
-            "content": {
-              "type": "array",
-              "items": {
-                "$ref": "#/definitions/UserInput"
-              }
-            },
-            "id": {
-              "type": "string"
-            },
+            "content": { "type": "array", "items": { "$ref": "#/definitions/UserInput" } },
+            "id": { "type": "string" },
             "type": {
               "type": "string",
               "enum": ["userMessage"],
@@ -1240,13 +857,9 @@
           "properties": {
             "fragments": {
               "type": "array",
-              "items": {
-                "$ref": "#/definitions/HookPromptFragment"
-              }
+              "items": { "$ref": "#/definitions/HookPromptFragment" }
             },
-            "id": {
-              "type": "string"
-            },
+            "id": { "type": "string" },
             "type": {
               "type": "string",
               "enum": ["hookPrompt"],
@@ -1259,34 +872,16 @@
           "type": "object",
           "required": ["id", "text", "type"],
           "properties": {
-            "id": {
-              "type": "string"
-            },
+            "id": { "type": "string" },
             "memoryCitation": {
               "default": null,
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/MemoryCitation"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "anyOf": [{ "$ref": "#/definitions/MemoryCitation" }, { "type": "null" }]
             },
             "phase": {
               "default": null,
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/MessagePhase"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "anyOf": [{ "$ref": "#/definitions/MessagePhase" }, { "type": "null" }]
             },
-            "text": {
-              "type": "string"
-            },
+            "text": { "type": "string" },
             "type": {
               "type": "string",
               "enum": ["agentMessage"],
@@ -1300,17 +895,9 @@
           "type": "object",
           "required": ["id", "text", "type"],
           "properties": {
-            "id": {
-              "type": "string"
-            },
-            "text": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "enum": ["plan"],
-              "title": "PlanThreadItemType"
-            }
+            "id": { "type": "string" },
+            "text": { "type": "string" },
+            "type": { "type": "string", "enum": ["plan"], "title": "PlanThreadItemType" }
           },
           "title": "PlanThreadItem"
         },
@@ -1318,28 +905,10 @@
           "type": "object",
           "required": ["id", "type"],
           "properties": {
-            "content": {
-              "default": [],
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "id": {
-              "type": "string"
-            },
-            "summary": {
-              "default": [],
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "type": {
-              "type": "string",
-              "enum": ["reasoning"],
-              "title": "ReasoningThreadItemType"
-            }
+            "content": { "default": [], "type": "array", "items": { "type": "string" } },
+            "id": { "type": "string" },
+            "summary": { "default": [], "type": "array", "items": { "type": "string" } },
+            "type": { "type": "string", "enum": ["reasoning"], "title": "ReasoningThreadItemType" }
           },
           "title": "ReasoningThreadItem"
         },
@@ -1351,24 +920,15 @@
               "description": "The command's output, aggregated from stdout and stderr.",
               "type": ["string", "null"]
             },
-            "command": {
-              "description": "The command to be executed.",
-              "type": "string"
-            },
+            "command": { "description": "The command to be executed.", "type": "string" },
             "commandActions": {
               "description": "A best-effort parsing of the command to understand the action(s) it will perform. This returns a list of CommandAction objects because a single shell command may be composed of many commands piped together.",
               "type": "array",
-              "items": {
-                "$ref": "#/definitions/CommandAction"
-              }
+              "items": { "$ref": "#/definitions/CommandAction" }
             },
             "cwd": {
               "description": "The command's working directory.",
-              "allOf": [
-                {
-                  "$ref": "#/definitions/AbsolutePathBuf"
-                }
-              ]
+              "allOf": [{ "$ref": "#/definitions/AbsolutePathBuf" }]
             },
             "durationMs": {
               "description": "The duration of the command execution in milliseconds.",
@@ -1380,24 +940,16 @@
               "type": ["integer", "null"],
               "format": "int32"
             },
-            "id": {
-              "type": "string"
-            },
+            "id": { "type": "string" },
             "processId": {
               "description": "Identifier for the underlying PTY process (when available).",
               "type": ["string", "null"]
             },
             "source": {
               "default": "agent",
-              "allOf": [
-                {
-                  "$ref": "#/definitions/CommandExecutionSource"
-                }
-              ]
+              "allOf": [{ "$ref": "#/definitions/CommandExecutionSource" }]
             },
-            "status": {
-              "$ref": "#/definitions/CommandExecutionStatus"
-            },
+            "status": { "$ref": "#/definitions/CommandExecutionStatus" },
             "type": {
               "type": "string",
               "enum": ["commandExecution"],
@@ -1410,18 +962,9 @@
           "type": "object",
           "required": ["changes", "id", "status", "type"],
           "properties": {
-            "changes": {
-              "type": "array",
-              "items": {
-                "$ref": "#/definitions/FileUpdateChange"
-              }
-            },
-            "id": {
-              "type": "string"
-            },
-            "status": {
-              "$ref": "#/definitions/PatchApplyStatus"
-            },
+            "changes": { "type": "array", "items": { "$ref": "#/definitions/FileUpdateChange" } },
+            "id": { "type": "string" },
+            "status": { "$ref": "#/definitions/PatchApplyStatus" },
             "type": {
               "type": "string",
               "enum": ["fileChange"],
@@ -1441,40 +984,16 @@
               "format": "int64"
             },
             "error": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/McpToolCallError"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "anyOf": [{ "$ref": "#/definitions/McpToolCallError" }, { "type": "null" }]
             },
-            "id": {
-              "type": "string"
-            },
-            "mcpAppResourceUri": {
-              "type": ["string", "null"]
-            },
+            "id": { "type": "string" },
+            "mcpAppResourceUri": { "type": ["string", "null"] },
             "result": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/McpToolCallResult"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "anyOf": [{ "$ref": "#/definitions/McpToolCallResult" }, { "type": "null" }]
             },
-            "server": {
-              "type": "string"
-            },
-            "status": {
-              "$ref": "#/definitions/McpToolCallStatus"
-            },
-            "tool": {
-              "type": "string"
-            },
+            "server": { "type": "string" },
+            "status": { "$ref": "#/definitions/McpToolCallStatus" },
+            "tool": { "type": "string" },
             "type": {
               "type": "string",
               "enum": ["mcpToolCall"],
@@ -1490,30 +1009,18 @@
             "arguments": true,
             "contentItems": {
               "type": ["array", "null"],
-              "items": {
-                "$ref": "#/definitions/DynamicToolCallOutputContentItem"
-              }
+              "items": { "$ref": "#/definitions/DynamicToolCallOutputContentItem" }
             },
             "durationMs": {
               "description": "The duration of the dynamic tool call in milliseconds.",
               "type": ["integer", "null"],
               "format": "int64"
             },
-            "id": {
-              "type": "string"
-            },
-            "namespace": {
-              "type": ["string", "null"]
-            },
-            "status": {
-              "$ref": "#/definitions/DynamicToolCallStatus"
-            },
-            "success": {
-              "type": ["boolean", "null"]
-            },
-            "tool": {
-              "type": "string"
-            },
+            "id": { "type": "string" },
+            "namespace": { "type": ["string", "null"] },
+            "status": { "$ref": "#/definitions/DynamicToolCallStatus" },
+            "success": { "type": ["boolean", "null"] },
+            "tool": { "type": "string" },
             "type": {
               "type": "string",
               "enum": ["dynamicToolCall"],
@@ -1537,9 +1044,7 @@
             "agentsStates": {
               "description": "Last known status of the target agents, when available.",
               "type": "object",
-              "additionalProperties": {
-                "$ref": "#/definitions/CollabAgentState"
-              }
+              "additionalProperties": { "$ref": "#/definitions/CollabAgentState" }
             },
             "id": {
               "description": "Unique identifier for this collab tool call.",
@@ -1555,21 +1060,12 @@
             },
             "reasoningEffort": {
               "description": "Reasoning effort requested for the spawned agent, when applicable.",
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ReasoningEffort"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "anyOf": [{ "$ref": "#/definitions/ReasoningEffort" }, { "type": "null" }]
             },
             "receiverThreadIds": {
               "description": "Thread ID of the receiving agent, when applicable. In case of spawn operation, this corresponds to the newly spawned agent.",
               "type": "array",
-              "items": {
-                "type": "string"
-              }
+              "items": { "type": "string" }
             },
             "senderThreadId": {
               "description": "Thread ID of the agent issuing the collab request.",
@@ -1577,19 +1073,11 @@
             },
             "status": {
               "description": "Current status of the collab tool call.",
-              "allOf": [
-                {
-                  "$ref": "#/definitions/CollabAgentToolCallStatus"
-                }
-              ]
+              "allOf": [{ "$ref": "#/definitions/CollabAgentToolCallStatus" }]
             },
             "tool": {
               "description": "Name of the collab tool that was invoked.",
-              "allOf": [
-                {
-                  "$ref": "#/definitions/CollabAgentTool"
-                }
-              ]
+              "allOf": [{ "$ref": "#/definitions/CollabAgentTool" }]
             },
             "type": {
               "type": "string",
@@ -1604,26 +1092,11 @@
           "required": ["id", "query", "type"],
           "properties": {
             "action": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/WebSearchAction"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "anyOf": [{ "$ref": "#/definitions/WebSearchAction" }, { "type": "null" }]
             },
-            "id": {
-              "type": "string"
-            },
-            "query": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "enum": ["webSearch"],
-              "title": "WebSearchThreadItemType"
-            }
+            "id": { "type": "string" },
+            "query": { "type": "string" },
+            "type": { "type": "string", "enum": ["webSearch"], "title": "WebSearchThreadItemType" }
           },
           "title": "WebSearchThreadItem"
         },
@@ -1631,17 +1104,9 @@
           "type": "object",
           "required": ["id", "path", "type"],
           "properties": {
-            "id": {
-              "type": "string"
-            },
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "type": "string",
-              "enum": ["imageView"],
-              "title": "ImageViewThreadItemType"
-            }
+            "id": { "type": "string" },
+            "path": { "$ref": "#/definitions/AbsolutePathBuf" },
+            "type": { "type": "string", "enum": ["imageView"], "title": "ImageViewThreadItemType" }
           },
           "title": "ImageViewThreadItem"
         },
@@ -1649,28 +1114,13 @@
           "type": "object",
           "required": ["id", "result", "status", "type"],
           "properties": {
-            "id": {
-              "type": "string"
-            },
-            "result": {
-              "type": "string"
-            },
-            "revisedPrompt": {
-              "type": ["string", "null"]
-            },
+            "id": { "type": "string" },
+            "result": { "type": "string" },
+            "revisedPrompt": { "type": ["string", "null"] },
             "savedPath": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/AbsolutePathBuf"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "anyOf": [{ "$ref": "#/definitions/AbsolutePathBuf" }, { "type": "null" }]
             },
-            "status": {
-              "type": "string"
-            },
+            "status": { "type": "string" },
             "type": {
               "type": "string",
               "enum": ["imageGeneration"],
@@ -1683,12 +1133,8 @@
           "type": "object",
           "required": ["id", "review", "type"],
           "properties": {
-            "id": {
-              "type": "string"
-            },
-            "review": {
-              "type": "string"
-            },
+            "id": { "type": "string" },
+            "review": { "type": "string" },
             "type": {
               "type": "string",
               "enum": ["enteredReviewMode"],
@@ -1701,12 +1147,8 @@
           "type": "object",
           "required": ["id", "review", "type"],
           "properties": {
-            "id": {
-              "type": "string"
-            },
-            "review": {
-              "type": "string"
-            },
+            "id": { "type": "string" },
+            "review": { "type": "string" },
             "type": {
               "type": "string",
               "enum": ["exitedReviewMode"],
@@ -1719,9 +1161,7 @@
           "type": "object",
           "required": ["id", "type"],
           "properties": {
-            "id": {
-              "type": "string"
-            },
+            "id": { "type": "string" },
             "type": {
               "type": "string",
               "enum": ["contextCompaction"],
@@ -1750,11 +1190,7 @@
           "type": "object",
           "required": ["type"],
           "properties": {
-            "type": {
-              "type": "string",
-              "enum": ["idle"],
-              "title": "IdleThreadStatusType"
-            }
+            "type": { "type": "string", "enum": ["idle"], "title": "IdleThreadStatusType" }
           },
           "title": "IdleThreadStatus"
         },
@@ -1776,15 +1212,9 @@
           "properties": {
             "activeFlags": {
               "type": "array",
-              "items": {
-                "$ref": "#/definitions/ThreadActiveFlag"
-              }
+              "items": { "$ref": "#/definitions/ThreadActiveFlag" }
             },
-            "type": {
-              "type": "string",
-              "enum": ["active"],
-              "title": "ActiveThreadStatusType"
-            }
+            "type": { "type": "string", "enum": ["active"], "title": "ActiveThreadStatusType" }
           },
           "title": "ActiveThreadStatus"
         }
@@ -1806,56 +1236,31 @@
         },
         "error": {
           "description": "Only populated when the Turn's status is failed.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/TurnError"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "anyOf": [{ "$ref": "#/definitions/TurnError" }, { "type": "null" }]
         },
-        "id": {
-          "type": "string"
-        },
+        "id": { "type": "string" },
         "items": {
           "description": "Only populated on a `thread/resume` or `thread/fork` response. For all other responses and notifications returning a Turn, the items field will be an empty list.",
           "type": "array",
-          "items": {
-            "$ref": "#/definitions/ThreadItem"
-          }
+          "items": { "$ref": "#/definitions/ThreadItem" }
         },
         "startedAt": {
           "description": "Unix timestamp (in seconds) when the turn started.",
           "type": ["integer", "null"],
           "format": "int64"
         },
-        "status": {
-          "$ref": "#/definitions/TurnStatus"
-        }
+        "status": { "$ref": "#/definitions/TurnStatus" }
       }
     },
     "TurnError": {
       "type": "object",
       "required": ["message"],
       "properties": {
-        "additionalDetails": {
-          "default": null,
-          "type": ["string", "null"]
-        },
+        "additionalDetails": { "default": null, "type": ["string", "null"] },
         "codexErrorInfo": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/CodexErrorInfo"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "anyOf": [{ "$ref": "#/definitions/CodexErrorInfo" }, { "type": "null" }]
         },
-        "message": {
-          "type": "string"
-        }
+        "message": { "type": "string" }
       }
     },
     "TurnStatus": {
@@ -1868,22 +1273,14 @@
           "type": "object",
           "required": ["text", "type"],
           "properties": {
-            "text": {
-              "type": "string"
-            },
+            "text": { "type": "string" },
             "text_elements": {
               "description": "UI-defined spans within `text` used to render or persist special elements.",
               "default": [],
               "type": "array",
-              "items": {
-                "$ref": "#/definitions/TextElement"
-              }
+              "items": { "$ref": "#/definitions/TextElement" }
             },
-            "type": {
-              "type": "string",
-              "enum": ["text"],
-              "title": "TextUserInputType"
-            }
+            "type": { "type": "string", "enum": ["text"], "title": "TextUserInputType" }
           },
           "title": "TextUserInput"
         },
@@ -1891,14 +1288,8 @@
           "type": "object",
           "required": ["type", "url"],
           "properties": {
-            "type": {
-              "type": "string",
-              "enum": ["image"],
-              "title": "ImageUserInputType"
-            },
-            "url": {
-              "type": "string"
-            }
+            "type": { "type": "string", "enum": ["image"], "title": "ImageUserInputType" },
+            "url": { "type": "string" }
           },
           "title": "ImageUserInput"
         },
@@ -1906,14 +1297,8 @@
           "type": "object",
           "required": ["path", "type"],
           "properties": {
-            "path": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "enum": ["localImage"],
-              "title": "LocalImageUserInputType"
-            }
+            "path": { "type": "string" },
+            "type": { "type": "string", "enum": ["localImage"], "title": "LocalImageUserInputType" }
           },
           "title": "LocalImageUserInput"
         },
@@ -1921,17 +1306,9 @@
           "type": "object",
           "required": ["name", "path", "type"],
           "properties": {
-            "name": {
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "enum": ["skill"],
-              "title": "SkillUserInputType"
-            }
+            "name": { "type": "string" },
+            "path": { "type": "string" },
+            "type": { "type": "string", "enum": ["skill"], "title": "SkillUserInputType" }
           },
           "title": "SkillUserInput"
         },
@@ -1939,17 +1316,9 @@
           "type": "object",
           "required": ["name", "path", "type"],
           "properties": {
-            "name": {
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "enum": ["mention"],
-              "title": "MentionUserInputType"
-            }
+            "name": { "type": "string" },
+            "path": { "type": "string" },
+            "type": { "type": "string", "enum": ["mention"], "title": "MentionUserInputType" }
           },
           "title": "MentionUserInput"
         }
@@ -1961,20 +1330,9 @@
           "type": "object",
           "required": ["type"],
           "properties": {
-            "queries": {
-              "type": ["array", "null"],
-              "items": {
-                "type": "string"
-              }
-            },
-            "query": {
-              "type": ["string", "null"]
-            },
-            "type": {
-              "type": "string",
-              "enum": ["search"],
-              "title": "SearchWebSearchActionType"
-            }
+            "queries": { "type": ["array", "null"], "items": { "type": "string" } },
+            "query": { "type": ["string", "null"] },
+            "type": { "type": "string", "enum": ["search"], "title": "SearchWebSearchActionType" }
           },
           "title": "SearchWebSearchAction"
         },
@@ -1987,9 +1345,7 @@
               "enum": ["openPage"],
               "title": "OpenPageWebSearchActionType"
             },
-            "url": {
-              "type": ["string", "null"]
-            }
+            "url": { "type": ["string", "null"] }
           },
           "title": "OpenPageWebSearchAction"
         },
@@ -1997,17 +1353,13 @@
           "type": "object",
           "required": ["type"],
           "properties": {
-            "pattern": {
-              "type": ["string", "null"]
-            },
+            "pattern": { "type": ["string", "null"] },
             "type": {
               "type": "string",
               "enum": ["findInPage"],
               "title": "FindInPageWebSearchActionType"
             },
-            "url": {
-              "type": ["string", "null"]
-            }
+            "url": { "type": ["string", "null"] }
           },
           "title": "FindInPageWebSearchAction"
         },
@@ -2015,11 +1367,7 @@
           "type": "object",
           "required": ["type"],
           "properties": {
-            "type": {
-              "type": "string",
-              "enum": ["other"],
-              "title": "OtherWebSearchActionType"
-            }
+            "type": { "type": "string", "enum": ["other"], "title": "OtherWebSearchActionType" }
           },
           "title": "OtherWebSearchAction"
         }

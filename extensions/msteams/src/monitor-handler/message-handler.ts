@@ -908,7 +908,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       );
     } catch (err) {
       log.error("dispatch failed", { error: formatUnknownError(err) });
-      runtime.error?.(`msteams dispatch failed: ${formatUnknownError(err)}`);
+      runtime.error(`msteams dispatch failed: ${formatUnknownError(err)}`);
       try {
         await context.sendActivity("⚠️ Something went wrong. Please try again.");
       } catch {
@@ -971,7 +971,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       });
     },
     onError: (err) => {
-      runtime.error?.(`msteams debounce flush failed: ${formatUnknownError(err)}`);
+      runtime.error(`msteams debounce flush failed: ${formatUnknownError(err)}`);
     },
   });
 

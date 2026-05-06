@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,6 +6,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { info, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { resolveOAuthDir } from "./auth-store.runtime.js";
 import { hasWebCredsSync, resolveWebCredsBackupPath, resolveWebCredsPath } from "./creds-files.js";
 import {
@@ -72,7 +72,6 @@ async function waitForWebAuthBarrier(
 
 export async function restoreCredsFromBackupIfNeeded(authDir: string): Promise<boolean> {
   const logger = getChildLogger({ module: "web-session" });
-  let tempRestorePath: string | null = null;
   try {
     const credsPath = resolveWebCredsPath(authDir);
     const backupPath = resolveWebCredsBackupPath(authDir);
@@ -94,24 +93,17 @@ export async function restoreCredsFromBackupIfNeeded(authDir: string): Promise<b
 
     // Ensure backup is parseable before restoring.
     JSON.parse(backupRaw);
-    tempRestorePath = path.join(authDir, `.creds.restore-${randomUUID()}.tmp`);
-    await fs.writeFile(tempRestorePath, backupRaw, {
-      encoding: "utf-8",
+    await replaceFileAtomic({
+      filePath: credsPath,
+      content: backupRaw,
+      dirMode: 0o700,
       mode: 0o600,
-      flag: "wx",
+      tempPrefix: ".creds.restore",
     });
-    await fs.rename(tempRestorePath, credsPath);
-    tempRestorePath = null;
     logger.warn({ credsPath }, "restored corrupted WhatsApp creds.json from backup");
     return true;
   } catch {
     // ignore
-  } finally {
-    if (tempRestorePath) {
-      await fs.rm(tempRestorePath, { force: true }).catch(() => {
-        // best-effort temp cleanup
-      });
-    }
   }
   return false;
 }

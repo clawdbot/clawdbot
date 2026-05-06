@@ -7,8 +7,6 @@ read_when:
   - Reviewing the strict-agentic, tool-schema, elevation, and replay fixes
 ---
 
-# GPT-5.5 / Codex Agentic Parity in OpenClaw
-
 OpenClaw already worked well with tool-using frontier models, but GPT-5.5 and Codex-style models were still underperforming in a few practical ways:
 
 - they could stop after planning instead of doing the work
@@ -25,11 +23,11 @@ This parity program fixes those gaps in four reviewable slices.
 
 This slice adds an opt-in `strict-agentic` execution contract for embedded Pi GPT-5 runs.
 
-When enabled, OpenClaw stops accepting plan-only turns as “good enough” completion. If the model only says what it intends to do and does not actually use tools or make progress, OpenClaw retries with an act-now steer and then fails closed with an explicit blocked state instead of silently ending the task.
+When enabled, OpenClaw stops accepting plan-only turns as "good enough" completion. If the model only says what it intends to do and does not actually use tools or make progress, OpenClaw retries with an act-now steer and then fails closed with an explicit blocked state instead of silently ending the task.
 
 This improves the GPT-5.5 experience most on:
 
-- short “ok do it” follow-ups
+- short "ok do it" follow-ups
 - code tasks where the first step is obvious
 - flows where `update_plan` should be progress tracking rather than filler text
 
@@ -86,21 +84,21 @@ The goal is not to make GPT-5.5 imitate Opus. The goal is to give GPT-5.5 a runt
 
 That changes the user experience from:
 
-- “the model had a good plan but stopped”
+- "the model had a good plan but stopped"
 
 to:
 
-- “the model either acted, or OpenClaw surfaced the exact reason it could not”
+- "the model either acted, or OpenClaw surfaced the exact reason it could not"
 
 ## Before vs after for GPT-5.5 users
 
 | Before this program                                                                            | After PR A-D                                                                             |
 | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| GPT-5.5 could stop after a reasonable plan without taking the next tool step                   | PR A turns “plan only” into “act now or surface a blocked state”                         |
+| GPT-5.5 could stop after a reasonable plan without taking the next tool step                   | PR A turns "plan only" into "act now or surface a blocked state"                         |
 | Strict tool schemas could reject parameter-free or OpenAI/Codex-shaped tools in confusing ways | PR C makes provider-owned tool registration and invocation more predictable              |
 | `/elevated full` guidance could be vague or wrong in blocked runtimes                          | PR B gives GPT-5.5 and the user truthful runtime and permission hints                    |
 | Replay or compaction failures could feel like the task silently disappeared                    | PR C surfaces paused, blocked, abandoned, and replay-invalid outcomes explicitly         |
-| “GPT-5.5 feels worse than Opus” was mostly anecdotal                                           | PR D turns that into the same scenario pack, the same metrics, and a hard pass/fail gate |
+| "GPT-5.5 feels worse than Opus" was mostly anecdotal                                           | PR D turns that into the same scenario pack, the same metrics, and a hard pass/fail gate |
 
 ## Architecture
 
@@ -142,7 +140,7 @@ The first-wave parity pack currently covers five scenarios:
 
 ### `approval-turn-tool-followthrough`
 
-Checks that the model does not stop at “I’ll do that” after a short approval. It should take the first concrete action in the same turn.
+Checks that the model does not stop at "I'll do that" after a short approval. It should take the first concrete action in the same turn.
 
 ### `model-switch-tool-continuity`
 
@@ -210,8 +208,8 @@ Use the verdict in `qa-agentic-parity-summary.json` as the final machine-readabl
 
 - `pass` means GPT-5.5 covered the same scenarios as Opus 4.6 and did not regress on the agreed aggregate metrics.
 - `fail` means at least one hard gate tripped: weaker completion, worse unintended stops, weaker valid tool use, any fake-success case, or mismatched scenario coverage.
-- “shared/base CI issue” is not itself a parity result. If CI noise outside PR D blocks a run, the verdict should wait for a clean merged-runtime execution instead of being inferred from branch-era logs.
-- Auth, proxy, DNS, and `/elevated full` truthfulness still come from PR B’s deterministic suites, so the final release claim needs both: a passing PR D parity verdict and green PR B truthfulness coverage.
+- "shared/base CI issue" is not itself a parity result. If CI noise outside PR D blocks a run, the verdict should wait for a clean merged-runtime execution instead of being inferred from branch-era logs.
+- Auth, proxy, DNS, and `/elevated full` truthfulness still come from PR B's deterministic suites, so the final release claim needs both: a passing PR D parity verdict and green PR B truthfulness coverage.
 
 ## Who should enable `strict-agentic`
 
@@ -219,7 +217,7 @@ Use `strict-agentic` when:
 
 - the agent is expected to act immediately when a next step is obvious
 - GPT-5.5 or Codex-family models are the primary runtime
-- you prefer explicit blocked states over “helpful” recap-only replies
+- you prefer explicit blocked states over "helpful" recap-only replies
 
 Keep the default contract when:
 

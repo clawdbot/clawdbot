@@ -9,7 +9,9 @@ const NPM_CONFIG_KEYS_TO_RESET = new Set([
   "npm_config_include_workspace_root",
   "npm_config_ignore_scripts",
   "npm_config_location",
+  "npm_config_legacy_peer_deps",
   "npm_config_prefix",
+  "npm_config_strict_peer_deps",
   "npm_config_workspace",
   "npm_config_workspaces",
 ]);

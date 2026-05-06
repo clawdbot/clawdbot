@@ -36,52 +36,325 @@ export const TalkSpeakParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const TalkRealtimeSessionParamsSchema = Type.Object(
+const TalkModeSchema = Type.Union([
+  Type.Literal("realtime"),
+  Type.Literal("stt-tts"),
+  Type.Literal("transcription"),
+]);
+
+const TalkTransportSchema = Type.Union([
+  Type.Literal("webrtc"),
+  Type.Literal("provider-websocket"),
+  Type.Literal("gateway-relay"),
+  Type.Literal("managed-room"),
+]);
+
+const TalkBrainSchema = Type.Union([
+  Type.Literal("agent-consult"),
+  Type.Literal("direct-tools"),
+  Type.Literal("none"),
+]);
+
+const TalkEventTypeSchema = Type.Union([
+  Type.Literal("session.started"),
+  Type.Literal("session.ready"),
+  Type.Literal("session.closed"),
+  Type.Literal("session.error"),
+  Type.Literal("session.replaced"),
+  Type.Literal("turn.started"),
+  Type.Literal("turn.ended"),
+  Type.Literal("turn.cancelled"),
+  Type.Literal("capture.started"),
+  Type.Literal("capture.stopped"),
+  Type.Literal("capture.cancelled"),
+  Type.Literal("capture.once"),
+  Type.Literal("input.audio.delta"),
+  Type.Literal("input.audio.committed"),
+  Type.Literal("transcript.delta"),
+  Type.Literal("transcript.done"),
+  Type.Literal("output.text.delta"),
+  Type.Literal("output.text.done"),
+  Type.Literal("output.audio.started"),
+  Type.Literal("output.audio.delta"),
+  Type.Literal("output.audio.done"),
+  Type.Literal("tool.call"),
+  Type.Literal("tool.progress"),
+  Type.Literal("tool.result"),
+  Type.Literal("tool.error"),
+  Type.Literal("usage.metrics"),
+  Type.Literal("latency.metrics"),
+  Type.Literal("health.changed"),
+]);
+
+const TURN_SCOPED_TALK_EVENT_TYPES = [
+  "turn.started",
+  "turn.ended",
+  "turn.cancelled",
+  "input.audio.delta",
+  "input.audio.committed",
+  "transcript.delta",
+  "transcript.done",
+  "output.text.delta",
+  "output.text.done",
+  "output.audio.started",
+  "output.audio.delta",
+  "output.audio.done",
+  "tool.call",
+  "tool.progress",
+  "tool.result",
+  "tool.error",
+];
+
+const CAPTURE_SCOPED_TALK_EVENT_TYPES = [
+  "capture.started",
+  "capture.stopped",
+  "capture.cancelled",
+  "capture.once",
+];
+
+function requireJsonSchemaProperties(properties: string[]): Record<string, { required: string[] }> {
+  const conditionalRequirementKey = ["th", "en"].join("");
+  return Object.fromEntries([[conditionalRequirementKey, { required: properties }]]);
+}
+
+export const TalkEventSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    type: TalkEventTypeSchema,
+    sessionId: NonEmptyString,
+    turnId: Type.Optional(Type.String()),
+    captureId: Type.Optional(Type.String()),
+    seq: Type.Integer({ minimum: 1 }),
+    timestamp: NonEmptyString,
+    mode: TalkModeSchema,
+    transport: TalkTransportSchema,
+    brain: TalkBrainSchema,
+    provider: Type.Optional(Type.String()),
+    final: Type.Optional(Type.Boolean()),
+    callId: Type.Optional(Type.String()),
+    itemId: Type.Optional(Type.String()),
+    parentId: Type.Optional(Type.String()),
+    payload: Type.Unknown(),
+  },
+  {
+    additionalProperties: false,
+    allOf: [
+      {
+        if: {
+          properties: { type: { enum: TURN_SCOPED_TALK_EVENT_TYPES } },
+          required: ["type"],
+        },
+        ...requireJsonSchemaProperties(["turnId"]),
+      },
+      {
+        if: {
+          properties: { type: { enum: CAPTURE_SCOPED_TALK_EVENT_TYPES } },
+          required: ["type"],
+        },
+        ...requireJsonSchemaProperties(["captureId"]),
+      },
+    ],
+  },
+);
+
+export const TalkClientCreateParamsSchema = Type.Object(
   {
     sessionKey: Type.Optional(Type.String()),
     provider: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
+    mode: Type.Optional(TalkModeSchema),
+    transport: Type.Optional(TalkTransportSchema),
+    brain: Type.Optional(TalkBrainSchema),
   },
   { additionalProperties: false },
 );
 
-export const TalkRealtimeRelayAudioParamsSchema = Type.Object(
+export const TalkClientToolCallParamsSchema = Type.Object(
   {
-    relaySessionId: NonEmptyString,
+    sessionKey: NonEmptyString,
+    callId: NonEmptyString,
+    name: NonEmptyString,
+    args: Type.Optional(Type.Unknown()),
+    relaySessionId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkClientToolCallResultSchema = Type.Object(
+  {
+    runId: NonEmptyString,
+    idempotencyKey: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const TalkSessionJoinParamsSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
+    token: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const TalkSessionCreateParamsSchema = Type.Object(
+  {
+    sessionKey: Type.Optional(Type.String()),
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    mode: Type.Optional(TalkModeSchema),
+    transport: Type.Optional(TalkTransportSchema),
+    brain: Type.Optional(TalkBrainSchema),
+    ttlMs: Type.Optional(Type.Integer({ minimum: 1000, maximum: 3600000 })),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkSessionAppendAudioParamsSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
     audioBase64: NonEmptyString,
     timestamp: Type.Optional(Type.Number()),
   },
   { additionalProperties: false },
 );
 
-export const TalkRealtimeRelayMarkParamsSchema = Type.Object(
+export const TalkSessionTurnParamsSchema = Type.Object(
   {
-    relaySessionId: NonEmptyString,
-    markName: Type.Optional(Type.String()),
+    sessionId: NonEmptyString,
+    turnId: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
 
-export const TalkRealtimeRelayStopParamsSchema = Type.Object(
+export const TalkSessionCancelTurnParamsSchema = Type.Object(
   {
-    relaySessionId: NonEmptyString,
+    sessionId: NonEmptyString,
+    turnId: Type.Optional(Type.String()),
+    reason: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
 
-export const TalkRealtimeRelayToolResultParamsSchema = Type.Object(
+export const TalkSessionCancelOutputParamsSchema = Type.Object(
   {
-    relaySessionId: NonEmptyString,
+    sessionId: NonEmptyString,
+    turnId: Type.Optional(Type.String()),
+    reason: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkSessionSubmitToolResultParamsSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
     callId: NonEmptyString,
     result: Type.Unknown(),
   },
   { additionalProperties: false },
 );
 
-export const TalkRealtimeRelayOkResultSchema = Type.Object(
+export const TalkSessionCloseParamsSchema = Type.Object(
   {
-    ok: Type.Boolean(),
+    sessionId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+const TalkSessionManagedRoomStateSchema = Type.Object(
+  {
+    activeClientId: Type.Optional(Type.String()),
+    activeTurnId: Type.Optional(Type.String()),
+    recentTalkEvents: Type.Array(TalkEventSchema),
+  },
+  { additionalProperties: false },
+);
+
+const TalkSessionManagedRoomRecordSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    roomId: NonEmptyString,
+    roomUrl: NonEmptyString,
+    sessionKey: NonEmptyString,
+    sessionId: Type.Optional(Type.String()),
+    channel: Type.Optional(Type.String()),
+    target: Type.Optional(Type.String()),
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    mode: TalkModeSchema,
+    transport: TalkTransportSchema,
+    brain: TalkBrainSchema,
+    createdAt: Type.Number(),
+    expiresAt: Type.Number(),
+    room: TalkSessionManagedRoomStateSchema,
+  },
+  { additionalProperties: false },
+);
+
+export const TalkCatalogParamsSchema = Type.Object({}, { additionalProperties: false });
+
+const TalkCatalogProviderSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    label: NonEmptyString,
+    configured: Type.Boolean(),
+    models: Type.Optional(Type.Array(Type.String())),
+    voices: Type.Optional(Type.Array(Type.String())),
+    defaultModel: Type.Optional(Type.String()),
+    modes: Type.Optional(Type.Array(TalkModeSchema)),
+    transports: Type.Optional(Type.Array(TalkTransportSchema)),
+    brains: Type.Optional(Type.Array(TalkBrainSchema)),
+    inputAudioFormats: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            encoding: Type.Union([Type.Literal("pcm16"), Type.Literal("g711_ulaw")]),
+            sampleRateHz: Type.Integer({ minimum: 1 }),
+            channels: Type.Integer({ minimum: 1 }),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
+    outputAudioFormats: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            encoding: Type.Union([Type.Literal("pcm16"), Type.Literal("g711_ulaw")]),
+            sampleRateHz: Type.Integer({ minimum: 1 }),
+            channels: Type.Integer({ minimum: 1 }),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
+    supportsBrowserSession: Type.Optional(Type.Boolean()),
+    supportsBargeIn: Type.Optional(Type.Boolean()),
+    supportsToolCalls: Type.Optional(Type.Boolean()),
+    supportsVideoFrames: Type.Optional(Type.Boolean()),
+    supportsSessionResumption: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+const TalkCatalogProviderGroupSchema = Type.Object(
+  {
+    activeProvider: Type.Optional(Type.String()),
+    providers: Type.Array(TalkCatalogProviderSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkCatalogResultSchema = Type.Object(
+  {
+    modes: Type.Array(TalkModeSchema),
+    transports: Type.Array(TalkTransportSchema),
+    brains: Type.Array(TalkBrainSchema),
+    speech: TalkCatalogProviderGroupSchema,
+    transcription: TalkCatalogProviderGroupSchema,
+    realtime: TalkCatalogProviderGroupSchema,
   },
   { additionalProperties: false },
 );
@@ -96,10 +369,49 @@ const BrowserRealtimeAudioContractSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const TalkSessionCreateResultSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
+    provider: Type.Optional(Type.String()),
+    mode: TalkModeSchema,
+    transport: TalkTransportSchema,
+    brain: TalkBrainSchema,
+    relaySessionId: Type.Optional(NonEmptyString),
+    transcriptionSessionId: Type.Optional(NonEmptyString),
+    handoffId: Type.Optional(NonEmptyString),
+    roomId: Type.Optional(NonEmptyString),
+    roomUrl: Type.Optional(NonEmptyString),
+    token: Type.Optional(NonEmptyString),
+    audio: Type.Optional(Type.Unknown()),
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    expiresAt: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkSessionTurnResultSchema = Type.Object(
+  {
+    ok: Type.Boolean(),
+    turnId: Type.Optional(Type.String()),
+    events: Type.Optional(Type.Array(TalkEventSchema)),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkSessionJoinResultSchema = TalkSessionManagedRoomRecordSchema;
+
+export const TalkSessionOkResultSchema = Type.Object(
+  {
+    ok: Type.Boolean(),
+  },
+  { additionalProperties: false },
+);
+
 const BrowserRealtimeWebRtcSdpSessionSchema = Type.Object(
   {
     provider: NonEmptyString,
-    transport: Type.Optional(Type.Literal("webrtc-sdp")),
+    transport: Type.Literal("webrtc"),
     clientSecret: NonEmptyString,
     offerUrl: Type.Optional(Type.String()),
     offerHeaders: Type.Optional(Type.Record(Type.String(), Type.String())),
@@ -113,7 +425,7 @@ const BrowserRealtimeWebRtcSdpSessionSchema = Type.Object(
 const BrowserRealtimeJsonPcmWebSocketSessionSchema = Type.Object(
   {
     provider: NonEmptyString,
-    transport: Type.Literal("json-pcm-websocket"),
+    transport: Type.Literal("provider-websocket"),
     protocol: NonEmptyString,
     clientSecret: NonEmptyString,
     websocketUrl: NonEmptyString,
@@ -152,7 +464,7 @@ const BrowserRealtimeManagedRoomSessionSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const TalkRealtimeSessionResultSchema = Type.Union([
+export const TalkClientCreateResultSchema = Type.Union([
   BrowserRealtimeWebRtcSdpSessionSchema,
   BrowserRealtimeJsonPcmWebSocketSessionSchema,
   BrowserRealtimeGatewayRelaySessionSchema,
@@ -167,6 +479,19 @@ const TalkProviderConfigSchema = Type.Object(talkProviderFieldSchemas, {
   additionalProperties: true,
 });
 
+const TalkRealtimeConfigSchema = Type.Object(
+  {
+    provider: Type.Optional(Type.String()),
+    providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    mode: Type.Optional(TalkModeSchema),
+    transport: Type.Optional(TalkTransportSchema),
+    brain: Type.Optional(TalkBrainSchema),
+  },
+  { additionalProperties: false },
+);
+
 const ResolvedTalkConfigSchema = Type.Object(
   {
     provider: Type.String(),
@@ -179,7 +504,8 @@ const TalkConfigSchema = Type.Object(
   {
     provider: Type.Optional(Type.String()),
     providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
-    resolved: ResolvedTalkConfigSchema,
+    realtime: Type.Optional(TalkRealtimeConfigSchema),
+    resolved: Type.Optional(ResolvedTalkConfigSchema),
     speechLocale: Type.Optional(Type.String()),
     interruptOnSpeech: Type.Optional(Type.Boolean()),
     silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -318,6 +644,8 @@ export const ChannelsStatusResultSchema = Type.Object(
     channelAccounts: Type.Record(NonEmptyString, Type.Array(ChannelAccountSnapshotSchema)),
     channelDefaultAccountId: Type.Record(NonEmptyString, NonEmptyString),
     eventLoop: Type.Optional(ChannelEventLoopHealthSchema),
+    partial: Type.Optional(Type.Boolean()),
+    warnings: Type.Optional(Type.Array(Type.String())),
   },
   { additionalProperties: false },
 );

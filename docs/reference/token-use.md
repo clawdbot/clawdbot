@@ -6,8 +6,6 @@ read_when:
 title: "Token use and costs"
 ---
 
-# Token use & costs
-
 OpenClaw tracks **tokens**, not characters. Tokens are model-specific, but most
 OpenAI-style models average ~4 characters per token for English text.
 
@@ -63,7 +61,7 @@ For a practical breakdown (per injected file, tools, skills, and system prompt s
 
 Use these in chat:
 
-- `/status` → **emoji‑rich status card** with the session model, context usage,
+- `/status` → **emoji-rich status card** with the session model, context usage,
   last response input/output tokens, and **estimated cost** (API key only).
 - `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
@@ -149,7 +147,7 @@ per agent with `agents.list[].params.cacheRetention`.
 For a full knob-by-knob guide, see [Prompt Caching](/reference/prompt-caching).
 
 For Anthropic API pricing, cache reads are significantly cheaper than input
-tokens, while cache writes are billed at a higher multiplier. See Anthropic’s
+tokens, while cache writes are billed at a higher multiplier. See Anthropic's
 prompt caching pricing for the latest rates and TTL multipliers:
 [https://docs.anthropic.com/docs/build-with-claude/prompt-caching](https://docs.anthropic.com/docs/build-with-claude/prompt-caching)
 

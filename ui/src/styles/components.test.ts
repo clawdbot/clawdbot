@@ -2,13 +2,16 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-function readComponentsCss(): string {
-  const cssPath = [
-    resolve(process.cwd(), "ui/src/styles/components.css"),
-    resolve(process.cwd(), "..", "ui/src/styles/components.css"),
-  ].find((candidate) => existsSync(candidate));
+function readStyleSheet(path: string): string {
+  const cssPath = [resolve(process.cwd(), path), resolve(process.cwd(), "..", path)].find(
+    (candidate) => existsSync(candidate),
+  );
   expect(cssPath).toBeTruthy();
   return readFileSync(cssPath!, "utf8");
+}
+
+function readComponentsCss(): string {
+  return readStyleSheet("ui/src/styles/components.css");
 }
 
 describe("agent fallback chip styles", () => {
@@ -32,6 +35,33 @@ describe("sessions filter styles", () => {
     expect(css).toContain(".sessions-filter-bar {\n  display: flex;\n  flex-wrap: wrap;");
     expect(css).toContain("@media (max-width: 760px)");
     expect(css).toContain(".sessions-filter-bar {\n    flex-direction: column;");
+  });
+});
+
+describe("sessions table responsive styles", () => {
+  it("keeps the compaction disclosure and details usable on narrow screens", () => {
+    const componentsCss = readComponentsCss();
+    const mobileCss = readStyleSheet("ui/src/styles/layout.mobile.css");
+
+    expect(componentsCss).toContain(".session-compaction-cell {");
+    expect(componentsCss).toContain(".session-compaction-trigger {");
+    expect(componentsCss).toContain(".session-details-panel {");
+    expect(componentsCss).not.toContain(".session-checkpoint-toggle {");
+    expect(mobileCss).toContain(".data-table.sessions-table {\n    min-width: 540px;");
+    expect(mobileCss).toContain(
+      ".sessions-table th:nth-child(10),\n  .sessions-table td:nth-child(10),\n  .sessions-table th:nth-child(11),\n  .sessions-table td:nth-child(11)",
+    );
+    expect(mobileCss).toContain(
+      ".sessions-table th:nth-child(4),\n  .sessions-table td:nth-child(4),\n  .sessions-table th:nth-child(9),\n  .sessions-table td:nth-child(9)",
+    );
+    expect(mobileCss).toContain(
+      ".sessions-table th:nth-child(3),\n  .sessions-table td:nth-child(3),\n  .sessions-table th:nth-child(8),\n  .sessions-table td:nth-child(8)",
+    );
+    expect(mobileCss).toContain(
+      ".sessions-table th:nth-child(5),\n  .sessions-table td:nth-child(5)",
+    );
+    expect(mobileCss).toContain(".data-table.sessions-table .data-table-key-col {");
+    expect(mobileCss).not.toContain(".sessions-table th:nth-child(7),");
   });
 });
 

@@ -11,11 +11,8 @@ const ensureOpenClawModelsJsonMock = vi.fn<
 const piModelModuleLoadedMock = vi.fn();
 const resolveEmbeddedAgentRuntimeMock = vi.fn(() => "auto");
 
-vi.mock("../agents/agent-paths.js", () => ({
-  resolveOpenClawAgentDir: () => "/tmp/agent",
-}));
-
 vi.mock("../agents/agent-scope.js", () => ({
+  resolveDefaultAgentDir: () => "/tmp/agent",
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
   resolveDefaultAgentId: () => "default",
 }));

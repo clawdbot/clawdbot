@@ -28,6 +28,18 @@
     "target": "OpenClaw 应用 SDK API 设计"
   },
   {
+    "source": "Message lifecycle refactor",
+    "target": "消息生命周期重构"
+  },
+  {
+    "source": "Channel message API",
+    "target": "频道消息 API"
+  },
+  {
+    "source": "Talk mode",
+    "target": "Talk 模式"
+  },
+  {
     "source": "Azure Speech",
     "target": "Azure Speech"
   },
@@ -50,6 +62,10 @@
   {
     "source": "Gateway RPC reference",
     "target": "Gateway RPC 参考"
+  },
+  {
+    "source": "Secure file operations",
+    "target": "安全文件操作"
   },
   {
     "source": "Sessions",
@@ -214,6 +230,50 @@
   {
     "source": "Capability Cookbook",
     "target": "能力扩展手册"
+  },
+  {
+    "source": "WhatsApp group messages",
+    "target": "WhatsApp 群组消息"
+  },
+  {
+    "source": "Oracle Cloud",
+    "target": "Oracle Cloud"
+  },
+  {
+    "source": "Install overview",
+    "target": "安装概览"
+  },
+  {
+    "source": "VPS hosting",
+    "target": "VPS 托管"
+  },
+  {
+    "source": "Linux server",
+    "target": "Linux 服务器"
+  },
+  {
+    "source": "Platforms",
+    "target": "平台"
+  },
+  {
+    "source": "Adding capabilities (redirect)",
+    "target": "添加能力（重定向）"
+  },
+  {
+    "source": "Adding capabilities (contributor guide)",
+    "target": "添加能力（贡献者指南）"
+  },
+  {
+    "source": "Plugin internals",
+    "target": "插件内部机制"
+  },
+  {
+    "source": "SDK overview",
+    "target": "SDK 概览"
+  },
+  {
+    "source": "Creating skills",
+    "target": "创建技能"
   },
   {
     "source": "Setup Wizard Reference",
@@ -524,6 +584,14 @@
     "target": "管理插件"
   },
   {
+    "source": "Plugin path ownership",
+    "target": "插件路径所有权"
+  },
+  {
+    "source": "Docker permissions",
+    "target": "Docker 权限"
+  },
+  {
     "source": "Plugin manifest",
     "target": "插件清单"
   },
@@ -684,6 +752,18 @@
     "target": "Codex Harness Context Engine Port"
   },
   {
+    "source": "Plugin refactor plan",
+    "target": "插件重构计划"
+  },
+  {
+    "source": "Retry policy",
+    "target": "重试策略"
+  },
+  {
+    "source": "Channel turn kernel",
+    "target": "频道轮次内核"
+  },
+  {
     "source": "/gateway/configuration#strict-validation",
     "target": "/gateway/configuration#strict-validation"
   },
@@ -694,5 +774,9 @@
   {
     "source": "/cli/config",
     "target": "/cli/config"
+  },
+  {
+    "source": "fs-safe Cleanup Plan",
+    "target": "fs-safe Cleanup Plan"
   }
 ]

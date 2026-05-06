@@ -535,10 +535,6 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     isMarkdownCapableMessageChannel: vi.fn(() => true),
   }));
 
-  vi.doMock("../agent-paths.js", () => ({
-    resolveOpenClawAgentDir: vi.fn(() => "/tmp/agent-dir"),
-  }));
-
   vi.doMock("../defaults.js", () => ({
     DEFAULT_CONTEXT_TOKENS: 200000,
     DEFAULT_MODEL: "test-model",

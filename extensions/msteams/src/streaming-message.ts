@@ -83,6 +83,7 @@ export class TeamsHttpStream {
   private finalized = false;
   private streamFailed = false;
   private lastStreamedText = "";
+  private finalMessageId: string | undefined = undefined;
   private streamStartedAt: number | undefined = undefined;
   private loop: DraftStreamLoop;
 
@@ -181,9 +182,9 @@ export class TeamsHttpStream {
   /**
    * Finalize the stream — send the final message activity.
    */
-  async finalize(): Promise<void> {
+  async finalize(): Promise<string | undefined> {
     if (this.finalized) {
-      return;
+      return this.finalMessageId;
     }
     this.finalized = true;
     this.stopped = true;
@@ -195,7 +196,7 @@ export class TeamsHttpStream {
     // bar after its streaming timeout. Sending an empty final message fails
     // with 403.
     if (!this.accumulatedText.trim()) {
-      return;
+      return this.finalMessageId;
     }
 
     // If streaming failed (>4000 chars or POST errors), close the stream
@@ -205,17 +206,18 @@ export class TeamsHttpStream {
     if (this.streamFailed) {
       if (this.streamId) {
         try {
-          await this.sendActivity({
+          const response = await this.sendActivity({
             type: "message",
             text: this.lastStreamedText || "",
             channelData: { feedbackLoopEnabled: this.feedbackLoopEnabled },
             entities: [AI_GENERATED_ENTITY, buildStreamInfoEntity(this.streamId, "final")],
           });
+          this.finalMessageId = extractId(response);
         } catch {
           // Best effort — stream will auto-close after Teams timeout
         }
       }
-      return;
+      return this.finalMessageId;
     }
 
     // Send final message activity.
@@ -235,11 +237,13 @@ export class TeamsHttpStream {
         entities,
       };
 
-      await this.sendActivity(finalActivity);
+      const response = await this.sendActivity(finalActivity);
+      this.finalMessageId = extractId(response);
     } catch (err) {
       this.streamFailed = true;
       this.onError?.(err);
     }
+    return this.finalMessageId;
   }
 
   /** Whether streaming successfully delivered content (at least one chunk sent, not failed). */
@@ -260,6 +264,16 @@ export class TeamsHttpStream {
   /** Whether the stream has been finalized. */
   get isFinalized(): boolean {
     return this.finalized;
+  }
+
+  /** Platform id returned by the final message activity, when available. */
+  get messageId(): string | undefined {
+    return this.finalMessageId;
+  }
+
+  /** Stream id returned by the first streaminfo activity, when available. */
+  get previewStreamId(): string | undefined {
+    return this.streamId;
   }
 
   /** Whether streaming fell back (not used in this implementation). */

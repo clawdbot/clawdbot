@@ -1,7 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
+import { tempWorkspaceSync, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 
 type TranscodeOutcome =
   | { ok: true; buffer: Buffer }
@@ -54,13 +52,13 @@ export async function transcodeAudioBuffer(params: {
     return { ok: false, reason: "platform-unsupported" };
   }
 
-  const tmpRoot = resolvePreferredOpenClawTmpDir();
-  mkdirSync(tmpRoot, { recursive: true, mode: 0o700 });
-  const tmpDir = mkdtempSync(join(tmpRoot, "tts-transcode-"));
-  const inPath = join(tmpDir, `in.${source}`);
-  const outPath = join(tmpDir, `out.${target}`);
+  const tmp = tempWorkspaceSync({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "tts-transcode-",
+  });
+  const inPath = tmp.write(`in.${source}`, params.audioBuffer);
+  const outPath = tmp.path(`out.${target}`);
   try {
-    writeFileSync(inPath, params.audioBuffer, { mode: 0o600 });
     const result = await runAfconvert({
       args: [...recipe, inPath, outPath],
       timeoutMs: params.timeoutMs ?? 5000,
@@ -68,15 +66,11 @@ export async function transcodeAudioBuffer(params: {
     if (!result.ok) {
       return { ok: false, reason: "transcoder-failed", detail: result.detail };
     }
-    return { ok: true, buffer: readFileSync(outPath) };
+    return { ok: true, buffer: tmp.read(`out.${target}`) };
   } catch (err) {
     return { ok: false, reason: "transcoder-failed", detail: (err as Error).message };
   } finally {
-    try {
-      rmSync(tmpDir, { recursive: true, force: true });
-    } catch {
-      // best-effort cleanup
-    }
+    tmp.cleanup();
   }
 }
 

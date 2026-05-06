@@ -20,6 +20,7 @@ import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
+import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
@@ -60,8 +61,9 @@ type RealtimeVoiceRuntimeModule = typeof import("./realtime-voice.runtime.js");
 type RealtimeHandlerModule = typeof import("./webhook/realtime-handler.js");
 
 const REALTIME_VOICE_CONSULT_SYSTEM_PROMPT = [
-  "You are a behind-the-scenes consultant for a live phone voice agent.",
-  "Prioritize a fast, speakable answer over exhaustive investigation.",
+  "You are the configured OpenClaw agent receiving delegated requests from a live phone voice bridge.",
+  "Act on behalf of the caller using the normal available tools when the caller asks you to do work.",
+  "Prioritize completing the user's request and returning a fast, speakable result over exhaustive investigation.",
   "For tool-backed status checks, prefer one or two bounded read-only queries before answering.",
   "Do not print secret values or dump environment variables; only check whether required configuration is present.",
   "Be accurate, brief, and speakable.",
@@ -317,8 +319,15 @@ export async function createVoiceCallRuntime(params: {
   );
   if (realtimeProvider) {
     const { RealtimeCallHandler } = await loadRealtimeHandler();
+    const realtimeInstructions = await buildRealtimeVoiceInstructions({
+      baseInstructions: config.realtime.instructions,
+      config,
+      coreConfig,
+      agentRuntime,
+    });
     const realtimeConfig = {
       ...config.realtime,
+      instructions: realtimeInstructions,
       tools: resolveRealtimeVoiceAgentConsultTools(
         config.realtime.toolPolicy,
         config.realtime.tools,
@@ -350,6 +359,10 @@ export async function createVoiceCallRuntime(params: {
             ...call,
             config: effectiveConfig,
           });
+          const requesterSessionKey =
+            typeof call.metadata?.requesterSessionKey === "string"
+              ? call.metadata.requesterSessionKey
+              : undefined;
           const fastContext = await resolveRealtimeFastContextConsult({
             cfg,
             agentId,
@@ -389,6 +402,8 @@ export async function createVoiceCallRuntime(params: {
             model,
             thinkLevel,
             timeoutMs: effectiveConfig.responseTimeoutMs,
+            spawnedBy: requesterSessionKey,
+            contextMode: requesterSessionKey ? "fork" : undefined,
             toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(
               effectiveConfig.realtime.toolPolicy,
             ),

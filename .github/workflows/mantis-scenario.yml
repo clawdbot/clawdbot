@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - discord-status-reactions-tool-only
+          - discord-thread-reply-filepath-attachment
           - slack-desktop-smoke
       baseline_ref:
         description: Optional baseline ref for before/after scenarios
@@ -57,6 +58,19 @@ jobs:
                 --repo "$GITHUB_REPOSITORY"
                 --ref main
                 -f "baseline_ref=${BASELINE_REF}"
+                -f "candidate_ref=${CANDIDATE_REF}"
+              )
+              if [[ -n "${PR_NUMBER:-}" ]]; then
+                args+=(-f "pr_number=${PR_NUMBER}")
+              fi
+              gh "${args[@]}"
+              ;;
+            discord-thread-reply-filepath-attachment)
+              args=(
+                workflow run mantis-discord-thread-attachment.yml
+                --repo "$GITHUB_REPOSITORY"
+                --ref main
+                -f "baseline_ref=${BASELINE_REF:-synthetic-reverted-thread-filepath-fix}"
                 -f "candidate_ref=${CANDIDATE_REF}"
               )
               if [[ -n "${PR_NUMBER:-}" ]]; then

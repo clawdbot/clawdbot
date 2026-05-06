@@ -33,18 +33,24 @@ export function describeWebSearchProviderContracts(pluginId: string) {
     pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)
       ?.webSearchProviderIds ?? [];
 
+  let providerEntries: WebSearchContractEntry[] | undefined;
   const resolveProviders = (): WebSearchContractEntry[] => {
+    if (providerEntries) {
+      return providerEntries;
+    }
     const publicArtifactProviders = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
       onlyPluginIds: [pluginId],
     });
     if (publicArtifactProviders) {
-      return publicArtifactProviders.map((provider) => ({
+      providerEntries = publicArtifactProviders.map((provider) => ({
         pluginId: provider.pluginId,
         provider,
         credentialValue: resolveWebSearchCredentialValue(provider),
       }));
+      return providerEntries;
     }
-    return resolveWebSearchProviderContractEntriesForPluginId(pluginId);
+    providerEntries = resolveWebSearchProviderContractEntriesForPluginId(pluginId);
+    return providerEntries;
   };
 
   describe(`${pluginId} web search provider contract registry load`, () => {

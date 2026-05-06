@@ -83,6 +83,45 @@
       }
     },
     {
+      "name": "@tencent-weixin/openclaw-weixin",
+      "description": "OpenClaw Weixin channel plugin by the Tencent Weixin team.",
+      "source": "external",
+      "kind": "channel",
+      "openclaw": {
+        "plugin": {
+          "id": "openclaw-weixin",
+          "label": "Weixin"
+        },
+        "channel": {
+          "id": "openclaw-weixin",
+          "label": "Weixin",
+          "selectionLabel": "Weixin（微信）",
+          "detailLabel": "Weixin",
+          "docsPath": "/channels/wechat",
+          "docsLabel": "weixin",
+          "blurb": "Personal WeChat messaging via QR-code login.",
+          "aliases": ["weixin", "wechat", "微信"],
+          "order": 75
+        },
+        "channelConfigs": {
+          "openclaw-weixin": {
+            "label": "Weixin",
+            "description": "Personal WeChat conversation channel.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "install": {
+          "npmSpec": "@tencent-weixin/openclaw-weixin@2.4.1",
+          "defaultChoice": "npm",
+          "expectedIntegrity": "sha512-FZnUVMQRpKGTKezeplr/DYal+5RSif2tXE51pljIFrO8rn7bVnnvpbj81/i9UMrYbuGiom1sl8OeSDzWRDKGhQ==",
+          "minHostVersion": ">=2026.3.22"
+        }
+      }
+    },
+    {
       "name": "@openclaw/bluebubbles",
       "description": "OpenClaw BlueBubbles channel plugin",
       "source": "official",

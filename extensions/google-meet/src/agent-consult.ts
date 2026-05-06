@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
@@ -7,7 +8,9 @@ import {
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
   type RealtimeVoiceBridgeSession,
+  type RealtimeVoiceToolCallEvent,
   type RealtimeVoiceTool,
+  type TalkEventInput,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -73,4 +76,83 @@ export async function consultOpenClawAgentForGoogleMeet(params: {
     toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(params.config.realtime.toolPolicy),
     extraSystemPrompt: GOOGLE_MEET_CONSULT_SYSTEM_PROMPT,
   });
+}
+
+export function handleGoogleMeetRealtimeConsultToolCall(params: {
+  strategy: string;
+  session: RealtimeVoiceBridgeSession;
+  event: RealtimeVoiceToolCallEvent;
+  config: GoogleMeetConfig;
+  fullConfig: OpenClawConfig;
+  runtime: PluginRuntime;
+  logger: RuntimeLogger;
+  meetingSessionId: string;
+  requesterSessionKey?: string;
+  transcript: Array<{ role: "user" | "assistant"; text: string }>;
+  onTalkEvent?: (event: TalkEventInput) => void;
+}): void {
+  const callId = params.event.callId || params.event.itemId;
+  if (params.strategy !== "bidi") {
+    params.onTalkEvent?.({
+      type: "tool.error",
+      callId,
+      payload: {
+        name: params.event.name,
+        error: `Tool "${params.event.name}" is only available in bidi realtime strategy`,
+      },
+      final: true,
+    });
+    params.session.submitToolResult(callId, {
+      error: `Tool "${params.event.name}" is only available in bidi realtime strategy`,
+    });
+    return;
+  }
+  if (params.event.name !== GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME) {
+    params.onTalkEvent?.({
+      type: "tool.error",
+      callId,
+      payload: { name: params.event.name, error: `Tool "${params.event.name}" not available` },
+      final: true,
+    });
+    params.session.submitToolResult(callId, {
+      error: `Tool "${params.event.name}" not available`,
+    });
+    return;
+  }
+  params.onTalkEvent?.({
+    type: "tool.progress",
+    callId,
+    payload: { name: params.event.name, status: "working" },
+  });
+  submitGoogleMeetConsultWorkingResponse(params.session, callId);
+  void consultOpenClawAgentForGoogleMeet({
+    config: params.config,
+    fullConfig: params.fullConfig,
+    runtime: params.runtime,
+    logger: params.logger,
+    meetingSessionId: params.meetingSessionId,
+    requesterSessionKey: params.requesterSessionKey,
+    args: params.event.args,
+    transcript: params.transcript,
+  })
+    .then((result) => {
+      params.onTalkEvent?.({
+        type: "tool.result",
+        callId,
+        payload: { name: params.event.name, result },
+        final: true,
+      });
+      params.session.submitToolResult(callId, result);
+    })
+    .catch((error: Error) => {
+      params.onTalkEvent?.({
+        type: "tool.error",
+        callId,
+        payload: { name: params.event.name, error: formatErrorMessage(error) },
+        final: true,
+      });
+      params.session.submitToolResult(callId, {
+        error: formatErrorMessage(error),
+      });
+    });
 }

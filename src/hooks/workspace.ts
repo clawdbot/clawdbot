@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
@@ -28,7 +28,7 @@ type LoadedHook = {
 
 function readHookPackageManifest(dir: string): HookPackageManifest | null {
   const manifestPath = path.join(dir, "package.json");
-  const raw = readBoundaryFileUtf8({
+  const raw = readRootFileUtf8({
     absolutePath: manifestPath,
     rootPath: dir,
     boundaryLabel: "hook package directory",
@@ -71,7 +71,7 @@ function loadHookFromDir(params: {
   nameHint?: string;
 }): LoadedHook | null {
   const hookMdPath = path.join(params.hookDir, "HOOK.md");
-  const content = readBoundaryFileUtf8({
+  const content = readRootFileUtf8({
     absolutePath: hookMdPath,
     rootPath: params.hookDir,
     boundaryLabel: "hook directory",
@@ -89,7 +89,7 @@ function loadHookFromDir(params: {
     let handlerPath: string | undefined;
     for (const candidate of handlerCandidates) {
       const candidatePath = path.join(params.hookDir, candidate);
-      const safeCandidatePath = resolveBoundaryFilePath({
+      const safeCandidatePath = resolveRootFilePath({
         absolutePath: candidatePath,
         rootPath: params.hookDir,
         boundaryLabel: "hook directory",
@@ -293,12 +293,12 @@ export function loadWorkspaceHookEntries(
   });
 }
 
-function readBoundaryFileUtf8(params: {
+function readRootFileUtf8(params: {
   absolutePath: string;
   rootPath: string;
   boundaryLabel: string;
 }): string | null {
-  return withOpenedBoundaryFileSync(params, (opened) => {
+  return withOpenedRootFileSync(params, (opened) => {
     try {
       return fs.readFileSync(opened.fd, "utf-8");
     } catch {
@@ -307,7 +307,7 @@ function readBoundaryFileUtf8(params: {
   });
 }
 
-function withOpenedBoundaryFileSync<T>(
+function withOpenedRootFileSync<T>(
   params: {
     absolutePath: string;
     rootPath: string;
@@ -315,7 +315,7 @@ function withOpenedBoundaryFileSync<T>(
   },
   read: (opened: { fd: number; path: string }) => T,
 ): T | null {
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: params.absolutePath,
     rootPath: params.rootPath,
     boundaryLabel: params.boundaryLabel,
@@ -330,10 +330,10 @@ function withOpenedBoundaryFileSync<T>(
   }
 }
 
-function resolveBoundaryFilePath(params: {
+function resolveRootFilePath(params: {
   absolutePath: string;
   rootPath: string;
   boundaryLabel: string;
 }): string | null {
-  return withOpenedBoundaryFileSync(params, (opened) => opened.path);
+  return withOpenedRootFileSync(params, (opened) => opened.path);
 }

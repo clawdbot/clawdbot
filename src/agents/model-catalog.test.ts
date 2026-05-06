@@ -19,16 +19,40 @@ let readFileMock: ReturnType<typeof vi.fn>;
 
 vi.mock("./model-suppression.runtime.js", () => ({
   shouldSuppressBuiltInModel: (params: { provider?: string; id?: string }) =>
-    (params.provider === "openai" ||
-      params.provider === "azure-openai-responses" ||
-      params.provider === "openai-codex") &&
-    params.id === "gpt-5.3-codex-spark",
+    isSuppressedModel(params.provider, params.id),
   buildShouldSuppressBuiltInModel: () => (params: { provider?: string; id?: string }) =>
-    (params.provider === "openai" ||
-      params.provider === "azure-openai-responses" ||
-      params.provider === "openai-codex") &&
-    params.id === "gpt-5.3-codex-spark",
+    isSuppressedModel(params.provider, params.id),
 }));
+
+function isSuppressedModel(provider?: string, id?: string): boolean {
+  const modelId = id?.trim().toLowerCase();
+  if (!modelId) {
+    return false;
+  }
+  if (
+    (provider === "openai" ||
+      provider === "azure-openai-responses" ||
+      provider === "openai-codex") &&
+    modelId === "gpt-5.3-codex-spark"
+  ) {
+    return true;
+  }
+  return (
+    provider === "openai-codex" &&
+    [
+      "gpt-5.1",
+      "gpt-5.1-codex",
+      "gpt-5.1-codex-mini",
+      "gpt-5.1-codex-max",
+      "gpt-5.2",
+      "gpt-5.2-codex",
+      "gpt-5.2-pro",
+      "gpt-5.3",
+      "gpt-5.3-codex",
+      "gpt-5.3-chat-latest",
+    ].includes(modelId)
+  );
+}
 
 function mockCatalogImportFailThenRecover() {
   let call = 0;
@@ -92,8 +116,8 @@ describe("loadModelCatalog", () => {
     vi.doMock("./models-config.js", () => ({
       ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
     }));
-    vi.doMock("./agent-paths.js", () => ({
-      resolveOpenClawAgentDir: () => "/tmp/openclaw",
+    vi.doMock("./agent-scope.js", () => ({
+      resolveDefaultAgentDir: () => "/tmp/openclaw",
     }));
     vi.doMock("../plugins/provider-runtime.runtime.js", () => ({
       augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
@@ -143,7 +167,7 @@ describe("loadModelCatalog", () => {
   afterAll(() => {
     vi.doUnmock("node:fs/promises");
     vi.doUnmock("./models-config.js");
-    vi.doUnmock("./agent-paths.js");
+    vi.doUnmock("./agent-scope.js");
     vi.doUnmock("../plugins/provider-runtime.runtime.js");
     vi.doUnmock("../plugins/current-plugin-metadata-snapshot.js");
     vi.doUnmock("../plugins/plugin-metadata-snapshot.js");
@@ -521,6 +545,57 @@ describe("loadModelCatalog", () => {
         provider: "openai-codex",
         id: "gpt-5.3-codex-spark",
       }),
+    );
+  });
+
+  it("filters stale openai-codex 5.1/5.2/5.3 built-ins from the catalog", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gpt-5.1-codex-mini",
+        provider: "openai-codex",
+        name: "GPT-5.1 Codex Mini",
+        reasoning: true,
+        contextWindow: 400000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.2-codex",
+        provider: "openai-codex",
+        name: "GPT-5.2 Codex",
+        reasoning: true,
+        contextWindow: 400000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.3-codex",
+        provider: "openai-codex",
+        name: "GPT-5.3 Codex",
+        reasoning: true,
+        contextWindow: 400000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.5",
+        provider: "openai-codex",
+        name: "GPT-5.5",
+        reasoning: true,
+        contextWindow: 400000,
+        input: ["text", "image"],
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    expect(result).not.toContainEqual(
+      expect.objectContaining({ provider: "openai-codex", id: "gpt-5.1-codex-mini" }),
+    );
+    expect(result).not.toContainEqual(
+      expect.objectContaining({ provider: "openai-codex", id: "gpt-5.2-codex" }),
+    );
+    expect(result).not.toContainEqual(
+      expect.objectContaining({ provider: "openai-codex", id: "gpt-5.3-codex" }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({ provider: "openai-codex", id: "gpt-5.5" }),
     );
   });
 

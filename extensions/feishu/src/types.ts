@@ -1,3 +1,4 @@
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/core";
 import type { FeishuConfigSchema, FeishuAccountConfigSchema, z } from "./config-schema.js";
 import type { MentionTarget } from "./mention-target.types.js";
@@ -53,6 +54,7 @@ export type FeishuMessageContext = {
 export type FeishuSendResult = {
   messageId: string;
   chatId: string;
+  receipt: MessageReceipt;
 };
 
 export type FeishuChatType = "p2p" | "group" | "topic_group" | "private";

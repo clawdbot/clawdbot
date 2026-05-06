@@ -44,6 +44,7 @@ type CreateSessionParams = {
   label?: string;
   model?: string;
   parentSessionKey?: string;
+  emitCommandHooks?: boolean;
 };
 
 type CreateSessionResult = {

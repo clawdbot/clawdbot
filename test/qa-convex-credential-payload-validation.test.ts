@@ -53,4 +53,33 @@ describe("QA Convex credential payload validation", () => {
 
     expect(normalizeCredentialPayloadForKind("future-kind", payload)).toBe(payload);
   });
+
+  it("normalizes WhatsApp credential payloads", () => {
+    expect(
+      normalizeCredentialPayloadForKind("whatsapp", {
+        driverPhoneE164: "+15550000001",
+        sutPhoneE164: "+15550000002",
+        driverAuthArchiveBase64: "driver-archive",
+        sutAuthArchiveBase64: "sut-archive",
+        groupJid: "120363000000000000@g.us",
+      }),
+    ).toEqual({
+      driverPhoneE164: "+15550000001",
+      sutPhoneE164: "+15550000002",
+      driverAuthArchiveBase64: "driver-archive",
+      sutAuthArchiveBase64: "sut-archive",
+      groupJid: "120363000000000000@g.us",
+    });
+  });
+
+  it("rejects WhatsApp payloads with duplicate phone numbers", () => {
+    expect(() =>
+      normalizeCredentialPayloadForKind("whatsapp", {
+        driverPhoneE164: "+15550000001",
+        sutPhoneE164: "+15550000001",
+        driverAuthArchiveBase64: "driver-archive",
+        sutAuthArchiveBase64: "sut-archive",
+      }),
+    ).toThrow("distinct driverPhoneE164 and sutPhoneE164");
+  });
 });

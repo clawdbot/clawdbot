@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { isRecord } from "../utils.js";
+import { loadEnabledBundleLspConfig } from "./bundle-lsp.js";
 import { loadEnabledBundleMcpConfig } from "./bundle-mcp.js";
 import {
   createEnabledPluginEntries,
@@ -215,6 +216,68 @@ describe("loadEnabledBundleMcpConfig", () => {
             normalizePathForAssertion("local-probe.mjs")!,
           ],
         });
+      },
+    );
+  });
+
+  it("reports malformed file-backed MCP configs instead of silently dropping servers", async () => {
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-bundle-malformed-mcp",
+      async ({ homeDir, workspaceDir }) => {
+        const pluginRoot = await writeClaudeBundleManifest({
+          homeDir,
+          pluginId: "malformed-mcp",
+          manifest: {
+            name: "malformed-mcp",
+            mcpServers: ".mcp.json",
+          },
+        });
+        await fs.writeFile(path.join(pluginRoot, ".mcp.json"), "{", "utf-8");
+
+        const loaded = loadEnabledBundleMcpConfig({
+          workspaceDir,
+          cfg: createEnabledBundleConfig(["malformed-mcp"]),
+        });
+
+        expect(loaded.config.mcpServers).toEqual({});
+        expect(loaded.diagnostics).toEqual([
+          expect.objectContaining({
+            pluginId: "malformed-mcp",
+            message: expect.stringContaining("unable to read .mcp.json"),
+          }),
+        ]);
+      },
+    );
+  });
+
+  it("reports malformed file-backed LSP configs instead of silently dropping servers", async () => {
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-bundle-malformed-lsp",
+      async ({ homeDir, workspaceDir }) => {
+        const pluginRoot = await writeClaudeBundleManifest({
+          homeDir,
+          pluginId: "malformed-lsp",
+          manifest: {
+            name: "malformed-lsp",
+            lspServers: ".lsp.json",
+          },
+        });
+        await fs.writeFile(path.join(pluginRoot, ".lsp.json"), "{", "utf-8");
+
+        const loaded = loadEnabledBundleLspConfig({
+          workspaceDir,
+          cfg: createEnabledBundleConfig(["malformed-lsp"]),
+        });
+
+        expect(loaded.config.lspServers).toEqual({});
+        expect(loaded.diagnostics).toEqual([
+          expect.objectContaining({
+            pluginId: "malformed-lsp",
+            message: expect.stringContaining("unable to read .lsp.json"),
+          }),
+        ]);
       },
     );
   });

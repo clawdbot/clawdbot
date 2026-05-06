@@ -18,7 +18,7 @@ type NostrGatewayStart = NonNullable<
 >;
 type NostrOutboundAdapter = Pick<
   ChannelOutboundAdapter,
-  "deliveryMode" | "textChunkLimit" | "sendText"
+  "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "sendText"
 > & {
   sendText: NonNullable<ChannelOutboundAdapter["sendText"]>;
 };
@@ -275,6 +275,12 @@ export const nostrPairingTextAdapter = {
 export const nostrOutboundAdapter: NostrOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 4000,
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      messageSendingHooks: true,
+    },
+  },
   sendText: async ({ cfg, to, text, accountId }) => {
     const core = getNostrRuntime();
     const aid = accountId ?? resolveDefaultNostrAccountId(cfg);

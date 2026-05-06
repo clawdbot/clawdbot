@@ -1,16 +1,39 @@
-import fs from "node:fs";
 import path from "node:path";
+import {
+  ackJsonDurableQueueEntry,
+  ensureJsonDurableQueueDirs,
+  loadJsonDurableQueueEntry,
+  loadPendingJsonDurableQueueEntries,
+  moveJsonDurableQueueEntryToFailed,
+  readJsonDurableQueueEntry,
+  resolveJsonDurableQueueEntryPaths,
+  writeJsonDurableQueueEntry,
+} from "@openclaw/fs-safe/store";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { generateSecureUuid } from "../secure-random.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
+import type { OutboundIdentity } from "./identity.js";
 import type { OutboundMirror } from "./mirror.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
 const QUEUE_DIRNAME = "delivery-queue";
 const FAILED_DIRNAME = "failed";
+const QUEUE_TEMP_PREFIX = ".delivery-queue";
+
+export type QueuedRenderedMessageBatchPlan = {
+  payloadCount: number;
+  textCount: number;
+  mediaCount: number;
+  voiceCount: number;
+  presentationCount: number;
+  interactiveCount: number;
+  channelDataCount: number;
+  items: readonly RenderedMessageBatchPlanItem[];
+};
 
 export type QueuedDeliveryPayload = {
   channel: Exclude<OutboundChannel, "none">;
@@ -22,10 +45,13 @@ export type QueuedDeliveryPayload = {
    * should produce the same result on replay.
    */
   payloads: ReplyPayload[];
+  /** Replayable projection summary captured when the durable send intent is created. */
+  renderedBatchPlan?: QueuedRenderedMessageBatchPlan;
   threadId?: string | number | null;
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
   formatting?: OutboundDeliveryFormattingOptions;
+  identity?: OutboundIdentity;
   bestEffort?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
@@ -43,6 +69,8 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
   retryCount: number;
   lastAttemptAt?: number;
   lastError?: string;
+  platformSendStartedAt?: number;
+  recoveryState?: "send_attempt_started" | "unknown_after_send";
 }
 
 export function resolveQueueDir(stateDir?: string): string {
@@ -61,38 +89,19 @@ function resolveQueueEntryPaths(
   jsonPath: string;
   deliveredPath: string;
 } {
-  const queueDir = resolveQueueDir(stateDir);
-  return {
-    jsonPath: path.join(queueDir, `${id}.json`),
-    deliveredPath: path.join(queueDir, `${id}.delivered`),
-  };
-}
-
-function getErrnoCode(err: unknown): string | null {
-  return err && typeof err === "object" && "code" in err
-    ? String((err as { code?: unknown }).code)
-    : null;
-}
-
-async function unlinkBestEffort(filePath: string): Promise<void> {
-  try {
-    await fs.promises.unlink(filePath);
-  } catch {
-    // Best-effort cleanup.
-  }
+  return resolveJsonDurableQueueEntryPaths(resolveQueueDir(stateDir), id);
 }
 
 async function writeQueueEntry(filePath: string, entry: QueuedDelivery): Promise<void> {
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
-    encoding: "utf-8",
-    mode: 0o600,
+  await writeJsonDurableQueueEntry({
+    filePath,
+    entry,
+    tempPrefix: QUEUE_TEMP_PREFIX,
   });
-  await fs.promises.rename(tmp, filePath);
 }
 
 async function readQueueEntry(filePath: string): Promise<QueuedDelivery> {
-  return JSON.parse(await fs.promises.readFile(filePath, "utf-8")) as QueuedDelivery;
+  return await readJsonDurableQueueEntry<QueuedDelivery>(filePath);
 }
 
 function normalizeLegacyQueuedDeliveryEntry(entry: QueuedDelivery): {
@@ -125,8 +134,10 @@ function normalizeLegacyQueuedDeliveryEntry(entry: QueuedDelivery): {
 /** Ensure the queue directory (and failed/ subdirectory) exist. */
 export async function ensureQueueDir(stateDir?: string): Promise<string> {
   const queueDir = resolveQueueDir(stateDir);
-  await fs.promises.mkdir(queueDir, { recursive: true, mode: 0o700 });
-  await fs.promises.mkdir(resolveFailedDir(stateDir), { recursive: true, mode: 0o700 });
+  await ensureJsonDurableQueueDirs({
+    queueDir,
+    failedDir: resolveFailedDir(stateDir),
+  });
   return queueDir;
 }
 
@@ -144,10 +155,12 @@ export async function enqueueDelivery(
     to: params.to,
     accountId: params.accountId,
     payloads: params.payloads,
+    renderedBatchPlan: params.renderedBatchPlan,
     threadId: params.threadId,
     replyToId: params.replyToId,
     replyToMode: params.replyToMode,
     formatting: params.formatting,
+    identity: params.identity,
     bestEffort: params.bestEffort,
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
@@ -170,22 +183,7 @@ export async function enqueueDelivery(
  * by {@link loadPendingDeliveries} on the next startup without re-sending.
  */
 export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
-  const { jsonPath, deliveredPath } = resolveQueueEntryPaths(id, stateDir);
-  try {
-    // Phase 1: atomic rename marks the delivery as complete.
-    await fs.promises.rename(jsonPath, deliveredPath);
-  } catch (err) {
-    const code = getErrnoCode(err);
-    if (code === "ENOENT") {
-      // .json already gone — may have been renamed by a previous ack attempt.
-      // Try to clean up a leftover .delivered marker if present.
-      await unlinkBestEffort(deliveredPath);
-      return;
-    }
-    throw err;
-  }
-  // Phase 2: remove the marker file.
-  await unlinkBestEffort(deliveredPath);
+  await ackJsonDurableQueueEntry(resolveQueueEntryPaths(id, stateDir));
 }
 
 /** Update a queue entry after a failed delivery attempt. */
@@ -198,81 +196,55 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   await writeQueueEntry(filePath, entry);
 }
 
+export async function markDeliveryPlatformSendAttemptStarted(
+  id: string,
+  stateDir?: string,
+): Promise<void> {
+  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+  const entry = await readQueueEntry(filePath);
+  entry.platformSendStartedAt = entry.platformSendStartedAt ?? Date.now();
+  entry.recoveryState = "send_attempt_started";
+  await writeQueueEntry(filePath, entry);
+}
+
+export async function markDeliveryPlatformOutcomeUnknown(
+  id: string,
+  stateDir?: string,
+): Promise<void> {
+  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+  const entry = await readQueueEntry(filePath);
+  entry.platformSendStartedAt = entry.platformSendStartedAt ?? Date.now();
+  entry.recoveryState = "unknown_after_send";
+  await writeQueueEntry(filePath, entry);
+}
+
 /** Load a single pending delivery entry by ID from the queue directory. */
 export async function loadPendingDelivery(
   id: string,
   stateDir?: string,
 ): Promise<QueuedDelivery | null> {
-  const { jsonPath } = resolveQueueEntryPaths(id, stateDir);
-  try {
-    const stat = await fs.promises.stat(jsonPath);
-    if (!stat.isFile()) {
-      return null;
-    }
-    const { entry, migrated } = normalizeLegacyQueuedDeliveryEntry(await readQueueEntry(jsonPath));
-    if (migrated) {
-      await writeQueueEntry(jsonPath, entry);
-    }
-    return entry;
-  } catch (err) {
-    if (getErrnoCode(err) === "ENOENT") {
-      return null;
-    }
-    throw err;
-  }
+  return await loadJsonDurableQueueEntry({
+    paths: resolveQueueEntryPaths(id, stateDir),
+    tempPrefix: QUEUE_TEMP_PREFIX,
+    read: async (entry) => normalizeLegacyQueuedDeliveryEntry(entry),
+  });
 }
 
 /** Load all pending delivery entries from the queue directory. */
 export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
   const queueDir = resolveQueueDir(stateDir);
-  let files: string[];
-  try {
-    files = await fs.promises.readdir(queueDir);
-  } catch (err) {
-    const code = getErrnoCode(err);
-    if (code === "ENOENT") {
-      return [];
-    }
-    throw err;
-  }
-
-  // Clean up .delivered markers left by ackDelivery if the process crashed
-  // between the rename and the unlink.
-  for (const file of files) {
-    if (file.endsWith(".delivered")) {
-      await unlinkBestEffort(path.join(queueDir, file));
-    }
-  }
-
-  const entries: QueuedDelivery[] = [];
-  for (const file of files) {
-    if (!file.endsWith(".json")) {
-      continue;
-    }
-    const filePath = path.join(queueDir, file);
-    try {
-      const stat = await fs.promises.stat(filePath);
-      if (!stat.isFile()) {
-        continue;
-      }
-      const { entry, migrated } = normalizeLegacyQueuedDeliveryEntry(
-        await readQueueEntry(filePath),
-      );
-      if (migrated) {
-        await writeQueueEntry(filePath, entry);
-      }
-      entries.push(entry);
-    } catch {
-      // Skip malformed or inaccessible entries.
-    }
-  }
-  return entries;
+  return await loadPendingJsonDurableQueueEntries({
+    queueDir,
+    tempPrefix: QUEUE_TEMP_PREFIX,
+    read: async (entry) => normalizeLegacyQueuedDeliveryEntry(entry),
+  });
 }
 
 /** Move a queue entry to the failed/ subdirectory. */
 export async function moveToFailed(id: string, stateDir?: string): Promise<void> {
-  const queueDir = resolveQueueDir(stateDir);
-  const failedDir = resolveFailedDir(stateDir);
-  await fs.promises.mkdir(failedDir, { recursive: true, mode: 0o700 });
-  await fs.promises.rename(path.join(queueDir, `${id}.json`), path.join(failedDir, `${id}.json`));
+  await moveJsonDurableQueueEntryToFailed({
+    queueDir: resolveQueueDir(stateDir),
+    failedDir: resolveFailedDir(stateDir),
+    id,
+  });
 }

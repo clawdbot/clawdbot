@@ -1,4 +1,8 @@
 import fsSync from "node:fs";
+import {
+  createMessageReceiptFromOutboundResults,
+  listMessageReceiptPlatformIds,
+} from "openclaw/plugin-sdk/channel-message";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { sleep } from "openclaw/plugin-sdk/text-runtime";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -52,7 +56,10 @@ function acceptedSendResult(kind: "media" | "text", id: string) {
   return {
     kind,
     messageId: id,
-    messageIds: [id],
+    receipt: createMessageReceiptFromOutboundResults({
+      kind,
+      results: [{ channel: "whatsapp", messageId: id }],
+    }),
     keys: [{ id }],
     providerAccepted: true,
   };
@@ -62,7 +69,10 @@ function unacceptedSendResult(kind: "media" | "text") {
   return {
     kind,
     messageId: "unknown",
-    messageIds: [],
+    receipt: createMessageReceiptFromOutboundResults({
+      kind,
+      results: [],
+    }),
     keys: [],
     providerAccepted: false,
   };
@@ -196,7 +206,19 @@ describe("deliverWebReply", () => {
     expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa", undefined);
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (text)");
     expect(delivery.providerAccepted).toBe(true);
-    expect(delivery.messageIds).toEqual(["reply-sent-1"]);
+    expect(listMessageReceiptPlatformIds(delivery.receipt)).toEqual(["reply-sent-1"]);
+    expect(delivery.receipt).toEqual(
+      expect.objectContaining({
+        primaryPlatformMessageId: "reply-sent-1",
+        platformMessageIds: ["reply-sent-1"],
+      }),
+    );
+    expect(delivery.receipt.parts).toEqual([
+      expect.objectContaining({
+        platformMessageId: "reply-sent-1",
+        kind: "text",
+      }),
+    ]);
   });
 
   it("reports text replies that Baileys did not accept", async () => {
@@ -214,7 +236,10 @@ describe("deliverWebReply", () => {
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
     expect(delivery).toMatchObject({
-      messageIds: [],
+      receipt: expect.objectContaining({
+        platformMessageIds: [],
+        parts: [],
+      }),
       providerAccepted: false,
     });
     expect(replyLogger.warn).toHaveBeenCalledWith(

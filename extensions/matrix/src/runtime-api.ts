@@ -90,7 +90,7 @@ export {
 export { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 export { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
 export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";

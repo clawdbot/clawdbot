@@ -4,13 +4,7 @@ import { URL } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
-import {
-  appendFileWithinRoot,
-  SafeOpenError,
-  openFileWithinRoot,
-  readFileWithinRoot,
-  writeFileWithinRoot,
-} from "../infra/fs-safe.js";
+import { root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { detectMime } from "../media/mime.js";
@@ -491,10 +485,8 @@ async function appendMemoryFlushContent(params: {
   signal?: AbortSignal;
 }) {
   if (!params.sandbox) {
-    await appendFileWithinRoot({
-      rootDir: params.root,
-      relativePath: params.relativePath,
-      data: params.content,
+    const root = await fsRoot(params.root);
+    await root.append(params.relativePath, params.content, {
       mkdir: true,
       prependNewlineIfNeeded: true,
     });
@@ -769,6 +761,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   }
 
   // When workspaceOnly is true, enforce workspace boundary
+  const rootPromise = fsRoot(root);
   return {
     mkdir: async (dir: string) => {
       const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
@@ -778,12 +771,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     },
     writeFile: async (absolutePath: string, content: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
-      await writeFileWithinRoot({
-        rootDir: root,
-        relativePath: relative,
-        data: content,
-        mkdir: true,
-      });
+      await (await rootPromise).write(relative, content, { mkdir: true });
     },
   } as const;
 }
@@ -807,23 +795,16 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
   }
 
   // When workspaceOnly is true, enforce workspace boundary
+  const rootPromise = fsRoot(root);
   return {
     readFile: async (absolutePath: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
-      const safeRead = await readFileWithinRoot({
-        rootDir: root,
-        relativePath: relative,
-      });
+      const safeRead = await (await rootPromise).read(relative);
       return safeRead.buffer;
     },
     writeFile: async (absolutePath: string, content: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
-      await writeFileWithinRoot({
-        rootDir: root,
-        relativePath: relative,
-        data: content,
-        mkdir: true,
-      });
+      await (await rootPromise).write(relative, content, { mkdir: true });
     },
     access: async (absolutePath: string) => {
       let relative: string;
@@ -838,16 +819,13 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         return;
       }
       try {
-        const opened = await openFileWithinRoot({
-          rootDir: root,
-          relativePath: relative,
-        });
+        const opened = await (await rootPromise).open(relative);
         await opened.handle.close().catch(() => {});
       } catch (error) {
-        if (error instanceof SafeOpenError && error.code === "not-found") {
+        if (error instanceof FsSafeError && error.code === "not-found") {
           throw createFsAccessError("ENOENT", absolutePath);
         }
-        if (error instanceof SafeOpenError && error.code === "outside-workspace") {
+        if (error instanceof FsSafeError && error.code === "outside-workspace") {
           // Don't throw here – see the comment above about the upstream
           // library swallowing access errors as "File not found".
           return;

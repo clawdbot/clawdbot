@@ -79,6 +79,14 @@ function readApprovalsFile(homeDir: string): ExecApprovalsFile {
   return JSON.parse(fs.readFileSync(approvalsFilePath(homeDir), "utf8")) as ExecApprovalsFile;
 }
 
+function listExecApprovalTempFiles(homeDir: string): string[] {
+  const dir = path.dirname(approvalsFilePath(homeDir));
+  if (!fs.existsSync(dir)) {
+    return [];
+  }
+  return fs.readdirSync(dir).filter((name) => name.endsWith(".tmp"));
+}
+
 describe("exec approvals store helpers", () => {
   it("expands home-prefixed default file and socket paths", () => {
     const dir = createHomeDir();
@@ -171,6 +179,189 @@ describe("exec approvals store helpers", () => {
     expect(fs.readFileSync(approvalsPath, "utf8")).toContain('"security": "full"');
     expect(fs.readFileSync(linkedPath, "utf8")).toBe('{"sentinel":true}\n');
     expect(fs.statSync(approvalsPath).ino).not.toBe(fs.statSync(linkedPath).ino);
+  });
+
+  it("normalizes successful rename writes to owner-only permissions", () => {
+    const dir = createHomeDir();
+    const actualWriteFileSync = fs.writeFileSync.bind(fs);
+    vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
+      const result = actualWriteFileSync(file, data, options as never);
+      const filePath = String(file);
+      if (
+        typeof file !== "number" &&
+        filePath.includes(".exec-approvals.") &&
+        filePath.endsWith(".tmp")
+      ) {
+        fs.chmodSync(file, 0o000);
+      }
+      return result;
+    });
+
+    saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
+
+    expect(fs.readFileSync(approvalsFilePath(dir), "utf8")).toContain('"security": "full"');
+    expect(fs.statSync(approvalsFilePath(dir)).mode & 0o777).toBe(0o600);
+  });
+
+  it("normalizes the approvals directory to owner-only permissions", () => {
+    const dir = createHomeDir();
+    const approvalsDir = path.dirname(approvalsFilePath(dir));
+    fs.mkdirSync(approvalsDir, { recursive: true });
+    fs.chmodSync(approvalsDir, 0o777);
+
+    saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
+
+    expect(fs.readFileSync(approvalsFilePath(dir), "utf8")).toContain('"security": "full"');
+    expect(fs.statSync(approvalsDir).mode & 0o777).toBe(0o700);
+  });
+
+  it("falls back to copying when rename cannot overwrite the approvals file", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(approvalsPath, '{"version":1,"agents":{}}\n', "utf8");
+    const actualRenameSync = fs.renameSync.bind(fs);
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(to) === approvalsPath) {
+        const error = Object.assign(new Error("locked target"), { code: "EPERM" });
+        throw error;
+      }
+      return actualRenameSync(from, to);
+    });
+
+    saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
+
+    expect(rename).toHaveBeenCalled();
+    expect(fs.readFileSync(approvalsPath, "utf8")).toContain('"security": "full"');
+    expect(fs.statSync(approvalsPath).mode & 0o777).toBe(0o600);
+    expect(listExecApprovalTempFiles(dir)).toEqual([]);
+  });
+
+  it("normalizes fallback temp files before copying", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(approvalsPath, '{"version":1,"agents":{}}\n', "utf8");
+    const actualWriteFileSync = fs.writeFileSync.bind(fs);
+    vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
+      const result = actualWriteFileSync(file, data, options as never);
+      const filePath = String(file);
+      if (
+        typeof file !== "number" &&
+        filePath.includes(".exec-approvals.") &&
+        filePath.endsWith(".tmp")
+      ) {
+        fs.chmodSync(file, 0o000);
+      }
+      return result;
+    });
+    const actualRenameSync = fs.renameSync.bind(fs);
+    vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(to) === approvalsPath) {
+        const error = Object.assign(new Error("locked target"), { code: "EPERM" });
+        throw error;
+      }
+      return actualRenameSync(from, to);
+    });
+
+    saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
+
+    expect(fs.readFileSync(approvalsPath, "utf8")).toContain('"security": "full"');
+    expect(fs.statSync(approvalsPath).mode & 0o777).toBe(0o600);
+    expect(listExecApprovalTempFiles(dir)).toEqual([]);
+  });
+
+  it("restores the previous approvals file when fallback copy fails", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    const previousRaw = '{"version":1,"defaults":{"security":"deny"},"agents":{}}\n';
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(approvalsPath, previousRaw, { encoding: "utf8", mode: 0o600 });
+    const actualRenameSync = fs.renameSync.bind(fs);
+    vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(to) === approvalsPath) {
+        const error = Object.assign(new Error("locked target"), { code: "EPERM" });
+        throw error;
+      }
+      return actualRenameSync(from, to);
+    });
+    const actualFtruncateSync = fs.ftruncateSync.bind(fs);
+    let forcedFallbackFailure = false;
+    vi.spyOn(fs, "ftruncateSync").mockImplementation((fd, len) => {
+      if (!forcedFallbackFailure && len === 0) {
+        forcedFallbackFailure = true;
+        actualFtruncateSync(fd, len);
+        const error = Object.assign(new Error("copy failed after opening destination"), {
+          code: "ENOSPC",
+        });
+        throw error;
+      }
+      return actualFtruncateSync(fd, len);
+    });
+
+    expect(() =>
+      saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+    ).toThrow(/copy failed after opening destination/);
+    expect(fs.readFileSync(approvalsPath, "utf8")).toBe(previousRaw);
+    expect(fs.statSync(approvalsPath).mode & 0o777).toBe(0o600);
+    expect(listExecApprovalTempFiles(dir)).toEqual([]);
+  });
+
+  it("does not follow a symlink swapped in before fallback copy", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    const targetPath = path.join(dir, "elsewhere.json");
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(approvalsPath, '{"version":1,"agents":{}}\n', "utf8");
+    fs.writeFileSync(targetPath, '{"sentinel":true}\n', "utf8");
+    const actualRenameSync = fs.renameSync.bind(fs);
+    vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(to) === approvalsPath) {
+        const error = Object.assign(new Error("locked target"), { code: "EPERM" });
+        throw error;
+      }
+      return actualRenameSync(from, to);
+    });
+    const actualStatSync = fs.statSync.bind(fs);
+    let swappedDestination = false;
+    vi.spyOn(fs, "statSync").mockImplementation((file, options) => {
+      const result = actualStatSync(file, options as never);
+      if (!swappedDestination && String(file) === approvalsPath) {
+        swappedDestination = true;
+        fs.rmSync(approvalsPath);
+        fs.symlinkSync(targetPath, approvalsPath);
+      }
+      return result;
+    });
+
+    expect(() =>
+      saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+    ).toThrow(/symlink|ELOOP/);
+    expect(fs.readFileSync(targetPath, "utf8")).toBe('{"sentinel":true}\n');
+    expect(listExecApprovalTempFiles(dir)).toEqual([]);
+  });
+
+  it("does not use the copy fallback for hard-linked approvals files", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    const linkedPath = path.join(dir, "linked.json");
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(linkedPath, '{"sentinel":true}\n', "utf8");
+    fs.linkSync(linkedPath, approvalsPath);
+    const actualRenameSync = fs.renameSync.bind(fs);
+    vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(to) === approvalsPath) {
+        const error = Object.assign(new Error("locked target"), { code: "EPERM" });
+        throw error;
+      }
+      return actualRenameSync(from, to);
+    });
+
+    expect(() =>
+      saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+    ).toThrow(/hard-linked exec approvals file/);
+    expect(fs.readFileSync(linkedPath, "utf8")).toBe('{"sentinel":true}\n');
+    expect(listExecApprovalTempFiles(dir)).toEqual([]);
   });
 
   it("refuses to write approvals through a symlink destination", () => {

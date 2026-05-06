@@ -11,7 +11,11 @@ import { createFeishuApiError, requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
 import { parsePostContent } from "./post.js";
-import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
+import {
+  assertFeishuMessageApiSuccess,
+  resolveFeishuReceiptKind,
+  toFeishuSendResult,
+} from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
 
@@ -132,7 +136,7 @@ async function sendFallbackDirect(
     { includeNestedErrorLogId: true },
   );
   assertFeishuMessageApiSuccess(response, errorPrefix);
-  return toFeishuSendResult(response, params.receiveId);
+  return toFeishuSendResult(response, params.receiveId, resolveFeishuReceiptKind(params.msgType));
 }
 
 async function sendReplyOrFallbackDirect(
@@ -188,7 +192,11 @@ async function sendReplyOrFallbackDirect(
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
   assertFeishuMessageApiSuccess(response, params.replyErrorPrefix);
-  return toFeishuSendResult(response, params.directParams.receiveId);
+  return toFeishuSendResult(
+    response,
+    params.directParams.receiveId,
+    resolveFeishuReceiptKind(params.msgType),
+  );
 }
 
 function normalizeCardTemplateVariable(value: unknown): string | undefined {

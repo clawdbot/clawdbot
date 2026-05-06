@@ -6,6 +6,7 @@ import type {
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderGroupPolicyWarningCollector,
@@ -22,7 +23,12 @@ import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-run
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
-import type { ChannelMessageActionName, ChannelPlugin, OpenClawConfig } from "../runtime-api.js";
+import type {
+  ChannelMessageActionName,
+  ChannelOutboundAdapter,
+  ChannelPlugin,
+  OpenClawConfig,
+} from "../runtime-api.js";
 import {
   buildProbeChannelStatusSummary,
   chunkTextForOutbound,
@@ -402,6 +408,47 @@ function describeMSTeamsMessageTool({
   };
 }
 
+const msteamsChannelOutbound: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  chunker: chunkTextForOutbound,
+  chunkerMode: "markdown",
+  textChunkLimit: 4000,
+  pollMaxOptions: 12,
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      media: true,
+      messageSendingHooks: true,
+    },
+  },
+  ...createRuntimeOutboundDelegates({
+    getRuntime: loadMSTeamsChannelRuntime,
+    sendText: { resolve: (runtime) => runtime.msteamsOutbound.sendText },
+    sendMedia: { resolve: (runtime) => runtime.msteamsOutbound.sendMedia },
+    sendPoll: { resolve: (runtime) => runtime.msteamsOutbound.sendPoll },
+  }),
+};
+
+const msteamsMessageAdapter = createChannelMessageAdapterFromOutbound({
+  id: "msteams",
+  outbound: msteamsChannelOutbound,
+  live: {
+    capabilities: {
+      draftPreview: true,
+      previewFinalization: true,
+      progressUpdates: true,
+      nativeStreaming: true,
+    },
+    finalizer: {
+      capabilities: {
+        finalEdit: true,
+        normalFallback: true,
+        previewReceipt: true,
+      },
+    },
+  },
+});
+
 export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsResult> =
   createChatChannelPlugin({
     base: {
@@ -458,6 +505,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           hint: "<conversationId|user:ID|conversation:ID>",
         },
       },
+      message: msteamsMessageAdapter,
       directory: createChannelDirectoryAdapter({
         self: async ({ cfg }) => {
           const creds = resolveMSTeamsCredentials(cfg.channels?.msteams);
@@ -1120,17 +1168,5 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         };
       },
     },
-    outbound: {
-      deliveryMode: "direct",
-      chunker: chunkTextForOutbound,
-      chunkerMode: "markdown",
-      textChunkLimit: 4000,
-      pollMaxOptions: 12,
-      ...createRuntimeOutboundDelegates({
-        getRuntime: loadMSTeamsChannelRuntime,
-        sendText: { resolve: (runtime) => runtime.msteamsOutbound.sendText },
-        sendMedia: { resolve: (runtime) => runtime.msteamsOutbound.sendMedia },
-        sendPoll: { resolve: (runtime) => runtime.msteamsOutbound.sendPoll },
-      }),
-    },
+    outbound: msteamsChannelOutbound,
   });

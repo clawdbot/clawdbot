@@ -1,6 +1,6 @@
 ---
 name: openclaw-pr-maintainer
-description: Review, triage, close, label, comment on, or land OpenClaw PRs/issues with maintainer evidence checks.
+description: Use immediately for any pasted OpenClaw GitHub issue or PR URL/number, and for OpenClaw issue/PR review, triage, duplicate search, opener identity/who wrote it, author account age/activity, comments, labels, close, land, or maintainer evidence checks.
 ---
 
 # OpenClaw PR Maintainer
@@ -28,8 +28,9 @@ gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --
 
 - For every reviewed, triaged, closed, or landed issue/PR, show the opener's human name when available, GitHub login, and account age.
 - Get the login from `gh issue view` / `gh pr view` (`author.login`), then fetch profile metadata once with `gh api users/<login> --jq '{login,name,created_at,type}'`.
-- Report account age as created date plus rough age, for example `Opened by Jane Doe (@jane, account created 2021-04-03, ~5y old)`.
-- Also show recent GitHub activity when it informs maintainer risk: OpenClaw PRs, issues, and commits in the last 12 months; for linked issue-fixing PRs, include both the PR author and issue opener when they differ.
+- Report opener identity as one compact line:
+  `By: Jane Doe (@jane, acct 2021-04-03) | OpenClaw: 4 PRs, 2 issues, 11 commits/12mo | GitHub: 9 repos, 86 commits, 9 PRs, 3 issues, 12 reviews`
+- Always show recent activity in two lanes: OpenClaw-local PRs, issues, and commits in the last 12 months; and general public GitHub activity over the same window. For linked issue-fixing PRs, include both the PR author and issue opener when they differ.
 - Prefer the bundled helper for activity lookups:
 
 ```bash
@@ -37,9 +38,11 @@ gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --
 .agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh --global <login>
 ```
 
-- The helper reports repo-local activity first and can fetch public GitHub contribution totals for the same window with `--global`.
+- The helper reports repo-local activity first and can fetch public GitHub contribution totals for the same window with `--global`; run the global form by default for review/triage identity summaries.
+- If the global contribution graph reports zero or looks inconsistent with visible public activity, sanity-check with `gh api users/<login>`, `gh api 'users/<login>/events/public?per_page=100'`, and recent public repo commits before calling the account inactive.
 - The helper is intentionally cache-friendly for gitcrawl-backed `gh`: it rounds repo-local windows to the UTC day, rounds global contribution windows to the UTC hour, and counts PRs/issues from one paginated issues response before fetching commits separately. Prefer reusing the helper instead of hand-rolling several `gh api` loops.
-- Report activity compactly, for example `OpenClaw last 12mo: 4 PRs, 2 issues, 11 commits; GitHub public last 12mo: 86 commits, 9 PRs, 3 issues, 12 reviews`.
+- If the contribution graph is misleading or zero but public events/repos show activity, keep it one line, for example:
+  `By: pickaxe (@ProspectOre, acct 2019-08-24) | OpenClaw: 5 PRs, 0 issues, 5 commits/12mo | GitHub: 5 repos, 29 recent events, 100 public own-repo commits; graph=0`
 - If `name` is empty, use the login only. If profile lookup is rate-limited or unavailable, say `account age unknown` rather than omitting the opener.
 - Use identity and activity as triage signal, not proof by itself: new, low-activity, or bot-like accounts can raise review caution, but code, repro, and CI evidence still decide.
 

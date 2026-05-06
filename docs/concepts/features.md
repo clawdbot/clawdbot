@@ -75,5 +75,17 @@ title: "Features"
 
 ## Related
 
-- [Experimental features](/concepts/experimental-features)
-- [Agent runtime](/concepts/agent)
+<CardGroup cols={2}>
+  <Card title="Experimental features" href="/concepts/experimental-features" icon="flask">
+    Opt-in features that have not yet shipped to the default surface.
+  </Card>
+  <Card title="Agent runtime" href="/concepts/agent" icon="robot">
+    Agent runtime model and how runs are dispatched.
+  </Card>
+  <Card title="Channels" href="/channels" icon="message-square">
+    Connect Telegram, WhatsApp, Discord, Slack, and more from one Gateway.
+  </Card>
+  <Card title="Plugins" href="/tools/plugin" icon="plug">
+    Bundled and third-party plugins that extend OpenClaw.
+  </Card>
+</CardGroup>

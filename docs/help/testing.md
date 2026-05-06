@@ -18,9 +18,9 @@ of Docker runners. This doc is a "how we test" guide:
 <Note>
 **QA stack (qa-lab, qa-channel, live transport lanes)** is documented separately:
 
-- [QA overview](/concepts/qa-e2e-automation) — architecture, command surface, scenario authoring.
-- [Matrix QA](/concepts/qa-matrix) — reference for `pnpm openclaw qa matrix`.
-- [QA channel](/channels/qa-channel) — the synthetic transport plugin used by repo-backed scenarios.
+- [QA overview](/concepts/qa-e2e-automation) - architecture, command surface, scenario authoring.
+- [Matrix QA](/concepts/qa-matrix) - reference for `pnpm openclaw qa matrix`.
+- [QA channel](/channels/qa-channel) - the synthetic transport plugin used by repo-backed scenarios.
 
 This page covers running the regular test suites and Docker/Parallels runners. The QA-specific runners section below ([QA-specific runners](#qa-specific-runners)) lists the concrete `qa` invocations and points back at the references above.
 </Note>
@@ -301,7 +301,7 @@ gh workflow run package-acceptance.yml --ref main \
   - Starts only the local AIMock provider server for direct protocol smoke
     testing.
 - `pnpm openclaw qa matrix`
-  - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel homeserver. Source-checkout only — packaged installs do not ship `qa-lab`.
+  - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel homeserver. Source-checkout only - packaged installs do not ship `qa-lab`.
   - Full CLI, profile/scenario catalog, env vars, and artifact layout: [Matrix QA](/concepts/qa-matrix).
 - `pnpm openclaw qa telegram`
   - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
@@ -399,7 +399,7 @@ The architecture and scenario-helper names for new channel adapters live in [QA 
 
 ## Test suites (what runs where)
 
-Think of the suites as “increasing realism” (and increasing flakiness/cost):
+Think of the suites as "increasing realism" (and increasing flakiness/cost):
 
 ### Unit / integration (default)
 
@@ -578,12 +578,12 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 - Files: `src/**/*.live.test.ts`, `test/**/*.live.test.ts`, and bundled-plugin live tests under `extensions/`
 - Default: **enabled** by `pnpm test:live` (sets `OPENCLAW_LIVE_TEST=1`)
 - Scope:
-  - “Does this provider/model actually work _today_ with real creds?”
+  - "Does this provider/model actually work _today_ with real creds?"
   - Catch provider format changes, tool-calling quirks, auth issues, and rate limit behavior
 - Expectations:
   - Not CI-stable by design (real networks, real provider policies, quotas, outages)
   - Costs money / uses rate limits
-  - Prefer running narrowed subsets instead of “everything”
+  - Prefer running narrowed subsets instead of "everything"
 - Live runs source `~/.profile` to pick up missing API keys.
 - By default, live runs still isolate `HOME` and copy config/auth material into a temp test home so unit fixtures cannot mutate your real `~/.openclaw`.
 - Set `OPENCLAW_LIVE_USE_REAL_HOME=1` only when you intentionally need live tests to use your real home directory.
@@ -601,13 +601,13 @@ Use this decision table:
 
 - Editing logic/tests: run `pnpm test` (and `pnpm test:coverage` if you changed a lot)
 - Touching gateway networking / WS protocol / pairing: add `pnpm test:e2e`
-- Debugging “my bot is down” / provider-specific failures / tool calling: run a narrowed `pnpm test:live`
+- Debugging "my bot is down" / provider-specific failures / tool calling: run a narrowed `pnpm test:live`
 
 ## Live (network-touching) tests
 
 For the live model matrix, CLI backend smokes, ACP smokes, Codex app-server
 harness, and all media-provider live tests (Deepgram, BytePlus, ComfyUI, image,
-music, video, media harness) — plus credential handling for live runs — see
+music, video, media harness) - plus credential handling for live runs - see
 [Testing live suites](/help/testing-live). For the dedicated update and
 plugin validation checklist, see
 [Testing updates and plugins](/help/testing-updates-plugins).
@@ -744,19 +744,19 @@ Run full Mintlify anchor validation when you need in-page heading checks too: `p
 
 ## Offline regression (CI-safe)
 
-These are “real pipeline” regressions without real providers:
+These are "real pipeline" regressions without real providers:
 
 - Gateway tool calling (mock OpenAI, real gateway + agent loop): `src/gateway/gateway.test.ts` (case: "runs a mock OpenAI tool call end-to-end via gateway agent loop")
 - Gateway wizard (WS `wizard.start`/`wizard.next`, writes config + auth enforced): `src/gateway/gateway.test.ts` (case: "runs wizard over ws and writes auth token config")
 
 ## Agent reliability evals (skills)
 
-We already have a few CI-safe tests that behave like “agent reliability evals”:
+We already have a few CI-safe tests that behave like "agent reliability evals":
 
 - Mock tool-calling through the real gateway + agent loop (`src/gateway/gateway.test.ts`).
 - End-to-end wizard flows that validate session wiring and config effects (`src/gateway/gateway.test.ts`).
 
-What’s still missing for skills (see [Skills](/tools/skills)):
+What's still missing for skills (see [Skills](/tools/skills)):
 
 - **Decisioning:** when skills are listed in the prompt, does the agent pick the right skill (or avoid irrelevant ones)?
 - **Compliance:** does the agent read `SKILL.md` before use and follow required steps/args?
@@ -829,7 +829,7 @@ Contract tests run in CI and do not require real API keys.
 When you fix a provider/model issue discovered in live:
 
 - Add a CI-safe regression if possible (mock/stub provider, or capture the exact request-shape transformation)
-- If it’s inherently live-only (rate limits, auth policies), keep the live test narrow and opt-in via env vars
+- If it's inherently live-only (rate limits, auth policies), keep the live test narrow and opt-in via env vars
 - Prefer targeting the smallest layer that catches the bug:
   - provider request conversion/replay bug → direct models test
   - gateway session/history/tool pipeline bug → gateway live smoke or CI-safe gateway mock test

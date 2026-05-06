@@ -1,14 +1,18 @@
+import fs from "node:fs";
+import path from "node:path";
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
 import { resolveVitestIsolation } from "./vitest.scoped-config.ts";
 import {
   nonIsolatedRunnerPath,
+  repoRoot,
   resolveRepoRootPath,
   sharedVitestConfig,
 } from "./vitest.shared.config.ts";
 import { getUnitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
 import {
   isBundledPluginDependentUnitTestFile,
+  isUnitConfigTestFile,
   unitTestAdditionalExcludePatterns,
   unitTestIncludePatterns,
 } from "./vitest.unit-paths.mjs";
@@ -28,6 +32,58 @@ export function loadExtraExcludePatternsFromEnv(
   return loadPatternListFromEnv("OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE", env) ?? [];
 }
 
+const defaultUnitCoverageRoots = ["src", "packages", "test"] as const;
+
+function toRepoPath(filePath: string): string {
+  return path.relative(repoRoot, filePath).split(path.sep).join("/");
+}
+
+function collectTestFiles(dir: string): string[] {
+  if (!fs.existsSync(dir)) {
+    return [];
+  }
+  const files: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
+      continue;
+    }
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectTestFiles(entryPath));
+    } else if (entry.isFile() && entry.name.endsWith(".test.ts")) {
+      files.push(toRepoPath(entryPath));
+    }
+  }
+  return files;
+}
+
+function resolveSiblingSourceFile(testFile: string): string | null {
+  if (!testFile.endsWith(".test.ts")) {
+    return null;
+  }
+  const sourceFile = testFile.replace(/\.test\.ts$/u, ".ts");
+  return fs.existsSync(resolveRepoRootPath(sourceFile)) ? sourceFile : null;
+}
+
+export function resolveDefaultUnitCoverageIncludePatterns(
+  unitFastTestFiles = getUnitFastTestFiles(),
+): string[] {
+  const fastTestFiles = new Set(unitFastTestFiles);
+  const sourceFiles = new Set<string>();
+  for (const root of defaultUnitCoverageRoots) {
+    for (const testFile of collectTestFiles(resolveRepoRootPath(root))) {
+      if (!isUnitConfigTestFile(testFile) || fastTestFiles.has(testFile)) {
+        continue;
+      }
+      const sourceFile = resolveSiblingSourceFile(testFile);
+      if (sourceFile !== null) {
+        sourceFiles.add(sourceFile);
+      }
+    }
+  }
+  return [...sourceFiles].toSorted((left, right) => left.localeCompare(right));
+}
+
 export function createUnitVitestConfigWithOptions(
   env: Record<string, string | undefined> = process.env,
   options: {
@@ -40,8 +96,15 @@ export function createUnitVitestConfigWithOptions(
 ) {
   const isolate = resolveVitestIsolation(env);
   const unitFastTestFiles = getUnitFastTestFiles();
+  const envIncludePatterns = loadIncludePatternsFromEnv(env);
   const defaultIncludePatterns = options.includePatterns ?? unitTestIncludePatterns;
   const cliIncludePatterns = narrowIncludePatternsForCli(defaultIncludePatterns, options.argv);
+  const coverageIncludePatterns =
+    options.includePatterns === undefined &&
+    envIncludePatterns === null &&
+    cliIncludePatterns === null
+      ? resolveDefaultUnitCoverageIncludePatterns(unitFastTestFiles)
+      : null;
   const protectedIncludeFiles = new Set(
     defaultIncludePatterns.filter((pattern) => isBundledPluginDependentUnitTestFile(pattern)),
   );
@@ -66,7 +129,7 @@ export function createUnitVitestConfigWithOptions(
           ),
         ),
       ],
-      include: loadIncludePatternsFromEnv(env) ?? cliIncludePatterns ?? defaultIncludePatterns,
+      include: envIncludePatterns ?? cliIncludePatterns ?? defaultIncludePatterns,
       exclude: [
         ...new Set([
           ...exclude,
@@ -78,6 +141,9 @@ export function createUnitVitestConfigWithOptions(
       ],
       coverage: {
         ...sharedTest.coverage,
+        ...(coverageIncludePatterns !== null && coverageIncludePatterns.length > 0
+          ? { include: coverageIncludePatterns }
+          : {}),
         exclude: [
           ...new Set([
             ...(sharedTest.coverage?.exclude ?? []),

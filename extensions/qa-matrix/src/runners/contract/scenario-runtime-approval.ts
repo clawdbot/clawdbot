@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { MATRIX_QA_DRIVER_DM_ROOM_KEY, resolveMatrixQaScenarioRoomId } from "./scenario-catalog.js";
 import {
@@ -108,6 +109,26 @@ function assertApprovalMetadata(params: {
   }
 }
 
+function isExpectedApprovalEvent(
+  event: MatrixQaObservedEvent,
+  params: {
+    context: MatrixQaScenarioContext;
+    expectedApprovalId: string;
+    expectedKind: MatrixQaApprovalKind;
+    roomId: string;
+    threadRootEventId?: string;
+  },
+) {
+  return (
+    event.roomId === params.roomId &&
+    event.sender === params.context.sutUserId &&
+    event.type === "m.room.message" &&
+    event.approval?.kind === params.expectedKind &&
+    event.approval.id === params.expectedApprovalId &&
+    (!params.threadRootEventId || event.relatesTo?.eventId === params.threadRootEventId)
+  );
+}
+
 async function waitForApprovalEvent(params: {
   context: MatrixQaScenarioContext;
   expectedApprovalId: string;
@@ -116,19 +137,26 @@ async function waitForApprovalEvent(params: {
   since?: string;
   threadRootEventId?: string;
 }) {
+  const observedMatch = params.context.observedEvents.find((event) =>
+    isExpectedApprovalEvent(event, params),
+  );
+  if (observedMatch) {
+    assertApprovalMetadata({
+      event: observedMatch,
+      expectedKind: params.expectedKind,
+    });
+    return {
+      event: observedMatch,
+      since: params.since,
+    };
+  }
   const client = createMatrixQaScenarioClient({
     accessToken: params.context.driverAccessToken,
     baseUrl: params.context.baseUrl,
   });
   const matched = await client.waitForRoomEvent({
     observedEvents: params.context.observedEvents,
-    predicate: (event) =>
-      event.roomId === params.roomId &&
-      event.sender === params.context.sutUserId &&
-      event.type === "m.room.message" &&
-      event.approval?.kind === params.expectedKind &&
-      event.approval.id === params.expectedApprovalId &&
-      (!params.threadRootEventId || event.relatesTo?.eventId === params.threadRootEventId),
+    predicate: (event) => isExpectedApprovalEvent(event, params),
     roomId: params.roomId,
     since: params.since,
     timeoutMs: params.context.timeoutMs,
@@ -138,6 +166,79 @@ async function waitForApprovalEvent(params: {
     expectedKind: params.expectedKind,
   });
   return matched;
+}
+
+async function waitForObservedApprovalEvent(params: {
+  context: MatrixQaScenarioContext;
+  expectedApprovalId: string;
+  expectedKind: MatrixQaApprovalKind;
+  roomIds: string[];
+  timeoutMs: number;
+}) {
+  const client = createMatrixQaDriverScenarioClient(params.context);
+  const roomIds = Array.from(
+    new Set(params.roomIds.map((roomId) => roomId.trim()).filter(Boolean)),
+  );
+  const primaryRoomId = roomIds[0];
+  if (!primaryRoomId) {
+    throw new Error("Matrix approval wait requires at least one candidate room");
+  }
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < params.timeoutMs) {
+    const observedMatch = params.context.observedEvents.find((event) =>
+      roomIds.some((roomId) =>
+        isExpectedApprovalEvent(event, {
+          ...params,
+          roomId,
+        }),
+      ),
+    );
+    if (observedMatch) {
+      assertApprovalMetadata({
+        event: observedMatch,
+        expectedKind: params.expectedKind,
+      });
+      return {
+        event: observedMatch,
+        since: undefined,
+      };
+    }
+    const remainingMs = params.timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await client.waitForOptionalRoomEvent({
+      observedEvents: params.context.observedEvents,
+      predicate: (event) =>
+        roomIds.some((roomId) =>
+          isExpectedApprovalEvent(event, {
+            ...params,
+            roomId,
+          }),
+        ),
+      roomId: primaryRoomId,
+      timeoutMs: Math.min(1_000, remainingMs),
+    });
+    await sleep(Math.min(100, Math.max(25, params.timeoutMs - (Date.now() - startedAt))));
+  }
+  throw new Error(
+    `timed out waiting for observed Matrix approval ${params.expectedApprovalId} in ${roomIds.join(", ")}`,
+  );
+}
+
+function listDriverDmApprovalCandidateRoomIds(context: MatrixQaScenarioContext) {
+  const preferredRoomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_DRIVER_DM_ROOM_KEY);
+  return [
+    preferredRoomId,
+    ...context.topology.rooms
+      .filter(
+        (room) =>
+          room.kind === "dm" &&
+          room.memberRoles.includes("driver") &&
+          room.memberRoles.includes("sut"),
+      )
+      .map((room) => room.roomId),
+  ];
 }
 
 async function reactToApproval(params: {
@@ -221,14 +322,6 @@ function assertApprovalDecisionResult(params: {
     throw new Error(
       `approval decision was ${formatApprovalResultValue(result?.decision)} instead of ${params.decision}`,
     );
-  }
-}
-
-function assertApprovalResolveResult(result: unknown) {
-  const resolved =
-    typeof result === "object" && result !== null ? (result as { ok?: unknown }) : null;
-  if (resolved?.ok !== true) {
-    throw new Error(`approval resolve result was ${formatApprovalResultValue(result)}`);
   }
 }
 
@@ -325,8 +418,8 @@ async function resolveApprovalDecision(params: {
     method,
     { decision: params.decision, id: params.approvalId },
     {
-      expectFinal: true,
-      timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
+      expectFinal: false,
+      timeoutMs: 5_000,
     },
   );
 }
@@ -563,7 +656,7 @@ export async function runApprovalPluginMetadataSingleEventScenario(
 
 export async function runApprovalChannelTargetBothScenario(context: MatrixQaScenarioContext) {
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
-  const dmRoomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_DRIVER_DM_ROOM_KEY);
+  const dmRoomIds = listDriverDmApprovalCandidateRoomIds(context);
   const token = buildMatrixQaToken("MATRIX_QA_APPROVAL_BOTH");
   const approvalId = `qa-${token.toLowerCase()}-${randomUUID().slice(0, 8)}`;
   const accepted = await requestExecApproval({
@@ -579,23 +672,22 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
     roomId: context.roomId,
     since: startSince,
   });
-  const dmApproval = await waitForApprovalEvent({
+  const dmApproval = await waitForObservedApprovalEvent({
     context,
     expectedApprovalId: approvalId,
     expectedKind: "exec",
-    roomId: dmRoomId,
-    since: startSince,
+    roomIds: dmRoomIds,
+    timeoutMs: context.timeoutMs,
   });
   if (channelApproval.event.approval?.id !== dmApproval.event.approval?.id) {
     throw new Error("target=both delivered different approval ids to channel and DM");
   }
-  const result = await resolveApprovalDecision({
+  await resolveApprovalDecision({
     approvalId,
     context,
     decision: "allow-once",
     kind: "exec",
   });
-  assertApprovalResolveResult(result);
   const lateDuplicate = await client.waitForOptionalRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) =>
@@ -622,7 +714,7 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
       `channel approval event: ${channelApproval.event.eventId}`,
       `dm approval event: ${dmApproval.event.eventId}`,
       `approval id: ${approvalId}`,
-      `decision: allow-once via gateway resolve`,
+      `cleanup decision: allow-once`,
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }

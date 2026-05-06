@@ -14,11 +14,25 @@ describe("ProxyConfigSchema", () => {
     const result = ProxyConfigSchema.parse({
       enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
+      loopbackMode: "gateway-only",
     });
     expect(result).toMatchObject({
       enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
+      loopbackMode: "gateway-only",
     });
+  });
+
+  it("accepts loopbackMode policy values", () => {
+    expect(ProxyConfigSchema.parse({ loopbackMode: "gateway-only" })?.loopbackMode).toBe(
+      "gateway-only",
+    );
+    expect(ProxyConfigSchema.parse({ loopbackMode: "proxy" })?.loopbackMode).toBe("proxy");
+    expect(ProxyConfigSchema.parse({ loopbackMode: "block" })?.loopbackMode).toBe("block");
+  });
+
+  it("rejects unknown loopbackMode values", () => {
+    expect(() => ProxyConfigSchema.parse({ loopbackMode: "bypass" })).toThrow();
   });
 
   it("rejects HTTPS proxy URLs because the node:http routing layer requires HTTP proxies", () => {

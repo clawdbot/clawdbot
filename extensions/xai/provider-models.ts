@@ -3,9 +3,9 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
-import { applyXaiModelCompat } from "openclaw/plugin-sdk/provider-tools";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveXaiCatalogEntry, XAI_BASE_URL } from "./model-definitions.js";
+import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 
 const XAI_MODERN_MODEL_PREFIXES = ["grok-3", "grok-4", "grok-code-fast"] as const;
 
@@ -26,7 +26,7 @@ export function resolveXaiForwardCompatModel(params: {
     return undefined;
   }
 
-  return applyXaiModelCompat(
+  return applyXaiRuntimeModelCompat(
     normalizeModelCompat({
       id: definition.id,
       name: definition.name,

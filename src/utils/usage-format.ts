@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { modelKey, normalizeModelRef, normalizeProviderId } from "../agents/model-selection.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayModelPricingCacheFingerprint } from "../gateway/model-pricing-cache-state.js";
 import { getCachedGatewayModelPricing } from "../gateway/model-pricing-cache.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 /**
@@ -204,7 +205,7 @@ function loadModelsJsonCostIndex(options?: {
   allowPluginNormalization?: boolean;
 }): Map<string, ModelCostConfig> {
   const useRawEntries = options?.allowPluginNormalization === false;
-  const modelsPath = path.join(resolveOpenClawAgentDir(), "models.json");
+  const modelsPath = path.join(resolveDefaultAgentDir({}), "models.json");
   try {
     const stat = fs.statSync(modelsPath);
     if (
@@ -212,13 +213,13 @@ function loadModelsJsonCostIndex(options?: {
       modelsJsonCostCache.path !== modelsPath ||
       modelsJsonCostCache.mtimeMs !== stat.mtimeMs
     ) {
-      const parsed = JSON.parse(fs.readFileSync(modelsPath, "utf8")) as {
+      const parsed = tryReadJsonSync<{
         providers?: Record<string, ModelProviderConfig>;
-      };
+      }>(modelsPath);
       modelsJsonCostCache = {
         path: modelsPath,
         mtimeMs: stat.mtimeMs,
-        providers: parsed.providers,
+        providers: parsed?.providers,
         normalizedEntries: null,
         rawEntries: null,
       };

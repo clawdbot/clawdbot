@@ -627,7 +627,15 @@ describe("sendMessageMatrix threads", () => {
       roomId: "!room:example",
       primaryMessageId: "$m1",
       messageId: "$m3",
-      messageIds: ["$m1", "$m2", "$m3"],
+      receipt: {
+        primaryPlatformMessageId: "$m1",
+        platformMessageIds: ["$m1", "$m2", "$m3"],
+        parts: [
+          expect.objectContaining({ platformMessageId: "$m1", kind: "text" }),
+          expect.objectContaining({ platformMessageId: "$m2", kind: "text" }),
+          expect.objectContaining({ platformMessageId: "$m3", kind: "text" }),
+        ],
+      },
     });
   });
 
@@ -720,7 +728,7 @@ describe("sendSingleTextMessageMatrix", () => {
   it("merges extra content fields into single-event sends", async () => {
     const { client, sendMessage } = makeClient();
 
-    await sendSingleTextMessageMatrix("room:!room:example", "done", {
+    const result = await sendSingleTextMessageMatrix("room:!room:example", "done", {
       client,
       cfg: {} as never,
       extraContent: { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true },
@@ -729,6 +737,11 @@ describe("sendSingleTextMessageMatrix", () => {
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
       body: "done",
       [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true,
+    });
+    expect(result.receipt).toMatchObject({
+      primaryPlatformMessageId: "evt1",
+      platformMessageIds: ["evt1"],
+      parts: [expect.objectContaining({ platformMessageId: "evt1", kind: "text" })],
     });
   });
 });

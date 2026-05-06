@@ -10,7 +10,7 @@ sidebarTitle: "Context engine"
 
 A **context engine** controls how OpenClaw builds model context for each run: which messages to include, how to summarize older history, and how to manage context across subagent boundaries.
 
-OpenClaw ships with a built-in `legacy` engine and uses it by default — most users never need to change this. Install and select a plugin engine only when you want different assembly, compaction, or cross-session recall behavior.
+OpenClaw ships with a built-in `legacy` engine and uses it by default - most users never need to change this. Install and select a plugin engine only when you want different assembly, compaction, or cross-session recall behavior.
 
 ## Quick start
 
@@ -61,7 +61,7 @@ OpenClaw ships with a built-in `legacy` engine and uses it by default — most u
 
   </Step>
   <Step title="Switch back to legacy (optional)">
-    Set `contextEngine` to `"legacy"` (or remove the key entirely — `"legacy"` is the default).
+    Set `contextEngine` to `"legacy"` (or remove the key entirely - `"legacy"` is the default).
   </Step>
 </Steps>
 
@@ -200,13 +200,13 @@ Required members:
 <ParamField path="promptAuthority" type='"assembled" | "preassembly_may_overflow"'>
   Controls which token estimate the runner uses for preemptive overflow
   prechecks. Defaults to `"assembled"`, which means only the assembled
-  prompt's estimate is checked — appropriate for engines that return a
+  prompt's estimate is checked - appropriate for engines that return a
   windowed, self-contained context. Set to `"preassembly_may_overflow"` only
   when your assembled view can hide overflow risk in the underlying
   transcript; the runner then takes the maximum of the assembled estimate
   and the pre-assembly (unwindowed) session-history estimate when deciding
   whether to preemptively compact. Either way, the messages you return are
-  still what the model sees — `promptAuthority` only affects the precheck.
+  still what the model sees - `promptAuthority` only affects the precheck.
 </ParamField>
 
 `compact` returns a `CompactResult`. When compaction rotates the active
@@ -222,7 +222,7 @@ Optional members:
 | `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                         |
 | `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session before it starts.                                                       |
 | `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                 |
-| `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload — not per-session.                           |
+| `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload - not per-session.                           |
 
 ### ownsCompaction
 
@@ -269,7 +269,7 @@ A no-op `compact()` is unsafe for an active non-owning engine because it disable
 ```
 
 <Note>
-The slot is exclusive at run time — only one registered context engine is resolved for a given run or compaction operation. Other enabled `kind: "context-engine"` plugins can still load and run their registration code; `plugins.slots.contextEngine` only selects which registered engine id OpenClaw resolves when it needs a context engine.
+The slot is exclusive at run time - only one registered context engine is resolved for a given run or compaction operation. Other enabled `kind: "context-engine"` plugins can still load and run their registration code; `plugins.slots.contextEngine` only selects which registered engine id OpenClaw resolves when it needs a context engine.
 </Note>
 
 <Note>
@@ -283,7 +283,7 @@ The slot is exclusive at run time — only one registered context engine is reso
     Compaction is one responsibility of the context engine. The legacy engine delegates to OpenClaw's built-in summarization. Plugin engines can implement any compaction strategy (DAG summaries, vector retrieval, etc.).
   </Accordion>
   <Accordion title="Memory plugins">
-    Memory plugins (`plugins.slots.memory`) are separate from context engines. Memory plugins provide search/retrieval; context engines control what the model sees. They can work together — a context engine might use memory plugin data during assembly. Plugin engines that want the active memory prompt path should prefer `buildMemorySystemPromptAddition(...)` from `openclaw/plugin-sdk/core`, which converts the active memory prompt sections into a ready-to-prepend `systemPromptAddition`. If an engine needs lower-level control, it can still pull raw lines from `openclaw/plugin-sdk/memory-host-core` via `buildActiveMemoryPromptSection(...)`.
+    Memory plugins (`plugins.slots.memory`) are separate from context engines. Memory plugins provide search/retrieval; context engines control what the model sees. They can work together - a context engine might use memory plugin data during assembly. Plugin engines that want the active memory prompt path should prefer `buildMemorySystemPromptAddition(...)` from `openclaw/plugin-sdk/core`, which converts the active memory prompt sections into a ready-to-prepend `systemPromptAddition`. If an engine needs lower-level control, it can still pull raw lines from `openclaw/plugin-sdk/memory-host-core` via `buildActiveMemoryPromptSection(...)`.
   </Accordion>
   <Accordion title="Session pruning">
     Trimming old tool results in-memory still runs regardless of which context engine is active.
@@ -299,8 +299,8 @@ The slot is exclusive at run time — only one registered context engine is reso
 
 ## Related
 
-- [Compaction](/concepts/compaction) — summarizing long conversations
-- [Context](/concepts/context) — how context is built for agent turns
-- [Plugin Architecture](/plugins/architecture) — registering context engine plugins
-- [Plugin manifest](/plugins/manifest) — plugin manifest fields
-- [Plugins](/tools/plugin) — plugin overview
+- [Compaction](/concepts/compaction) - summarizing long conversations
+- [Context](/concepts/context) - how context is built for agent turns
+- [Plugin Architecture](/plugins/architecture) - registering context engine plugins
+- [Plugin manifest](/plugins/manifest) - plugin manifest fields
+- [Plugins](/tools/plugin) - plugin overview

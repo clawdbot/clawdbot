@@ -1,4 +1,5 @@
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-message";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createEmptyChannelResult,
@@ -42,6 +43,19 @@ import {
 const loadZalouserChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
 const ZALOUSER_TEXT_CHUNK_LIMIT = 2000;
+
+type ZalouserSendTextContext = {
+  to: string;
+  text: string;
+  accountId?: string | null;
+  cfg: OpenClawConfig;
+};
+
+type ZalouserSendMediaContext = ZalouserSendTextContext & {
+  mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+};
 
 export function resolveZalouserQrProfile(accountId?: string | null): string {
   const normalized = normalizeAccountId(accountId);
@@ -92,34 +106,61 @@ function resolveZalouserRequireMention(params: ChannelGroupContext): boolean {
   return true;
 }
 
+async function sendZalouserTextFromContext({ to, text, accountId, cfg }: ZalouserSendTextContext) {
+  const { sendMessageZalouser } = await loadZalouserChannelRuntime();
+  const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
+  const target = parseZalouserOutboundTarget(to);
+  return await sendMessageZalouser(target.threadId, text, {
+    profile: account.profile,
+    isGroup: target.isGroup,
+    textMode: "markdown",
+    textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
+    textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),
+  });
+}
+
+async function sendZalouserMediaFromContext({
+  to,
+  text,
+  mediaUrl,
+  accountId,
+  cfg,
+  mediaLocalRoots,
+  mediaReadFile,
+}: ZalouserSendMediaContext) {
+  const { sendMessageZalouser } = await loadZalouserChannelRuntime();
+  const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
+  const target = parseZalouserOutboundTarget(to);
+  return await sendMessageZalouser(target.threadId, text, {
+    profile: account.profile,
+    isGroup: target.isGroup,
+    mediaUrl,
+    mediaLocalRoots,
+    mediaReadFile,
+    textMode: "markdown",
+    textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
+    textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),
+  });
+}
+
 const zalouserRawSendResultAdapter = createRawChannelSendResultAdapter({
   channel: "zalouser",
-  sendText: async ({ to, text, accountId, cfg }) => {
-    const { sendMessageZalouser } = await loadZalouserChannelRuntime();
-    const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
-    const target = parseZalouserOutboundTarget(to);
-    return await sendMessageZalouser(target.threadId, text, {
-      profile: account.profile,
-      isGroup: target.isGroup,
-      textMode: "markdown",
-      textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
-      textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),
-    });
+  sendText: sendZalouserTextFromContext,
+  sendMedia: sendZalouserMediaFromContext,
+});
+
+export const zalouserMessageAdapter = defineChannelMessageAdapter({
+  id: "zalouser",
+  durableFinal: {
+    capabilities: {
+      text: true,
+      media: true,
+      messageSendingHooks: true,
+    },
   },
-  sendMedia: async ({ to, text, mediaUrl, accountId, cfg, mediaLocalRoots, mediaReadFile }) => {
-    const { sendMessageZalouser } = await loadZalouserChannelRuntime();
-    const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
-    const target = parseZalouserOutboundTarget(to);
-    return await sendMessageZalouser(target.threadId, text, {
-      profile: account.profile,
-      isGroup: target.isGroup,
-      mediaUrl,
-      mediaLocalRoots,
-      mediaReadFile,
-      textMode: "markdown",
-      textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
-      textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),
-    });
+  send: {
+    text: sendZalouserTextFromContext,
+    media: sendZalouserMediaFromContext,
   },
 });
 

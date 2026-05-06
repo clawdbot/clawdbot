@@ -71,12 +71,10 @@ export async function modelsListCommand(
   }
   const [
     { loadAuthProfileStoreWithoutExternalProfiles },
-    { resolveOpenClawAgentDir },
-    { resolveAgentWorkspaceDir, resolveDefaultAgentId },
+    { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
     { resolveDefaultAgentWorkspaceDir },
   ] = await Promise.all([
     import("../../agents/auth-profiles/store.js"),
-    import("../../agents/agent-paths.js"),
     import("../../agents/agent-scope.js"),
     import("../../agents/workspace.js"),
   ]);
@@ -84,8 +82,8 @@ export async function modelsListCommand(
     commandName: "models list",
     runtime,
   });
-  const authStore = loadAuthProfileStoreWithoutExternalProfiles();
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = resolveDefaultAgentDir(cfg);
+  const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const workspaceDir =
     resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? resolveDefaultAgentWorkspaceDir();
   const authIndex = createModelListAuthIndex({ cfg, authStore, workspaceDir });

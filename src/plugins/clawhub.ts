@@ -749,7 +749,7 @@ async function verifyClawHubArchiveFiles(params: {
       extractedBytes += bytes;
       return extractedBytes <= DEFAULT_MAX_EXTRACTED_BYTES;
     };
-    for (const entry of Object.values(zip.files)) {
+    for (const entry of Object.values(zip.files as Record<string, JSZip.JSZipObject>)) {
       entryCount += 1;
       if (entryCount > DEFAULT_MAX_ENTRIES) {
         return buildClawHubInstallFailure(

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { saveJsonFile } from "../infra/json-file.js";
-import { readJsonFile, readJsonFileSync, writeJsonAtomic } from "../infra/json-files.js";
+import { tryReadJson, tryReadJsonSync, writeJson } from "../infra/json-files.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -161,14 +161,14 @@ function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex | null 
 export async function readPersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<InstalledPluginIndex | null> {
-  const parsed = await readJsonFile<unknown>(resolveInstalledPluginIndexStorePath(options));
+  const parsed = await tryReadJson<unknown>(resolveInstalledPluginIndexStorePath(options));
   return parseInstalledPluginIndex(parsed);
 }
 
 export function readPersistedInstalledPluginIndexSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): InstalledPluginIndex | null {
-  const parsed = readJsonFileSync(resolveInstalledPluginIndexStorePath(options));
+  const parsed = tryReadJsonSync(resolveInstalledPluginIndexStorePath(options));
   return parseInstalledPluginIndex(parsed);
 }
 
@@ -177,12 +177,12 @@ export async function writePersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<string> {
   const filePath = resolveInstalledPluginIndexStorePath(options);
-  await writeJsonAtomic(
+  await writeJson(
     filePath,
     { ...index, warning: INSTALLED_PLUGIN_INDEX_WARNING },
     {
       trailingNewline: true,
-      ensureDirMode: 0o700,
+      dirMode: 0o700,
       mode: 0o600,
     },
   );

@@ -101,6 +101,20 @@ private func agentAction(
         #expect(DeepLinkParser.parse(url) == nil)
     }
 
+    @Test func parseGatewayLinkAllowsPrivateLanWs() {
+        let url = URL(
+            string: "openclaw://gateway?host=openclaw.local&port=18789&tls=0&token=abc")!
+        #expect(
+            DeepLinkParser.parse(url) == .gateway(
+                .init(
+                    host: "openclaw.local",
+                    port: 18789,
+                    tls: false,
+                    bootstrapToken: nil,
+                    token: "abc",
+                    password: nil)))
+    }
+
     @Test func parseGatewayLinkRejectsInsecurePrefixBypassHost() {
         let url = URL(
             string: "openclaw://gateway?host=127.attacker.example&port=18789&tls=0&token=abc")!
@@ -160,6 +174,25 @@ private func agentAction(
             bootstrapToken: "tok",
             token: nil,
             password: nil))
+    }
+
+    @Test func parseGatewaySetupCodeAllowsPrivateLanWs() {
+        let payload = #"{"url":"ws://openclaw.local:18789","bootstrapToken":"tok"}"#
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
+
+        #expect(link == .init(
+            host: "openclaw.local",
+            port: 18789,
+            tls: false,
+            bootstrapToken: "tok",
+            token: nil,
+            password: nil))
+    }
+
+    @Test func parseGatewaySetupCodeRejectsTailnetPlaintextWs() {
+        let payload = #"{"url":"ws://gateway.tailnet.ts.net:18789","bootstrapToken":"tok"}"#
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
+        #expect(link == nil)
     }
 
     @Test func parseGatewaySetupInputParsesFullCopiedSetupMessage() {

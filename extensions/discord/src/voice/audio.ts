@@ -1,11 +1,9 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
-import path from "node:path";
 import type { Readable } from "node:stream";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const require = createRequire(import.meta.url);
 
@@ -153,11 +151,13 @@ function estimateDurationSeconds(pcm: Buffer): number {
 export async function writeVoiceWavFile(
   pcm: Buffer,
 ): Promise<{ path: string; durationSeconds: number }> {
-  const tempDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "discord-voice-"));
-  const filePath = path.join(tempDir, `segment-${randomUUID()}.wav`);
+  const workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "discord-voice-",
+  });
   const wav = buildWavBuffer(pcm);
-  await fs.writeFile(filePath, wav);
-  scheduleTempCleanup(tempDir);
+  const filePath = await workspace.write("segment.wav", wav);
+  scheduleTempCleanup(workspace.dir);
   return { path: filePath, durationSeconds: estimateDurationSeconds(pcm) };
 }
 

@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
-import { chmod, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { readdir, readFile, stat, unlink } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
+import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 
@@ -40,8 +41,8 @@ function createHostedZaloMediaToken(): string {
 }
 
 async function ensureHostedZaloMediaDir(): Promise<void> {
-  await mkdir(ZALO_OUTBOUND_MEDIA_DIR, { recursive: true, mode: 0o700 });
-  await chmod(ZALO_OUTBOUND_MEDIA_DIR, 0o700).catch(() => undefined);
+  await privateFileStore(ZALO_OUTBOUND_MEDIA_DIR).writeText(".ready", "");
+  await unlink(join(ZALO_OUTBOUND_MEDIA_DIR, ".ready")).catch(() => undefined);
 }
 
 async function deleteHostedZaloMediaEntry(id: string): Promise<void> {
@@ -142,18 +143,15 @@ export async function prepareHostedZaloMediaUrl(params: {
   const token = createHostedZaloMediaToken();
   const publicBaseUrl = new URL(params.webhookUrl).origin;
 
-  await writeFile(resolveHostedZaloMediaBufferPath(id), media.buffer, { mode: 0o600 });
+  const store = privateFileStore(ZALO_OUTBOUND_MEDIA_DIR);
+  await store.writeText(`${id}.bin`, media.buffer);
   try {
-    await writeFile(
-      resolveHostedZaloMediaMetadataPath(id),
-      JSON.stringify({
-        routePath,
-        token,
-        contentType: media.contentType,
-        expiresAt: Date.now() + ZALO_OUTBOUND_MEDIA_TTL_MS,
-      } satisfies HostedZaloMediaMetadata),
-      { encoding: "utf8", mode: 0o600 },
-    );
+    await store.writeJson(`${id}.json`, {
+      routePath,
+      token,
+      contentType: media.contentType,
+      expiresAt: Date.now() + ZALO_OUTBOUND_MEDIA_TTL_MS,
+    } satisfies HostedZaloMediaMetadata);
   } catch (error) {
     await deleteHostedZaloMediaEntry(id);
     throw error;

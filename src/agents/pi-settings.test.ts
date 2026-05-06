@@ -5,7 +5,9 @@ import {
   applyPiCompactionSettingsFromConfig,
   DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
   isSilentOverflowProneModel,
+  resolveEffectiveCompactionMode,
   resolveCompactionReserveTokensFloor,
+  shouldDisablePiAutoCompaction,
 } from "./pi-settings.js";
 
 describe("applyPiCompactionSettingsFromConfig", () => {
@@ -347,6 +349,40 @@ describe("resolveCompactionReserveTokensFloor", () => {
     ).toBe(0);
   });
 });
+describe("resolveEffectiveCompactionMode", () => {
+  it("defaults to default compaction mode", () => {
+    expect(resolveEffectiveCompactionMode()).toBe("default");
+    expect(resolveEffectiveCompactionMode({ agents: { defaults: { compaction: {} } } })).toBe(
+      "default",
+    );
+    expect(
+      resolveEffectiveCompactionMode({
+        agents: { defaults: { compaction: { mode: "default" } } },
+      }),
+    ).toBe("default");
+  });
+
+  it("returns safeguard for explicit safeguard mode", () => {
+    expect(
+      resolveEffectiveCompactionMode({
+        agents: { defaults: { compaction: { mode: "safeguard" } } },
+      }),
+    ).toBe("safeguard");
+  });
+
+  it("returns safeguard when a compaction provider is configured", () => {
+    expect(
+      resolveEffectiveCompactionMode({
+        agents: { defaults: { compaction: { provider: "deepseek" } } },
+      }),
+    ).toBe("safeguard");
+    expect(
+      resolveEffectiveCompactionMode({
+        agents: { defaults: { compaction: { mode: "default", provider: "deepseek" } } },
+      }),
+    ).toBe("safeguard");
+  });
+});
 
 describe("isSilentOverflowProneModel", () => {
   // Reporter's repro shape: openrouter routing to z-ai/glm. Both the bare
@@ -432,6 +468,36 @@ describe("isSilentOverflowProneModel", () => {
   });
 });
 
+describe("shouldDisablePiAutoCompaction", () => {
+  it("returns false with no owner, default mode, and ordinary provider behavior", () => {
+    expect(shouldDisablePiAutoCompaction({})).toBe(false);
+    expect(shouldDisablePiAutoCompaction({ compactionMode: "default" })).toBe(false);
+    expect(
+      shouldDisablePiAutoCompaction({
+        contextEngineInfo: { id: "legacy", name: "Legacy", ownsCompaction: false },
+        compactionMode: "default",
+        silentOverflowProneProvider: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when a context engine owns compaction", () => {
+    expect(
+      shouldDisablePiAutoCompaction({
+        contextEngineInfo: { id: "third-party", name: "Third-party", ownsCompaction: true },
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true when effective compaction mode is safeguard", () => {
+    expect(shouldDisablePiAutoCompaction({ compactionMode: "safeguard" })).toBe(true);
+  });
+
+  it("returns true for silent-overflow-prone providers", () => {
+    expect(shouldDisablePiAutoCompaction({ silentOverflowProneProvider: true })).toBe(true);
+  });
+});
+
 describe("applyPiAutoCompactionGuard", () => {
   // Direct repro of openclaw#75799: pi-ai's silent-overflow detection misfires
   // on a successful turn against z.ai-style providers, triggering Pi's
@@ -475,6 +541,26 @@ describe("applyPiAutoCompactionGuard", () => {
         version: "0.1.0",
         ownsCompaction: true,
       },
+    });
+
+    expect(result).toEqual({ supported: true, disabled: true });
+    expect(setCompactionEnabled).toHaveBeenCalledWith(false);
+  });
+
+  it("disables Pi auto-compaction when provider config forces safeguard mode", () => {
+    const setCompactionEnabled = vi.fn();
+    const settingsManager = {
+      getCompactionReserveTokens: () => 20_000,
+      getCompactionKeepRecentTokens: () => 4_000,
+      applyOverrides: () => {},
+      setCompactionEnabled,
+    };
+
+    const result = applyPiAutoCompactionGuard({
+      settingsManager,
+      compactionMode: resolveEffectiveCompactionMode({
+        agents: { defaults: { compaction: { provider: "deepseek" } } },
+      }),
     });
 
     expect(result).toEqual({ supported: true, disabled: true });

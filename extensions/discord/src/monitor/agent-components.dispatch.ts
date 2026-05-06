@@ -37,7 +37,7 @@ import { deliverDiscordReply } from "./reply-delivery.js";
 
 let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
 let replyPipelineRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/channel-reply-pipeline")>
+  | Promise<typeof import("openclaw/plugin-sdk/channel-message")>
   | undefined;
 let typingRuntimePromise: Promise<typeof import("./typing.js")> | undefined;
 
@@ -47,7 +47,7 @@ async function loadConversationRuntime() {
 }
 
 async function loadReplyPipelineRuntime() {
-  replyPipelineRuntimePromise ??= import("openclaw/plugin-sdk/channel-reply-pipeline");
+  replyPipelineRuntimePromise ??= import("openclaw/plugin-sdk/channel-message");
   return await replyPipelineRuntimePromise;
 }
 
@@ -241,8 +241,8 @@ export async function dispatchDiscordComponentEvent(params: {
 
   const deliverTarget = `channel:${interactionCtx.channelId}`;
   const typingChannelId = interactionCtx.channelId;
-  const { createChannelReplyPipeline } = await loadReplyPipelineRuntime();
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+  const { createChannelMessageReplyPipeline } = await loadReplyPipelineRuntime();
+  const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: ctx.cfg,
     agentId,
     channel: "discord",

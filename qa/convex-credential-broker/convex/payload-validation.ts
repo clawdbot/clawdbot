@@ -13,6 +13,7 @@ export class CredentialPayloadValidationError extends Error {
 type PayloadValidationFailureFactory = (httpStatus: number, code: string, message: string) => Error;
 
 const DISCORD_SNOWFLAKE_RE = /^\d{17,20}$/u;
+const E164_RE = /^\+[1-9]\d{6,14}$/u;
 const TELEGRAM_CHAT_ID_RE = /^-?\d+$/u;
 
 function createCredentialPayloadValidationError(httpStatus: number, code: string, message: string) {
@@ -106,6 +107,65 @@ function normalizeDiscordCredentialPayload(
   } satisfies Record<string, unknown>;
 }
 
+function requireE164PayloadString(
+  payload: Record<string, unknown>,
+  key: string,
+  kind: string,
+  createFailure: PayloadValidationFailureFactory,
+) {
+  const value = requirePayloadString(payload, key, kind, createFailure);
+  if (!E164_RE.test(value)) {
+    throwPayloadError(
+      createFailure,
+      `Credential payload for kind "${kind}" must include "${key}" as an E.164 phone number string.`,
+    );
+  }
+  return value;
+}
+
+function normalizeWhatsAppCredentialPayload(
+  payload: Record<string, unknown>,
+  createFailure: PayloadValidationFailureFactory,
+) {
+  const driverPhoneE164 = requireE164PayloadString(
+    payload,
+    "driverPhoneE164",
+    "whatsapp",
+    createFailure,
+  );
+  const sutPhoneE164 = requireE164PayloadString(payload, "sutPhoneE164", "whatsapp", createFailure);
+  if (driverPhoneE164 === sutPhoneE164) {
+    throwPayloadError(
+      createFailure,
+      'Credential payload for kind "whatsapp" must use distinct driverPhoneE164 and sutPhoneE164 values.',
+    );
+  }
+  const driverAuthArchiveBase64 = requirePayloadString(
+    payload,
+    "driverAuthArchiveBase64",
+    "whatsapp",
+    createFailure,
+  );
+  const sutAuthArchiveBase64 = requirePayloadString(
+    payload,
+    "sutAuthArchiveBase64",
+    "whatsapp",
+    createFailure,
+  );
+  const groupJid =
+    typeof payload.groupJid === "string" && payload.groupJid.trim()
+      ? payload.groupJid.trim()
+      : undefined;
+
+  return {
+    driverPhoneE164,
+    sutPhoneE164,
+    driverAuthArchiveBase64,
+    sutAuthArchiveBase64,
+    ...(groupJid ? { groupJid } : {}),
+  } satisfies Record<string, unknown>;
+}
+
 export function normalizeCredentialPayloadForKind(
   kind: string,
   payload: Record<string, unknown>,
@@ -116,6 +176,9 @@ export function normalizeCredentialPayloadForKind(
   }
   if (kind === "discord") {
     return normalizeDiscordCredentialPayload(payload, createFailure);
+  }
+  if (kind === "whatsapp") {
+    return normalizeWhatsAppCredentialPayload(payload, createFailure);
   }
   return payload;
 }

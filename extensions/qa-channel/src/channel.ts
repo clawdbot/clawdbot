@@ -3,6 +3,10 @@ import {
   buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
+import {
+  createMessageReceiptFromOutboundResults,
+  defineChannelMessageAdapter,
+} from "openclaw/plugin-sdk/channel-message";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -22,6 +26,41 @@ import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
 const CHANNEL_ID = "qa-channel" as const;
 const meta = { ...getChatChannelMeta(CHANNEL_ID) };
+
+const qaChannelMessageAdapter = defineChannelMessageAdapter({
+  id: CHANNEL_ID,
+  durableFinal: {
+    capabilities: {
+      text: true,
+      replyTo: true,
+      thread: true,
+      messageSendingHooks: true,
+    },
+  },
+  send: {
+    text: async (ctx) => {
+      const result = await sendQaChannelText({
+        cfg: ctx.cfg as CoreConfig,
+        accountId: ctx.accountId,
+        to: ctx.to,
+        text: ctx.text,
+        threadId: ctx.threadId,
+        replyToId: ctx.replyToId,
+      });
+      const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
+      const replyToId = ctx.replyToId ?? undefined;
+      return {
+        messageId: result.messageId,
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ channel: CHANNEL_ID, messageId: result.messageId }],
+          threadId,
+          replyToId,
+          kind: "text",
+        }),
+      };
+    },
+  },
+});
 
 export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createChatChannelPlugin({
   base: {
@@ -124,6 +163,7 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
       },
     },
     actions: qaChannelMessageActions,
+    message: qaChannelMessageAdapter,
   },
   outbound: {
     base: {

@@ -62,6 +62,12 @@ export type TuiSessionList = {
       space?: string;
       subject?: string;
       chatType?: string;
+      origin?: {
+        label?: string;
+        provider?: string;
+        surface?: string;
+      };
+      lastChannel?: string;
       lastProvider?: string;
       lastTo?: string;
       lastAccountId?: string;

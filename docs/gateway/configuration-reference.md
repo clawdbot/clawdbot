@@ -27,21 +27,21 @@ Dedicated deep references:
 - [Slash commands](/tools/slash-commands) for the current built-in + bundled command catalog
 - owning channel/plugin pages for channel-specific command surfaces
 
-Config format is **JSON5** (comments + trailing commas allowed). All fields are optional — OpenClaw uses safe defaults when omitted.
+Config format is **JSON5** (comments + trailing commas allowed). All fields are optional - OpenClaw uses safe defaults when omitted.
 
 ---
 
 ## Channels
 
-Per-channel config keys moved to a dedicated page — see
-[Configuration — channels](/gateway/config-channels) for `channels.*`,
+Per-channel config keys moved to a dedicated page - see
+[Configuration - channels](/gateway/config-channels) for `channels.*`,
 including Slack, Discord, Telegram, WhatsApp, Matrix, iMessage, and other
 bundled channels (auth, access control, multi-account, mention gating).
 
 ## Agent defaults, multi-agent, sessions, and messages
 
-Moved to a dedicated page — see
-[Configuration — agents](/gateway/config-agents) for:
+Moved to a dedicated page - see
+[Configuration - agents](/gateway/config-agents) for:
 
 - `agents.defaults.*` (workspace, model, thinking, heartbeat, memory, media, skills, sandbox)
 - `multiAgent.*` (multi-agent routing and bindings)
@@ -54,13 +54,13 @@ Moved to a dedicated page — see
 ## Tools and custom providers
 
 Tool policy, experimental toggles, provider-backed tool config, and custom
-provider / base-URL setup moved to a dedicated page — see
-[Configuration — tools and custom providers](/gateway/config-tools).
+provider / base-URL setup moved to a dedicated page - see
+[Configuration - tools and custom providers](/gateway/config-tools).
 
 ## Models
 
 Provider definitions, model allowlists, and custom provider setup live in
-[Configuration — tools and custom providers](/gateway/config-tools#custom-providers-and-base-urls).
+[Configuration - tools and custom providers](/gateway/config-tools#custom-providers-and-base-urls).
 The `models` root also owns global model-catalog behavior.
 
 ```json5
@@ -968,7 +968,7 @@ Notes:
 - `otel.headers`: extra HTTP/gRPC metadata headers sent with OTel export requests.
 - `otel.serviceName`: service name for resource attributes.
 - `otel.traces` / `otel.metrics` / `otel.logs`: enable trace, metrics, or log export.
-- `otel.sampleRate`: trace sampling rate `0`–`1`.
+- `otel.sampleRate`: trace sampling rate `0`-`1`.
 - `otel.flushIntervalMs`: periodic telemetry flush interval in ms.
 - `otel.captureContent`: opt-in raw content capture for OTEL span attributes. Defaults to off. Boolean `true` captures non-system message/tool content; the object form lets you enable `inputMessages`, `outputMessages`, `toolInputs`, `toolOutputs`, and `systemPrompt` explicitly.
 - `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`: environment toggle for latest experimental GenAI span provider attributes. By default spans keep the legacy `gen_ai.system` attribute for compatibility; GenAI metrics use bounded semantic attributes.
@@ -998,7 +998,7 @@ Notes:
 }
 ```
 
-- `channel`: release channel for npm/git installs — `"stable"`, `"beta"`, or `"dev"`.
+- `channel`: release channel for npm/git installs - `"stable"`, `"beta"`, or `"dev"`.
 - `checkOnStart`: check for npm updates when the gateway starts (default: `true`).
 - `auto.enabled`: enable background auto-update for package installs (default: `false`).
 - `auto.stableDelayHours`: minimum delay in hours before stable-channel auto-apply (default: `6`; max: `168`).
@@ -1162,9 +1162,9 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 }
 ```
 
-- `maxAttempts`: maximum retries for one-shot jobs on transient errors (default: `3`; range: `0`–`10`).
-- `backoffMs`: array of backoff delays in ms for each retry attempt (default: `[30000, 60000, 300000]`; 1–10 entries).
-- `retryOn`: error types that trigger retries — `"rate_limit"`, `"overloaded"`, `"network"`, `"timeout"`, `"server_error"`. Omit to retry all transient types.
+- `maxAttempts`: maximum retries for one-shot jobs on transient errors (default: `3`; range: `0`-`10`).
+- `backoffMs`: array of backoff delays in ms for each retry attempt (default: `[30000, 60000, 300000]`; 1-10 entries).
+- `retryOn`: error types that trigger retries - `"rate_limit"`, `"overloaded"`, `"network"`, `"timeout"`, `"server_error"`. Omit to retry all transient types.
 
 Applies only to one-shot cron jobs. Recurring jobs use separate failure handling.
 
@@ -1189,7 +1189,7 @@ Applies only to one-shot cron jobs. Recurring jobs use separate failure handling
 - `after`: consecutive failures before an alert fires (positive integer, min: `1`).
 - `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer).
 - `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
-- `mode`: delivery mode — `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
+- `mode`: delivery mode - `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
 - `accountId`: optional account or channel id to scope alert delivery.
 
 ### `cron.failureDestination`

@@ -1,6 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
 import { MANIFEST_KEY } from "../../compat/legacy-names.js";
+import { tryReadJsonSync } from "../../infra/json-files.js";
 import { isPrereleaseSemverVersion, parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registry.js";
@@ -135,15 +135,11 @@ function loadExternalCatalogEntries(options: CatalogOptions): ExternalCatalogEnt
 function loadCatalogEntriesFromPaths(paths: Iterable<string>): ExternalCatalogEntry[] {
   const entries: ExternalCatalogEntry[] = [];
   for (const resolvedPath of paths) {
-    if (!fs.existsSync(resolvedPath)) {
+    const payload = tryReadJsonSync(resolvedPath);
+    if (payload === null) {
       continue;
     }
-    try {
-      const payload = JSON.parse(fs.readFileSync(resolvedPath, "utf-8")) as unknown;
-      entries.push(...parseCatalogEntries(payload));
-    } catch {
-      // Ignore invalid catalog files.
-    }
+    entries.push(...parseCatalogEntries(payload));
   }
   return entries;
 }
@@ -158,18 +154,14 @@ function loadOfficialCatalogEntriesFromPaths(paths: Iterable<string>): ExternalC
       }
       continue;
     }
-    if (!fs.existsSync(resolvedPath)) {
+    const payload = tryReadJsonSync(resolvedPath);
+    if (payload === null) {
       officialCatalogEntriesByPath.set(resolvedPath, null);
       continue;
     }
-    try {
-      const payload = JSON.parse(fs.readFileSync(resolvedPath, "utf-8")) as unknown;
-      const parsed = parseCatalogEntries(payload);
-      officialCatalogEntriesByPath.set(resolvedPath, parsed);
-      entries.push(...parsed);
-    } catch {
-      officialCatalogEntriesByPath.set(resolvedPath, null);
-    }
+    const parsed = parseCatalogEntries(payload);
+    officialCatalogEntriesByPath.set(resolvedPath, parsed);
+    entries.push(...parsed);
   }
   return entries;
 }

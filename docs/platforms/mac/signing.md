@@ -40,11 +40,11 @@ When signing with `SIGN_IDENTITY="-"` (ad-hoc), the script automatically disable
 - `OpenClawBuildTimestamp`: ISO8601 UTC at package time
 - `OpenClawGitCommit`: short git hash (or `unknown` if unavailable)
 
-The About tab reads these keys to show version, build date, git commit, and whether it’s a debug build (via `#if DEBUG`). Run the packager to refresh these values after code changes.
+The About tab reads these keys to show version, build date, git commit, and whether it's a debug build (via `#if DEBUG`). Run the packager to refresh these values after code changes.
 
 ## Why
 
-TCC permissions are tied to the bundle identifier _and_ code signature. Unsigned debug builds with changing UUIDs were causing macOS to forget grants after each rebuild. Signing the binaries (ad‑hoc by default) and keeping a fixed bundle id/path (`dist/OpenClaw.app`) preserves the grants between builds, matching the VibeTunnel approach.
+TCC permissions are tied to the bundle identifier _and_ code signature. Unsigned debug builds with changing UUIDs were causing macOS to forget grants after each rebuild. Signing the binaries (ad-hoc by default) and keeping a fixed bundle id/path (`dist/OpenClaw.app`) preserves the grants between builds, matching the VibeTunnel approach.
 
 ## Related
 

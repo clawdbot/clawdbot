@@ -405,6 +405,66 @@ describe("node.invoke APNs wake path", () => {
     expect(call?.[1]).toMatchObject({ ok: true, nodeId: "ios-node-reconnect" });
   });
 
+  it("broadcasts canonical Talk capture events for successful PTT node commands", async () => {
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "android-talk-node",
+        commands: ["talk.ptt.start"],
+        capabilities: ["talk"],
+        platform: "android",
+      })),
+      invoke: vi.fn().mockResolvedValue({
+        ok: true,
+        payloadJSON: '{"captureId":"capture-1"}',
+      }),
+    };
+
+    await nodeHandlers["node.invoke"]({
+      params: {
+        nodeId: "android-talk-node",
+        command: "talk.ptt.start",
+        idempotencyKey: "idem-talk-ptt-start",
+      },
+      respond: respond as never,
+      context: {
+        nodeRegistry,
+        execApprovalManager: undefined,
+        logGateway: { info: vi.fn(), warn: vi.fn() },
+        getRuntimeConfig: () => mocks.getRuntimeConfig(),
+        broadcast,
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-talk-ptt", method: "node.invoke" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(broadcast).toHaveBeenCalledWith(
+      "talk.event",
+      expect.objectContaining({
+        nodeId: "android-talk-node",
+        command: "talk.ptt.start",
+        talkEvent: expect.objectContaining({
+          type: "capture.started",
+          sessionId: "node:android-talk-node:talk:capture-1",
+          captureId: "capture-1",
+          seq: expect.any(Number),
+          mode: "stt-tts",
+          transport: "managed-room",
+          brain: "agent-consult",
+          final: false,
+          payload: expect.objectContaining({
+            nodeId: "android-talk-node",
+            command: "talk.ptt.start",
+          }),
+        }),
+      }),
+      { dropIfSlow: true },
+    );
+  });
+
   it("clears stale registrations after an invalid device token wake failure", async () => {
     const registration = directRegistration("ios-node-stale");
     mocks.loadApnsRegistration.mockResolvedValue(registration);

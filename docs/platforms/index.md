@@ -22,7 +22,7 @@ Native companion apps for Windows are also planned; the Gateway is recommended v
 - Windows: [Windows](/platforms/windows)
 - Linux: [Linux](/platforms/linux)
 
-## VPS & hosting
+## VPS and hosting
 
 - VPS hub: [VPS hosting](/vps)
 - Fly.io: [Fly.io](/install/fly)

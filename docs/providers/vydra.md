@@ -14,10 +14,18 @@ The bundled Vydra plugin adds:
 
 OpenClaw uses the same `VYDRA_API_KEY` for all three capabilities.
 
-<Warning>
-Use `https://www.vydra.ai/api/v1` as the base URL.
+| Property        | Value                                                                     |
+| --------------- | ------------------------------------------------------------------------- |
+| Provider id     | `vydra`                                                                   |
+| Plugin          | bundled, `enabledByDefault: true`                                         |
+| Auth env var    | `VYDRA_API_KEY`                                                           |
+| Onboarding flag | `--auth-choice vydra-api-key`                                             |
+| Direct CLI flag | `--vydra-api-key <key>`                                                   |
+| Contracts       | `imageGenerationProviders`, `videoGenerationProviders`, `speechProviders` |
+| Base URL        | `https://www.vydra.ai/api/v1` (use the `www` host)                        |
 
-Vydra's apex host (`https://vydra.ai/api/v1`) currently redirects to `www`. Some HTTP clients drop `Authorization` on that cross-host redirect, which turns a valid API key into a misleading auth failure. The bundled plugin uses the `www` base URL directly to avoid that.
+<Warning>
+  Use `https://www.vydra.ai/api/v1` as the base URL. Vydra's apex host (`https://vydra.ai/api/v1`) currently redirects to `www`. Some HTTP clients drop `Authorization` on that cross-host redirect, which turns a valid API key into a misleading auth failure. The bundled plugin uses the `www` base URL directly to avoid that.
 </Warning>
 
 ## Setup

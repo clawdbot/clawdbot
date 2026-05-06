@@ -21,7 +21,8 @@ export {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
 } from "./host/openclaw-runtime-config.js";
-export { writeFileWithinRoot } from "./host/openclaw-runtime-io.js";
+export { root } from "./host/openclaw-runtime-io.js";
+export { isPathInside } from "./host/fs-utils.js";
 export { createSubsystemLogger } from "./host/openclaw-runtime-io.js";
 export { detectMime } from "./host/openclaw-runtime-io.js";
 export { resolveGlobalSingleton } from "./host/openclaw-runtime-io.js";

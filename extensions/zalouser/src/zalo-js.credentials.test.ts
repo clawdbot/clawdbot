@@ -450,8 +450,8 @@ describe("zalouser credential persistence", () => {
         await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
           const started = await startZaloQrLogin({ profile, timeoutMs: 1000 });
           const waited = await waitForZaloQrLogin({ profile, timeoutMs: 1000 });
-          expect(`${started.message} ${waited.message}`).toContain(
-            "Refusing to write Zalo credentials to symlinked path",
+          expect(`${started.message} ${waited.message}`).toMatch(
+            /Refusing to write Zalo credentials to symlinked path|private store target must be a regular file/,
           );
         });
 

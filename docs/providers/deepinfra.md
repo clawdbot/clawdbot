@@ -3,9 +3,8 @@ summary: "Use DeepInfra's unified API to access the most popular open source and
 read_when:
   - You want a single API key for the top open source LLMs
   - You want to run models via DeepInfra's API in OpenClaw
+title: "DeepInfra"
 ---
-
-# DeepInfra
 
 DeepInfra provides a **unified API** that routes requests to the most popular open source and frontier models behind a single
 endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
@@ -81,3 +80,8 @@ deepinfra/zai-org/GLM-5.1
 - Default model: `deepinfra/deepseek-ai/DeepSeek-V3.2`
 - Base URL: `https://api.deepinfra.com/v1/openai`
 - Native video generation uses `https://api.deepinfra.com/v1/inference/<model>`.
+
+## Related
+
+- [Model providers](/concepts/model-providers)
+- [All providers](/providers/index)

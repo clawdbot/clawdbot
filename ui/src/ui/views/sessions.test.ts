@@ -367,6 +367,41 @@ describe("sessions view", () => {
     expect(badge?.textContent?.trim()).toBe("cron");
   });
 
+  it("renders and filters the session runtime", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:claude",
+              kind: "direct",
+              updatedAt: 20,
+              agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
+            },
+            {
+              key: "agent:main:pi",
+              kind: "direct",
+              updatedAt: 10,
+              agentRuntime: { id: "pi", source: "implicit" },
+            },
+          ]),
+        ),
+        searchQuery: "fallback none",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim()),
+    ).toContain("Runtime");
+    expect(container.querySelector(".session-runtime-cell")?.textContent?.trim()).toBe(
+      "claude-cli (fallback none)",
+    );
+    expect(container.textContent).not.toContain("agent:main:pi");
+  });
+
   it("keeps raw keys for inherited identity object properties", async () => {
     const container = document.createElement("div");
     render(
@@ -420,6 +455,96 @@ describe("sessions view", () => {
     expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
     const tokenCell = container.querySelector(".session-token-cell");
     expect(tokenCell?.textContent?.trim()).toBe("123456 / 200000");
+  });
+
+  it("renders the checkpoint count as the compaction disclosure", async () => {
+    const container = document.createElement("div");
+    const onToggleCheckpointDetails = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            compactionCheckpointCount: 1,
+            latestCompactionCheckpoint: {
+              checkpointId: "checkpoint-1",
+              createdAt: Date.now(),
+              reason: "manual",
+            },
+          }),
+        ),
+        onToggleCheckpointDetails,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const compactionCell = container.querySelector("tbody .session-compaction-col");
+    expect(compactionCell?.textContent).toContain("1 Checkpoint");
+    expect(compactionCell?.textContent).not.toContain("manual");
+    const trigger = container.querySelector<HTMLButtonElement>(".session-compaction-trigger");
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".session-checkpoint-toggle")).toBeNull();
+
+    trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
+  });
+
+  it("renders expanded session details with compaction history", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: 123456,
+            contextTokens: 200000,
+            model: "gpt-5.5",
+            modelProvider: "openai",
+            status: "running",
+            runtimeMs: 125000,
+            compactionCheckpointCount: 1,
+            latestCompactionCheckpoint: {
+              checkpointId: "checkpoint-1",
+              createdAt: Date.now(),
+              reason: "manual",
+            },
+          }),
+        ),
+        expandedCheckpointKey: "agent:main:main",
+        checkpointItemsByKey: {
+          "agent:main:main": [
+            {
+              checkpointId: "checkpoint-1",
+              sessionKey: "agent:main:main",
+              sessionId: "session-1",
+              createdAt: Date.now(),
+              reason: "manual",
+              tokensBefore: 123456,
+              tokensAfter: 38920,
+              summary: "Trimmed earlier setup chatter and kept the active execution plan.",
+              preCompaction: { sessionId: "session-1" },
+              postCompaction: { sessionId: "session-1" },
+            },
+          ],
+        },
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const details = container.querySelector(".session-details-panel");
+    expect(details?.textContent).toContain("Session details");
+    expect(details?.textContent).toContain("gpt-5.5");
+    expect(details?.textContent).toContain("openai");
+    expect(details?.textContent).toContain("2m 5s");
+    expect(details?.textContent).toContain("Compaction history");
+    expect(details?.textContent).toContain("123,456 to 38,920 tokens");
+    expect(details?.textContent).not.toContain("->");
   });
 
   it("does not expand checkpoint details when the row has none or a nested control was used", async () => {

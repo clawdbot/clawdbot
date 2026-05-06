@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 
 export function shouldSkipStatusScanMissingConfigFastPath(
   env: NodeJS.ProcessEnv = process.env,
@@ -45,10 +46,11 @@ export async function loadStatusScanCommandConfig(params: {
     coldStart && params.allowMissingConfigFastPath === true
       ? { resolvedConfig: sourceConfig, diagnostics: [] }
       : await params.resolveConfig(sourceConfig);
+  const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg: sourceConfig, env });
   return {
     coldStart,
     sourceConfig,
     resolvedConfig,
-    secretDiagnostics: diagnostics,
+    secretDiagnostics: tokenConflict ? [...diagnostics, tokenConflict.diagnostic] : diagnostics,
   };
 }

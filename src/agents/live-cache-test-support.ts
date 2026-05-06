@@ -1,7 +1,7 @@
 import { completeSimple, type Api, type AssistantMessage, type Model } from "@mariozechner/pi-ai";
 import { getRuntimeConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
@@ -163,7 +163,7 @@ export async function resolveLiveDirectModel(params: {
 }): Promise<LiveResolvedModel> {
   const cfg = getRuntimeConfig();
   await ensureOpenClawModelsJson(cfg);
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = resolveDefaultAgentDir(cfg);
   const authStorage = discoverAuthStorage(agentDir);
   const models = discoverModels(authStorage, agentDir).getAll();
 

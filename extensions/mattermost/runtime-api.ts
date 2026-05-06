@@ -57,7 +57,7 @@ export {
   resolveEffectiveAllowFromLists,
 } from "openclaw/plugin-sdk/channel-policy";
 export { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";

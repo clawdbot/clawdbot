@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathExists as fsSafePathExists } from "./infra/fs-safe.js";
 import {
   resolveEffectiveHomeDir,
   resolveHomeRelativePath,
@@ -11,18 +12,6 @@ export { escapeRegExp } from "./shared/regexp.js";
 
 export async function ensureDir(dir: string) {
   await fs.promises.mkdir(dir, { recursive: true });
-}
-
-/**
- * Check if a file or directory exists at the given path.
- */
-export async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.promises.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export function clampNumber(value: number, min: number, max: number): number {
@@ -206,3 +195,9 @@ export function displayString(input: string): string {
 
 // Configuration root; can be overridden via OPENCLAW_STATE_DIR.
 export const CONFIG_DIR = resolveConfigDir();
+/**
+ * Check if a file or directory exists at the given path.
+ */
+export async function pathExists(targetPath: string): Promise<boolean> {
+  return await fsSafePathExists(targetPath);
+}

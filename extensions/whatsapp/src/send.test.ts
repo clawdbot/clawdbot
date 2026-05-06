@@ -28,7 +28,6 @@ function acceptedSendResult(kind: WhatsAppSendKind, id: string): WhatsAppSendRes
   return {
     kind,
     messageId: id,
-    messageIds: [id],
     keys: [{ id }],
     providerAccepted: true,
   };

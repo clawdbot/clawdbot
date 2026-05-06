@@ -8,7 +8,7 @@ import {
   withRouteTabContext,
 } from "./agent.shared.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
-import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./path-output.js";
+import { DEFAULT_UPLOAD_DIR, pathScope } from "./path-output.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import {
   asyncBrowserRoute,
@@ -43,11 +43,9 @@ export function registerBrowserAgentActHookRoutes(
         ctx,
         targetId,
         run: async ({ profileCtx, cdpUrl, tab }) => {
-          const uploadPathsResult = await resolveExistingPathsWithinRoot({
-            rootDir: DEFAULT_UPLOAD_DIR,
-            requestedPaths: paths,
-            scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-          });
+          const uploadPathsResult = await pathScope(DEFAULT_UPLOAD_DIR, {
+            label: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
+          }).existing(paths);
           if (!uploadPathsResult.ok) {
             res.status(400).json({ error: uploadPathsResult.error });
             return;

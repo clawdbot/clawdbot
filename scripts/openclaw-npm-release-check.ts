@@ -63,6 +63,7 @@ export type NpmDistTagMirrorAuth = {
 };
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE = "node-llama-cpp";
+const FS_SAFE_PACKAGE = "@openclaw/fs-safe";
 const MAX_CALVER_DISTANCE_DAYS = 2;
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -181,6 +182,10 @@ function normalizeRepoUrl(value: unknown): string {
     .replace(/^git\+/, "")
     .replace(/\.git$/i, "")
     .replace(/\/+$/, "");
+}
+
+function isLocalDependencySpec(value: string | undefined): boolean {
+  return /^(?:file|link|workspace):/u.test(value ?? "");
 }
 
 export function parseReleaseVersion(version: string): ParsedReleaseVersion | null {
@@ -317,6 +322,11 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
   if (pkg.dependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
     errors.push(
       `package.json dependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
+    );
+  }
+  if (isLocalDependencySpec(pkg.dependencies?.[FS_SAFE_PACKAGE])) {
+    errors.push(
+      `package.json dependencies["${FS_SAFE_PACKAGE}"] must use a published semver range before npm release; found "${pkg.dependencies?.[FS_SAFE_PACKAGE]}".`,
     );
   }
   if (pkg.optionalDependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {

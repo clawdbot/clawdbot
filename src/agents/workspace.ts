@@ -1,7 +1,9 @@
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { openBoundaryFile } from "../infra/boundary-file-read.js";
+import { openRootFile } from "../infra/boundary-file-read.js";
+import { pathExists } from "../infra/fs-safe.js";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   exactWorkspaceEntryExists,
@@ -55,7 +57,7 @@ async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
 }): Promise<WorkspaceGuardedReadResult> {
-  const opened = await openBoundaryFile({
+  const opened = await openRootFile({
     absolutePath: params.filePath,
     rootPath: params.workspaceDir,
     boundaryLabel: "workspace root",
@@ -197,15 +199,6 @@ async function writeFileIfMissing(filePath: string, content: string): Promise<bo
   }
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function fileContentDiffersFromTemplate(
   filePath: string,
   template: string,
@@ -274,7 +267,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   state: WorkspaceSetupState;
   bootstrapExists?: boolean;
 }): Promise<WorkspaceBootstrapCompletionReconcileResult> {
-  const bootstrapExists = params.bootstrapExists ?? (await fileExists(params.bootstrapPath));
+  const bootstrapExists = params.bootstrapExists ?? (await pathExists(params.bootstrapPath));
   if (
     typeof params.state.setupCompletedAt === "string" &&
     params.state.setupCompletedAt.trim().length > 0
@@ -384,7 +377,7 @@ export async function resolveWorkspaceBootstrapStatus(
     return "complete";
   }
   const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
-  const bootstrapExists = await fileExists(bootstrapPath);
+  const bootstrapExists = await pathExists(bootstrapPath);
   if (!bootstrapExists) {
     return "complete";
   }
@@ -416,16 +409,11 @@ async function writeWorkspaceSetupState(
   statePath: string,
   state: WorkspaceSetupState,
 ): Promise<void> {
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
-  const payload = `${JSON.stringify(state, null, 2)}\n`;
-  const tmpPath = `${statePath}.tmp-${process.pid}-${Date.now().toString(36)}`;
-  try {
-    await fs.writeFile(tmpPath, payload, { encoding: "utf-8" });
-    await fs.rename(tmpPath, statePath);
-  } catch (err) {
-    await fs.unlink(tmpPath).catch(() => {});
-    throw err;
-  }
+  await replaceFileAtomic({
+    filePath: statePath,
+    content: `${JSON.stringify(state, null, 2)}\n`,
+    tempPrefix: ".workspace-state",
+  });
 }
 
 async function hasGitRepo(dir: string): Promise<boolean> {
@@ -561,7 +549,7 @@ export async function ensureAgentWorkspace(params?: {
   };
   const nowIso = () => new Date().toISOString();
 
-  let bootstrapExists = await fileExists(bootstrapPath);
+  let bootstrapExists = await pathExists(bootstrapPath);
   if (!state.bootstrapSeededAt && bootstrapExists) {
     markState({ bootstrapSeededAt: nowIso() });
   }
@@ -596,7 +584,7 @@ export async function ensureAgentWorkspace(params?: {
       const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
       const wroteBootstrap = await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
       if (!wroteBootstrap) {
-        bootstrapExists = await fileExists(bootstrapPath);
+        bootstrapExists = await pathExists(bootstrapPath);
       } else {
         bootstrapExists = true;
       }

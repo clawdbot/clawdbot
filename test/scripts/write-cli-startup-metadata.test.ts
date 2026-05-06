@@ -29,7 +29,16 @@ describe("write-cli-startup-metadata", () => {
       "utf8",
     );
 
-    await writeCliStartupMetadata({ distDir, outputPath, extensionsDir });
+    await writeCliStartupMetadata({
+      distDir,
+      outputPath,
+      extensionsDir,
+      renderBundledRootHelpText: async () => {
+        throw new Error("dist root help unavailable");
+      },
+      renderSourceRootHelpText: () => "Usage: openclaw\n",
+      renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
+    });
 
     const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
       browserHelpText: string;

@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const hoisted = await vi.hoisted(async () => {
@@ -18,6 +19,7 @@ const hoisted = await vi.hoisted(async () => {
     ),
     mkdirMock: vi.fn(async (_filePath: string, _options?: { recursive?: boolean }) => undefined),
     accessMock: vi.fn(async (_filePath: string) => undefined),
+    pathExistsMock: vi.fn(async (_filePath: string) => true),
     exportHtmlTemplateContents: new Map<string, string>(),
   };
 });
@@ -34,6 +36,10 @@ vi.mock("../../config/sessions/store.js", () => ({
 
 vi.mock("./commands-system-prompt.js", () => ({
   resolveCommandsSystemPromptBundle: hoisted.resolveCommandsSystemPromptBundleMock,
+}));
+
+vi.mock("../../infra/fs-safe.js", () => ({
+  pathExists: hoisted.pathExistsMock,
 }));
 
 vi.mock("node:fs", async () => {
@@ -119,6 +125,10 @@ function makeParams(): HandleCommandsParams {
 }
 
 describe("buildExportSessionReply", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     hoisted.resolveDefaultSessionStorePathMock.mockReturnValue("/tmp/target-store/sessions.json");
@@ -141,6 +151,7 @@ describe("buildExportSessionReply", () => {
       sandboxRuntime: { sandboxed: false, mode: "off" },
     });
     hoisted.accessMock.mockResolvedValue(undefined);
+    hoisted.pathExistsMock.mockResolvedValue(true);
     hoisted.exportHtmlTemplateContents.clear();
   });
 
@@ -229,6 +240,32 @@ describe("buildExportSessionReply", () => {
       ).toString("base64"),
     );
     expect(html).toContain('const base64 = document.getElementById("session-data").textContent;');
+  });
+
+  it("suffixes colliding default export filenames instead of overwriting", async () => {
+    const { buildExportSessionReply } = await import("./commands-export-session.js");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-05T10:11:12.345Z"));
+    const collision = Object.assign(new Error("exists"), { code: "EEXIST" });
+    hoisted.writeFileMock.mockRejectedValueOnce(collision).mockResolvedValueOnce(undefined);
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    const expectedBase = path.join(
+      "/tmp/workspace",
+      "openclaw-session-session--2026-05-05T10-11-12.html",
+    );
+    const expectedSuffix = path.join(
+      "/tmp/workspace",
+      "openclaw-session-session--2026-05-05T10-11-12-2.html",
+    );
+    expect(hoisted.writeFileMock.mock.calls[0]?.[0]).toBe(expectedBase);
+    expect(hoisted.writeFileMock.mock.calls[0]?.[2]).toMatchObject({
+      encoding: "utf-8",
+      flag: "wx",
+    });
+    expect(hoisted.writeFileMock.mock.calls[1]?.[0]).toBe(expectedSuffix);
+    expect(reply.text).toContain("📄 File: openclaw-session-session--2026-05-05T10-11-12-2.html");
   });
 
   it("preserves replacement text with dollar sequences", async () => {

@@ -163,6 +163,39 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
   };
 }
 
+function projectAssistantTextFromMixedToolContent(
+  content: unknown[],
+  maxChars: number,
+): { content: unknown[]; changed: boolean } | null {
+  const hasToolHistoryBlock = content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    return isToolHistoryBlockType((block as { type?: unknown }).type);
+  });
+  if (!hasToolHistoryBlock) {
+    return null;
+  }
+
+  const textBlocks: unknown[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const entry = block as { type?: unknown; text?: unknown };
+    if (entry.type !== "text" || typeof entry.text !== "string" || !entry.text.trim()) {
+      continue;
+    }
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const truncated = truncateChatHistoryText(stripped.text, maxChars);
+    if (truncated.text.trim()) {
+      textBlocks.push({ type: "text", text: truncated.text });
+    }
+  }
+
+  return textBlocks.length > 0 ? { content: textBlocks, changed: true } : null;
+}
+
 function toFiniteNumber(x: unknown): number | undefined {
   return typeof x === "number" && Number.isFinite(x) ? x : undefined;
 }
@@ -285,10 +318,19 @@ function sanitizeChatHistoryMessage(
       changed = true;
     }
     if (entry.role === "assistant" && Array.isArray(entry.content)) {
-      const sanitizedPhases = sanitizeAssistantPhasedContentBlocks(entry.content);
-      if (sanitizedPhases.changed) {
-        entry.content = sanitizedPhases.content;
+      const mixedToolText = projectAssistantTextFromMixedToolContent(entry.content, maxChars);
+      if (mixedToolText) {
+        entry.content = mixedToolText.content;
+        if (entry.phase === "commentary") {
+          delete entry.phase;
+        }
         changed = true;
+      } else {
+        const sanitizedPhases = sanitizeAssistantPhasedContentBlocks(entry.content);
+        if (sanitizedPhases.changed) {
+          entry.content = sanitizedPhases.content;
+          changed = true;
+        }
       }
     }
   }
@@ -353,6 +395,31 @@ function hasAssistantNonTextContent(message: unknown): boolean {
   );
 }
 
+function hasAssistantMixedToolVisibleText(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  let hasToolHistoryBlock = false;
+  let hasText = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const entry = block as { type?: unknown; text?: unknown };
+    if (isToolHistoryBlockType(entry.type)) {
+      hasToolHistoryBlock = true;
+    }
+    if (entry.type === "text" && typeof entry.text === "string" && entry.text.trim()) {
+      hasText = true;
+    }
+  }
+  return hasToolHistoryBlock && hasText;
+}
+
 function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
@@ -362,7 +429,7 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
     return false;
   }
   if (resolveAssistantMessagePhase(message) === "commentary") {
-    return true;
+    return !hasAssistantMixedToolVisibleText(message);
   }
   const text = extractAssistantTextForSilentCheck(message);
   if (text === undefined || !isSuppressedControlReplyText(text)) {

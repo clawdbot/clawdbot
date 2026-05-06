@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -45,9 +45,8 @@ describe("transcodeAudioBufferToOpus", () => {
       expect.arrayContaining(["-c:a", "libopus", "-b:a", "64k", "-ar", "48000", "-ac", "1"]),
       { timeoutMs: 1234 },
     );
-    expect(
-      capturedInputPath?.startsWith(path.join(resolvePreferredOpenClawTmpDir(), "tts-test-")),
-    ).toBe(true);
+    const tempRoot = realpathSync(resolvePreferredOpenClawTmpDir());
+    expect(capturedInputPath?.startsWith(path.join(tempRoot, "tts-test-"))).toBe(true);
     expect(capturedInputPath ? existsSync(capturedInputPath) : true).toBe(false);
     expect(capturedOutputPath ? existsSync(capturedOutputPath) : true).toBe(false);
   });
@@ -93,7 +92,7 @@ describe("transcodeAudioBufferToOpus", () => {
       tempPrefix: "../bad-prefix",
     });
 
-    const tempRoot = resolvePreferredOpenClawTmpDir();
+    const tempRoot = realpathSync(resolvePreferredOpenClawTmpDir());
     expect(capturedInputPath?.startsWith(tempRoot)).toBe(true);
     expect(capturedOutputPath?.startsWith(tempRoot)).toBe(true);
   });

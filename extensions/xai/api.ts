@@ -25,6 +25,7 @@ export {
   XAI_IMAGE_MODELS,
 } from "./model-definitions.js";
 export { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
+export { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 export {
   applyXaiModelCompat,
   HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,

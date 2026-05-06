@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
-  resolveOpenClawAgentDir,
+  resolveDefaultAgentDir,
   resolveProviderIdForAuth,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
@@ -194,12 +194,16 @@ function resolveCodexAppServerAuthProfileCredential(
   if (!authProfileId) {
     return undefined;
   }
-  const store = lookup.authProfileStore ?? loadCodexAppServerAuthProfileStore(lookup.agentDir);
+  const store =
+    lookup.authProfileStore ?? loadCodexAppServerAuthProfileStore(lookup.agentDir, lookup.config);
   return store.profiles[authProfileId];
 }
 
-function loadCodexAppServerAuthProfileStore(agentDir: string | undefined): AuthProfileStore {
-  return ensureAuthProfileStore(agentDir?.trim() || resolveOpenClawAgentDir(), {
+function loadCodexAppServerAuthProfileStore(
+  agentDir: string | undefined,
+  config?: ProviderAuthAliasConfig,
+): AuthProfileStore {
+  return ensureAuthProfileStore(agentDir?.trim() || resolveDefaultAgentDir(config ?? {}), {
     allowKeychainPrompt: false,
   });
 }

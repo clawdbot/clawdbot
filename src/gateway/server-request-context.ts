@@ -28,7 +28,7 @@ type GatewayRequestContextParams = {
   nodeSubscribe: GatewayRequestContext["nodeSubscribe"];
   nodeUnsubscribe: GatewayRequestContext["nodeUnsubscribe"];
   nodeUnsubscribeAll: GatewayRequestContext["nodeUnsubscribeAll"];
-  hasConnectedMobileNode: GatewayRequestContext["hasConnectedMobileNode"];
+  hasConnectedTalkNode: GatewayRequestContext["hasConnectedTalkNode"];
   clients: Set<GatewayRequestContextClient>;
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
@@ -92,7 +92,7 @@ export function createGatewayRequestContext(
     nodeSubscribe: params.nodeSubscribe,
     nodeUnsubscribe: params.nodeUnsubscribe,
     nodeUnsubscribeAll: params.nodeUnsubscribeAll,
-    hasConnectedMobileNode: params.hasConnectedMobileNode,
+    hasConnectedTalkNode: params.hasConnectedTalkNode,
     hasExecApprovalClients: (excludeConnId?: string) => {
       for (const gatewayClient of params.clients) {
         if (excludeConnId && gatewayClient.connId === excludeConnId) {

@@ -161,7 +161,7 @@ Configure your tunnel's ingress rules to only route the webhook path:
    - Spaces use session key `agent:<agentId>:googlechat:group:<spaceId>`.
 4. DM access is pairing by default. Unknown senders receive a pairing code; approve with:
    - `openclaw pairing approve googlechat <code>`
-5. Group spaces require @-mention by default. Use `botUser` if mention detection needs the app’s user name.
+5. Group spaces require @-mention by default. Use `botUser` if mention detection needs the app's user name.
 
 ## Targets
 
@@ -210,7 +210,7 @@ Notes:
 
 - Service account credentials can also be passed inline with `serviceAccount` (JSON string).
 - `serviceAccountRef` is also supported (env/file SecretRef), including per-account refs under `channels.googlechat.accounts.<id>.serviceAccountRef`.
-- Default webhook path is `/googlechat` if `webhookPath` isn’t set.
+- Default webhook path is `/googlechat` if `webhookPath` isn't set.
 - `dangerouslyAllowNameMatching` re-enables mutable email principal matching for allowlists (break-glass compatibility mode).
 - Reactions are available via the `reactions` tool and `channels action` when `actions.reactions` is enabled.
 - Message actions expose `send` for text and `upload-file` for explicit attachment sends. `upload-file` accepts `media` / `filePath` / `path` plus optional `message`, `filename`, and thread targeting.

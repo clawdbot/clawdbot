@@ -1,14 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import {
   createServer,
   request as httpRequest,
@@ -20,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
+import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import { runBeforeToolCallHook } from "../pi-tools.before-tool-call.js";
@@ -823,18 +815,10 @@ function writeNativeHookRelayBridgeRecord(
   registryPath: string,
   record: NativeHookRelayBridgeRecord,
 ): void {
-  const tempPath = path.join(
-    path.dirname(registryPath),
-    `.${path.basename(registryPath)}.${process.pid}.${randomUUID()}.tmp`,
+  privateFileStoreSync(path.dirname(registryPath)).writeText(
+    path.basename(registryPath),
+    `${JSON.stringify(record)}\n`,
   );
-  try {
-    writeFileSync(tempPath, `${JSON.stringify(record)}\n`, { mode: 0o600, flag: "wx" });
-    renameSync(tempPath, registryPath);
-    chmodSync(registryPath, 0o600);
-  } catch (error) {
-    rmSync(tempPath, { force: true });
-    throw error;
-  }
 }
 
 function nativeHookRelayBridgeRegistryPath(relayId: string): string {

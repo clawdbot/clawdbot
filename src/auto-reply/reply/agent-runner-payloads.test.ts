@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
@@ -31,6 +31,10 @@ async function expectSameTargetRepliesDelivered(params: { provider: string; to: 
 }
 
 describe("buildReplyPayloads media filter integration", () => {
+  beforeEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
   it("strips legacy bracket tool blocks from heartbeat replies", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,

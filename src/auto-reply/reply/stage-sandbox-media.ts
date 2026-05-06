@@ -7,11 +7,12 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { copyFileWithinRoot, SafeOpenError } from "../../infra/fs-safe.js";
+import { root as fsRoot, FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
 import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
+import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { getMediaDir, MEDIA_MAX_BYTES } from "../../media/store.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CONFIG_DIR } from "../../utils.js";
@@ -99,15 +100,16 @@ export async function stageSandboxMedia(params: {
           maxBytes: STAGED_MEDIA_MAX_BYTES,
         });
       } else {
+        const copySource = await fs.realpath(source).catch(() => source);
         await stageLocalFileIntoRoot({
-          sourcePath: source,
+          sourcePath: copySource,
           rootDir: effectiveWorkspaceDir,
           relativeDestPath: relativeDest,
           maxBytes: STAGED_MEDIA_MAX_BYTES,
         });
       }
     } catch (err) {
-      if (err instanceof SafeOpenError && err.code === "too-large") {
+      if (err instanceof FsSafeError && err.code === "too-large") {
         logVerbose(
           `Blocking inbound media staging above ${STAGED_MEDIA_MAX_BYTES} bytes: ${source}`,
         );
@@ -139,10 +141,8 @@ async function stageLocalFileIntoRoot(params: {
   relativeDestPath: string;
   maxBytes?: number;
 }): Promise<void> {
-  await copyFileWithinRoot({
-    sourcePath: params.sourcePath,
-    rootDir: params.rootDir,
-    relativePath: params.relativeDestPath,
+  const root = await fsRoot(params.rootDir);
+  await root.copyIn(params.relativeDestPath, params.sourcePath, {
     maxBytes: params.maxBytes,
   });
 }
@@ -215,21 +215,27 @@ async function isAllowedSourcePath(params: {
     }
     return true;
   }
+  const inboundReference = await resolveInboundMediaReference(params.source).catch(() => null);
+  if (inboundReference) {
+    return true;
+  }
   const mediaDir = getMediaDir();
+  const canonicalMediaDir = await fs.realpath(mediaDir).catch(() => mediaDir);
   if (
     !isInboundPathAllowed({
       filePath: params.source,
-      roots: [mediaDir],
+      roots: [mediaDir, canonicalMediaDir],
     })
   ) {
     logVerbose(`Blocking attempt to stage media from outside media directory: ${params.source}`);
     return false;
   }
   try {
+    const canonicalSource = await fs.realpath(params.source).catch(() => params.source);
     await assertSandboxPath({
-      filePath: params.source,
-      cwd: mediaDir,
-      root: mediaDir,
+      filePath: canonicalSource,
+      cwd: canonicalMediaDir,
+      root: canonicalMediaDir,
     });
     return true;
   } catch {

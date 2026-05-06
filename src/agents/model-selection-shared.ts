@@ -442,6 +442,7 @@ function applyModelCatalogMetadata(params: {
   }
   const nextAlias = alias ?? params.entry.alias;
   const nextContextWindow = configuredEntry?.contextWindow ?? params.entry.contextWindow;
+  const nextContextTokens = configuredEntry?.contextTokens ?? params.entry.contextTokens;
   const nextReasoning = configuredEntry?.reasoning ?? params.entry.reasoning;
   const nextInput = configuredEntry?.input ?? params.entry.input;
   const nextCompat = configuredEntry?.compat ?? params.entry.compat;
@@ -451,6 +452,7 @@ function applyModelCatalogMetadata(params: {
     name: configuredEntry?.name ?? params.entry.name,
     ...(nextAlias ? { alias: nextAlias } : {}),
     ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
+    ...(nextContextTokens !== undefined ? { contextTokens: nextContextTokens } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
     ...(nextCompat ? { compat: nextCompat } : {}),
@@ -465,6 +467,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
   const configuredEntry = params.metadata.configuredByKey.get(key);
   const alias = params.metadata.aliasByKey.get(key);
   const nextContextWindow = configuredEntry?.contextWindow;
+  const nextContextTokens = configuredEntry?.contextTokens;
   const nextReasoning = configuredEntry?.reasoning;
   const nextInput = configuredEntry?.input;
   const nextCompat = configuredEntry?.compat;
@@ -475,6 +478,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
     provider: params.parsed.provider,
     ...(alias ? { alias } : {}),
     ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
+    ...(nextContextTokens !== undefined ? { contextTokens: nextContextTokens } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
     ...(nextCompat ? { compat: nextCompat } : {}),
@@ -836,6 +840,10 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
         typeof model?.contextWindow === "number" && model.contextWindow > 0
           ? model.contextWindow
           : undefined;
+      const contextTokens =
+        typeof model?.contextTokens === "number" && model.contextTokens > 0
+          ? model.contextTokens
+          : undefined;
       const reasoning = typeof model?.reasoning === "boolean" ? model.reasoning : undefined;
       const input = Array.isArray(model?.input) ? model.input : undefined;
       const compat = model?.compat && typeof model.compat === "object" ? model.compat : undefined;
@@ -844,6 +852,7 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
         id,
         name,
         contextWindow,
+        contextTokens,
         reasoning,
         input,
         compat,

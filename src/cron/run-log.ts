@@ -1,9 +1,10 @@
-import { randomBytes } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
+import { appendRegularFile, isPathInside, pathExists, root as fsRoot } from "../infra/fs-safe.js";
+import { privateFileStore } from "../infra/private-file-store.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -84,7 +85,7 @@ export function resolveCronRunLogPath(params: { storePath: string; jobId: string
   const runsDir = path.resolve(dir, "runs");
   const safeJobId = assertSafeCronRunLogJobId(params.jobId);
   const resolvedPath = path.resolve(runsDir, `${safeJobId}.jsonl`);
-  if (!resolvedPath.startsWith(`${runsDir}${path.sep}`)) {
+  if (!isPathInside(runsDir, resolvedPath)) {
     throw new Error("invalid cron run log job id");
   }
   return resolvedPath;
@@ -147,11 +148,10 @@ async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLin
     .map((l) => l.trim())
     .filter(Boolean);
   const kept = lines.slice(Math.max(0, lines.length - opts.keepLines));
-  const tmp = `${filePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  await fs.writeFile(tmp, `${kept.join("\n")}\n`, { encoding: "utf-8", mode: 0o600 });
-  await setSecureFileMode(tmp);
-  await fs.rename(tmp, filePath);
-  await setSecureFileMode(filePath);
+  await privateFileStore(path.dirname(filePath)).writeText(
+    path.basename(filePath),
+    `${kept.join("\n")}\n`,
+  );
 }
 
 export async function appendCronRunLog(
@@ -167,9 +167,10 @@ export async function appendCronRunLog(
       const runDir = path.dirname(resolved);
       await fs.mkdir(runDir, { recursive: true, mode: 0o700 });
       await fs.chmod(runDir, 0o700).catch(() => undefined);
-      await fs.appendFile(resolved, `${JSON.stringify(entry)}\n`, {
-        encoding: "utf-8",
-        mode: 0o600,
+      await appendRegularFile({
+        filePath: resolved,
+        content: `${JSON.stringify(entry)}\n`,
+        rejectSymlinkParents: true,
       });
       await setSecureFileMode(resolved);
       await pruneIfNeeded(resolved, {
@@ -447,10 +448,31 @@ export async function readCronRunLogEntriesPageAll(
   const query = normalizeLowercaseStringOrEmpty(opts.query);
   const sortDir: CronRunLogSortDir = opts.sortDir === "asc" ? "asc" : "desc";
   const runsDir = path.resolve(path.dirname(path.resolve(opts.storePath)), "runs");
-  const files = await fs.readdir(runsDir, { withFileTypes: true }).catch(() => []);
+  if (!(await pathExists(runsDir))) {
+    return {
+      entries: [],
+      total: 0,
+      offset: 0,
+      limit,
+      hasMore: false,
+      nextOffset: null,
+    };
+  }
+  const runsRoot = await fsRoot(runsDir).catch(() => null);
+  if (!runsRoot) {
+    return {
+      entries: [],
+      total: 0,
+      offset: 0,
+      limit,
+      hasMore: false,
+      nextOffset: null,
+    };
+  }
+  const files = await runsRoot.list(".", { withFileTypes: true }).catch(() => []);
   const jsonlFiles = files
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-    .map((entry) => path.join(runsDir, entry.name));
+    .filter((entry) => entry.isFile && entry.name.endsWith(".jsonl"))
+    .map((entry) => entry.name);
   if (jsonlFiles.length === 0) {
     return {
       entries: [],
@@ -461,10 +483,10 @@ export async function readCronRunLogEntriesPageAll(
       nextOffset: null,
     };
   }
-  await Promise.all(jsonlFiles.map((f) => drainPendingWrite(f)));
+  await Promise.all(jsonlFiles.map((fileName) => drainPendingWrite(path.join(runsDir, fileName))));
   const chunks = await Promise.all(
-    jsonlFiles.map(async (filePath) => {
-      const raw = await fs.readFile(filePath, "utf-8").catch(() => "");
+    jsonlFiles.map(async (fileName) => {
+      const raw = await runsRoot.readText(fileName).catch(() => "");
       return parseAllRunLogEntries(raw);
     }),
   );

@@ -1,4 +1,8 @@
 import { scot, da } from "@urbit/aura";
+import {
+  createMessageReceiptFromOutboundResults,
+  type MessageReceiptPartKind,
+} from "openclaw/plugin-sdk/channel-message";
 import { markdownToStory, createImageBlock, isImageUrl, type Story } from "./story.js";
 
 export type TlonPokeApi = {
@@ -17,14 +21,39 @@ type SendStoryParams = {
   fromShip: string;
   toShip: string;
   story: Story;
+  kind?: MessageReceiptPartKind;
 };
+
+function createTlonSendReceipt(params: {
+  messageId: string;
+  conversationId: string;
+  kind: MessageReceiptPartKind;
+}) {
+  return createMessageReceiptFromOutboundResults({
+    results: [
+      {
+        channel: "tlon",
+        messageId: params.messageId,
+        conversationId: params.conversationId,
+      },
+    ],
+    threadId: params.conversationId,
+    kind: params.kind,
+  });
+}
 
 export async function sendDm({ api, fromShip, toShip, text }: SendTextParams) {
   const story: Story = markdownToStory(text);
-  return sendDmWithStory({ api, fromShip, toShip, story });
+  return sendDmWithStory({ api, fromShip, toShip, story, kind: "text" });
 }
 
-export async function sendDmWithStory({ api, fromShip, toShip, story }: SendStoryParams) {
+export async function sendDmWithStory({
+  api,
+  fromShip,
+  toShip,
+  story,
+  kind = "unknown",
+}: SendStoryParams) {
   const sentAt = Date.now();
   const idUd = scot("ud", da.fromUnix(sentAt));
   const id = `${fromShip}/${idUd}`;
@@ -52,7 +81,11 @@ export async function sendDmWithStory({ api, fromShip, toShip, story }: SendStor
     json: action,
   });
 
-  return { channel: "tlon", messageId: id };
+  return {
+    channel: "tlon",
+    messageId: id,
+    receipt: createTlonSendReceipt({ messageId: id, conversationId: toShip, kind }),
+  };
 }
 
 type SendGroupParams = {
@@ -71,6 +104,7 @@ type SendGroupStoryParams = {
   channelName: string;
   story: Story;
   replyToId?: string | null;
+  kind?: MessageReceiptPartKind;
 };
 
 export async function sendGroupMessage({
@@ -82,7 +116,15 @@ export async function sendGroupMessage({
   replyToId,
 }: SendGroupParams) {
   const story: Story = markdownToStory(text);
-  return sendGroupMessageWithStory({ api, fromShip, hostShip, channelName, story, replyToId });
+  return sendGroupMessageWithStory({
+    api,
+    fromShip,
+    hostShip,
+    channelName,
+    story,
+    replyToId,
+    kind: "text",
+  });
 }
 
 export async function sendGroupMessageWithStory({
@@ -92,6 +134,7 @@ export async function sendGroupMessageWithStory({
   channelName,
   story,
   replyToId,
+  kind = "unknown",
 }: SendGroupStoryParams) {
   const sentAt = Date.now();
 
@@ -148,7 +191,16 @@ export async function sendGroupMessageWithStory({
     json: action,
   });
 
-  return { channel: "tlon", messageId: `${fromShip}/${sentAt}` };
+  const messageId = `${fromShip}/${sentAt}`;
+  return {
+    channel: "tlon",
+    messageId,
+    receipt: createTlonSendReceipt({
+      messageId,
+      conversationId: `${hostShip}/${channelName}`,
+      kind,
+    }),
+  };
 }
 
 /**

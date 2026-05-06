@@ -875,6 +875,16 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.providers": "Talk Provider Settings",
   "talk.providers.*": "Talk Provider Config",
   "talk.providers.*.apiKey": "Talk Provider API Key", // pragma: allowlist secret
+  "talk.realtime": "Talk Realtime",
+  "talk.realtime.provider": "Talk Realtime Provider",
+  "talk.realtime.providers": "Talk Realtime Provider Settings",
+  "talk.realtime.providers.*": "Talk Realtime Provider Config",
+  "talk.realtime.providers.*.apiKey": "Talk Realtime Provider API Key", // pragma: allowlist secret
+  "talk.realtime.model": "Talk Realtime Model",
+  "talk.realtime.voice": "Talk Realtime Voice",
+  "talk.realtime.mode": "Talk Realtime Mode",
+  "talk.realtime.transport": "Talk Realtime Transport",
+  "talk.realtime.brain": "Talk Realtime Brain",
   channels: "Channels",
   "channels.defaults": "Channel Defaults",
   "channels.defaults.groupPolicy": "Default Group Policy",

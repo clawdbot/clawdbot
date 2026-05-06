@@ -64,19 +64,23 @@ function createParamsWithRuntimePlan(
   const params = createParams(sessionFile, workspaceDir);
   return {
     ...params,
-    runtimePlan: buildAgentRuntimePlan({
-      provider: params.provider,
-      modelId: params.modelId,
-      model: params.model,
-      modelApi: params.model.api,
-      harnessId: "codex",
-      harnessRuntime: "codex",
-      config: params.config,
-      workspaceDir,
-      agentDir: tempDir,
-      thinkingLevel: params.thinkLevel,
-    }),
-  } as EmbeddedRunAttemptParams;
+    runtimePlan: buildCodexRuntimePlan(params, workspaceDir),
+  };
+}
+
+function buildCodexRuntimePlan(params: EmbeddedRunAttemptParams, workspaceDir: string) {
+  return buildAgentRuntimePlan({
+    provider: params.provider,
+    modelId: params.modelId,
+    model: params.model,
+    modelApi: params.model.api,
+    harnessId: "codex",
+    harnessRuntime: "codex",
+    config: params.config,
+    workspaceDir,
+    agentDir: tempDir,
+    thinkingLevel: params.thinkLevel,
+  });
 }
 
 function threadStartResult(threadId = "thread-1") {
@@ -180,6 +184,7 @@ function createAppServerHarness(
 ) {
   const requests: Array<{ method: string; params: unknown }> = [];
   let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+  let handleServerRequest: AppServerRequestHandler | undefined;
   const request = vi.fn(async (method: string, params?: unknown) => {
     requests.push({ method, params });
     return requestImpl(method, params);
@@ -194,10 +199,21 @@ function createAppServerHarness(
           notify = handler;
           return () => undefined;
         },
-        addRequestHandler: () => () => undefined,
+        addRequestHandler: (handler: AppServerRequestHandler) => {
+          handleServerRequest = handler;
+          return () => undefined;
+        },
       } as never;
     },
   );
+
+  const waitForServerRequestHandler = async () => {
+    await vi.waitFor(() => expect(handleServerRequest).toBeTypeOf("function"), {
+      interval: 1,
+      timeout: 30_000,
+    });
+    return handleServerRequest!;
+  };
 
   return {
     request,
@@ -219,6 +235,11 @@ function createAppServerHarness(
     },
     async notify(notification: CodexServerNotification) {
       await notify(notification);
+    },
+    waitForServerRequestHandler,
+    async handleServerRequest(request: Parameters<AppServerRequestHandler>[0]) {
+      const handler = await waitForServerRequestHandler();
+      return handler(request);
     },
     async completeTurn(params: { threadId: string; turnId: string }) {
       await notify({
@@ -346,6 +367,12 @@ function createNamedDynamicTool(
   };
 }
 
+type AppServerRequestHandler = (request: {
+  id: string | number;
+  method: string;
+  params?: unknown;
+}) => Promise<unknown>;
+
 function extractRelayIdFromThreadRequest(params: unknown): string {
   const command = (
     params as {
@@ -364,17 +391,20 @@ function extractRelayIdFromThreadRequest(params: unknown): string {
 describe("runCodexAppServerAttempt", () => {
   beforeEach(async () => {
     resetAgentEventsForTest();
+    vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-run-"));
   });
 
   afterEach(async () => {
     __testing.resetCodexAppServerClientFactoryForTests();
+    __testing.resetOpenClawCodingToolsFactoryForTests();
     resetCodexRateLimitCacheForTests();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     resetAgentEventsForTest();
     resetGlobalHookRunner();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -475,6 +505,19 @@ describe("runCodexAppServerAttempt", () => {
     params.config = { tools: { profile: "coding" } };
     params.sourceReplyDeliveryMode = "message_tool_only";
     params.messageProvider = "whatsapp";
+    params.runtimePlan = buildCodexRuntimePlan(params, workspaceDir);
+    let seenForceMessageTool: boolean | undefined;
+    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      seenForceMessageTool = options?.forceMessageTool;
+      return [
+        {
+          name: "message",
+          description: "message test tool",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(),
+        },
+      ] as never;
+    });
 
     const dynamicTools = await __testing.buildDynamicTools({
       params,
@@ -489,6 +532,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     const dynamicToolNames = dynamicTools.map((tool) => tool.name);
 
+    expect(seenForceMessageTool).toBe(true);
     expect(dynamicToolNames).toContain("message");
   });
 
@@ -502,6 +546,7 @@ describe("runCodexAppServerAttempt", () => {
       session: { store: sessionsPath, mainKey: "main", scope: "per-sender" },
       tools: { profile: "coding" },
     };
+    params.runtimePlan = buildCodexRuntimePlan(params, workspaceDir);
     await fs.writeFile(
       sessionsPath,
       JSON.stringify({
@@ -517,6 +562,18 @@ describe("runCodexAppServerAttempt", () => {
         },
       }),
     );
+    let seenRunSessionKey: string | undefined;
+    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      seenRunSessionKey = options?.runSessionKey;
+      return [
+        {
+          name: "session_status",
+          description: "session status test tool",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(async () => ({ details: { sessionKey: options?.runSessionKey } })),
+        },
+      ] as never;
+    });
 
     const dynamicTools = await __testing.buildDynamicTools({
       params,
@@ -533,6 +590,7 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(sessionStatus).toBeDefined();
     const result = await sessionStatus?.execute("call-current", { sessionKey: "current" });
+    expect(seenRunSessionKey).toBe("agent:main:main");
     expect((result?.details as { sessionKey?: string } | undefined)?.sessionKey).toBe(
       "agent:main:main",
     );
@@ -620,6 +678,93 @@ describe("runCodexAppServerAttempt", () => {
       consoleMessage:
         "codex process tool timeout: action=poll sessionId=rapid-crustacean toolTimeoutMs=1 requestedWaitMs=30000; per-tool-call watchdog, not session idle; repeated lines usually mean process-poll retry churn, not model progress",
     });
+  });
+
+  it("emits normalized tool progress around app-server dynamic tool requests", async () => {
+    const harness = createStartedThreadHarness();
+    const onRunAgentEvent = vi.fn();
+    const globalAgentEvents: AgentEventPayload[] = [];
+    onAgentEvent((event) => globalAgentEvents.push(event));
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.onAgentEvent = onRunAgentEvent;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    await expect(
+      harness.handleServerRequest({
+        id: "request-tool-1",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: null,
+          tool: "message",
+          arguments: {
+            action: "send",
+            token: "plain-secret-value-12345",
+            text: "hello",
+          },
+        },
+      }),
+    ).resolves.toMatchObject({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: expect.stringMatching(
+            /^(Unknown OpenClaw tool: message|Action send requires a target\.)$/u,
+          ),
+        },
+      ],
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event);
+    expect(agentEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stream: "tool",
+          data: expect.objectContaining({
+            phase: "start",
+            name: "message",
+            toolCallId: "call-1",
+            args: expect.objectContaining({
+              action: "send",
+              token: "plain-…2345",
+              text: "hello",
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          stream: "tool",
+          data: expect.objectContaining({
+            phase: "result",
+            name: "message",
+            toolCallId: "call-1",
+            isError: true,
+            result: expect.objectContaining({ success: false }),
+          }),
+        }),
+      ]),
+    );
+    expect(JSON.stringify(agentEvents)).not.toContain("plain-secret-value-12345");
+    expect(globalAgentEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          runId: "run-1",
+          sessionKey: "agent:main:session-1",
+          stream: "tool",
+          data: expect.objectContaining({ phase: "start", name: "message" }),
+        }),
+      ]),
+    );
   });
 
   it("releases the session when Codex never completes after a dynamic tool response", async () => {
@@ -807,7 +952,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
-  it("passes OpenClaw bootstrap files through Codex config instructions", async () => {
+  it("passes OpenClaw bootstrap files through Codex developer instructions", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -822,14 +967,18 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
-    const config = (threadStart?.params as { config?: { instructions?: string } }).config;
-    expect(config).toEqual(
-      expect.objectContaining({
-        instructions: expect.stringContaining("Soul voice goes here."),
-      }),
-    );
-    expect(config?.instructions).toContain("Codex loads AGENTS.md natively");
-    expect(config?.instructions).not.toContain("Follow AGENTS guidance.");
+    const params = threadStart?.params as {
+      config?: { instructions?: string };
+      developerInstructions?: string;
+    };
+    const config = params.config;
+
+    // Regression for #77363: persona/style bootstrap (SOUL.md) must reach the
+    // explicit developerInstructions field, not config.instructions.
+    expect(params.developerInstructions).toContain("Soul voice goes here.");
+    expect(params.developerInstructions).toContain("Codex loads AGENTS.md natively");
+    expect(params.developerInstructions).not.toContain("Follow AGENTS guidance.");
+    expect(config?.instructions).toBeUndefined();
   });
 
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
@@ -1423,7 +1572,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     await waitForMethod("turn/start");
 
-    expect(queueAgentHarnessMessage("session-1", "more context")).toBe(true);
+    expect(queueAgentHarnessMessage("session-1", "more context", { debounceMs: 1 })).toBe(true);
     await vi.waitFor(
       () => expect(requests.some((entry) => entry.method === "turn/steer")).toBe(true),
       { interval: 1 },

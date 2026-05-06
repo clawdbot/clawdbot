@@ -286,6 +286,7 @@ function resolveModelSelectionForCommand(params: {
 async function persistModelDirectiveForTest(params: {
   command: string;
   profiles?: Record<string, ApiKeyProfile>;
+  cfg?: OpenClawConfig;
   aliasIndex?: ModelAliasIndex;
   allowedModelKeys: string[];
   sessionEntry?: SessionEntry;
@@ -297,7 +298,7 @@ async function persistModelDirectiveForTest(params: {
     setAuthProfiles(params.profiles);
   }
   const directives = parseInlineDirectives(params.command);
-  const cfg = baseConfig();
+  const cfg = params.cfg ?? baseConfig();
   const sessionEntry = params.sessionEntry ?? createSessionEntry();
   const persisted = await persistInlineDirectives({
     directives,
@@ -781,6 +782,39 @@ describe("/model chat UX", () => {
     });
 
     expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+  });
+
+  it("uses Codex OAuth context config for persisted native Codex runtime directives", async () => {
+    const { persisted } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-5.5 --runtime codex hello",
+      allowedModelKeys: ["openai/gpt-5.5"],
+      cfg: {
+        ...baseConfig(),
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT-5.5",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_050_000,
+                  contextTokens: 1_000_000,
+                  maxTokens: 128_000,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(persisted.provider).toBe("openai");
+    expect(persisted.model).toBe("gpt-5.5");
+    expect(persisted.contextTokens).toBe(1_000_000);
   });
 
   it("clears runtime overrides when the model directive asks for default runtime", async () => {

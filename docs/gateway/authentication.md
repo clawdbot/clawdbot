@@ -22,7 +22,7 @@ For credential eligibility/reason-code rules used by `models status --probe`, se
 
 ## Recommended setup (API key, any provider)
 
-If you’re running a long-lived gateway, start with an API key for your chosen
+If you're running a long-lived gateway, start with an API key for your chosen
 provider.
 For Anthropic specifically, API key auth is still the most predictable server
 setup, but OpenClaw also supports reusing a local Claude CLI login.
@@ -51,7 +51,7 @@ openclaw models status
 openclaw doctor
 ```
 
-If you’d rather not manage env vars yourself, onboarding can store
+If you'd rather not manage env vars yourself, onboarding can store
 API keys for daemon use: `openclaw onboard`.
 
 See [Help](/help) for details on env inheritance (`env.shellEnv`,
@@ -187,7 +187,7 @@ Use `/model` (or `/model list`) for a compact picker; use `/model status` for th
 
 ### Per-agent (CLI override)
 
-Set an explicit auth profile order override for an agent (stored in that agent’s `auth-state.json`):
+Set an explicit auth profile order override for an agent (stored in that agent's `auth-state.json`):
 
 ```bash
 openclaw models auth order get --provider anthropic

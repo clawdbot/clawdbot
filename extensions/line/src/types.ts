@@ -1,4 +1,5 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
 
@@ -60,6 +61,7 @@ export interface ResolvedLineAccount {
 export interface LineSendResult {
   messageId: string;
   chatId: string;
+  receipt: MessageReceipt;
 }
 
 export type LineProbeResult = BaseProbeResult<string> & {

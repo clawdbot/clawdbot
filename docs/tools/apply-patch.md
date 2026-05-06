@@ -51,6 +51,14 @@ The tool accepts a single `input` string that wraps one or more file operations:
 
 ## Related
 
-- [Diffs](/tools/diffs)
-- [Exec tool](/tools/exec)
-- [Code execution](/tools/code-execution)
+<CardGroup cols={2}>
+  <Card title="Diffs" href="/tools/diffs" icon="code-compare">
+    Read-only diff viewer for change presentation.
+  </Card>
+  <Card title="Exec tool" href="/tools/exec" icon="terminal">
+    Shell command execution from the agent.
+  </Card>
+  <Card title="Code execution" href="/tools/code-execution" icon="square-code">
+    Sandboxed remote Python analysis with xAI.
+  </Card>
+</CardGroup>

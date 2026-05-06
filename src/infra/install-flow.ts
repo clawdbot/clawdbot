@@ -2,7 +2,8 @@ import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
-import { type ArchiveLogger, extractArchive, fileExists, resolvePackedRootDir } from "./archive.js";
+import { type ArchiveLogger, extractArchive, resolvePackedRootDir } from "./archive.js";
+import { pathExists } from "./fs-safe.js";
 import { withTempDir } from "./install-source-utils.js";
 
 type ExistingInstallPathResult =
@@ -20,7 +21,7 @@ export async function resolveExistingInstallPath(
   inputPath: string,
 ): Promise<ExistingInstallPathResult> {
   const resolvedPath = resolveUserPath(inputPath);
-  if (!(await fileExists(resolvedPath))) {
+  if (!(await pathExists(resolvedPath))) {
     return { ok: false, error: `path not found: ${resolvedPath}` };
   }
   const stat = await fs.stat(resolvedPath);

@@ -369,13 +369,14 @@ describe("chrome.ts internal", () => {
         cdpIsLoopback: true,
       }) as unknown as ResolvedBrowserProfile;
 
-    const makeResolved = (): ResolvedBrowserConfig =>
+    const makeResolved = (overrides: Partial<ResolvedBrowserConfig> = {}): ResolvedBrowserConfig =>
       ({
         headless: true,
         noSandbox: true,
         extraArgs: [],
         localLaunchTimeoutMs: 15_000,
         localCdpReadyTimeoutMs: 8_000,
+        ...overrides,
       }) as unknown as ResolvedBrowserConfig;
 
     it("rejects a remote profile before attempting to spawn", async () => {
@@ -528,7 +529,10 @@ describe("chrome.ts internal", () => {
       await fsp.symlink("remote-host-535", path.join(userDataDir, "SingletonLock"));
 
       try {
-        const running = await launchOpenClawChrome(makeResolved(), profile);
+        const running = await launchOpenClawChrome(
+          makeResolved({ localLaunchTimeoutMs: 20 }),
+          profile,
+        );
         expect(running.proc).toBe(secondProc);
         expect(firstProc.kill).toHaveBeenCalledWith("SIGKILL");
         expect(spawnCalls).toBe(2);

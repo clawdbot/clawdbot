@@ -1,15 +1,22 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyParentDefaultHelpAction } from "./parent-default-help.js";
+import { applyParentDefaultHelpAction, isParentDefaultHelpAction } from "./parent-default-help.js";
 
 describe("applyParentDefaultHelpAction (#73077)", () => {
   let originalExitCode: NodeJS.Process["exitCode"];
+  let originalSuppressHelpBanner: string | undefined;
   beforeEach(() => {
     originalExitCode = process.exitCode;
+    originalSuppressHelpBanner = process.env.OPENCLAW_SUPPRESS_HELP_BANNER;
     process.exitCode = undefined;
   });
   afterEach(() => {
     process.exitCode = originalExitCode;
+    if (originalSuppressHelpBanner === undefined) {
+      delete process.env.OPENCLAW_SUPPRESS_HELP_BANNER;
+    } else {
+      process.env.OPENCLAW_SUPPRESS_HELP_BANNER = originalSuppressHelpBanner;
+    }
   });
 
   function buildParent(): Command {
@@ -24,10 +31,17 @@ describe("applyParentDefaultHelpAction (#73077)", () => {
 
   it("invokes parent help and exits 0 when invoked without subcommand", async () => {
     const parent = buildParent();
-    const helpSpy = vi.spyOn(parent, "outputHelp").mockImplementation(() => {});
+    const suppressHelpBannerValues: Array<string | undefined> = [];
+    const helpSpy = vi.spyOn(parent, "outputHelp").mockImplementation(() => {
+      suppressHelpBannerValues.push(process.env.OPENCLAW_SUPPRESS_HELP_BANNER);
+    });
+    expect(isParentDefaultHelpAction(parent)).toBe(false);
     applyParentDefaultHelpAction(parent);
+    expect(isParentDefaultHelpAction(parent)).toBe(true);
     await parent.parent!.parseAsync(["node", "test", "parent"]);
     expect(helpSpy).toHaveBeenCalledTimes(1);
+    expect(suppressHelpBannerValues).toEqual(["1"]);
+    expect(process.env.OPENCLAW_SUPPRESS_HELP_BANNER).toBeUndefined();
     expect(process.exitCode).toBe(0);
   });
 

@@ -1,4 +1,10 @@
 import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  createMessageReceiptFromOutboundResults,
+  defineChannelMessageAdapter,
+  type ChannelMessageSendResult,
+  type MessageReceiptPartKind,
+} from "openclaw/plugin-sdk/channel-message";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 // Register the PlatformAdapter before any core/ module is used.
@@ -25,11 +31,136 @@ import type { ResolvedQQBotAccount } from "./types.js";
 
 // Shared promise so concurrent multi-account startups serialize the dynamic
 // import of the gateway module, avoiding an ESM circular-dependency race.
-let _gatewayModulePromise: Promise<typeof import("./bridge/gateway.js")> | undefined;
+let gatewayModulePromise: Promise<typeof import("./bridge/gateway.js")> | undefined;
 function loadGatewayModule(): Promise<typeof import("./bridge/gateway.js")> {
-  _gatewayModulePromise ??= import("./bridge/gateway.js");
-  return _gatewayModulePromise;
+  gatewayModulePromise ??= import("./bridge/gateway.js");
+  return gatewayModulePromise;
 }
+
+function createQQBotSendReceipt(params: {
+  messageId?: string;
+  target: string;
+  kind: MessageReceiptPartKind;
+}) {
+  const messageId = params.messageId?.trim();
+  return createMessageReceiptFromOutboundResults({
+    results: messageId
+      ? [
+          {
+            channel: "qqbot",
+            messageId,
+            conversationId: params.target,
+          },
+        ]
+      : [],
+    threadId: params.target,
+    kind: params.kind,
+  });
+}
+
+async function sendQQBotText(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  text: string;
+  accountId?: string | null;
+  replyToId?: string | null;
+}) {
+  // Ensure bridge/gateway.ts module-level registrations (audio adapter factory,
+  // platform adapter, etc.) have executed before engine code runs.
+  await loadGatewayModule();
+  const account = resolveQQBotAccount(params.cfg, params.accountId);
+  const { sendText } = await import("./engine/messaging/outbound.js");
+  const result = await sendText({
+    to: params.to,
+    text: params.text,
+    accountId: params.accountId,
+    replyToId: params.replyToId,
+    account: toGatewayAccount(account),
+  });
+  return {
+    channel: "qqbot" as const,
+    messageId: result.messageId ?? "",
+    receipt: createQQBotSendReceipt({
+      messageId: result.messageId,
+      target: params.to,
+      kind: "text",
+    }),
+    meta: result.error ? { error: result.error } : undefined,
+  };
+}
+
+async function sendQQBotMedia(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  text?: string | null;
+  mediaUrl?: string | null;
+  accountId?: string | null;
+  replyToId?: string | null;
+}) {
+  // Same guard as sendText — ensure adapters are registered.
+  await loadGatewayModule();
+  const account = resolveQQBotAccount(params.cfg, params.accountId);
+  const { sendMedia } = await import("./engine/messaging/outbound.js");
+  const result = await sendMedia({
+    to: params.to,
+    text: params.text ?? "",
+    mediaUrl: params.mediaUrl ?? "",
+    accountId: params.accountId,
+    replyToId: params.replyToId,
+    account: toGatewayAccount(account),
+  });
+  return {
+    channel: "qqbot" as const,
+    messageId: result.messageId ?? "",
+    receipt: createQQBotSendReceipt({
+      messageId: result.messageId,
+      target: params.to,
+      kind: "media",
+    }),
+    meta: result.error ? { error: result.error } : undefined,
+  };
+}
+
+function toQQBotMessageSendResult(result: Awaited<ReturnType<typeof sendQQBotText>>) {
+  return {
+    messageId: result.messageId,
+    receipt: result.receipt,
+  } satisfies ChannelMessageSendResult;
+}
+
+const qqbotMessageAdapter = defineChannelMessageAdapter({
+  id: "qqbot",
+  durableFinal: {
+    capabilities: {
+      text: true,
+      media: true,
+      replyTo: true,
+    },
+  },
+  send: {
+    text: async (ctx) =>
+      toQQBotMessageSendResult(
+        await sendQQBotText({
+          cfg: ctx.cfg,
+          to: ctx.to,
+          text: ctx.text,
+          accountId: ctx.accountId,
+          replyToId: ctx.replyToId,
+        }),
+      ),
+    media: async (ctx) =>
+      toQQBotMessageSendResult(
+        await sendQQBotMedia({
+          cfg: ctx.cfg,
+          to: ctx.to,
+          text: ctx.text,
+          mediaUrl: ctx.mediaUrl,
+          accountId: ctx.accountId,
+          replyToId: ctx.replyToId,
+        }),
+      ),
+  },
+});
 
 const EXEC_APPROVAL_COMMAND_RE =
   /\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+(?:allow-once|allow-always|always|deny)\b/i;
@@ -98,6 +229,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     ...qqbotSetupAdapterShared,
   },
   approvalCapability: getQQBotApprovalCapability(),
+  message: qqbotMessageAdapter,
   messaging: {
     targetPrefixes: ["qqbot"],
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */
@@ -120,44 +252,23 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         payload,
         hint,
       }),
-    sendText: async ({ to, text, accountId, replyToId, cfg }) => {
-      // Ensure bridge/gateway.ts module-level registrations (audio adapter factory,
-      // platform adapter, etc.) have executed before engine code runs.
-      await loadGatewayModule();
-      const account = resolveQQBotAccount(cfg, accountId);
-      const { sendText } = await import("./engine/messaging/outbound.js");
-      const result = await sendText({
+    sendText: async ({ to, text, accountId, replyToId, cfg }) =>
+      await sendQQBotText({
+        cfg,
         to,
         text,
         accountId,
         replyToId,
-        account: toGatewayAccount(account),
-      });
-      return {
-        channel: "qqbot" as const,
-        messageId: result.messageId ?? "",
-        meta: result.error ? { error: result.error } : undefined,
-      };
-    },
-    sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, cfg }) => {
-      // Same guard as sendText — ensure adapters are registered.
-      await loadGatewayModule();
-      const account = resolveQQBotAccount(cfg, accountId);
-      const { sendMedia } = await import("./engine/messaging/outbound.js");
-      const result = await sendMedia({
+      }),
+    sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, cfg }) =>
+      await sendQQBotMedia({
+        cfg,
         to,
-        text: text ?? "",
-        mediaUrl: mediaUrl ?? "",
+        text,
+        mediaUrl,
         accountId,
         replyToId,
-        account: toGatewayAccount(account),
-      });
-      return {
-        channel: "qqbot" as const,
-        messageId: result.messageId ?? "",
-        meta: result.error ? { error: result.error } : undefined,
-      };
-    },
+      }),
   },
   gateway: {
     startAccount: async (ctx) => {

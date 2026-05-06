@@ -9,6 +9,11 @@ import type {
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  defineChannelMessageAdapter,
+  type ChannelMessageSendResult,
+  type MessageReceiptPartKind,
+} from "openclaw/plugin-sdk/channel-message";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderGroupPolicyWarningCollector,
@@ -66,6 +71,7 @@ import { messageActionTargetAliases } from "./message-action-contract.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { collectFeishuSecurityAuditFindings } from "./security-audit.js";
+import { createFeishuSendReceipt } from "./send-result.js";
 import { resolveFeishuSessionConversation } from "./session-conversation.js";
 import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
 import { feishuSetupAdapter } from "./setup-core.js";
@@ -130,6 +136,51 @@ const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "feishuChannelRuntime",
 );
+
+function toFeishuMessageSendResult(
+  result: { messageId?: string; chatId?: string; receipt?: ChannelMessageSendResult["receipt"] },
+  kind: MessageReceiptPartKind,
+): ChannelMessageSendResult {
+  const receipt =
+    result.receipt ??
+    createFeishuSendReceipt({
+      messageId: result.messageId,
+      chatId: result.chatId ?? "",
+      kind,
+    });
+  return {
+    messageId: result.messageId || receipt.primaryPlatformMessageId,
+    receipt,
+  };
+}
+
+const feishuMessageAdapter = defineChannelMessageAdapter({
+  id: "feishu",
+  durableFinal: {
+    capabilities: {
+      text: true,
+      media: true,
+    },
+  },
+  send: {
+    text: async (ctx) => {
+      const runtime = await loadFeishuChannelRuntime();
+      const sendText = runtime.feishuOutbound.sendText;
+      if (!sendText) {
+        throw new Error("Feishu text sending is not available.");
+      }
+      return toFeishuMessageSendResult(await sendText(ctx), "text");
+    },
+    media: async (ctx) => {
+      const runtime = await loadFeishuChannelRuntime();
+      const sendMedia = runtime.feishuOutbound.sendMedia;
+      if (!sendMedia) {
+        throw new Error("Feishu media sending is not available.");
+      }
+      return toFeishuMessageSendResult(await sendMedia(ctx), "media");
+    },
+  },
+});
 
 function buildFeishuPresentationCard(params: {
   presentation: NonNullable<ReturnType<typeof normalizeMessagePresentation>>;
@@ -1255,6 +1306,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           });
         },
       },
+      message: feishuMessageAdapter,
     },
     security: {
       collectWarnings: projectConfigAccountIdWarningCollector<{

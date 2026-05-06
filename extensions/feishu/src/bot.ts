@@ -78,6 +78,31 @@ const groupNameCache = new Map<string, { name: string; expiresAt: number }>();
 const GROUP_NAME_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const GROUP_NAME_CACHE_MAX_SIZE = 500; // hard cap
 
+type FeishuGroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
+
+function resolveConfiguredFeishuGroupSessionScope(params: {
+  groupConfig?: {
+    groupSessionScope?: FeishuGroupSessionScope;
+    topicSessionMode?: "enabled" | "disabled";
+  };
+  feishuCfg?: {
+    groupSessionScope?: FeishuGroupSessionScope;
+    topicSessionMode?: "enabled" | "disabled";
+  };
+}): FeishuGroupSessionScope {
+  const legacyTopicSessionMode =
+    params.groupConfig?.topicSessionMode ?? params.feishuCfg?.topicSessionMode ?? "disabled";
+  return (
+    params.groupConfig?.groupSessionScope ??
+    params.feishuCfg?.groupSessionScope ??
+    (legacyTopicSessionMode === "enabled" ? "group_topic" : "group")
+  );
+}
+
+function isFeishuTopicSessionScope(scope: FeishuGroupSessionScope): boolean {
+  return scope === "group_topic" || scope === "group_topic_sender";
+}
+
 function evictGroupNameCache(): void {
   const now = Date.now();
   for (const [key, val] of groupNameCache) {
@@ -503,6 +528,36 @@ export async function handleFeishuMessage(params: {
   const groupConfig = isGroup
     ? resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId })
     : undefined;
+  const groupSessionScope = isGroup
+    ? resolveConfiguredFeishuGroupSessionScope({ groupConfig, feishuCfg })
+    : null;
+  let effectiveThreadId = ctx.threadId;
+  if (
+    isGroup &&
+    ctx.chatType === "topic_group" &&
+    !effectiveThreadId &&
+    isFeishuTopicSessionScope(groupSessionScope ?? "group")
+  ) {
+    try {
+      const messageInfo = await getMessageFeishu({
+        cfg,
+        accountId: account.accountId,
+        messageId: ctx.messageId,
+      });
+      const hydratedThreadId = messageInfo?.threadId?.trim();
+      if (hydratedThreadId) {
+        ctx = { ...ctx, threadId: hydratedThreadId };
+        effectiveThreadId = hydratedThreadId;
+        log(
+          `feishu[${account.accountId}]: hydrated topic thread_id=${hydratedThreadId} for message=${ctx.messageId}`,
+        );
+      }
+    } catch (err) {
+      log(
+        `feishu[${account.accountId}]: failed to hydrate topic thread_id for message=${ctx.messageId}: ${String(err)}`,
+      );
+    }
+  }
   const effectiveGroupSenderAllowFrom = isGroup
     ? (groupConfig?.allowFrom?.length ?? 0) > 0
       ? (groupConfig?.allowFrom ?? [])
@@ -514,7 +569,7 @@ export async function handleFeishuMessage(params: {
         senderOpenId: ctx.senderOpenId,
         messageId: ctx.messageId,
         rootId: ctx.rootId,
-        threadId: ctx.threadId,
+        threadId: effectiveThreadId,
         chatType: ctx.chatType,
         groupConfig,
         feishuCfg,

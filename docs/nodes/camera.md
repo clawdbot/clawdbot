@@ -116,7 +116,7 @@ The macOS companion app exposes a checkbox:
 
 - **Settings → General → Allow Camera** (`openclaw.cameraEnabled`)
   - Default: **off**
-  - When off: camera requests return “Camera disabled by user”.
+  - When off: camera requests return "Camera disabled by user".
 
 ### CLI helper (node invoke)
 

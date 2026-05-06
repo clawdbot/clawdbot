@@ -275,6 +275,22 @@ describe("config observe recovery", () => {
     });
   });
 
+  it("hardens async backup restores to owner-only config permissions", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withSuiteHome(async (home) => {
+      const { deps, configPath } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeClobberedUpdateChannel(configPath);
+      await fsp.chmod(configPath, 0o644);
+
+      await recoverClobberedUpdateChannel({ deps, configPath });
+
+      expect((await fsp.stat(configPath)).mode & 0o777).toBe(0o600);
+    });
+  });
+
   it("auto-restores after a large size drop against last-good config", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath } = makeDeps(home);
@@ -453,6 +469,22 @@ describe("config observe recovery", () => {
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.backupHash).toBeTypeOf("string");
       expect(observe?.lastKnownGoodIno ?? null).toBeNull();
+    });
+  });
+
+  it("hardens sync backup restores to owner-only config permissions", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withSuiteHome(async (home) => {
+      const { deps, configPath } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeClobberedUpdateChannel(configPath);
+      await fsp.chmod(configPath, 0o644);
+
+      recoverClobberedUpdateChannelSync({ deps, configPath });
+
+      expect((await fsp.stat(configPath)).mode & 0o777).toBe(0o600);
     });
   });
 

@@ -1,5 +1,15 @@
+import type {
+  ChannelMessageSendCommitContext,
+  ChannelMessageUnknownSendReconciliationResult,
+} from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../errors.js";
+import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
+import type { OutboundDeliveryResult } from "./deliver-types.js";
+import {
+  isOutboundDeliveryResultArray,
+  runOutboundDeliveryCommitHooks,
+} from "./delivery-commit-hooks.js";
 import {
   ackDelivery,
   failDelivery,
@@ -21,7 +31,10 @@ export type DeliverFn = (
   params: {
     cfg: OpenClawConfig;
   } & QueuedDeliveryPayload & {
+      deliveryQueueId?: string;
+      deliveryQueueStateDir?: string;
       skipQueue?: boolean;
+      deferCommitHooks?: boolean;
     },
 ) => Promise<unknown>;
 
@@ -109,17 +122,19 @@ export async function withActiveDeliveryClaim<T>(
   }
 }
 
-function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig) {
+function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig, stateDir?: string) {
   return {
     cfg,
     channel: entry.channel,
     to: entry.to,
     accountId: entry.accountId,
     payloads: entry.payloads,
+    renderedBatchPlan: entry.renderedBatchPlan,
     threadId: entry.threadId,
     replyToId: entry.replyToId,
     replyToMode: entry.replyToMode,
     formatting: entry.formatting,
+    identity: entry.identity,
     bestEffort: entry.bestEffort,
     gifPlayback: entry.gifPlayback,
     forceDocument: entry.forceDocument,
@@ -127,8 +142,158 @@ function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig) 
     mirror: entry.mirror,
     session: entry.session,
     gatewayClientScopes: entry.gatewayClientScopes,
+    deliveryQueueId: entry.id,
+    deliveryQueueStateDir: stateDir,
     skipQueue: true, // Prevent re-enqueueing during recovery.
+    deferCommitHooks: true,
   } satisfies Parameters<DeliverFn>[0];
+}
+
+async function reconcileUnknownQueuedDelivery(opts: {
+  entry: QueuedDelivery;
+  cfg: OpenClawConfig;
+  log: RecoveryLogger;
+}): Promise<ChannelMessageUnknownSendReconciliationResult | null> {
+  const adapter = resolveOutboundChannelMessageAdapter({
+    channel: opts.entry.channel,
+    cfg: opts.cfg,
+    allowBootstrap: true,
+  });
+  if (adapter?.durableFinal?.capabilities?.reconcileUnknownSend !== true) {
+    return null;
+  }
+  const reconcileUnknownSend = adapter?.durableFinal?.reconcileUnknownSend;
+  if (!reconcileUnknownSend) {
+    return null;
+  }
+  const { entry } = opts;
+  try {
+    return await reconcileUnknownSend({
+      cfg: opts.cfg,
+      queueId: entry.id,
+      channel: entry.channel,
+      to: entry.to,
+      ...(entry.accountId !== undefined ? { accountId: entry.accountId } : {}),
+      enqueuedAt: entry.enqueuedAt,
+      retryCount: entry.retryCount,
+      ...(entry.platformSendStartedAt !== undefined
+        ? { platformSendStartedAt: entry.platformSendStartedAt }
+        : {}),
+      payloads: entry.payloads,
+      ...(entry.renderedBatchPlan ? { renderedBatchPlan: entry.renderedBatchPlan } : {}),
+      ...(entry.replyToId !== undefined ? { replyToId: entry.replyToId } : {}),
+      ...(entry.replyToMode !== undefined ? { replyToMode: entry.replyToMode } : {}),
+      ...(entry.threadId !== undefined ? { threadId: entry.threadId } : {}),
+      ...(entry.silent !== undefined ? { silent: entry.silent } : {}),
+    });
+  } catch (err) {
+    const error = formatErrorMessage(err);
+    opts.log.warn(`Delivery entry ${opts.entry.id} unknown-send reconciliation failed: ${error}`);
+    return { status: "unresolved", error, retryable: true };
+  }
+}
+
+function buildReconciledSentResult(
+  entry: QueuedDelivery,
+  reconciliation: Extract<ChannelMessageUnknownSendReconciliationResult, { status: "sent" }>,
+): OutboundDeliveryResult {
+  return {
+    channel: entry.channel,
+    messageId:
+      reconciliation.messageId ??
+      reconciliation.receipt.primaryPlatformMessageId ??
+      reconciliation.receipt.platformMessageIds[0] ??
+      "",
+    receipt: reconciliation.receipt,
+  };
+}
+
+function buildReconciledCommitContext(params: {
+  entry: QueuedDelivery;
+  cfg: OpenClawConfig;
+  result: OutboundDeliveryResult;
+}): ChannelMessageSendCommitContext {
+  const payload = params.entry.payloads[0] ?? {};
+  const result = {
+    messageId: params.result.messageId,
+    receipt: params.result.receipt ?? {
+      platformMessageIds: [params.result.messageId].filter(Boolean),
+      parts: [],
+      sentAt: Date.now(),
+    },
+  };
+  const base = {
+    cfg: params.cfg,
+    to: params.entry.to,
+    accountId: params.entry.accountId,
+    replyToId: params.entry.replyToId,
+    replyToMode: params.entry.replyToMode,
+    threadId: params.entry.threadId,
+    silent: params.entry.silent,
+    result,
+  };
+  if (
+    payload.presentation !== undefined ||
+    payload.delivery !== undefined ||
+    payload.interactive !== undefined ||
+    (payload.channelData !== undefined && Object.keys(payload.channelData).length > 0)
+  ) {
+    return {
+      ...base,
+      kind: "payload",
+      text: payload.text ?? "",
+      mediaUrl: payload.mediaUrl,
+      payload,
+    };
+  }
+  const mediaUrl = payload.mediaUrl ?? payload.mediaUrls?.find((url) => url);
+  if (mediaUrl) {
+    return {
+      ...base,
+      kind: "media",
+      text: payload.text ?? "",
+      mediaUrl,
+      audioAsVoice: payload.audioAsVoice,
+      gifPlayback: params.entry.gifPlayback,
+      forceDocument: params.entry.forceDocument,
+    };
+  }
+  return {
+    ...base,
+    kind: "text",
+    text: payload.text ?? "",
+  };
+}
+
+async function runReconciledSentCommitHooks(params: {
+  entry: QueuedDelivery;
+  cfg: OpenClawConfig;
+  reconciliation: Extract<ChannelMessageUnknownSendReconciliationResult, { status: "sent" }>;
+  log: RecoveryLogger;
+}): Promise<void> {
+  const adapter = resolveOutboundChannelMessageAdapter({
+    channel: params.entry.channel,
+    cfg: params.cfg,
+    allowBootstrap: true,
+  });
+  const afterCommit = adapter?.send?.lifecycle?.afterCommit;
+  if (!afterCommit) {
+    return;
+  }
+  const result = buildReconciledSentResult(params.entry, params.reconciliation);
+  try {
+    await afterCommit(
+      buildReconciledCommitContext({
+        entry: params.entry,
+        cfg: params.cfg,
+        result,
+      }),
+    );
+  } catch (err) {
+    params.log.warn(
+      `Delivery entry ${params.entry.id} reconciled sent afterCommit hook failed: ${formatErrorMessage(err)}`,
+    );
+  }
 }
 
 async function moveEntryToFailedWithLogging(
@@ -196,14 +361,90 @@ async function drainQueuedEntry(opts: {
   entry: QueuedDelivery;
   cfg: OpenClawConfig;
   deliver: DeliverFn;
+  log: RecoveryLogger;
   stateDir?: string;
   onRecovered?: (entry: QueuedDelivery) => void;
   onFailed?: (entry: QueuedDelivery, errMsg: string) => void;
 }): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone"> {
   const { entry } = opts;
+  if (
+    entry.recoveryState === "send_attempt_started" ||
+    entry.recoveryState === "unknown_after_send"
+  ) {
+    const reconciliation = await reconcileUnknownQueuedDelivery({
+      entry,
+      cfg: opts.cfg,
+      log: opts.log,
+    });
+    if (reconciliation?.status === "sent") {
+      try {
+        await ackDelivery(entry.id, opts.stateDir);
+        await runReconciledSentCommitHooks({
+          entry,
+          cfg: opts.cfg,
+          reconciliation,
+          log: opts.log,
+        });
+        opts.onRecovered?.(entry);
+        opts.log.info(`Delivery entry ${entry.id} reconciled unknown_after_send as already sent`);
+        return "recovered";
+      } catch (ackErr) {
+        if (getErrnoCode(ackErr) === "ENOENT") {
+          return "already-gone";
+        }
+        const errMsg = `failed to ack reconciled sent delivery: ${formatErrorMessage(ackErr)}`;
+        opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
+        opts.onFailed?.(entry, errMsg);
+        try {
+          await failDelivery(entry.id, errMsg, opts.stateDir);
+          return "failed";
+        } catch (failErr) {
+          if (getErrnoCode(failErr) === "ENOENT") {
+            return "already-gone";
+          }
+        }
+        return "failed";
+      }
+    }
+    if (reconciliation?.status === "not_sent") {
+      opts.log.info(
+        `Delivery entry ${entry.id} reconciled ${entry.recoveryState} as not sent; replaying`,
+      );
+    } else {
+      const errMsg =
+        reconciliation?.status === "unresolved" && reconciliation.error
+          ? `delivery state is ${entry.recoveryState} and reconciliation is unresolved: ${reconciliation.error}`
+          : `delivery state is ${entry.recoveryState}; refusing blind replay without adapter reconciliation`;
+      opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
+      opts.onFailed?.(entry, errMsg);
+      if (reconciliation?.status === "unresolved" && reconciliation.retryable === true) {
+        try {
+          await failDelivery(entry.id, errMsg, opts.stateDir);
+          return "failed";
+        } catch (failErr) {
+          if (getErrnoCode(failErr) === "ENOENT") {
+            return "already-gone";
+          }
+        }
+        return "failed";
+      }
+      try {
+        await moveToFailed(entry.id, opts.stateDir);
+        return "moved-to-failed";
+      } catch (moveErr) {
+        if (getErrnoCode(moveErr) === "ENOENT") {
+          return "already-gone";
+        }
+      }
+      return "failed";
+    }
+  }
   try {
-    await opts.deliver(buildRecoveryDeliverParams(entry, opts.cfg));
+    const result = await opts.deliver(buildRecoveryDeliverParams(entry, opts.cfg, opts.stateDir));
     await ackDelivery(entry.id, opts.stateDir);
+    if (isOutboundDeliveryResultArray(result)) {
+      await runOutboundDeliveryCommitHooks(result);
+    }
     opts.onRecovered?.(entry);
     return "recovered";
   } catch (err) {
@@ -314,6 +555,7 @@ export async function drainPendingDeliveries(opts: {
           entry: currentEntry,
           cfg: opts.cfg,
           deliver,
+          log: opts.log,
           stateDir: opts.stateDir,
           onFailed: (failedEntry, errMsg) => {
             if (isPermanentDeliveryError(errMsg)) {
@@ -405,6 +647,7 @@ export async function recoverPendingDeliveries(opts: {
         entry: currentEntry,
         cfg: opts.cfg,
         deliver: opts.deliver,
+        log: opts.log,
         stateDir: opts.stateDir,
         onRecovered: (recoveredEntry) => {
           summary.recovered += 1;

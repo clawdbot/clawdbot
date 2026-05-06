@@ -23,6 +23,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
     url?: string;
     configPath?: string;
     urlSource?: "cli" | "env";
+    ignoreEnvUrlOverride?: boolean;
   } = {},
   resolvers: GatewayConnectionDetailResolvers = {},
 ): GatewayConnectionDetails {
@@ -40,9 +41,10 @@ export function buildGatewayConnectionDetailsWithResolvers(
   const scheme = tlsEnabled ? "wss" : "ws";
   const localUrl = `${scheme}://127.0.0.1:${localPort}`;
   const cliUrlOverride = normalizeOptionalString(options.url);
-  const envUrlOverride = cliUrlOverride
-    ? undefined
-    : normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL);
+  const envUrlOverride =
+    cliUrlOverride || options.ignoreEnvUrlOverride
+      ? undefined
+      : normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const remoteUrl = normalizeOptionalString(remote?.url);
   const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;

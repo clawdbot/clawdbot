@@ -3099,7 +3099,7 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it("keeps diagnostic progress when source progress callbacks are suppressed", async () => {
+  it("forwards non-answer progress callbacks when source replies are suppressed", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const dispatcher = createDispatcher();
@@ -3131,6 +3131,7 @@ describe("dispatchReplyFromConfig", () => {
       dispatcher,
       replyOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
         onToolStart: callbacks.toolStart,
         onItemEvent: callbacks.itemEvent,
         onCommandOutput: callbacks.commandOutput,
@@ -3138,9 +3139,9 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    expect(callbacks.toolStart).not.toHaveBeenCalled();
-    expect(callbacks.itemEvent).not.toHaveBeenCalled();
-    expect(callbacks.commandOutput).not.toHaveBeenCalled();
+    expect(callbacks.toolStart).toHaveBeenCalledTimes(1);
+    expect(callbacks.itemEvent).toHaveBeenCalledTimes(1);
+    expect(callbacks.commandOutput).toHaveBeenCalledTimes(1);
     expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledTimes(3);
     expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledWith({
       sessionKey: "agent:main:discord:channel:C1",

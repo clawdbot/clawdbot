@@ -328,14 +328,22 @@ export function resolveContextTokens(params: {
   provider: string;
   model: string;
 }): number {
-  return (
-    params.agentCfg?.contextTokens ??
-    resolveContextTokensForModel({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: params.model,
-      allowAsyncLoad: false,
-    }) ??
-    DEFAULT_CONTEXT_TOKENS
-  );
+  const modelContextTokens = resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    allowAsyncLoad: false,
+  });
+  const agentContextTokens =
+    typeof params.agentCfg?.contextTokens === "number" && params.agentCfg.contextTokens > 0
+      ? Math.floor(params.agentCfg.contextTokens)
+      : undefined;
+
+  if (agentContextTokens !== undefined) {
+    return modelContextTokens !== undefined
+      ? Math.min(agentContextTokens, modelContextTokens)
+      : agentContextTokens;
+  }
+
+  return modelContextTokens ?? DEFAULT_CONTEXT_TOKENS;
 }

@@ -74,35 +74,57 @@ function describeSecureMobilePairingFix(source?: string): string {
   return (
     "Tailscale and public mobile pairing require a secure gateway URL (wss://) or Tailscale Serve/Funnel." +
     sourceNote +
-    " Fix: use a private LAN IP address, prefer gateway.tailscale.mode=serve, or set " +
+    " Fix: use a private LAN address, prefer gateway.tailscale.mode=serve, or set " +
     "gateway.remote.url / plugins.entries.device-pair.config.publicUrl to a wss:// URL. " +
-    "ws:// is only valid for localhost, private LAN IP addresses, or the Android emulator."
+    "ws:// is only valid for localhost, private LAN addresses, .local hosts, or the Android emulator."
   );
 }
 
-function isPrivateLanIpHost(host: string): boolean {
-  if (isRfc1918Ipv4Address(host)) {
+function normalizeMobilePairingHost(host: string): string {
+  let normalized = normalizeLowercaseStringOrEmpty(host);
+  if (normalized.startsWith("[") && normalized.endsWith("]")) {
+    normalized = normalized.slice(1, -1);
+  }
+  if (normalized.endsWith(".")) {
+    normalized = normalized.slice(0, -1);
+  }
+  const zoneIndex = normalized.indexOf("%");
+  if (zoneIndex >= 0) {
+    normalized = normalized.slice(0, zoneIndex);
+  }
+  return normalized;
+}
+
+function isPrivateLanHost(host: string): boolean {
+  const normalized = normalizeMobilePairingHost(host);
+  if (normalized.endsWith(".local")) {
     return true;
   }
-  const parsed = parseCanonicalIpAddress(host);
+  if (isRfc1918Ipv4Address(normalized)) {
+    return true;
+  }
+  const parsed = parseCanonicalIpAddress(normalized);
   if (!parsed) {
     return false;
   }
   if (isIpv4Address(parsed)) {
-    const normalized = parsed.toString();
-    return normalized.startsWith("169.254.") && !isCarrierGradeNatIpv4Address(normalized);
+    const normalizedIp = parsed.toString();
+    return normalizedIp.startsWith("169.254.") && !isCarrierGradeNatIpv4Address(normalizedIp);
   }
   if (!isIpv6Address(parsed)) {
     return false;
   }
-  const normalized = normalizeLowercaseStringOrEmpty(parsed.toString());
+  const normalizedIp = normalizeLowercaseStringOrEmpty(parsed.toString());
   return (
-    normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd")
+    normalizedIp.startsWith("fe80:") ||
+    normalizedIp.startsWith("fc") ||
+    normalizedIp.startsWith("fd")
   );
 }
 
 function isMobilePairingCleartextAllowedHost(host: string): boolean {
-  return isLoopbackHost(host) || host === "10.0.2.2" || isPrivateLanIpHost(host);
+  const normalized = normalizeMobilePairingHost(host);
+  return isLoopbackHost(normalized) || normalized === "10.0.2.2" || isPrivateLanHost(normalized);
 }
 
 function validateMobilePairingUrl(url: string, source?: string): string | null {

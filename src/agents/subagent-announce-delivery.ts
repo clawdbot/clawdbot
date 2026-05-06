@@ -6,6 +6,7 @@ import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   mergeDeliveryContext,
@@ -689,6 +690,14 @@ function hasGatewayAgentMessagingToolDelivery(response: unknown): boolean {
   return Boolean(result && hasMessagingToolDeliveryEvidence(result));
 }
 
+function isGatewayAgentRunPending(response: unknown): boolean {
+  if (!response || typeof response !== "object") {
+    return false;
+  }
+  const status = (response as { status?: unknown }).status;
+  return isNonTerminalAgentRunStatus(status);
+}
+
 function inferCompletionChatType(params: {
   requesterSessionKey: string;
   targetRequesterSessionKey: string;
@@ -1047,7 +1056,11 @@ async function sendSubagentAnnounceDirectly(params: {
       throw err;
     }
 
-    if (shouldSendCompletionFallback(directAnnounceResponse, completionFallbackText)) {
+    const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
+    if (
+      !directAnnounceStillPending &&
+      shouldSendCompletionFallback(directAnnounceResponse, completionFallbackText)
+    ) {
       const didFallback = await sendCompletionFallback({
         cfg,
         channel: deliveryTarget.channel,
@@ -1066,6 +1079,13 @@ async function sendSubagentAnnounceDirectly(params: {
           path: resolveCompletionFallbackPath(deliveryTarget.threadId),
         };
       }
+    }
+
+    if (directAnnounceStillPending) {
+      return {
+        delivered: true,
+        path: "direct",
+      };
     }
 
     if (

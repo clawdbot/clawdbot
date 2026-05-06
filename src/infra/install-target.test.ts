@@ -3,12 +3,12 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
-const fileExistsMock = vi.hoisted(() => vi.fn());
+const pathExistsMock = vi.hoisted(() => vi.fn());
 const resolveSafeInstallDirMock = vi.hoisted(() => vi.fn());
 const assertCanonicalPathWithinBaseMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./archive.js", () => ({
-  fileExists: (...args: unknown[]) => fileExistsMock(...args),
+vi.mock("./fs-safe.js", () => ({
+  pathExists: (...args: unknown[]) => pathExistsMock(...args),
 }));
 
 vi.mock("./install-safe-path.js", () => ({
@@ -19,7 +19,7 @@ vi.mock("./install-safe-path.js", () => ({
 import { ensureInstallTargetAvailable, resolveCanonicalInstallTarget } from "./install-target.js";
 
 beforeEach(() => {
-  fileExistsMock.mockReset();
+  pathExistsMock.mockReset();
   resolveSafeInstallDirMock.mockReset();
   assertCanonicalPathWithinBaseMock.mockReset();
 });
@@ -99,8 +99,8 @@ describe("resolveCanonicalInstallTarget", () => {
 
 describe("ensureInstallTargetAvailable", () => {
   it("blocks only install mode when the target already exists", async () => {
-    fileExistsMock.mockResolvedValueOnce(true);
-    fileExistsMock.mockResolvedValueOnce(false);
+    pathExistsMock.mockResolvedValueOnce(true);
+    pathExistsMock.mockResolvedValueOnce(false);
 
     await expect(
       ensureInstallTargetAvailable({

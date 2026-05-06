@@ -1,3 +1,4 @@
+import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -52,6 +53,7 @@ function resolveDirectFromActiveRegistry(
 export function resolveOutboundChannelPlugin(params: {
   channel: string;
   cfg?: OpenClawConfig;
+  allowBootstrap?: boolean;
 }): ChannelPlugin | undefined {
   const normalized = normalizeDeliverableOutboundChannel(params.channel);
   if (!normalized) {
@@ -69,6 +71,18 @@ export function resolveOutboundChannelPlugin(params: {
     return directCurrent;
   }
 
+  if (params.allowBootstrap !== true) {
+    return resolve();
+  }
+
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
   return resolveLoaded() ?? resolveDirectFromActiveRegistry(normalized) ?? resolve();
+}
+
+export function resolveOutboundChannelMessageAdapter(params: {
+  channel: string;
+  cfg?: OpenClawConfig;
+  allowBootstrap?: boolean;
+}): ChannelMessageAdapterShape | undefined {
+  return resolveOutboundChannelPlugin(params)?.message;
 }

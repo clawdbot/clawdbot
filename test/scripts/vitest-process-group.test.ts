@@ -96,4 +96,46 @@ describe("vitest process group helpers", () => {
     expect(listeners.get("SIGTERM")?.size ?? 0).toBe(0);
     expect(listeners.get("exit")?.size ?? 0).toBe(0);
   });
+
+  it("raises process listener limits for highly parallel cleanup handlers", () => {
+    const listeners = new Map<string, Set<() => void>>();
+    let maxListeners = 10;
+    const fakeProcess = {
+      getMaxListeners: () => maxListeners,
+      setMaxListeners: vi.fn((value: number) => {
+        maxListeners = value;
+        return fakeProcess;
+      }),
+      listenerCount(event: string) {
+        return listeners.get(event)?.size ?? 0;
+      },
+      on(event: string, handler: () => void) {
+        const set = listeners.get(event) ?? new Set();
+        set.add(handler);
+        listeners.set(event, set);
+      },
+      off(event: string, handler: () => void) {
+        listeners.get(event)?.delete(handler);
+      },
+    };
+
+    const teardowns = Array.from({ length: 12 }, (_, index) =>
+      installVitestProcessGroupCleanup({
+        child: { pid: 4200 + index },
+        processObject: fakeProcess as unknown as NodeJS.Process,
+        platform: "darwin",
+        kill: vi.fn(),
+      }),
+    );
+
+    expect(maxListeners).toBeGreaterThan(10);
+    expect(fakeProcess.setMaxListeners).toHaveBeenCalled();
+
+    for (const teardown of teardowns) {
+      teardown();
+    }
+    expect(listeners.get("SIGINT")?.size ?? 0).toBe(0);
+    expect(listeners.get("SIGTERM")?.size ?? 0).toBe(0);
+    expect(listeners.get("exit")?.size ?? 0).toBe(0);
+  });
 });

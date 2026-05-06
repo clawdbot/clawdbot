@@ -12,10 +12,13 @@ import https from "node:https";
 import { isIP } from "node:net";
 import { bootstrap as bootstrapGlobalAgent } from "global-agent";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
+
+export type ProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
 import { logInfo, logWarn } from "../../../logger.js";
 import { isLoopbackIpAddress } from "../../../shared/net/ip.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 import {
+  getActiveManagedProxyLoopbackMode,
   getActiveManagedProxyUrl,
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
@@ -39,7 +42,7 @@ const PROXY_ENV_KEYS = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"
 const GLOBAL_AGENT_PROXY_KEYS = ["GLOBAL_AGENT_HTTP_PROXY", "GLOBAL_AGENT_HTTPS_PROXY"] as const;
 const GLOBAL_AGENT_FORCE_KEYS = ["GLOBAL_AGENT_FORCE_GLOBAL_AGENT"] as const;
 const NO_PROXY_ENV_KEYS = ["no_proxy", "NO_PROXY", "GLOBAL_AGENT_NO_PROXY"] as const;
-const PROXY_ACTIVE_KEYS = ["OPENCLAW_PROXY_ACTIVE"] as const;
+const PROXY_ACTIVE_KEYS = ["OPENCLAW_PROXY_ACTIVE", "OPENCLAW_PROXY_LOOPBACK_MODE"] as const;
 const ALL_PROXY_ENV_KEYS = [
   ...PROXY_ENV_KEYS,
   ...GLOBAL_AGENT_PROXY_KEYS,
@@ -47,19 +50,8 @@ const ALL_PROXY_ENV_KEYS = [
   ...NO_PROXY_ENV_KEYS,
   ...PROXY_ACTIVE_KEYS,
 ] as const;
-const GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS = [
-  ...ALL_PROXY_ENV_KEYS,
-  "all_proxy",
-  "ALL_PROXY",
-] as const;
 type ProxyEnvKey = (typeof ALL_PROXY_ENV_KEYS)[number];
 type ProxyEnvSnapshot = Record<ProxyEnvKey, string | undefined>;
-type GatewayControlPlaneProxyBypassEnvKey =
-  (typeof GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS)[number];
-type GatewayControlPlaneProxyBypassEnvSnapshot = Record<
-  GatewayControlPlaneProxyBypassEnvKey,
-  string | undefined
->;
 type NodeHttpStackSnapshot = {
   httpRequest: typeof http.request;
   httpGet: typeof http.get;
@@ -107,16 +99,17 @@ function captureProxyEnv(): ProxyEnvSnapshot {
     NO_PROXY: process.env["NO_PROXY"],
     GLOBAL_AGENT_NO_PROXY: process.env["GLOBAL_AGENT_NO_PROXY"],
     OPENCLAW_PROXY_ACTIVE: process.env["OPENCLAW_PROXY_ACTIVE"],
+    OPENCLAW_PROXY_LOOPBACK_MODE: process.env["OPENCLAW_PROXY_LOOPBACK_MODE"],
   };
 }
 
-function injectProxyEnv(proxyUrl: string): ProxyEnvSnapshot {
+function injectProxyEnv(proxyUrl: string, loopbackMode: ProxyLoopbackMode): ProxyEnvSnapshot {
   const snapshot = captureProxyEnv();
-  applyProxyEnv(proxyUrl);
+  applyProxyEnv(proxyUrl, loopbackMode);
   return snapshot;
 }
 
-function applyProxyEnv(proxyUrl: string): void {
+function applyProxyEnv(proxyUrl: string, loopbackMode: ProxyLoopbackMode): void {
   for (const key of PROXY_ENV_KEYS) {
     process.env[key] = proxyUrl;
   }
@@ -125,6 +118,7 @@ function applyProxyEnv(proxyUrl: string): void {
   }
   process.env["GLOBAL_AGENT_FORCE_GLOBAL_AGENT"] = "true";
   process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
+  process.env["OPENCLAW_PROXY_LOOPBACK_MODE"] = loopbackMode;
   for (const key of NO_PROXY_ENV_KEYS) {
     process.env[key] = "";
   }
@@ -138,39 +132,6 @@ function restoreProxyEnv(snapshot: ProxyEnvSnapshot): void {
     } else {
       process.env[key] = value;
     }
-  }
-}
-
-function captureGatewayControlPlaneProxyBypassEnv(): GatewayControlPlaneProxyBypassEnvSnapshot {
-  const snapshot = {} as GatewayControlPlaneProxyBypassEnvSnapshot;
-  for (const key of GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS) {
-    snapshot[key] = process.env[key];
-  }
-  return snapshot;
-}
-
-function restoreGatewayControlPlaneProxyBypassEnv(
-  snapshot: GatewayControlPlaneProxyBypassEnvSnapshot,
-): void {
-  for (const key of GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS) {
-    const value = snapshot[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
-
-function withoutGatewayControlPlaneProxyEnv<T>(run: () => T): T {
-  const snapshot = captureGatewayControlPlaneProxyBypassEnv();
-  for (const key of GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS) {
-    delete process.env[key];
-  }
-  try {
-    return run();
-  } finally {
-    restoreGatewayControlPlaneProxyBypassEnv(snapshot);
   }
 }
 
@@ -387,15 +348,28 @@ function redactProxyUrlForLog(value: string): string {
   }
 }
 
+export function ensureInheritedManagedProxyRoutingActive(): void {
+  if (process.env["OPENCLAW_PROXY_ACTIVE"] !== "1") {
+    return;
+  }
+  const proxyUrl = process.env["GLOBAL_AGENT_HTTP_PROXY"] ?? process.env["HTTP_PROXY"];
+  if (!proxyUrl || !isSupportedProxyUrl(proxyUrl)) {
+    return;
+  }
+  bootstrapNodeHttpStack(proxyUrl);
+  forceResetGlobalDispatcher();
+}
+
 export async function startProxy(config: ProxyConfig | undefined): Promise<ProxyHandle | null> {
   if (config?.enabled !== true) {
     return null;
   }
 
   const proxyUrl = resolveProxyUrl(config);
+  const loopbackMode = config.loopbackMode ?? "gateway-only";
   const activeProxyUrl = getActiveManagedProxyUrl();
   if (activeProxyUrl) {
-    const registration = registerActiveManagedProxyUrl(new URL(proxyUrl));
+    const registration = registerActiveManagedProxyUrl(new URL(proxyUrl), loopbackMode);
     const handle: ProxyHandle = {
       proxyUrl,
       injectedProxyUrl: proxyUrl,
@@ -415,10 +389,10 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   let registration: ActiveManagedProxyRegistration | null = null;
 
   try {
-    injectedEnvSnapshot = injectProxyEnv(proxyUrl);
+    injectedEnvSnapshot = injectProxyEnv(proxyUrl, loopbackMode);
     forceResetGlobalDispatcher();
     bootstrapNodeHttpStack(proxyUrl);
-    registration = registerActiveManagedProxyUrl(new URL(proxyUrl));
+    registration = registerActiveManagedProxyUrl(new URL(proxyUrl), loopbackMode);
   } catch (err) {
     restoreAfterFailedProxyActivation(lifecycleBaseEnvSnapshot);
     throw new Error(`proxy: failed to activate external proxy routing: ${String(err)}`, {
@@ -456,73 +430,134 @@ export async function stopProxy(handle: ProxyHandle | null): Promise<void> {
   await handle.stop();
 }
 
-function isGatewayLoopbackControlPlaneUrl(value: string): boolean {
-  let url: URL;
+function parseGatewayControlPlaneUrl(value: string): URL | null {
   try {
-    url = new URL(value);
+    return new URL(value);
   } catch {
-    return false;
+    return null;
   }
+}
+
+function isGatewayControlPlaneProtocol(protocol: string): boolean {
+  return protocol === "ws:" || protocol === "wss:" || protocol === "http:" || protocol === "https:";
+}
+
+function getGatewayControlPlaneNoProxyAuthority(value: string): string | null {
+  const url = parseGatewayControlPlaneUrl(value);
   if (
-    url.protocol !== "ws:" &&
-    url.protocol !== "wss:" &&
-    url.protocol !== "http:" &&
-    url.protocol !== "https:"
+    url === null ||
+    !isGatewayControlPlaneProtocol(url.protocol) ||
+    !isGatewayControlPlaneLoopbackHost(url.hostname)
+  ) {
+    return null;
+  }
+  return url.port ? `${url.hostname}:${url.port}` : url.hostname;
+}
+
+function unbracketHost(hostname: string): string {
+  return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+}
+
+function isGatewayControlPlaneIpv6LoopbackUrl(value: string): boolean {
+  const url = parseGatewayControlPlaneUrl(value);
+  if (
+    url === null ||
+    !isGatewayControlPlaneProtocol(url.protocol) ||
+    !isGatewayControlPlaneLoopbackHost(url.hostname)
   ) {
     return false;
   }
-  return isGatewayControlPlaneLoopbackHost(url.hostname);
+  return isIP(unbracketHost(url.hostname)) === 6;
+}
+
+function readGlobalAgentNoProxy(): string {
+  const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"];
+  if (!isRecord(agent)) {
+    return "";
+  }
+  return typeof agent["NO_PROXY"] === "string" ? agent["NO_PROXY"] : "";
+}
+
+function writeGlobalAgentNoProxy(value: string): void {
+  const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"];
+  if (isRecord(agent)) {
+    agent["NO_PROXY"] = value === "" ? null : value;
+  }
+}
+
+function appendNoProxyAuthority(noProxy: string, authority: string): string {
+  const entries = noProxy.split(/[\s,]+/).filter(Boolean);
+  return entries.includes(authority) ? noProxy : [...entries, authority].join(",");
+}
+
+function disableGlobalAgentProxyForIpv6GatewayLoopback(url: string): (() => void) | undefined {
+  if (
+    getActiveManagedProxyLoopbackMode() !== "gateway-only" ||
+    !isGatewayControlPlaneIpv6LoopbackUrl(url)
+  ) {
+    return undefined;
+  }
+  const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"];
+  if (!isRecord(agent)) {
+    return undefined;
+  }
+
+  const previousHttpProxy = agent["HTTP_PROXY"];
+  const previousHttpsProxy = agent["HTTPS_PROXY"];
+  agent["HTTP_PROXY"] = null;
+  agent["HTTPS_PROXY"] = null;
+  let stopped = false;
+  return () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    agent["HTTP_PROXY"] = previousHttpProxy;
+    agent["HTTPS_PROXY"] = previousHttpsProxy;
+  };
+}
+
+export function registerManagedProxyGatewayLoopbackNoProxy(url: string): (() => void) | undefined {
+  const authority = getGatewayControlPlaneNoProxyAuthority(url);
+  if (!authority) {
+    return undefined;
+  }
+  const loopbackMode = getActiveManagedProxyLoopbackMode();
+  if (loopbackMode === "block") {
+    throw new Error(
+      "proxy: Gateway loopback control-plane connections are blocked by proxy.loopbackMode",
+    );
+  }
+  if (loopbackMode === "proxy") {
+    return undefined;
+  }
+
+  const previousNoProxy = readGlobalAgentNoProxy();
+  writeGlobalAgentNoProxy(appendNoProxyAuthority(previousNoProxy, authority));
+  let stopped = false;
+  return () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    writeGlobalAgentNoProxy(previousNoProxy);
+  };
+}
+
+export function withManagedProxyGatewayLoopbackRouting<T>(url: string, run: () => T): T {
+  let unregisterNoProxy: (() => void) | undefined;
+  let restoreIpv6Bypass: (() => void) | undefined;
+  try {
+    unregisterNoProxy = registerManagedProxyGatewayLoopbackNoProxy(url);
+    restoreIpv6Bypass = disableGlobalAgentProxyForIpv6GatewayLoopback(url);
+    return run();
+  } finally {
+    restoreIpv6Bypass?.();
+    unregisterNoProxy?.();
+  }
 }
 
 function isGatewayControlPlaneLoopbackHost(hostname: string): boolean {
   const normalizedHost = hostname.trim().toLowerCase().replace(/\.+$/, "");
   return normalizedHost === "localhost" || isLoopbackIpAddress(hostname);
-}
-
-export function dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane<T>(
-  url: string,
-  run: () => T,
-): T {
-  if (!isGatewayLoopbackControlPlaneUrl(url)) {
-    throw new Error("proxy: dangerous Gateway control-plane bypass is loopback-only");
-  }
-
-  const snapshot = nodeHttpStackSnapshot;
-  if (!snapshot) {
-    return withoutGatewayControlPlaneProxyEnv(run);
-  }
-
-  // Security-sensitive: this temporarily removes managed proxy hooks for the
-  // synchronous Gateway loopback WebSocket constructor only. Do not reuse this
-  // helper for provider, plugin, user WebUI, model server, or arbitrary egress.
-  return withoutGatewayControlPlaneProxyEnv(() => {
-    const activeStack = captureNodeHttpStack();
-    const globalRecord = global as Record<string, unknown>;
-    try {
-      http.request = snapshot.httpRequest;
-      http.get = snapshot.httpGet;
-      http.globalAgent = snapshot.httpGlobalAgent;
-      https.request = snapshot.httpsRequest;
-      https.get = snapshot.httpsGet;
-      https.globalAgent = snapshot.httpsGlobalAgent;
-      if (snapshot.hadGlobalAgent) {
-        globalRecord["GLOBAL_AGENT"] = snapshot.globalAgent;
-      } else {
-        delete globalRecord["GLOBAL_AGENT"];
-      }
-      return run();
-    } finally {
-      http.request = activeStack.httpRequest;
-      http.get = activeStack.httpGet;
-      http.globalAgent = activeStack.httpGlobalAgent;
-      https.request = activeStack.httpsRequest;
-      https.get = activeStack.httpsGet;
-      https.globalAgent = activeStack.httpsGlobalAgent;
-      if (activeStack.hadGlobalAgent) {
-        globalRecord["GLOBAL_AGENT"] = activeStack.globalAgent;
-      } else {
-        delete globalRecord["GLOBAL_AGENT"];
-      }
-    }
-  });
 }

@@ -8,7 +8,7 @@ read_when:
 title: "OAuth"
 ---
 
-OpenClaw supports “subscription auth” via OAuth for providers that offer it
+OpenClaw supports "subscription auth" via OAuth for providers that offer it
 (notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic, the practical split
 is now:
 
@@ -25,7 +25,7 @@ For Anthropic in production, API key auth is the safer recommended path.
 - where tokens are **stored** (and why)
 - how to handle **multiple accounts** (profiles + per-session overrides)
 
-OpenClaw also supports **provider plugins** that ship their own OAuth or API‑key
+OpenClaw also supports **provider plugins** that ship their own OAuth or API-key
 flows. Run them via:
 
 ```bash
@@ -38,7 +38,7 @@ OAuth providers commonly mint a **new refresh token** during login/refresh flows
 
 Practical symptom:
 
-- you log in via OpenClaw _and_ via Claude Code / Codex CLI → one of them randomly gets “logged out” later
+- you log in via OpenClaw _and_ via Claude Code / Codex CLI → one of them randomly gets "logged out" later
 
 To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
 
@@ -105,7 +105,7 @@ Claude login on the host, onboarding/configure can reuse it directly.
 
 ## OAuth exchange (how login works)
 
-OpenClaw’s interactive login flows are implemented in `@mariozechner/pi-ai` and wired into the wizards/commands.
+OpenClaw's interactive login flows are implemented in `@mariozechner/pi-ai` and wired into the wizards/commands.
 
 ### Anthropic setup-token
 
@@ -125,7 +125,7 @@ Flow shape (PKCE):
 1. generate PKCE verifier/challenge + random `state`
 2. open `https://auth.openai.com/oauth/authorize?...`
 3. try to capture callback on `http://127.0.0.1:1455/auth/callback`
-4. if callback can’t bind (or you’re remote/headless), paste the redirect URL/code
+4. if callback can't bind (or you're remote/headless), paste the redirect URL/code
 5. exchange at `https://auth.openai.com/oauth/token`
 6. extract `accountId` from the access token and store `{ access, refresh, expires, accountId }`
 
@@ -156,7 +156,7 @@ Two patterns:
 
 ### 1) Preferred: separate agents
 
-If you want “personal” and “work” to never interact, use isolated agents (separate sessions + credentials + workspace):
+If you want "personal" and "work" to never interact, use isolated agents (separate sessions + credentials + workspace):
 
 ```bash
 openclaw agents add work
@@ -189,6 +189,6 @@ Related docs:
 
 ## Related
 
-- [Authentication](/gateway/authentication) — model provider auth overview
-- [Secrets](/gateway/secrets) — credential storage and SecretRef
-- [Configuration Reference](/gateway/configuration-reference#auth-storage) — auth config keys
+- [Authentication](/gateway/authentication) - model provider auth overview
+- [Secrets](/gateway/secrets) - credential storage and SecretRef
+- [Configuration Reference](/gateway/configuration-reference#auth-storage) - auth config keys

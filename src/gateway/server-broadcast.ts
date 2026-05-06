@@ -32,6 +32,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   presence: [],
   shutdown: [],
   tick: [],
+  "talk.event": [READ_SCOPE],
   "talk.mode": [WRITE_SCOPE],
   "update.available": [],
   "voicewake.changed": [READ_SCOPE],

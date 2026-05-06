@@ -89,6 +89,9 @@ export function shouldStartProxyForCli(argv: string[]): boolean {
   if (invocation.hasHelpOrVersion || !primary) {
     return false;
   }
+  if (invocation.commandPath.length === 1 && primary === "channels") {
+    return false;
+  }
   return resolveCliNetworkProxyPolicy(policyArgv) === "default";
 }
 
