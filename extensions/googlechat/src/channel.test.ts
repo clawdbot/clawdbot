@@ -272,14 +272,14 @@ describe("googlechatPlugin outbound sendMedia", () => {
             cfg,
             to: "spaces/AAA",
             text: "threaded",
-            threadId: "thread-1",
+            threadId: "spaces/AAA/threads/thread-1",
           });
           const request = requireMockArg(sendGoogleChatMessageMock) as {
             space?: string;
             thread?: string;
           };
           expect(request.space).toBe("spaces/AAA");
-          expect(request.thread).toBe("thread-1");
+          expect(request.thread).toBe("spaces/AAA/threads/thread-1");
         },
         messageSendingHooks: () => {
           expect(googlechatMessageAdapter.send?.text).toBeTypeOf("function");
