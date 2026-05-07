@@ -735,6 +735,54 @@ describe("memory tools", () => {
     }
   });
 
+  it("preserves sibling supplement results when one corpus=all supplement rejects (#77897)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      registerMemoryCorpusSupplement("healthy-wiki", {
+        search: async () => [
+          {
+            corpus: "wiki",
+            path: "entities/healthy.md",
+            title: "Healthy",
+            kind: "entity",
+            score: 1.1,
+            snippet: "Healthy supplement result",
+          },
+        ],
+        get: async () => null,
+      });
+      registerMemoryCorpusSupplement("broken-wiki", {
+        search: async () => {
+          throw new Error("corpus backend unavailable");
+        },
+        get: async () => null,
+      });
+
+      const tool = createMemorySearchToolOrThrow();
+      const result = await tool.execute("call_all_partial_supplement_failure", {
+        query: "healthy",
+        corpus: "all",
+        maxResults: 3,
+      });
+      const details = result.details as { results: Array<{ corpus: string; path: string }> };
+
+      expect(details.results.map((entry) => [entry.corpus, entry.path])).toContainEqual([
+        "wiki",
+        "entities/healthy.md",
+      ]);
+      expect(details.results.map((entry) => [entry.corpus, entry.path])).toContainEqual([
+        "memory",
+        "MEMORY.md",
+      ]);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const message = String(warnSpy.mock.calls[0]?.[0] ?? "");
+      expect(message).toContain('corpus supplement "broken-wiki" search failed');
+      expect(message).toContain("corpus backend unavailable");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("falls back to a wiki corpus supplement for memory_get corpus=all", async () => {
     setMemoryReadFileImpl(async () => {
       throw new Error("path required");
