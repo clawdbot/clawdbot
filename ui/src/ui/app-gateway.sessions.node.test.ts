@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 const loadSessionsMock = vi.fn();
 const loadChatHistoryMock = vi.fn();
@@ -38,6 +38,7 @@ vi.mock("./controllers/exec-approval.ts", () => ({
   addExecApproval: vi.fn(),
   parseExecApprovalRequested: vi.fn(() => null),
   parseExecApprovalResolved: vi.fn(() => null),
+  pruneExecApprovalQueue: vi.fn((queue) => queue),
   removeExecApproval: vi.fn(),
 }));
 vi.mock("./controllers/nodes.ts", () => ({
@@ -57,6 +58,21 @@ const { handleGatewayEvent } = await import("./app-gateway.ts");
 const { addExecApproval } = await vi.importActual<typeof import("./controllers/exec-approval.ts")>(
   "./controllers/exec-approval.ts",
 );
+
+afterAll(() => {
+  vi.doUnmock("./app-chat.ts");
+  vi.doUnmock("./app-settings.ts");
+  vi.doUnmock("./app-tool-stream.ts");
+  vi.doUnmock("./controllers/agents.ts");
+  vi.doUnmock("./controllers/assistant-identity.ts");
+  vi.doUnmock("./controllers/chat.ts");
+  vi.doUnmock("./controllers/devices.ts");
+  vi.doUnmock("./controllers/exec-approval.ts");
+  vi.doUnmock("./controllers/nodes.ts");
+  vi.doUnmock("./controllers/sessions.ts");
+  vi.doUnmock("./gateway.ts");
+  vi.resetModules();
+});
 
 function createHost() {
   return {

@@ -22,6 +22,7 @@ export {
   resolveWritablePathWithinRoot,
   FsSafeError,
   SsrFBlockedError,
+  writeExternalFileWithinRoot,
   writeViaSiblingTempPath,
   wrapExternalContent,
 } from "openclaw/plugin-sdk/security-runtime";

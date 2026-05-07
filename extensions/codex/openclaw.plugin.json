@@ -130,6 +130,11 @@
             "minimum": 1,
             "default": 60000
           },
+          "turnCompletionIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 60000
+          },
           "approvalPolicy": {
             "type": "string",
             "enum": ["never", "on-request", "on-failure", "untrusted"]
@@ -268,6 +273,11 @@
     "appServer.requestTimeoutMs": {
       "label": "Request Timeout",
       "help": "Maximum time to wait for Codex app-server control-plane requests.",
+      "advanced": true
+    },
+    "appServer.turnCompletionIdleTimeoutMs": {
+      "label": "Turn Completion Idle Timeout",
+      "help": "Maximum quiet time after a turn-scoped Codex app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
       "advanced": true
     },
     "appServer.approvalPolicy": {

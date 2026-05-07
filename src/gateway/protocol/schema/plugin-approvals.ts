@@ -14,6 +14,12 @@ export const PluginApprovalRequestParamsSchema = Type.Object(
     severity: Type.Optional(Type.String({ enum: ["info", "warning", "critical"] })),
     toolName: Type.Optional(Type.String()),
     toolCallId: Type.Optional(Type.String()),
+    allowedDecisions: Type.Optional(
+      Type.Array(Type.String({ enum: ["allow-once", "allow-always", "deny"] }), {
+        minItems: 1,
+        maxItems: 3,
+      }),
+    ),
     agentId: Type.Optional(Type.String()),
     sessionKey: Type.Optional(Type.String()),
     turnSourceChannel: Type.Optional(Type.String()),

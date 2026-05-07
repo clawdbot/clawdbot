@@ -95,6 +95,16 @@ function normalizeDiscordCredentialPayload(
     "sutApplicationId",
     createFailure,
   );
+  const voiceChannelId =
+    typeof payload.voiceChannelId === "string" && payload.voiceChannelId.trim()
+      ? payload.voiceChannelId.trim()
+      : undefined;
+  if (voiceChannelId && !DISCORD_SNOWFLAKE_RE.test(voiceChannelId)) {
+    throwPayloadError(
+      createFailure,
+      'Credential payload for kind "discord" must include "voiceChannelId" as a Discord snowflake string when set.',
+    );
+  }
   const driverBotToken = requirePayloadString(payload, "driverBotToken", "discord", createFailure);
   const sutBotToken = requirePayloadString(payload, "sutBotToken", "discord", createFailure);
 
@@ -104,6 +114,7 @@ function normalizeDiscordCredentialPayload(
     driverBotToken,
     sutBotToken,
     sutApplicationId,
+    ...(voiceChannelId ? { voiceChannelId } : {}),
   } satisfies Record<string, unknown>;
 }
 

@@ -221,7 +221,7 @@ function toSystemAuditFindings(params: {
   severityFilter?: TaskSystemAuditSeverity;
   codeFilter?: TaskSystemAuditCode;
 }) {
-  const taskFindings = listTaskAuditFindings();
+  const taskFindings = listTaskAuditFindings({ tasks: reconcileInspectableTasks() });
   const flowFindings = listTaskFlowAuditFindings();
   const allFindings: TaskSystemAuditFinding[] = [
     ...taskFindings.map((finding) => ({

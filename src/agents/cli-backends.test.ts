@@ -307,6 +307,7 @@ beforeEach(() => {
         systemPromptFileConfigKey: "model_instructions_file",
         systemPromptWhen: "first",
         imagePathScope: "workspace",
+        clearEnv: ["CODEX_API_KEY", "OPENAI_API_KEY"],
         reliability: {
           watchdog: {
             fresh: {
@@ -401,6 +402,8 @@ describe("resolveCliBackendConfig reliability merge", () => {
       'service_tier="fast"',
       "--skip-git-repo-check",
     ]);
+    expect(resolved?.config.clearEnv).toContain("OPENAI_API_KEY");
+    expect(resolved?.config.clearEnv).toContain("CODEX_API_KEY");
   });
 
   it("deep-merges reliability watchdog overrides for codex", () => {

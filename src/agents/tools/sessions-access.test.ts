@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
+  createSessionVisibilityRowChecker,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxSessionToolsVisibility,
   resolveSessionToolsVisibility,
@@ -109,6 +110,175 @@ describe("createAgentToAgentPolicy", () => {
 });
 
 describe("createSessionVisibilityGuard", () => {
+  it("allows cross-agent spawned child rows in list results with tree visibility", () => {
+    const guard = createSessionVisibilityRowChecker({
+      action: "list",
+      requesterSessionKey: "agent:main:main",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(
+      guard.check({
+        key: "agent:codex:acp:child-1",
+        spawnedBy: "agent:main:main",
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  it("allows cross-agent spawned child rows in all-visibility list results when a2a is disabled", () => {
+    const guard = createSessionVisibilityRowChecker({
+      action: "list",
+      requesterSessionKey: "agent:main:main",
+      visibility: "all",
+      a2aPolicy: createAgentToAgentPolicy({
+        tools: { agentToAgent: { enabled: false } },
+      } as unknown as OpenClawConfig),
+    });
+
+    expect(
+      guard.check({
+        key: "agent:codex:acp:child-1",
+        spawnedBy: "agent:main:main",
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  it("keeps agent visibility same-agent-only for cross-agent owned child rows", () => {
+    const guard = createSessionVisibilityRowChecker({
+      action: "list",
+      requesterSessionKey: "agent:main:main",
+      visibility: "agent",
+      a2aPolicy: createAgentToAgentPolicy({
+        tools: { agentToAgent: { enabled: true, allow: ["main", "codex"] } },
+      } as unknown as OpenClawConfig),
+    });
+
+    expect(
+      guard.check({
+        key: "agent:codex:acp:child-1",
+        spawnedBy: "agent:main:main",
+      }),
+    ).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session list visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.",
+    });
+  });
+
+  it("does not do spawned lookup for list visibility without row metadata", async () => {
+    const callGateway = vi.fn(async () => ({
+      sessions: [{ key: "agent:codex:acp:child-1" }],
+    }));
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: callGateway as never,
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "list",
+      requesterSessionKey: "agent:main:main",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:child-1")).toMatchObject({ allowed: false });
+    expect(callGateway).not.toHaveBeenCalled();
+
+    sessionsResolutionTesting.setDepsForTest();
+  });
+
+  it("allows cross-agent spawned child sessions with tree visibility", async () => {
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async (request: { method?: string; params?: { spawnedBy?: string } }) => {
+        if (request.method === "sessions.list") {
+          expect(request.params?.spawnedBy).toBe("agent:main:main");
+          return {
+            sessions: [{ key: "agent:codex:acp:child-1" }],
+          };
+        }
+        return {};
+      }) as never,
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "history",
+      requesterSessionKey: "agent:main:main",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:child-1")).toEqual({ allowed: true });
+
+    sessionsResolutionTesting.setDepsForTest();
+  });
+
+  it("keeps self visibility restricted even for spawned child sessions", async () => {
+    const guard = await createSessionVisibilityGuard({
+      action: "history",
+      requesterSessionKey: "agent:main:main",
+      visibility: "self",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:child-1")).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.",
+    });
+  });
+
+  it("allows cross-agent spawned child sessions before agent-to-agent checks with all visibility", async () => {
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async (request: { method?: string; params?: { spawnedBy?: string } }) => {
+        if (request.method === "sessions.list") {
+          expect(request.params?.spawnedBy).toBe("agent:main:main");
+          return {
+            sessions: [{ key: "agent:codex:acp:child-1" }],
+          };
+        }
+        return {};
+      }) as never,
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "send",
+      requesterSessionKey: "agent:main:main",
+      visibility: "all",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:child-1")).toEqual({ allowed: true });
+
+    sessionsResolutionTesting.setDepsForTest();
+  });
+
+  it("allows cross-agent spawned child status before agent-to-agent checks with all visibility", async () => {
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async (request: { method?: string; params?: { spawnedBy?: string } }) => {
+        if (request.method === "sessions.list") {
+          expect(request.params?.spawnedBy).toBe("agent:main:main");
+          return {
+            sessions: [{ key: "agent:codex:acp:child-1" }],
+          };
+        }
+        return {};
+      }) as never,
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "status",
+      requesterSessionKey: "agent:main:main",
+      visibility: "all",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:child-1")).toEqual({ allowed: true });
+
+    sessionsResolutionTesting.setDepsForTest();
+  });
+
   it("does not block exact same-agent spawned targets that fall past the spawned list cap", async () => {
     sessionsResolutionTesting.setDepsForTest({
       callGateway: vi.fn(async (request: { method?: string; params?: { key?: string } }) => {

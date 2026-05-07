@@ -1,10 +1,13 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,
   WAMessage,
 } from "@whiskeysockets/baileys";
 import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-message";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";
 
@@ -371,5 +374,88 @@ describe("createWebSendApi", () => {
         }),
       }),
     );
+  });
+});
+
+// Integration tests for issue #67378: createWebSendApi must route outbound
+// PN-only sends through the LID forward-mapping when authDir is provided,
+// otherwise messages going to LID-addressed contacts vanish into a
+// sender-only ghost chat.
+describe("createWebSendApi LID resolution (issue #67378)", () => {
+  const sendMessage = vi.fn(async () => ({ key: { id: "msg-1" } }));
+  const sendPresenceUpdate = vi.fn(async () => {});
+  let authDir: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    authDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-lid-"));
+    fs.writeFileSync(path.join(authDir, "lid-mapping-15555550000.json"), JSON.stringify("987654"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(authDir, { recursive: true, force: true });
+  });
+
+  it("resolves PN to LID for sendMessage when authDir is provided", async () => {
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      authDir,
+    });
+    await api.sendMessage("+15555550000", "hello");
+    expect(sendMessage).toHaveBeenCalledWith("987654@lid", { text: "hello" });
+  });
+
+  it("falls back to PN s.whatsapp.net when no LID mapping exists", async () => {
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      authDir,
+    });
+    await api.sendMessage("+33123456789", "hello");
+    expect(sendMessage).toHaveBeenCalledWith("33123456789@s.whatsapp.net", { text: "hello" });
+  });
+
+  it("resolves PN to LID for sendPoll", async () => {
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      authDir,
+    });
+    await api.sendPoll("+15555550000", { question: "Q?", options: ["a", "b"] });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "987654@lid",
+      expect.objectContaining({ poll: expect.any(Object) }),
+    );
+  });
+
+  it("resolves PN to LID for sendComposingTo presence", async () => {
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      authDir,
+    });
+    await api.sendComposingTo("+15555550000");
+    expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "987654@lid");
+  });
+
+  it("skips newsletter composing presence when authDir is provided", async () => {
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      authDir,
+    });
+    await api.sendComposingTo("120363401234567890@newsletter");
+    expect(sendPresenceUpdate).not.toHaveBeenCalled();
+  });
+
+  it("preserves legacy behavior (no authDir → PN-only routing)", async () => {
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      // authDir intentionally omitted
+    });
+    await api.sendMessage("+15555550000", "hello");
+    expect(sendMessage).toHaveBeenCalledWith("15555550000@s.whatsapp.net", { text: "hello" });
   });
 });

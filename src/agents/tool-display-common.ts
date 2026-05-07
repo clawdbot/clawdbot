@@ -34,14 +34,15 @@ export function defaultTitle(name: string): string {
   if (!cleaned) {
     return "Tool";
   }
-  return cleaned
-    .split(/\s+/)
-    .map((part) =>
+  const parts: string[] = [];
+  for (const part of cleaned.split(/\s+/)) {
+    parts.push(
       part.length <= 2 && part.toUpperCase() === part
         ? part
         : `${part.at(0)?.toUpperCase() ?? ""}${part.slice(1)}`,
-    )
-    .join(" ");
+    );
+  }
+  return parts.join(" ");
 }
 
 function normalizeVerb(value?: string): string | undefined {
@@ -131,14 +132,23 @@ function coerceDisplayValue(
     return String(value);
   }
   if (Array.isArray(value)) {
-    const values = value
-      .map((item) => coerceDisplayValue(item, opts))
-      .filter((item): item is string => Boolean(item));
-    if (values.length === 0) {
+    const values: string[] = [];
+    let displayValueCount = 0;
+    for (const item of value) {
+      const display = coerceDisplayValue(item, opts);
+      if (!display) {
+        continue;
+      }
+      displayValueCount += 1;
+      if (values.length < maxArrayEntries) {
+        values.push(display);
+      }
+    }
+    if (displayValueCount === 0) {
       return undefined;
     }
-    const preview = values.slice(0, maxArrayEntries).join(", ");
-    return values.length > maxArrayEntries ? `${preview}…` : preview;
+    const preview = values.join(", ");
+    return displayValueCount > maxArrayEntries ? `${preview}…` : preview;
   }
   return undefined;
 }
@@ -162,8 +172,13 @@ function lookupValueByPath(args: unknown, path: string): unknown {
 }
 
 export function formatDetailKey(raw: string, overrides: Record<string, string> = {}): string {
-  const segments = raw.split(".").filter(Boolean);
-  const last = segments.at(-1) ?? raw;
+  let last = "";
+  for (const segment of raw.split(".")) {
+    if (segment) {
+      last = segment;
+    }
+  }
+  last ||= raw;
   const override = overrides[last];
   if (override) {
     return override;
@@ -295,12 +310,13 @@ function resolveWebFetchDetail(args: unknown): string | undefined {
       ? Math.floor(record.maxChars)
       : undefined;
 
-  const suffix = [
-    mode ? `mode ${mode}` : undefined,
-    maxChars !== undefined ? `max ${maxChars} chars` : undefined,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(", ");
+  let suffix = "";
+  if (mode) {
+    suffix = `mode ${mode}`;
+  }
+  if (maxChars !== undefined) {
+    suffix = suffix ? `${suffix}, max ${maxChars} chars` : `max ${maxChars} chars`;
+  }
 
   return suffix ? `from ${url} (${suffix})` : `from ${url}`;
 }
@@ -366,10 +382,15 @@ function resolveDetailFromKeys(
     return undefined;
   }
 
-  return unique
-    .slice(0, opts.maxEntries ?? 8)
-    .map((entry) => `${entry.label} ${entry.value}`)
-    .join(" · ");
+  const maxEntries = opts.maxEntries ?? 8;
+  const parts: string[] = [];
+  for (let index = 0; index < unique.length && index < maxEntries; index += 1) {
+    const entry = unique[index];
+    if (entry) {
+      parts.push(`${entry.label} ${entry.value}`);
+    }
+  }
+  return parts.join(" · ");
 }
 
 function resolveToolVerbAndDetail(params: {
@@ -438,11 +459,16 @@ export function formatToolDetailText(
     return undefined;
   }
   const normalized = detail.includes(" · ")
-    ? detail
-        .split(" · ")
-        .map((part) => part.trim())
-        .filter((part) => part.length > 0)
-        .join(", ")
+    ? (() => {
+        const parts: string[] = [];
+        for (const part of detail.split(" · ")) {
+          const trimmed = part.trim();
+          if (trimmed) {
+            parts.push(trimmed);
+          }
+        }
+        return parts.join(", ");
+      })()
     : detail;
   if (!normalized) {
     return undefined;

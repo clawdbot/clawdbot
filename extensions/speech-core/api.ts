@@ -43,6 +43,8 @@ export type {
   SpeechProviderResolveTalkConfigContext,
   SpeechProviderResolveTalkOverridesContext,
   SpeechSynthesisRequest,
+  SpeechSynthesisStreamRequest,
+  SpeechSynthesisStreamResult,
   SpeechSynthesisTarget,
   SpeechTelephonySynthesisRequest,
   SpeechVoiceOption,

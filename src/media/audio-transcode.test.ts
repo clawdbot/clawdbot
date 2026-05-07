@@ -94,6 +94,6 @@ describe("transcodeAudioBufferToOpus", () => {
 
     const tempRoot = realpathSync(resolvePreferredOpenClawTmpDir());
     expect(capturedInputPath?.startsWith(tempRoot)).toBe(true);
-    expect(capturedOutputPath?.startsWith(tempRoot)).toBe(true);
+    expect(capturedOutputPath ? existsSync(capturedOutputPath) : true).toBe(false);
   });
 });

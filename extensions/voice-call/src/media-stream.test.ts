@@ -202,6 +202,9 @@ describe("MediaStreamHandler security hardening", () => {
         }),
       );
       await flush();
+      await vi.waitFor(() => {
+        expect(talkEvents.some((event) => event.type === "session.ready")).toBe(true);
+      });
 
       ws.send(
         JSON.stringify({

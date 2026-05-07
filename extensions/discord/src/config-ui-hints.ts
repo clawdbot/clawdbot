@@ -201,6 +201,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Voice Reconnect Grace (ms)",
     help: "Grace period for a disconnected Discord voice session to enter Signalling or Connecting before OpenClaw destroys it. Default: 15000.",
   },
+  "voice.captureSilenceGraceMs": {
+    label: "Discord Voice Capture Silence Grace (ms)",
+    help: "Silence window after Discord reports a speaker ended before OpenClaw finalizes the audio segment for transcription. Default: 2500.",
+  },
   "voice.tts": {
     label: "Discord Voice Text-to-Speech",
     help: "Optional TTS overrides for Discord voice playback (merged with messages.tts).",

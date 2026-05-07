@@ -169,6 +169,35 @@ describe("handleCommands /plugins install", () => {
     });
   });
 
+  it("refuses plugin installs in Nix mode before package installer side effects", async () => {
+    const previousNixMode = process.env.OPENCLAW_NIX_MODE;
+    process.env.OPENCLAW_NIX_MODE = "1";
+    try {
+      await withTempHome("openclaw-command-plugins-home-", async () => {
+        const workspaceDir = await workspaceHarness.createWorkspace();
+        const params = buildPluginsParams("/plugins install @acme/demo", workspaceDir);
+        const result = await handlePluginsCommand(params, true);
+        if (result === null) {
+          throw new Error("expected plugin install result");
+        }
+
+        expect(result.reply?.text).toContain("OPENCLAW_NIX_MODE=1");
+        expect(result.reply?.text).toContain("nix-openclaw#quick-start");
+        expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+        expect(installPluginFromPathMock).not.toHaveBeenCalled();
+        expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+        expect(installPluginFromGitSpecMock).not.toHaveBeenCalled();
+        expect(persistPluginInstallMock).not.toHaveBeenCalled();
+      });
+    } finally {
+      if (previousNixMode === undefined) {
+        delete process.env.OPENCLAW_NIX_MODE;
+      } else {
+        process.env.OPENCLAW_NIX_MODE = previousNixMode;
+      }
+    }
+  });
+
   it("installs from an explicit git: spec", async () => {
     installPluginFromGitSpecMock.mockResolvedValue({
       ok: true,

@@ -6,8 +6,9 @@ describe("safe npm install helpers", () => {
     expect(
       createSafeNpmInstallArgs({
         omitDev: true,
-        ignoreWorkspaces: true,
+        omitPeer: true,
         legacyPeerDeps: true,
+        ignoreWorkspaces: true,
         loglevel: "error",
         noAudit: true,
         noFund: true,
@@ -15,8 +16,9 @@ describe("safe npm install helpers", () => {
     ).toEqual([
       "install",
       "--omit=dev",
-      "--loglevel=error",
+      "--omit=peer",
       "--legacy-peer-deps",
+      "--loglevel=error",
       "--ignore-scripts",
       "--workspaces=false",
       "--no-audit",

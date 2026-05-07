@@ -152,8 +152,8 @@ Slack-only:
 Legacy key migration:
 
 - Telegram: legacy `streamMode` and scalar/boolean `streaming` values are detected and migrated by doctor/config compatibility paths to `streaming.mode`.
-- Discord: `streamMode` + boolean `streaming` auto-migrate to `streaming` enum.
-- Slack: `streamMode` auto-migrates to `streaming.mode`; boolean `streaming` auto-migrates to `streaming.mode` plus `streaming.nativeTransport`; legacy `nativeStreaming` auto-migrates to `streaming.nativeTransport`.
+- Discord: `streamMode` + boolean `streaming` remain runtime aliases for the `streaming` enum; run `openclaw doctor --fix` to rewrite persisted config.
+- Slack: `streamMode` remains a runtime alias for `streaming.mode`; boolean `streaming` remains a runtime alias for `streaming.mode` plus `streaming.nativeTransport`; legacy `nativeStreaming` remains a runtime alias for `streaming.nativeTransport`. Run `openclaw doctor --fix` to rewrite persisted config.
 
 ### Runtime behavior
 

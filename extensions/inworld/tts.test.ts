@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -44,9 +44,14 @@ function readRequestBody(request: GuardRequest): string {
   return body;
 }
 
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
+
 describe("listInworldVoices", () => {
   afterEach(() => {
-    fetchWithSsrFGuardMock.mockClear();
+    fetchWithSsrFGuardMock.mockReset();
     vi.restoreAllMocks();
   });
 
@@ -157,7 +162,7 @@ describe("listInworldVoices", () => {
 
 describe("inworldTTS", () => {
   afterEach(() => {
-    fetchWithSsrFGuardMock.mockClear();
+    fetchWithSsrFGuardMock.mockReset();
     vi.restoreAllMocks();
   });
 

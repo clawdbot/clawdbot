@@ -31,6 +31,14 @@ export type SessionAccessResult =
   | { allowed: true }
   | { allowed: false; error: string; status: "forbidden" };
 
+export type SessionVisibilityRow = {
+  key: string;
+  agentId?: string;
+  ownerSessionKey?: string;
+  spawnedBy?: string;
+  parentSessionKey?: string;
+};
+
 export async function listSpawnedSessionKeys(params: {
   requesterSessionKey: string;
   limit?: number;
@@ -191,11 +199,56 @@ export function createSessionVisibilityChecker(params: {
   a2aPolicy: AgentToAgentPolicy;
   spawnedKeys: Set<string> | null;
 }): { check: (targetSessionKey: string) => SessionAccessResult } {
-  const requesterAgentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
   const spawnedKeys = params.spawnedKeys;
+  const rowChecker = createSessionVisibilityRowChecker({
+    action: params.action,
+    requesterSessionKey: params.requesterSessionKey,
+    visibility: params.visibility,
+    a2aPolicy: params.a2aPolicy,
+  });
 
   const check = (targetSessionKey: string): SessionAccessResult => {
-    const targetAgentId = resolveAgentIdFromSessionKey(targetSessionKey);
+    const isSpawnedSession = spawnedKeys?.has(targetSessionKey) === true;
+    return rowChecker.check({
+      key: targetSessionKey,
+      spawnedBy: isSpawnedSession ? params.requesterSessionKey : undefined,
+    });
+  };
+
+  return { check };
+}
+
+function rowOwnedByRequester(row: SessionVisibilityRow, requesterSessionKey: string): boolean {
+  return (
+    row.ownerSessionKey === requesterSessionKey ||
+    row.spawnedBy === requesterSessionKey ||
+    row.parentSessionKey === requesterSessionKey
+  );
+}
+
+export function createSessionVisibilityRowChecker(params: {
+  action: SessionAccessAction;
+  requesterSessionKey: string;
+  visibility: SessionToolsVisibility;
+  a2aPolicy: AgentToAgentPolicy;
+}): { check: (row: SessionVisibilityRow) => SessionAccessResult } {
+  const requesterAgentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
+
+  const check = (row: SessionVisibilityRow): SessionAccessResult => {
+    const targetSessionKey = row.key;
+    const targetAgentId = row.agentId ?? resolveAgentIdFromSessionKey(targetSessionKey);
+    const isRequesterSession =
+      targetSessionKey === params.requesterSessionKey || targetSessionKey === "current";
+    const isRequesterOwned = rowOwnedByRequester(row, params.requesterSessionKey);
+    // Row ownership is stronger than agent ids: ACP children may use a backend
+    // agent id while still belonging to the requester that spawned them.
+    if (
+      !isRequesterSession &&
+      isRequesterOwned &&
+      (params.visibility === "tree" || params.visibility === "all")
+    ) {
+      return { allowed: true };
+    }
     const isCrossAgent = targetAgentId !== requesterAgentId;
     if (isCrossAgent) {
       if (params.visibility !== "all") {
@@ -222,7 +275,7 @@ export function createSessionVisibilityChecker(params: {
       return { allowed: true };
     }
 
-    if (params.visibility === "self" && targetSessionKey !== params.requesterSessionKey) {
+    if (params.visibility === "self" && !isRequesterSession) {
       return {
         allowed: false,
         status: "forbidden",
@@ -230,11 +283,7 @@ export function createSessionVisibilityChecker(params: {
       };
     }
 
-    if (
-      params.visibility === "tree" &&
-      targetSessionKey !== params.requesterSessionKey &&
-      !spawnedKeys?.has(targetSessionKey)
-    ) {
+    if (params.visibility === "tree" && !isRequesterSession && !isRequesterOwned) {
       return {
         allowed: false,
         status: "forbidden",
@@ -256,8 +305,10 @@ export async function createSessionVisibilityGuard(params: {
 }): Promise<{
   check: (targetSessionKey: string) => SessionAccessResult;
 }> {
+  // Listing already has row ownership metadata; direct key actions still need
+  // this lookup until every caller can pass a normalized session row.
   const spawnedKeys =
-    params.visibility === "tree"
+    params.action !== "list" && (params.visibility === "tree" || params.visibility === "all")
       ? await listSpawnedSessionKeys({ requesterSessionKey: params.requesterSessionKey })
       : null;
   return createSessionVisibilityChecker({

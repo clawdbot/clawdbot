@@ -215,4 +215,47 @@ describe("diagnostics timeline", () => {
       name: "plugins.metadata.scan",
     });
   });
+
+  it("lets nested spans inherit the active timeline phase and parent span", async () => {
+    const { env, path } = await createTimelineEnv();
+
+    const result = await measureDiagnosticsTimelineSpan(
+      "reply.run_agent_turn",
+      () =>
+        measureDiagnosticsTimelineSpanSync("plugins.metadata.scan", () => 42, {
+          env,
+        }),
+      {
+        env,
+        phase: "agent-turn",
+      },
+    );
+
+    expect(result).toBe(42);
+    const events = await readTimeline(path);
+    expect(events).toHaveLength(4);
+    const [parentStart, childStart, childEnd, parentEnd] = events;
+    expect(parentStart).toMatchObject({
+      type: "span.start",
+      name: "reply.run_agent_turn",
+      phase: "agent-turn",
+    });
+    expect(childStart).toMatchObject({
+      type: "span.start",
+      name: "plugins.metadata.scan",
+      phase: "agent-turn",
+      parentSpanId: parentStart?.spanId,
+    });
+    expect(childEnd).toMatchObject({
+      type: "span.end",
+      name: "plugins.metadata.scan",
+      phase: "agent-turn",
+      parentSpanId: parentStart?.spanId,
+    });
+    expect(parentEnd).toMatchObject({
+      type: "span.end",
+      name: "reply.run_agent_turn",
+      phase: "agent-turn",
+    });
+  });
 });

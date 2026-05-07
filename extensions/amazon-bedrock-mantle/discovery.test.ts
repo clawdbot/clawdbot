@@ -28,6 +28,9 @@ describe("bedrock mantle discovery", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    resetMantleDiscoveryCacheForTest();
+    resetIamTokenCacheForTest();
     process.env = originalEnv;
   });
 

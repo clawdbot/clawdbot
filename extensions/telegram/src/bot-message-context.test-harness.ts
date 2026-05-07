@@ -18,6 +18,8 @@ type BuildTelegramMessageContextForTestParams = {
   options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
   accountId?: string;
+  ackReactionScope?: BuildTelegramMessageContextParams["ackReactionScope"];
+  botApi?: Record<string, unknown>;
   runtime?: BuildTelegramMessageContextParams["runtime"];
   sessionRuntime?: BuildTelegramMessageContextParams["sessionRuntime"] | null;
   resolveGroupActivation?: BuildTelegramMessageContextParams["resolveGroupActivation"];
@@ -67,6 +69,7 @@ export async function buildTelegramMessageContextForTest(
       api: {
         sendChatAction: vi.fn(),
         setMessageReaction: vi.fn(),
+        ...params.botApi,
       },
     } as never,
     cfg: (params.cfg ?? baseTelegramMessageContextConfig) as never,
@@ -82,7 +85,7 @@ export async function buildTelegramMessageContextForTest(
     dmPolicy: "open",
     allowFrom: ["*"],
     groupAllowFrom: [],
-    ackReactionScope: "off",
+    ackReactionScope: params.ackReactionScope ?? "off",
     logger: { info: vi.fn() },
     resolveGroupActivation: params.resolveGroupActivation ?? (() => undefined),
     resolveGroupRequireMention: params.resolveGroupRequireMention ?? (() => false),

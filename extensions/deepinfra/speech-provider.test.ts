@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { buildDeepInfraSpeechProvider } from "./speech-provider.js";
 
 const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
@@ -18,6 +18,11 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   postJsonRequest: postJsonRequestMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/provider-http");
+  vi.resetModules();
+});
 
 describe("deepinfra speech provider", () => {
   afterEach(() => {

@@ -543,13 +543,14 @@ describe("createEmbeddedLobsterRunner", () => {
       runToolRequest: vi.fn(
         async ({ ctx }: { ctx?: { signal?: AbortSignal } }) =>
           await new Promise((resolve, reject) => {
-            ctx?.signal?.addEventListener("abort", () => {
-              reject(ctx.signal?.reason ?? new Error("aborted"));
-            });
-            setTimeout(
+            const timeout = setTimeout(
               () => resolve({ ok: true, status: "ok", output: [], requiresApproval: null }),
               500,
             );
+            ctx?.signal?.addEventListener("abort", () => {
+              clearTimeout(timeout);
+              reject(ctx.signal?.reason ?? new Error("aborted"));
+            });
           }),
       ),
       resumeToolRequest: vi.fn(),

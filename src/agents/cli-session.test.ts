@@ -128,7 +128,7 @@ describe("cli-session helpers", () => {
       resolveCliSessionReuse({
         binding,
         authProfileId: "anthropic:personal",
-        authEpoch: "auth-epoch-a",
+        authEpoch: "auth-epoch-b",
         authEpochVersion: 2,
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
@@ -164,6 +164,28 @@ describe("cli-session helpers", () => {
         mcpConfigHash: "mcp-b",
       }),
     ).toEqual({ invalidatedReason: "mcp" });
+  });
+
+  it("reuses when auth profile ids rotate but the versioned auth epoch is stable", () => {
+    const binding = {
+      sessionId: "cli-session-1",
+      authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
+      authEpochVersion: 2,
+      extraSystemPromptHash: "prompt-a",
+      mcpConfigHash: "mcp-a",
+    };
+
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work-alias",
+        authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
+        extraSystemPromptHash: "prompt-a",
+        mcpConfigHash: "mcp-a",
+      }),
+    ).toEqual({ sessionId: "cli-session-1" });
   });
 
   it("accepts unversioned auth epochs for binding upgrades", () => {

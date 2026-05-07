@@ -22,6 +22,7 @@ openclaw channels list
 openclaw channels status
 openclaw channels capabilities
 openclaw channels capabilities --channel discord --target channel:123
+openclaw channels capabilities --channel discord --target channel:<voice-channel-id>
 openclaw channels resolve --channel slack "#general" "@jane"
 openclaw channels logs --channel all
 ```
@@ -124,7 +125,7 @@ Notes:
 
 - `--channel` is optional; omit it to list every channel (including extensions).
 - `--account` is only valid with `--channel`.
-- `--target` accepts `channel:<id>` or a raw numeric channel id and only applies to Discord.
+- `--target` accepts `channel:<id>` or a raw numeric channel id and only applies to Discord. For Discord voice channels, the permission check flags missing `ViewChannel`, `Connect`, `Speak`, `SendMessages`, and `ReadMessageHistory`.
 - Probes are provider-specific: Discord intents + optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; Microsoft Teams app token + Graph roles/scopes (annotated where known). Channels without probes report `Probe: unavailable`.
 
 ## Resolve names to IDs

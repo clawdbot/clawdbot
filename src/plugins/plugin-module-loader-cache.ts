@@ -49,7 +49,6 @@ export type PluginModuleLoaderStatsSnapshot = {
 
 const DEFAULT_PLUGIN_MODULE_LOADER_CACHE_ENTRIES = 128;
 const MAX_TRACKED_SOURCE_TRANSFORM_TARGETS = 24;
-const JITI_FACTORY_OVERRIDE_KEY = Symbol.for("openclaw.pluginModuleLoaderJitiFactoryOverride");
 const PLUGIN_SDK_IMPORT_SPECIFIER_PATTERN =
   /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(?:openclaw|@openclaw)\/plugin-sdk(?:\/[^"']*)?["']/u;
 const requireForJiti = createRequire(import.meta.url);
@@ -106,14 +105,6 @@ export function resetPluginModuleLoaderStatsForTest(): void {
 }
 
 function loadCreateJitiLoaderFactory(): PluginModuleLoaderFactory {
-  const override = (
-    globalThis as typeof globalThis & {
-      [JITI_FACTORY_OVERRIDE_KEY]?: PluginModuleLoaderFactory;
-    }
-  )[JITI_FACTORY_OVERRIDE_KEY];
-  if (override) {
-    return override;
-  }
   if (createJitiLoaderFactory) {
     return createJitiLoaderFactory;
   }

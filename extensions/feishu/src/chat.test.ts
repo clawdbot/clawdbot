@@ -1,5 +1,5 @@
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, PluginRuntime } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -35,6 +35,11 @@ describe("registerFeishuChatTools", () => {
 
   beforeAll(async () => {
     ({ registerFeishuChatTools } = await import("./chat.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./client.js");
+    vi.resetModules();
   });
 
   beforeEach(() => {

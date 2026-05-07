@@ -25,6 +25,17 @@ const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
+const ensureCodexRuntimePluginForModelSelection = vi.hoisted(() =>
+  vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+    cfg,
+    required: false,
+    installed: false,
+  })),
+);
+
+vi.mock("./codex-runtime-plugin-install.js", () => ({
+  ensureCodexRuntimePluginForModelSelection,
+}));
 
 vi.mock("../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntry: vi.fn(() => undefined),
@@ -98,7 +109,7 @@ vi.mock("../plugins/provider-auth-helpers.js", () => ({
     params: {
       profileId: string;
       provider: string;
-      mode: "api_key" | "oauth" | "token";
+      mode: "api_key" | "aws-sdk" | "oauth" | "token";
       email?: string;
       displayName?: string;
     },
@@ -639,6 +650,7 @@ describe("applyAuthChoice", () => {
     resolvePluginProviders.mockReset();
     resolvePluginProviders.mockReturnValue(defaultProviderPlugins);
     runProviderModelSelectedHook.mockClear();
+    ensureCodexRuntimePluginForModelSelection.mockClear();
     detectZaiEndpoint.mockReset();
     detectZaiEndpoint.mockResolvedValue(null);
     testAuthProfileStores.clear();

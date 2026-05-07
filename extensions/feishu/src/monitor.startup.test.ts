@@ -1,5 +1,5 @@
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 
@@ -50,6 +50,13 @@ async function waitForStartedAccount(started: string[], accountId: string) {
 
 afterEach(() => {
   stopFeishuMonitor();
+});
+
+afterAll(() => {
+  vi.doUnmock("./probe.js");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./runtime.js");
+  vi.resetModules();
 });
 
 describe("Feishu monitor startup preflight", () => {

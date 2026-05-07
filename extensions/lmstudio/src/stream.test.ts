@@ -1,6 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() => vi.fn());
@@ -26,6 +26,12 @@ vi.mock("./runtime.js", async (importOriginal) => {
     resolveLmstudioProviderHeaders: (params: unknown) => resolveLmstudioProviderHeadersMock(params),
     resolveLmstudioRuntimeApiKey: (params: unknown) => resolveLmstudioRuntimeApiKeyMock(params),
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("./models.fetch.js");
+  vi.doUnmock("./runtime.js");
+  vi.resetModules();
 });
 
 type StreamEvent = { type: string } & Record<string, unknown>;
@@ -108,6 +114,7 @@ describe("lmstudio stream wrapper", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     ensureLmstudioModelLoadedMock.mockReset();
     resolveLmstudioProviderHeadersMock.mockReset();
     resolveLmstudioRuntimeApiKeyMock.mockReset();

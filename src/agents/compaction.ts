@@ -177,7 +177,12 @@ export function splitMessagesByTokenShare(
       const stopReason = (message as { stopReason?: unknown }).stopReason;
       const keepsPending =
         stopReason !== "aborted" && stopReason !== "error" && toolCalls.length > 0;
-      pendingToolCallIds = keepsPending ? new Set(toolCalls.map((t) => t.id)) : new Set();
+      pendingToolCallIds = new Set();
+      if (keepsPending) {
+        for (const toolCall of toolCalls) {
+          pendingToolCallIds.add(toolCall.id);
+        }
+      }
       pendingChunkStartIndex = keepsPending ? current.length - 1 : null;
     } else if (message.role === "toolResult" && pendingToolCallIds.size > 0) {
       const resultId = extractToolResultId(message);

@@ -6,6 +6,14 @@ import {
   discoverChutesModels,
 } from "./models.js";
 
+function restoreEnvVar(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
+
 async function withLiveChutesDiscovery<T>(
   fetchMock: ReturnType<typeof vi.fn>,
   run: () => Promise<T>,
@@ -24,8 +32,8 @@ async function withLiveChutesDiscovery<T>(
   try {
     return await run();
   } finally {
-    process.env.NODE_ENV = oldNodeEnv;
-    process.env.VITEST = oldVitest;
+    restoreEnvVar("NODE_ENV", oldNodeEnv);
+    restoreEnvVar("VITEST", oldVitest);
     vi.unstubAllGlobals();
     if (options?.now) {
       vi.useRealTimers();

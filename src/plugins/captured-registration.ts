@@ -41,6 +41,7 @@ import type {
 
 type CapturedPluginCliRegistration = {
   register: OpenClawPluginCliRegistrar;
+  parentPath: string[];
   commands: string[];
   descriptors: OpenClawPluginCliCommandDescriptor[];
 };
@@ -156,6 +157,9 @@ export function createCapturedPluginRegistration(params?: {
       resolvePath: (input) => input,
       handlers: {
         registerCli(registrar, opts) {
+          const parentPath = (opts?.parentPath ?? [])
+            .map((segment) => segment.trim())
+            .filter(Boolean);
           const descriptors = (opts?.descriptors ?? [])
             .map((descriptor) => ({
               name: descriptor.name.trim(),
@@ -174,6 +178,7 @@ export function createCapturedPluginRegistration(params?: {
           }
           cliRegistrars.push({
             register: registrar,
+            parentPath,
             commands,
             descriptors,
           });

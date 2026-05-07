@@ -40,6 +40,11 @@ Use `--agent <id>` to inspect a configured agent's model/auth state. When omitte
 the command uses `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` if set, otherwise the
 configured default agent.
 Probe rows can come from auth profiles, env credentials, or `models.json`.
+For Codex OAuth troubleshooting, `openclaw models status`,
+`openclaw models auth list --provider openai-codex`, and
+`openclaw config get agents.defaults.model --json` are the quickest way to
+confirm whether an agent has a usable `openai-codex` auth profile for
+`openai/*` through the native Codex runtime. See [OpenAI provider setup](/providers/openai#check-and-recover-codex-oauth-routing).
 
 Notes:
 

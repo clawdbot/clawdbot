@@ -10,12 +10,13 @@ import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
   applyPrimaryModel,
+  ensureCodexRuntimePluginForModelSelection,
   promptDefaultModel,
   promptModelAllowlist,
 } from "./model-picker.js";
 import { loadStaticManifestCatalogRowsForList } from "./models/list.manifest-catalog.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
-import { randomToken } from "./onboard-helpers.js";
+import { randomToken } from "./random-token.js";
 
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 type ProviderChoiceModelPrompt = {
@@ -217,6 +218,15 @@ export async function promptAuthConfig(
       }
       if (modelSelection.model) {
         next = applyPrimaryModel(next, modelSelection.model);
+        next = (
+          await ensureCodexRuntimePluginForModelSelection({
+            cfg: next,
+            model: modelSelection.model,
+            prompter,
+            runtime,
+            workspaceDir: resolveDefaultAgentWorkspaceDir(),
+          })
+        ).cfg;
       }
       break;
     }

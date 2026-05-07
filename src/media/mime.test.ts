@@ -207,6 +207,7 @@ describe("normalizeMimeType", () => {
 
   it.each([
     { input: "Audio/MP4; codecs=mp4a.40.2", expected: "audio/mp4" },
+    { input: "image/apng", expected: "image/png" },
     { input: "   ", expected: undefined },
     { input: null, expected: undefined },
     { input: undefined, expected: undefined },

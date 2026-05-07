@@ -80,8 +80,12 @@ heartbeat.unref?.();
 child.on("exit", (code, signal) => {
   clearInterval(heartbeat);
   if (signal) {
+    process.stderr.write(`[test:live] vitest exited via signal=${signal}\n`);
     process.kill(process.pid, signal);
     return;
+  }
+  if ((code ?? 1) !== 0) {
+    process.stderr.write(`[test:live] vitest exited code=${code ?? 1}\n`);
   }
   process.exit(code ?? 1);
 });

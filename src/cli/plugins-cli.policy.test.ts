@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   buildPluginRegistrySnapshotReport,
@@ -11,6 +11,8 @@ import {
   writeConfigFile,
 } from "./plugins-cli-test-helpers.js";
 
+const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
+
 describe("plugins cli policy mutations", () => {
   const compatibilityPluginIds = [
     { alias: "openai-codex", pluginId: "openai" },
@@ -20,6 +22,14 @@ describe("plugins cli policy mutations", () => {
 
   beforeEach(() => {
     resetPluginsCliTestState();
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {
+      delete process.env.OPENCLAW_NIX_MODE;
+    } else {
+      process.env.OPENCLAW_NIX_MODE = ORIGINAL_OPENCLAW_NIX_MODE;
+    }
   });
 
   function mockPluginRegistry(ids: string[]) {
@@ -60,6 +70,25 @@ describe("plugins cli policy mutations", () => {
       policyPluginIds: ["alpha"],
       reason: "policy-changed",
     });
+  });
+
+  it("refuses plugin enablement in Nix mode before config mutation", async () => {
+    const previous = process.env.OPENCLAW_NIX_MODE;
+    process.env.OPENCLAW_NIX_MODE = "1";
+    try {
+      await expect(runPluginsCommand(["plugins", "enable", "alpha"])).rejects.toThrow(
+        "OPENCLAW_NIX_MODE=1",
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_NIX_MODE;
+      } else {
+        process.env.OPENCLAW_NIX_MODE = previous;
+      }
+    }
+
+    expect(enablePluginInConfig).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("refreshes the persisted plugin registry after disabling a plugin", async () => {

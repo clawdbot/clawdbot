@@ -7,7 +7,10 @@ import {
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
-import { readCodexCliCredentialsCached } from "./cli-credentials.js";
+import {
+  readClaudeCliCredentialsCached,
+  readCodexCliCredentialsCached,
+} from "./cli-credentials.js";
 import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "./model-auth.js";
 import { normalizeProviderId } from "./model-selection.js";
 
@@ -79,6 +82,12 @@ export function resolveModelAuthLabel(params: {
     readCodexCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
   ) {
     return "oauth (codex-cli)";
+  }
+  if (
+    providerKey === "claude-cli" &&
+    readClaudeCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
+  ) {
+    return "oauth (claude-cli)";
   }
 
   const customKey = resolveUsableCustomProviderApiKey({

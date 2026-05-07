@@ -808,8 +808,8 @@ describe("resolveNodeCommandAllowlist", () => {
       },
     );
 
-    expect(allow.has("canvas.present")).toBe(true);
-    expect(allow.has("canvas.a2ui.pushJSONL")).toBe(true);
+    expect(allow.has("canvas.present")).toBe(false);
+    expect(allow.has("canvas.a2ui.pushJSONL")).toBe(false);
     expect(allow.has("camera.list")).toBe(true);
     expect(allow.has("location.get")).toBe(true);
     expect(allow.has("device.info")).toBe(true);

@@ -32,6 +32,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Owner boundary: fix owner-specific behavior in the owner module. Shared/core gets generic seams only; no owner ids, dependency strings, defaults, migrations, or recovery policy. If a bug names an extension or its dependency, start in that extension and add a generic core seam only when multiple owners need it.
 - Dependency ownership follows runtime ownership: extension-only deps stay plugin-local; root deps only for core imports or intentionally internalized bundled plugin runtime.
 - Legacy config repair: doctor/fix paths, not startup/load-time core migrations.
+- No legacy compatibility in core/runtime paths. When old config/store shapes need support, add an `openclaw doctor --fix` rewrite/repair rule with tests and keep runtime code on the canonical contract.
 - Core test asserting extension-specific behavior: move to owner extension or generic contract test.
 - New seams: backwards-compatible, documented, versioned. Third-party plugins exist.
 - Channels: `src/channels/**` is implementation; plugin authors get SDK seams.
@@ -189,7 +190,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Mac gateway: dev watch = `pnpm gateway:watch` (tmux `openclaw-gateway-watch-main`, auto-attach). Noninteractive: `OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch`; attach/stop: `tmux attach -t openclaw-gateway-watch-main` / `tmux kill-session -t openclaw-gateway-watch-main`. Managed installs: `openclaw gateway restart/status --deep`. No launchd/ad-hoc tmux. Logs: `./scripts/clawlog.sh`.
 - Version bump touches: `package.json`, `apps/android/app/build.gradle.kts`, `apps/ios/version.json` + `pnpm ios:version:sync`, macOS `Info.plist`, `docs/install/updating.md`. Appcast only for Sparkle release.
 - Mobile LAN pairing: plaintext `ws://` loopback-only. Private-network `ws://` needs `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`; Tailscale/public use `wss://` or tunnel.
-- A2UI hash `src/canvas-host/a2ui/.bundle.hash`: generated; ignore unless running `pnpm canvas:a2ui:bundle`; commit separately.
+- A2UI hash `extensions/canvas/src/host/a2ui/.bundle.hash`: generated; ignore unless running `pnpm canvas:a2ui:bundle`; commit separately.
 
 ## Ops / Footguns
 

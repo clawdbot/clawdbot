@@ -1268,9 +1268,7 @@ function itemOutputText(item: CodexThreadItem): string | undefined {
   return undefined;
 }
 
-function collectDynamicToolContentText(
-  contentItems: Extract<CodexThreadItem, { type: "dynamicToolCall" }>["contentItems"],
-): string {
+function collectDynamicToolContentText(contentItems: CodexThreadItem["contentItems"]): string {
   if (!Array.isArray(contentItems)) {
     return "";
   }

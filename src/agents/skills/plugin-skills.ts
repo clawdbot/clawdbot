@@ -27,6 +27,9 @@ export function resolvePluginSkillDirs(params: {
 }): string[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir) {
+    publishPluginSkills([], {
+      pluginSkillsDir: params.pluginSkillsDir,
+    });
     return [];
   }
   const config = params.config ?? {};

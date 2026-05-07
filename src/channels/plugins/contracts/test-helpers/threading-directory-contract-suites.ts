@@ -9,16 +9,11 @@ import type {
 } from "../../types.core.js";
 import type { ChannelPlugin } from "../../types.js";
 
-let contractRuntime: RuntimeEnv | undefined;
-
-async function getDirectoryContractRuntime(): Promise<RuntimeEnv> {
-  if (contractRuntime) {
-    return contractRuntime;
-  }
-  const { createNonExitingRuntime } = await import("../../../../runtime.js");
-  contractRuntime = createNonExitingRuntime();
-  return contractRuntime;
-}
+const contractRuntime = new Proxy(Object.create(null), {
+  get(_target, property) {
+    throw new Error(`Directory contract unexpectedly accessed runtime.${String(property)}`);
+  },
+}) as RuntimeEnv;
 
 function expectDirectoryEntryShape(entry: ChannelDirectoryEntry) {
   expect(["user", "group", "channel"]).toContain(entry.kind);
@@ -193,11 +188,10 @@ export async function expectChannelDirectoryBaseContract(params: {
   if (params.coverage === "presence") {
     return;
   }
-  const runtime = await getDirectoryContractRuntime();
   const self = await directory?.self?.({
     cfg,
     accountId,
-    runtime,
+    runtime: contractRuntime,
   });
   if (self) {
     expectDirectoryEntryShape(self);
@@ -209,7 +203,7 @@ export async function expectChannelDirectoryBaseContract(params: {
       accountId,
       query: "",
       limit: 5,
-      runtime,
+      runtime: contractRuntime,
     })) ?? [];
   expect(Array.isArray(peers)).toBe(true);
   for (const peer of peers) {
@@ -222,7 +216,7 @@ export async function expectChannelDirectoryBaseContract(params: {
       accountId,
       query: "",
       limit: 5,
-      runtime,
+      runtime: contractRuntime,
     })) ?? [];
   expect(Array.isArray(groups)).toBe(true);
   for (const group of groups) {
@@ -235,7 +229,7 @@ export async function expectChannelDirectoryBaseContract(params: {
       accountId,
       groupId: groups[0].id,
       limit: 5,
-      runtime,
+      runtime: contractRuntime,
     });
     expect(Array.isArray(members)).toBe(true);
     for (const member of members) {

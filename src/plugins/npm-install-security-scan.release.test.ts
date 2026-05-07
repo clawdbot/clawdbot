@@ -20,7 +20,7 @@ type PublishablePluginPackage = {
 };
 
 const execFileAsync = promisify(execFile);
-const PACKAGE_SCAN_CONCURRENCY = 6;
+const PACKAGE_SCAN_CONCURRENCY = 12;
 
 const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS = new Set([
   "@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts",

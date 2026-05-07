@@ -131,6 +131,7 @@ describe("media-generation runtime shared candidates", () => {
   });
 
   it("disables implicit provider expansion when mediaGenerationAutoProviderFallback=false", () => {
+    let listProviderCalls = 0;
     const candidates = resolveCapabilityModelCandidates({
       cfg: {
         agents: {
@@ -143,16 +144,20 @@ describe("media-generation runtime shared candidates", () => {
         primary: "google/gemini-3.1-flash-image-preview",
       },
       parseModelRef,
-      listProviders: () => [
-        {
-          id: "openai",
-          defaultModel: "gpt-image-1",
-          isConfigured: () => true,
-        },
-      ],
+      listProviders: () => {
+        listProviderCalls += 1;
+        return [
+          {
+            id: "openai",
+            defaultModel: "gpt-image-1",
+            isConfigured: () => true,
+          },
+        ];
+      },
     });
 
     expect(candidates).toEqual([{ provider: "google", model: "gemini-3.1-flash-image-preview" }]);
+    expect(listProviderCalls).toBe(0);
   });
 
   it("treats an explicit model override as exact-only", () => {
@@ -180,6 +185,27 @@ describe("media-generation runtime shared candidates", () => {
     });
 
     expect(candidates).toEqual([{ provider: "openai", model: "gpt-image-2" }]);
+  });
+
+  it("resolves slash-containing provider model IDs from registered provider models", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {} as OpenClawConfig,
+      modelConfig: {
+        primary: "openai/gpt-image-2",
+      },
+      modelOverride: "fal-ai/flux/dev",
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "fal",
+          defaultModel: "fal-ai/flux/dev",
+          models: ["fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"],
+          isConfigured: () => true,
+        },
+      ],
+    });
+
+    expect(candidates).toEqual([{ provider: "fal", model: "fal-ai/flux/dev" }]);
   });
 });
 

@@ -69,6 +69,9 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
             : "");
         return apiKey ? { apiKey, provider: credential.provider, email: credential.email } : null;
       }
+      if (credential.type !== "oauth") {
+        return null;
+      }
       let oauthCredential = credential;
       if ((oauthCredential.expires ?? 0) <= Date.now()) {
         const refreshed = await providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin({
@@ -540,6 +543,35 @@ describe("bridgeCodexAppServerStartOptions", () => {
         type: "apiKey",
         apiKey: "ref-backed-api-key",
       });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unsupported Codex auth profile credential types before OAuth refresh", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:aws",
+        credential: {
+          type: "aws-sdk",
+          provider: "openai-codex",
+        },
+      });
+
+      await expect(
+        applyCodexAppServerAuthProfile({
+          client: { request } as never,
+          agentDir,
+          authProfileId: "openai-codex:aws",
+        }),
+      ).rejects.toThrow(
+        'Codex app-server auth profile "openai-codex:aws" does not contain usable credentials.',
+      );
+      expect(oauthMocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

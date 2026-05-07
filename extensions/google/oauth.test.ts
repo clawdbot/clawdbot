@@ -1,5 +1,5 @@
 import { join, parse } from "node:path";
-import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
@@ -31,6 +31,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
       };
     },
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
 });
 
 const mockExistsSync = vi.fn();

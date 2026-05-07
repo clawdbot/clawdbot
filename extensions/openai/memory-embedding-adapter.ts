@@ -32,6 +32,7 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
           provider: "openai",
           baseUrl: client.baseUrl,
           model: client.model,
+          outputDimensionality: client.outputDimensionality,
           documentInputType: client.documentInputType ?? client.inputType,
           headers: sanitizeEmbeddingCacheHeaders(client.headers, ["authorization"]),
         },
@@ -47,6 +48,9 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
               body: {
                 model: client.model,
                 input: chunk.text,
+                ...(typeof client.outputDimensionality === "number"
+                  ? { dimensions: client.outputDimensionality }
+                  : {}),
                 ...(inputType ? { input_type: inputType } : {}),
               },
             })),

@@ -65,6 +65,17 @@ function createSeenSignalFetch() {
   return { fetchImpl, getSeenSignal: () => seenSignal };
 }
 
+function createSymbolHeaderInit(enumerable: boolean): RequestInit {
+  const headers = { "Content-Type": "application/json" } as Record<string, string> & {
+    [key: symbol]: unknown;
+  };
+  Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
+    value: new Set(["content-type"]),
+    enumerable,
+  });
+  return { headers };
+}
+
 describe("wrapFetchWithAbortSignal", () => {
   it("adds duplex for requests with a body", async () => {
     const { fetchImpl, getSeenInit } = createSeenInitFetch();
@@ -277,6 +288,26 @@ describe("wrapFetchWithAbortSignal", () => {
 
     expect(() => wrapped.preconnect("https://example.com")).not.toThrow();
   });
+
+  it.each([
+    { enumerable: true, name: "enumerable" },
+    { enumerable: false, name: "non-enumerable" },
+  ])(
+    "drops $name header symbol metadata before calling the wrapped fetch",
+    async ({ enumerable }) => {
+      const { fetchImpl, getSeenInit } = createSeenInitFetch();
+      const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+      const init = createSymbolHeaderInit(enumerable);
+
+      await wrapped("https://example.com", init);
+
+      const seenHeaders = getSeenInit()?.headers;
+      expect(seenHeaders).not.toBe(init.headers);
+      expect(Object.getOwnPropertySymbols(seenHeaders as object)).toEqual([]);
+      expect(new Headers(seenHeaders).get("content-type")).toBe("application/json");
+      expect(Object.getOwnPropertySymbols(init.headers as object)).toHaveLength(1);
+    },
+  );
 });
 
 describe("resolveFetch", () => {

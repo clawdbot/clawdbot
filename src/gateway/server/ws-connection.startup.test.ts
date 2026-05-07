@@ -57,7 +57,6 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       clients: new Set(),
       preauthConnectionBudget: { release: vi.fn() } as never,
       port: 19001,
-      canvasHostEnabled: false,
       resolvedAuth: { mode: "none", allowTailscale: false },
       isStartupPending: () => true,
       gatewayMethods: [],

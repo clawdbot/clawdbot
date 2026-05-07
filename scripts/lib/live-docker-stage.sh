@@ -13,6 +13,7 @@ openclaw_live_stage_source_tree() {
     --warning=no-file-changed \
     --ignore-failed-read \
     --exclude=.git \
+    --exclude=.artifacts \
     --exclude=node_modules \
     --exclude=dist \
     --exclude=ui/dist \

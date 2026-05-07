@@ -135,12 +135,15 @@ describe("nextcloud-talk inbound behavior", () => {
     readStoreAllowFromForDmPolicyMock.mockResolvedValue([]);
   });
 
-  // The DM pairing assertion currently depends on a mocked runtime barrel that Vitest
-  // does not bind reliably for this extension package.
-  it.skip("issues a DM pairing challenge and sends the challenge text", async () => {
+  it("issues a DM pairing challenge and sends the challenge text", async () => {
+    const issueChallenge = vi.fn(
+      async (params: { sendPairingReply: (text: string) => Promise<void> }) => {
+        await params.sendPairingReply("Pair with code 123456");
+      },
+    );
     createChannelPairingControllerMock.mockReturnValue({
       readStoreForDmPolicy: vi.fn(),
-      issueChallenge: vi.fn(),
+      issueChallenge,
     });
     resolveDmGroupAccessWithCommandGateMock.mockReturnValue({
       decision: "pairing",
@@ -152,12 +155,31 @@ describe("nextcloud-talk inbound behavior", () => {
 
     const statusSink = vi.fn();
     await handleNextcloudTalkInbound({
-      message: createMessage(),
+      message: createMessage({ timestamp: 1_736_380_800_000 }),
       account: createAccount(),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
       runtime: createRuntimeEnv(),
       statusSink,
     });
+
+    expect(issueChallenge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderId: "user-1",
+        senderIdLine: "Your Nextcloud user id: user-1",
+        meta: { name: "Alice" },
+      }),
+    );
+    expect(sendMessageNextcloudTalkMock).toHaveBeenCalledWith(
+      "room-1",
+      "Pair with code 123456",
+      expect.objectContaining({
+        cfg: { channels: { "nextcloud-talk": {} } },
+        accountId: "default",
+      }),
+    );
+    expect(statusSink).toHaveBeenCalledWith({ lastInboundAt: 1_736_380_800_000 });
+    expect(statusSink).toHaveBeenCalledWith({ lastOutboundAt: expect.any(Number) });
+    expect(dispatchChannelMessageReplyWithBaseMock).not.toHaveBeenCalled();
   });
 
   it("drops unmentioned group traffic before dispatch", async () => {

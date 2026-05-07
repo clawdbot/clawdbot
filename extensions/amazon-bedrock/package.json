@@ -7,7 +7,8 @@
   "dependencies": {
     "@aws-sdk/client-bedrock": "3.1042.0",
     "@aws-sdk/client-bedrock-runtime": "3.1042.0",
-    "@aws-sdk/credential-provider-node": "3.972.39"
+    "@aws-sdk/credential-provider-node": "3.972.39",
+    "@smithy/shared-ini-file-loader": "4.4.9"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

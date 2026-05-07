@@ -152,15 +152,17 @@ final class CanvasManager {
 
     private func handleGatewayPush(_ push: GatewayPush) {
         guard case let .snapshot(snapshot) = push else { return }
-        let raw = snapshot.canvashosturl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let raw =
+            (snapshot.pluginsurfaceurls?["canvas"]?.value as? String)?
+                .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
         if raw.isEmpty {
-            Self.logger.debug("canvas host url missing in gateway snapshot")
+            Self.logger.debug("canvas plugin surface URL missing in gateway snapshot")
         } else {
-            Self.logger.debug("canvas host url snapshot=\(raw, privacy: .public)")
+            Self.logger.debug("canvas plugin surface URL snapshot=\(raw, privacy: .public)")
         }
         let a2uiUrl = Self.resolveA2UIHostUrl(from: raw)
         if a2uiUrl == nil, !raw.isEmpty {
-            Self.logger.debug("canvas host url invalid; cannot resolve A2UI")
+            Self.logger.debug("canvas plugin surface URL invalid; cannot resolve A2UI")
         }
         guard let controller = self.panelController else {
             if a2uiUrl != nil {
@@ -197,7 +199,7 @@ final class CanvasManager {
     }
 
     private func resolveA2UIHostUrl() async -> String? {
-        let raw = await GatewayConnection.shared.canvasHostUrl()
+        let raw = await GatewayConnection.shared.canvasPluginSurfaceUrl()
         return Self.resolveA2UIHostUrl(from: raw)
     }
 

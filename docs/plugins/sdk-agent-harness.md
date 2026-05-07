@@ -194,9 +194,10 @@ intentional silent replies such as `NO_REPLY` unclassified.
 The bundled `codex` harness is the native Codex mode for embedded OpenClaw
 agent turns. Enable the bundled `codex` plugin first, and include `codex` in
 `plugins.allow` if your config uses a restrictive allowlist. Native app-server
-configs should use `openai/gpt-*` with `agentRuntime.id: "codex"`.
-Use `openai-codex/*` for Codex OAuth through PI instead. Legacy `codex/*`
-model refs remain compatibility aliases for the native harness.
+configs should use `openai/gpt-*`; OpenAI agent turns select the Codex harness
+by default. Legacy `openai-codex/*` routes should be repaired with
+`openclaw doctor --fix`, and legacy `codex/*` model refs remain compatibility
+aliases for the native harness.
 
 When this mode runs, Codex owns the native thread id, resume behavior,
 compaction, and app-server execution. OpenClaw still owns the chat channel,

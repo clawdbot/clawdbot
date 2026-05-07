@@ -27,10 +27,10 @@ function formatRuntimeLogCallArg(value: unknown): string {
 describe("cli program (nodes basics)", () => {
   let program: Command;
 
-  function createProgram() {
+  async function createProgram() {
     const next = new Command();
     next.exitOverride();
-    registerNodesCli(next);
+    await registerNodesCli(next);
     return next;
   }
 
@@ -59,7 +59,7 @@ describe("cli program (nodes basics)", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     ({ registerNodesCli } = await import("./nodes-cli.js"));
-    program = createProgram();
+    program = await createProgram();
   });
 
   it("runs nodes list with the effective paired node view while preserving paired metadata", async () => {

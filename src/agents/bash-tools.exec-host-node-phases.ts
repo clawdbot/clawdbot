@@ -119,6 +119,11 @@ export async function resolveNodeExecutionTarget(
     throw err;
   }
   const nodeInfo = nodes.find((entry) => entry.nodeId === nodeId);
+  if (nodeInfo?.connected === false) {
+    throw new Error(
+      `exec host=node requires a connected node (${nodeId} is currently disconnected). Start or reconnect the companion app or node host, or select a connected node.`,
+    );
+  }
   const declaredCommands = Array.isArray(nodeInfo?.commands) ? nodeInfo.commands : [];
   const supportsSystemRun = declaredCommands.includes("system.run");
   if (!supportsSystemRun) {

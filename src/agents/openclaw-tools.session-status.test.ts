@@ -26,6 +26,10 @@ const resolveEnvApiKeyMock = vi.hoisted(() =>
 const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
   vi.fn((_params?: { provider?: string }) => null as { apiKey: string; source: string } | null),
 );
+const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+  configFingerprint: "session-status-test-empty-plugin-metadata",
+  plugins: [],
+}));
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -242,6 +246,9 @@ vi.mock("../config/config.js", createConfigModuleMock);
 vi.mock("../agents/model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 // Keep provider-runtime/plugin activation out of this focused tool test. The
 // session_status surface only needs model selection semantics here, not real

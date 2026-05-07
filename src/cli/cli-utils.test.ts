@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { parseCanvasSnapshotPayload } from "../../extensions/canvas/runtime-api.js";
 import { registerDnsCli } from "./dns-cli.js";
-import { parseCanvasSnapshotPayload } from "./nodes-canvas.js";
 import { parseByteSize } from "./parse-bytes.js";
 import { parseDurationMs } from "./parse-duration.js";
 import {

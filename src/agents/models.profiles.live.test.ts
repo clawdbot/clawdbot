@@ -1,4 +1,12 @@
-import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
+import { writeSync } from "node:fs";
+import {
+  type Api,
+  completeSimple,
+  getModels,
+  getProviders,
+  type KnownProvider,
+  type Model,
+} from "@mariozechner/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
@@ -14,6 +22,8 @@ import {
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
   isHighSignalLiveModelRef,
+  isPrioritizedHighSignalLiveModelRef,
+  listPrioritizedHighSignalLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
@@ -43,7 +53,11 @@ import {
   isCloudflareOrHtmlErrorPage,
   isRateLimitErrorMessage,
 } from "./pi-embedded-helpers/errors.js";
-import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
+import {
+  discoverAuthStorage,
+  discoverModels,
+  normalizeDiscoveredPiModel,
+} from "./pi-model-discovery.js";
 
 const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
@@ -83,7 +97,46 @@ function parseModelFilter(raw?: string): Set<string> | null {
 }
 
 function logProgress(message: string): void {
-  process.stderr.write(`[live] ${message}\n`);
+  writeSync(2, `[live] ${message}\n`);
+}
+
+function resolveKnownProvider(provider: string): KnownProvider | undefined {
+  const normalized = provider.trim();
+  return getProviders().find((knownProvider) => knownProvider === normalized);
+}
+
+function loadPrioritizedHighSignalModels(): Model<Api>[] {
+  const idsByProvider = new Map<string, Set<string>>();
+  for (const ref of listPrioritizedHighSignalLiveModelRefs()) {
+    const bucket = idsByProvider.get(ref.provider);
+    if (bucket) {
+      bucket.add(ref.id);
+    } else {
+      idsByProvider.set(ref.provider, new Set([ref.id]));
+    }
+  }
+
+  const models: Model<Api>[] = [];
+  const seen = new Set<string>();
+  for (const [provider, ids] of idsByProvider) {
+    const knownProvider = resolveKnownProvider(provider);
+    if (!knownProvider) {
+      continue;
+    }
+    for (const model of getModels(knownProvider)) {
+      const id = model.id.toLowerCase();
+      if (!ids.has(id)) {
+        continue;
+      }
+      const key = `${provider}/${id}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      models.push(model);
+    }
+  }
+  return models;
 }
 
 function formatElapsedSeconds(ms: number): string {
@@ -292,6 +345,7 @@ function isAudioOnlyModelErrorMessage(raw: string): boolean {
 function isUnsupportedReasoningEffortErrorMessage(raw: string): boolean {
   return (
     /does not support parameter reasoningeffort/i.test(raw) ||
+    /invalid reasoning effort/i.test(raw) ||
     /unsupported value:\s*'low'.*reasoning\.effort.*supported values are:\s*'medium'/i.test(raw)
   );
 }
@@ -312,6 +366,15 @@ function isOpenRouterOpaqueBadRequestErrorMessage(raw: string): boolean {
     msg.includes('"msg":"bad request"')
   );
 }
+
+describe("isUnsupportedReasoningEffortErrorMessage", () => {
+  it("matches provider-native reasoning effort rejections", () => {
+    expect(isUnsupportedReasoningEffortErrorMessage('Error: 400 "Invalid reasoning effort."')).toBe(
+      true,
+    );
+    expect(isUnsupportedReasoningEffortErrorMessage("Error: 400 model not found")).toBe(false);
+  });
+});
 
 describe("isUnsupportedPlanErrorMessage", () => {
   it("matches provider plan-gated models", () => {
@@ -733,29 +796,44 @@ describeLive("live models (profile keys)", () => {
 
       const providers = parseProviderFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
       const providerList = providers ? [...providers] : null;
+      logProgress("[live-models] resolving agent dir");
       const agentDir = resolveDefaultAgentDir(cfg);
-      const authStorage = discoverAuthStorage(agentDir, {
-        config: cfg,
-        env: process.env,
-        ...(providerList
-          ? {
-              externalCli: externalCliDiscoveryForProviders({ cfg, providers: providerList }),
-              skipExternalAuthProfiles: true,
-              syntheticAuthProviderRefs: [],
-            }
-          : {}),
-      });
-      logProgress("[live-models] loading model registry");
-      const models = await withLiveStageTimeout(
-        Promise.resolve().then(() => discoverModels(authStorage, agentDir).getAll()),
-        "[live-models] load model registry",
-      );
-
       const rawModels = process.env.OPENCLAW_LIVE_MODELS?.trim();
       const useModern = rawModels === "modern" || rawModels === "all";
       const useExplicit = Boolean(rawModels) && !useModern;
       const filter = useExplicit ? parseModelFilter(rawModels) : null;
+      const useDefaultPriorityOnly = !filter && useModern && !providers;
       const allowNotFoundSkip = useModern;
+      const models = await (async () => {
+        if (useDefaultPriorityOnly) {
+          logProgress("[live-models] loading prioritized model refs");
+          return loadPrioritizedHighSignalModels();
+        }
+        logProgress("[live-models] loading auth storage");
+        const authStorage = await withLiveStageTimeout(
+          Promise.resolve().then(() =>
+            discoverAuthStorage(agentDir, {
+              config: cfg,
+              env: process.env,
+              externalCli: externalCliDiscoveryForProviders({ cfg, providers: providerList ?? [] }),
+              ...(providerList
+                ? {
+                    skipExternalAuthProfiles: true,
+                    syntheticAuthProviderRefs: [],
+                  }
+                : {}),
+            }),
+          ),
+          "[live-models] load auth storage",
+        );
+        logProgress("[live-models] loading model registry");
+        return withLiveStageTimeout(
+          Promise.resolve().then(() =>
+            discoverModels(authStorage, agentDir, { normalizeModels: false }).getAll(),
+          ),
+          "[live-models] load model registry",
+        );
+      })();
       const perModelTimeoutMs = toInt(process.env.OPENCLAW_LIVE_MODEL_TIMEOUT_MS, 30_000);
       const maxModels = resolveHighSignalLiveModelLimit({
         rawMaxModels: process.env.OPENCLAW_LIVE_MAX_MODELS,
@@ -788,6 +866,12 @@ describeLive("live models (profile keys)", () => {
         }
         if (!filter && useModern) {
           if (
+            useDefaultPriorityOnly &&
+            !isPrioritizedHighSignalLiveModelRef({ provider: model.provider, id: model.id })
+          ) {
+            continue;
+          }
+          if (
             shouldExcludeProviderFromDefaultHighSignalLiveSweep({
               provider: model.provider,
               useExplicitModels: useExplicit,
@@ -815,7 +899,10 @@ describeLive("live models (profile keys)", () => {
             });
             continue;
           }
-          candidates.push({ model, apiKeyInfo });
+          candidates.push({
+            model: normalizeDiscoveredPiModel(model, agentDir),
+            apiKeyInfo,
+          });
         } catch (err) {
           skipped.push({ model: id, reason: String(err) });
         }

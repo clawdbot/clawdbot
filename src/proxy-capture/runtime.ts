@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
+import { normalizeRequestInitHeadersForFetch } from "../infra/fetch-headers.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
 import {
   closeDebugProxyCaptureStore,
@@ -174,8 +175,9 @@ function installDebugProxyGlobalFetchPatch(
   fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY] = { originalFetch };
   fetchTarget.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = resolveUrlString(input);
+    const normalizedInit = normalizeRequestInitHeadersForFetch(init);
     try {
-      const response = await originalFetch(input, init);
+      const response = await originalFetch(input, normalizedInit);
       if (url && /^https?:/i.test(url)) {
         captureHttpExchange(
           {
@@ -184,17 +186,18 @@ function installDebugProxyGlobalFetchPatch(
               (typeof Request !== "undefined" && input instanceof Request
                 ? input.method
                 : undefined) ??
-              init?.method ??
+              normalizedInit?.method ??
               "GET",
             requestHeaders:
               (typeof Request !== "undefined" && input instanceof Request
                 ? input.headers
-                : undefined) ?? (init?.headers as Headers | Record<string, string> | undefined),
+                : undefined) ??
+              (normalizedInit?.headers as Headers | Record<string, string> | undefined),
             requestBody:
               (typeof Request !== "undefined" && input instanceof Request
                 ? (input as Request & { body?: BodyInit | null }).body
                 : undefined) ??
-              (init as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ??
+              (normalizedInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ??
               null,
             response,
             transport: "http",
@@ -225,7 +228,7 @@ function installDebugProxyGlobalFetchPatch(
             (typeof Request !== "undefined" && input instanceof Request
               ? input.method
               : undefined) ??
-            init?.method ??
+            normalizedInit?.method ??
             "GET",
           host: parsed.host,
           path: `${parsed.pathname}${parsed.search}`,

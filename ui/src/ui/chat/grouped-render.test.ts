@@ -1523,7 +1523,7 @@ describe("grouped chat rendering", () => {
         timestamp: Date.now(),
       },
       {
-        canvasHostUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
+        canvasPluginSurfaceUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
       },
     );
 

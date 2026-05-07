@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import {
   cleanupAmbientCommentTypingReaction,
@@ -18,6 +18,12 @@ vi.mock("./client.js", () => ({
 
 describe("createCommentTypingReactionLifecycle", () => {
   const request = vi.fn();
+
+  afterAll(() => {
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./client.js");
+    vi.resetModules();
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();

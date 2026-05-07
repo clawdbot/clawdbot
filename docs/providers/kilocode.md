@@ -1,12 +1,10 @@
 ---
 summary: "Use Kilo Gateway's unified API to access many models in OpenClaw"
-title: "Kilocode"
+title: "Kilo Gateway"
 read_when:
   - You want a single API key for many LLMs
   - You want to run models via Kilo Gateway in OpenClaw
 ---
-
-# Kilo Gateway
 
 Kilo Gateway provides a **unified API** that routes requests to many models behind a single
 endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.

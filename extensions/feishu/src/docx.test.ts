@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createToolFactoryHarness, type ToolLike } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -64,6 +64,11 @@ type ToolResultWithDetails = {
 const WORKSPACE_ROOT = path.resolve("/workspace");
 
 describe("feishu_doc image fetch hardening", () => {
+  afterAll(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
 

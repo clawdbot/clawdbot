@@ -70,11 +70,13 @@ function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliase
   if (!command) {
     throw new Error(`registerAlias: unknown command key: ${key}`);
   }
-  const existing = new Set(
-    command.textAliases
-      .map((alias) => normalizeOptionalLowercaseString(alias))
-      .filter((alias): alias is string => Boolean(alias)),
-  );
+  const existing = new Set<string>();
+  for (const alias of command.textAliases) {
+    const lowered = normalizeOptionalLowercaseString(alias);
+    if (lowered) {
+      existing.add(lowered);
+    }
+  }
   for (const alias of aliases) {
     const trimmed = alias.trim();
     if (!trimmed) {

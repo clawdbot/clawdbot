@@ -22,11 +22,16 @@ import {
   collectPresentOpenClawTools,
   isUpdatePlanToolEnabledForOpenClawTools,
 } from "./openclaw-tools.registration.js";
+import {
+  type HookContext,
+  isToolWrappedWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook,
+} from "./pi-tools.before-tool-call.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
+import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
-import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
@@ -118,6 +123,14 @@ export function createOpenClawTools(
     enableHeartbeatTool?: boolean;
     /** If true, skip plugin tool resolution and return only shipped core tools. */
     disablePluginTools?: boolean;
+    /**
+     * Wrap returned tools with the before_tool_call hook at construction time.
+     * Defaults to true; callers that already enforce the hook at a later shared
+     * boundary should opt out explicitly.
+     */
+    wrapBeforeToolCallHook?: boolean;
+    /** Override or extend the default hook context used by construction-time wrapping. */
+    beforeToolCallHookContext?: HookContext;
     /** Records hot-path tool-prep stages for reply startup diagnostics. */
     recordToolPrepStage?: (name: string) => void;
     /** Trusted sender id from inbound context (not tool args). */
@@ -324,7 +337,6 @@ export function createOpenClawTools(
     ...(embedded
       ? []
       : [
-          createCanvasTool({ config: options?.config }),
           nodesTool,
           createCronTool({
             agentSessionKey: options?.agentSessionKey,
@@ -415,19 +427,45 @@ export function createOpenClawTools(
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];
   options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");
-
-  if (options?.disablePluginTools) {
-    return tools;
+  let allTools = tools;
+  if (!options?.disablePluginTools) {
+    const existingToolNames = new Set<string>();
+    for (const tool of tools) {
+      existingToolNames.add(tool.name);
+    }
+    allTools = [
+      ...tools,
+      ...resolveOpenClawPluginToolsForOptions({
+        options,
+        resolvedConfig,
+        existingToolNames,
+      }),
+    ];
+    options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
   }
 
-  const wrappedPluginTools = resolveOpenClawPluginToolsForOptions({
-    options,
-    resolvedConfig,
-    existingToolNames: new Set(tools.map((tool) => tool.name)),
-  });
-  options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
-
-  return [...tools, ...wrappedPluginTools];
+  if (options?.wrapBeforeToolCallHook === false) {
+    return allTools;
+  }
+  const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
+  const defaultHookContext: HookContext = {
+    ...(hookAgentId ? { agentId: hookAgentId } : {}),
+    ...(resolvedConfig ? { config: resolvedConfig } : {}),
+    ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
+    ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
+    ...(options?.currentChannelId ? { channelId: options.currentChannelId } : {}),
+    loopDetection: resolveToolLoopDetectionConfig({ cfg: resolvedConfig, agentId: hookAgentId }),
+  };
+  const hookContext = {
+    ...defaultHookContext,
+    ...options?.beforeToolCallHookContext,
+  };
+  options?.recordToolPrepStage?.("openclaw-tools:tool-hooks");
+  return allTools.map((tool) =>
+    isToolWrappedWithBeforeToolCallHook(tool)
+      ? tool
+      : wrapToolWithBeforeToolCallHook(tool, hookContext),
+  );
 }
 
 export const __testing = {

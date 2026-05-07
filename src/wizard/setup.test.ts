@@ -5,6 +5,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
@@ -41,6 +42,13 @@ const resolvePluginProvidersRuntime = vi.hoisted(() =>
 );
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
+const ensureCodexRuntimePluginForModelSelection = vi.hoisted(() =>
+  vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+    cfg,
+    required: false,
+    installed: false,
+  })),
+);
 const promptDefaultModel = vi.hoisted(() => vi.fn<PromptDefaultModel>(async () => ({})));
 const promptCustomApiConfig = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
 const configureGatewayForSetup = vi.hoisted(() =>
@@ -192,6 +200,7 @@ vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
 }));
 
 vi.mock("../commands/model-picker.js", () => ({
+  ensureCodexRuntimePluginForModelSelection,
   applyPrimaryModel,
   promptDefaultModel,
 }));

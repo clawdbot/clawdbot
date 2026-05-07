@@ -2529,7 +2529,7 @@ export function renderApp(state: AppViewState) {
                   sidebarContent: state.sidebarContent,
                   sidebarError: state.sidebarError,
                   splitRatio: state.splitRatio,
-                  canvasHostUrl: state.hello?.canvasHostUrl ?? null,
+                  canvasPluginSurfaceUrl: state.hello?.pluginSurfaceUrls?.canvas ?? null,
                   onOpenSidebar: (content) => state.handleOpenSidebar(content),
                   onCloseSidebar: () => state.handleCloseSidebar(),
                   onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),

@@ -638,24 +638,83 @@ describe("buildStatusReply subagent summary", () => {
           },
           ...commonParams,
         });
-        const piText = await buildStatusText({
+        const implicitCodexText = await buildStatusText({
           cfg: baseCfg,
           ...commonParams,
         });
 
         const normalizedCodex = normalizeTestText(codexText);
-        const normalizedPi = normalizeTestText(piText);
+        const normalizedImplicitCodex = normalizeTestText(implicitCodexText);
         expect(normalizedCodex).toContain("Model: openai/gpt-5.5");
         expect(normalizedCodex).toContain("oauth (openai-codex:status)");
         expect(normalizedCodex).toContain("openai-codex:status");
-        expect(normalizedPi).toContain("Model: openai/gpt-5.5");
-        expect(normalizedPi).toContain("unknown");
-        expect(normalizedPi).not.toContain("openai-codex:status");
+        expect(normalizedImplicitCodex).toContain("Model: openai/gpt-5.5");
+        expect(normalizedImplicitCodex).toContain("oauth (openai-codex:status)");
+        expect(normalizedImplicitCodex).toContain("Runtime: OpenAI Codex");
       },
       {
         env: {
           OPENAI_API_KEY: undefined,
           OPENAI_OAUTH_TOKEN: undefined,
+        },
+      },
+    );
+  });
+
+  it("uses Claude CLI OAuth auth labels for anthropic models running on the Claude CLI runtime", async () => {
+    await withTempHome(
+      async (dir) => {
+        const authPath = path.join(dir, ".claude", ".credentials.json");
+        fs.mkdirSync(path.dirname(authPath), { recursive: true });
+        fs.writeFileSync(
+          authPath,
+          JSON.stringify({
+            claudeAiOauth: {
+              accessToken: "access-token",
+              refreshToken: "refresh-token",
+              expiresAt: Date.now() + 60_000,
+            },
+          }),
+          "utf8",
+        );
+
+        const text = await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            agents: {
+              defaults: {
+                agentRuntime: { id: "claude-cli" },
+              },
+            },
+          },
+          sessionEntry: {
+            sessionId: "sess-status-claude-cli-oauth",
+            updatedAt: 0,
+          },
+          sessionKey: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          statusChannel: "mobilechat",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          contextTokens: 32_000,
+          resolvedHarness: "claude-cli",
+          resolvedFastMode: false,
+          resolvedVerboseLevel: "off",
+          resolvedReasoningLevel: "off",
+          resolveDefaultThinkingLevel: async () => undefined,
+          isGroup: false,
+          defaultGroupActivation: () => "mention",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Model: anthropic/claude-opus-4-7");
+        expect(normalized).toContain("oauth (claude-cli)");
+      },
+      {
+        env: {
+          ANTHROPIC_API_KEY: undefined,
+          ANTHROPIC_OAUTH_TOKEN: undefined,
         },
       },
     );

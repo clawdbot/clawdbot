@@ -85,6 +85,7 @@ describe("openshell backend manager", () => {
 
   afterAll(() => {
     vi.doUnmock("./cli.js");
+    vi.resetModules();
   });
 
   beforeEach(() => {

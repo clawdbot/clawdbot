@@ -1,4 +1,7 @@
-import { statSync } from "node:fs";
+import { statSync, writeFileSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 type EdgeTTSRuntimeConfig = {
@@ -99,10 +102,36 @@ export async function edgeTTS(
   });
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    await tts.ttsPromise(text, outputPath);
-    if (readOutputSize(outputPath) > 0) {
+    const outputSize = await writeEdgeTtsOutput({
+      outputPath,
+      ttsPromise: async (tempPath) => {
+        await tts.ttsPromise(text, tempPath);
+      },
+    });
+    if (outputSize > 0) {
       return;
     }
   }
   throw new Error("Edge TTS produced empty audio file after retry");
+}
+
+async function writeEdgeTtsOutput(params: {
+  outputPath: string;
+  ttsPromise: (tempPath: string) => Promise<void>;
+}): Promise<number> {
+  const rootDir = path.dirname(params.outputPath);
+  await mkdir(rootDir, { recursive: true });
+  let outputSize = 0;
+  await writeExternalFileWithinRoot({
+    rootDir,
+    path: path.basename(params.outputPath),
+    write: async (tempPath) => {
+      await params.ttsPromise(tempPath);
+      outputSize = readOutputSize(tempPath);
+      if (outputSize === 0) {
+        writeFileSync(tempPath, "");
+      }
+    },
+  });
+  return outputSize;
 }

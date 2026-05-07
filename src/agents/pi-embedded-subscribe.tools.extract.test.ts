@@ -20,6 +20,19 @@ describe("extractMessagingToolSend", () => {
           },
           source: "test",
         },
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" }),
+            messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+          },
+          source: "test",
+        },
+        {
+          pluginId: "discord",
+          plugin: createChannelTestPluginBase({ id: "discord" }),
+          source: "test",
+        },
       ]),
     );
   });

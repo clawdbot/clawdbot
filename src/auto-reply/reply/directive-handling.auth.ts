@@ -113,6 +113,12 @@ export const resolveAuthLabel = async (
           source: "",
         };
       }
+      if (profile.type === "aws-sdk") {
+        return {
+          label: `${profileId} aws-sdk${more}`,
+          source: "",
+        };
+      }
       const display = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
       const label = display === profileId ? profileId : display;
       const exp = formatExpirationLabel(profile.expires, now, formatUntil);
@@ -168,6 +174,10 @@ export const resolveAuthLabel = async (
         }
         const suffix = formatFlagsSuffix(flags);
         return `${profileId}=token:${tokenLabel}${suffix}`;
+      }
+      if (profile.type === "aws-sdk") {
+        const suffix = formatFlagsSuffix(flags);
+        return `${profileId}=aws-sdk${suffix}`;
       }
       const display = resolveAuthProfileDisplayLabel({
         cfg,

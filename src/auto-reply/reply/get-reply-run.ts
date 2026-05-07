@@ -18,6 +18,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
   isAcpSessionKey,
@@ -417,6 +418,18 @@ export async function runPreparedReply(
     abortedLastRun,
   } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
+  const traceAttributes = {
+    provider,
+    hasSessionKey: Boolean(sessionKey),
+    isHeartbeat,
+    queueMode: perMessageQueueMode ?? "configured",
+  };
+  const traceRunPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
+    measureDiagnosticsTimelineSpan(name, run, {
+      phase: "agent-turn",
+      config: cfg,
+      attributes: traceAttributes,
+    });
   const promptSessionCtx = resolvePromptSessionContextForSystemEvent({
     sessionCtx,
     sessionEntry,
@@ -733,9 +746,9 @@ export async function runPreparedReply(
           skillsSnapshot: sessionEntry?.skillsSnapshot,
           systemSent: currentSystemSent,
         }
-      : await (async () => {
+      : await traceRunPhase("reply.ensure_skill_snapshot", async () => {
           const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
-          return ensureSkillSnapshot({
+          return await ensureSkillSnapshot({
             sessionEntry,
             sessionStore,
             sessionKey,
@@ -746,11 +759,14 @@ export async function runPreparedReply(
             cfg,
             skillFilter: opts?.skillFilter,
           });
-        })();
+        });
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
-  let { prefixedCommandBody, queuedBody, transcriptCommandBody } = await rebuildPromptBodies();
+  let { prefixedCommandBody, queuedBody, transcriptCommandBody } = await traceRunPhase(
+    "reply.build_prompt_bodies",
+    () => rebuildPromptBodies(),
+  );
   const currentTurnContext = resolveCurrentTurnPromptContext(sessionCtx);
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
@@ -838,7 +854,9 @@ export async function runPreparedReply(
         inlineMode: perMessageQueueMode,
         inlineOptions: perMessageQueueOptions,
       });
-  const piRuntime = useFastReplyRuntime ? null : await loadPiEmbeddedRuntime();
+  const piRuntime = useFastReplyRuntime
+    ? null
+    : await traceRunPhase("reply.load_pi_runtime", () => loadPiEmbeddedRuntime());
   const sessionLaneKey = piRuntime
     ? piRuntime.resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal)
     : undefined;
@@ -858,17 +876,21 @@ export async function runPreparedReply(
   }
   let authProfileId = useFastReplyRuntime
     ? preparedSessionState.sessionEntry?.authProfileOverride
-    : await resolveSessionAuthProfileOverride({
-        cfg,
-        provider,
-        agentDir,
-        sessionEntry: preparedSessionState.sessionEntry,
-        sessionStore,
-        sessionKey,
-        storePath,
-        isNewSession,
-      });
-  const { runReplyAgent } = await loadAgentRunnerRuntime();
+    : await traceRunPhase("reply.resolve_auth_profile", () =>
+        resolveSessionAuthProfileOverride({
+          cfg,
+          provider,
+          agentDir,
+          sessionEntry: preparedSessionState.sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          isNewSession,
+        }),
+      );
+  const { runReplyAgent } = await traceRunPhase("reply.load_agent_runner_runtime", () =>
+    loadAgentRunnerRuntime(),
+  );
   const queueKey = sessionKey ?? sessionIdFinal;
   preparedSessionState = resolvePreparedSessionState();
   const resolveActiveQueueSessionId = () =>
@@ -924,7 +946,10 @@ export async function runPreparedReply(
               isNewSession,
             });
         preparedSessionState = resolvePreparedSessionState();
-        ({ prefixedCommandBody, queuedBody, transcriptCommandBody } = await rebuildPromptBodies());
+        ({ prefixedCommandBody, queuedBody, transcriptCommandBody } = await traceRunPhase(
+          "reply.build_prompt_bodies",
+          () => rebuildPromptBodies(),
+        ));
       },
       resolveBusyState: resolveQueueBusyState,
     });

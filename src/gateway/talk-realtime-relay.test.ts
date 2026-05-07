@@ -16,6 +16,76 @@ describe("talk realtime gateway relay", () => {
     clearTalkRealtimeRelaySessionsForTest();
   });
 
+  function createIdleRelayProvider(): RealtimeVoiceProviderPlugin {
+    return {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: () => ({
+        connect: vi.fn(async () => undefined),
+        sendAudio: vi.fn(),
+        setMediaTimestamp: vi.fn(),
+        handleBargeIn: vi.fn(),
+        submitToolResult: vi.fn(),
+        acknowledgeMark: vi.fn(),
+        close: vi.fn(),
+        isConnected: vi.fn(() => true),
+      }),
+    };
+  }
+
+  function createAbortableRelayRunFixture(provider = createIdleRelayProvider()) {
+    const abortController = new AbortController();
+    const broadcast = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const removeChatRun = vi.fn(() => ({ sessionKey: "main", clientRunId: "run-1" }));
+    const context = {
+      broadcastToConnIds: vi.fn(),
+      broadcast,
+      nodeSendToSession,
+      chatAbortControllers: new Map([
+        [
+          "run-1",
+          {
+            controller: abortController,
+            sessionId: "run-1",
+            sessionKey: "main",
+            startedAtMs: 1,
+            expiresAtMs: Date.now() + 60_000,
+          },
+        ],
+      ]),
+      chatRunBuffers: new Map([["run-1", "partial answer"]]),
+      chatDeltaSentAt: new Map(),
+      chatDeltaLastBroadcastLen: new Map(),
+      chatAbortedRuns: new Map(),
+      removeChatRun,
+      agentRunSeq: new Map(),
+    } as never;
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+
+    registerTalkRealtimeRelayAgentRun({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      sessionKey: "main",
+      runId: "run-1",
+    });
+    return {
+      abortController,
+      broadcast,
+      nodeSendToSession,
+      removeChatRun,
+      session,
+    };
+  }
+
   it("bridges browser audio, transcripts, and tool results through a backend provider", async () => {
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const bridge = {
@@ -321,63 +391,8 @@ describe("talk realtime gateway relay", () => {
   });
 
   it("aborts linked agent consult runs when the relay turn is cancelled", () => {
-    const abortController = new AbortController();
-    const broadcast = vi.fn();
-    const nodeSendToSession = vi.fn();
-    const removeChatRun = vi.fn(() => ({ sessionKey: "main", clientRunId: "run-1" }));
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "relay-test",
-      label: "Relay Test",
-      isConfigured: () => true,
-      createBridge: () => ({
-        connect: vi.fn(async () => undefined),
-        sendAudio: vi.fn(),
-        setMediaTimestamp: vi.fn(),
-        handleBargeIn: vi.fn(),
-        submitToolResult: vi.fn(),
-        acknowledgeMark: vi.fn(),
-        close: vi.fn(),
-        isConnected: vi.fn(() => true),
-      }),
-    };
-    const context = {
-      broadcastToConnIds: vi.fn(),
-      broadcast,
-      nodeSendToSession,
-      chatAbortControllers: new Map([
-        [
-          "run-1",
-          {
-            controller: abortController,
-            sessionId: "run-1",
-            sessionKey: "main",
-            startedAtMs: 1,
-            expiresAtMs: Date.now() + 60_000,
-          },
-        ],
-      ]),
-      chatRunBuffers: new Map([["run-1", "partial answer"]]),
-      chatDeltaSentAt: new Map(),
-      chatDeltaLastBroadcastLen: new Map(),
-      chatAbortedRuns: new Map(),
-      removeChatRun,
-      agentRunSeq: new Map(),
-    } as never;
-    const session = createTalkRealtimeRelaySession({
-      context,
-      connId: "conn-1",
-      provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
-    });
-
-    registerTalkRealtimeRelayAgentRun({
-      relaySessionId: session.relaySessionId,
-      connId: "conn-1",
-      sessionKey: "main",
-      runId: "run-1",
-    });
+    const { abortController, broadcast, nodeSendToSession, removeChatRun, session } =
+      createAbortableRelayRunFixture();
     cancelTalkRealtimeRelayTurn({
       relaySessionId: session.relaySessionId,
       connId: "conn-1",
@@ -403,63 +418,8 @@ describe("talk realtime gateway relay", () => {
   });
 
   it("aborts linked agent consult runs when the relay session closes", () => {
-    const abortController = new AbortController();
-    const broadcast = vi.fn();
-    const nodeSendToSession = vi.fn();
-    const removeChatRun = vi.fn(() => ({ sessionKey: "main", clientRunId: "run-1" }));
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "relay-test",
-      label: "Relay Test",
-      isConfigured: () => true,
-      createBridge: () => ({
-        connect: vi.fn(async () => undefined),
-        sendAudio: vi.fn(),
-        setMediaTimestamp: vi.fn(),
-        handleBargeIn: vi.fn(),
-        submitToolResult: vi.fn(),
-        acknowledgeMark: vi.fn(),
-        close: vi.fn(),
-        isConnected: vi.fn(() => true),
-      }),
-    };
-    const context = {
-      broadcastToConnIds: vi.fn(),
-      broadcast,
-      nodeSendToSession,
-      chatAbortControllers: new Map([
-        [
-          "run-1",
-          {
-            controller: abortController,
-            sessionId: "run-1",
-            sessionKey: "main",
-            startedAtMs: 1,
-            expiresAtMs: Date.now() + 60_000,
-          },
-        ],
-      ]),
-      chatRunBuffers: new Map([["run-1", "partial answer"]]),
-      chatDeltaSentAt: new Map(),
-      chatDeltaLastBroadcastLen: new Map(),
-      chatAbortedRuns: new Map(),
-      removeChatRun,
-      agentRunSeq: new Map(),
-    } as never;
-    const session = createTalkRealtimeRelaySession({
-      context,
-      connId: "conn-1",
-      provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
-    });
-
-    registerTalkRealtimeRelayAgentRun({
-      relaySessionId: session.relaySessionId,
-      connId: "conn-1",
-      sessionKey: "main",
-      runId: "run-1",
-    });
+    const { abortController, broadcast, nodeSendToSession, session } =
+      createAbortableRelayRunFixture();
     stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
 
     expect(abortController.signal.aborted).toBe(true);

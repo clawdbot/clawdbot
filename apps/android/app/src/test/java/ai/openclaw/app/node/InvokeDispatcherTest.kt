@@ -286,9 +286,9 @@ class InvokeDispatcherTest {
       smsTelephonyAvailable = { smsTelephonyAvailable },
       callLogAvailable = { callLogAvailable },
       debugBuild = { debugBuild },
-      refreshNodeCanvasCapability = { false },
       onCanvasA2uiPush = {},
       onCanvasA2uiReset = {},
+      refreshCanvasHostUrl = { null },
       motionActivityAvailable = { motionActivityAvailable },
       motionPedometerAvailable = { motionPedometerAvailable },
     )

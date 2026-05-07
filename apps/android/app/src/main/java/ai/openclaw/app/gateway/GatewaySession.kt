@@ -135,7 +135,7 @@ class GatewaySession(
   private val writeLock = Mutex()
   private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
 
-  @Volatile private var canvasHostUrl: String? = null
+  @Volatile private var pluginSurfaceUrls: Map<String, String> = emptyMap()
 
   @Volatile private var mainSessionKey: String? = null
 
@@ -185,7 +185,7 @@ class GatewaySession(
     scope.launch(Dispatchers.IO) {
       job?.cancelAndJoin()
       job = null
-      canvasHostUrl = null
+      pluginSurfaceUrls = emptyMap()
       mainSessionKey = null
       onDisconnected("Offline")
     }
@@ -196,7 +196,20 @@ class GatewaySession(
     currentConnection?.closeQuietly()
   }
 
-  fun currentCanvasHostUrl(): String? = canvasHostUrl
+  fun currentCanvasHostUrl(): String? = pluginSurfaceUrls["canvas"]
+
+  suspend fun refreshCanvasHostUrl(timeoutMs: Long = 8_000): String? {
+    val refreshed =
+      refreshPluginSurfaceUrl(
+        method = "node.pluginSurface.refresh",
+        params = buildJsonObject { put("surface", JsonPrimitive("canvas")) },
+        timeoutMs = timeoutMs,
+      )
+    if (!refreshed.isNullOrBlank()) {
+      pluginSurfaceUrls = pluginSurfaceUrls + ("canvas" to refreshed)
+    }
+    return refreshed
+  }
 
   fun currentMainSessionKey(): String? = mainSessionKey
 
@@ -215,6 +228,28 @@ class GatewaySession(
     } catch (err: Throwable) {
       Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
       false
+    }
+  }
+
+  private suspend fun refreshPluginSurfaceUrl(
+    method: String,
+    params: JsonElement?,
+    timeoutMs: Long,
+  ): String? {
+    val conn = currentConnection ?: return null
+    return try {
+      val res = conn.request(method, params, timeoutMs)
+      if (!res.ok) return null
+      val obj = res.payloadJson?.let { json.parseToJsonElement(it).asObjectOrNull() } ?: return null
+      val raw =
+        obj["pluginSurfaceUrls"]
+          .asObjectOrNull()
+          ?.get("canvas")
+          .asStringOrNull()
+      normalizeCanvasHostUrl(raw, conn.endpoint, isTlsConnection = conn.tls != null)
+    } catch (err: Throwable) {
+      Log.d("OpenClawGateway", "$method failed: ${err.message ?: err::class.java.simpleName}")
+      null
     }
   }
 
@@ -280,52 +315,6 @@ class GatewaySession(
     return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
   }
 
-  suspend fun refreshNodeCanvasCapability(timeoutMs: Long = 8_000): Boolean {
-    val conn = currentConnection ?: return false
-    val response =
-      try {
-        conn.request(
-          "node.canvas.capability.refresh",
-          params = buildJsonObject {},
-          timeoutMs = timeoutMs,
-        )
-      } catch (err: Throwable) {
-        Log.w("OpenClawGateway", "node.canvas.capability.refresh failed: ${err.message ?: err::class.java.simpleName}")
-        return false
-      }
-    if (!response.ok) {
-      val err = response.error
-      Log.w(
-        "OpenClawGateway",
-        "node.canvas.capability.refresh rejected: ${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}",
-      )
-      return false
-    }
-    val payloadObj = response.payloadJson?.let(::parseJsonOrNull)?.asObjectOrNull()
-    val refreshedCapability =
-      payloadObj
-        ?.get("canvasCapability")
-        .asStringOrNull()
-        ?.trim()
-        .orEmpty()
-    if (refreshedCapability.isEmpty()) {
-      Log.w("OpenClawGateway", "node.canvas.capability.refresh missing canvasCapability")
-      return false
-    }
-    val scopedCanvasHostUrl = canvasHostUrl?.trim().orEmpty()
-    if (scopedCanvasHostUrl.isEmpty()) {
-      Log.w("OpenClawGateway", "node.canvas.capability.refresh missing local canvasHostUrl")
-      return false
-    }
-    val refreshedUrl = replaceCanvasCapabilityInScopedHostUrl(scopedCanvasHostUrl, refreshedCapability)
-    if (refreshedUrl == null) {
-      Log.w("OpenClawGateway", "node.canvas.capability.refresh unable to rewrite scoped canvas URL")
-      return false
-    }
-    canvasHostUrl = refreshedUrl
-    return true
-  }
-
   private data class RpcResponse(
     val id: String,
     val ok: Boolean,
@@ -334,12 +323,12 @@ class GatewaySession(
   )
 
   private inner class Connection(
-    private val endpoint: GatewayEndpoint,
+    val endpoint: GatewayEndpoint,
     private val token: String?,
     private val bootstrapToken: String?,
     private val password: String?,
     private val options: GatewayConnectOptions,
-    private val tls: GatewayTlsParams?,
+    val tls: GatewayTlsParams?,
   ) {
     private val connectDeferred = CompletableDeferred<Unit>()
     private val closedDeferred = CompletableDeferred<Unit>()
@@ -615,8 +604,13 @@ class GatewaySession(
             }
           }
       }
-      val rawCanvas = obj["canvasHostUrl"].asStringOrNull()
-      canvasHostUrl = normalizeCanvasHostUrl(rawCanvas, endpoint, isTlsConnection = tls != null)
+      val rawPluginSurfaceUrls = obj["pluginSurfaceUrls"].asObjectOrNull()
+      val normalizedPluginSurfaceUrls =
+        rawPluginSurfaceUrls?.mapNotNull { (surface, value) ->
+          normalizeCanvasHostUrl(value.asStringOrNull(), endpoint, isTlsConnection = tls != null)
+            ?.let { normalized -> surface to normalized }
+        } ?: emptyList()
+      pluginSurfaceUrls = normalizedPluginSurfaceUrls.toMap()
       val sessionDefaults =
         obj["snapshot"]
           .asObjectOrNull()
@@ -910,7 +904,7 @@ class GatewaySession(
         conn.awaitClose()
       } finally {
         currentConnection = null
-        canvasHostUrl = null
+        pluginSurfaceUrls = emptyMap()
         mainSessionKey = null
       }
     }
@@ -1131,22 +1125,6 @@ private fun parseJsonOrNull(payload: String): JsonElement? {
   } catch (_: Throwable) {
     null
   }
-}
-
-internal fun replaceCanvasCapabilityInScopedHostUrl(
-  scopedUrl: String,
-  capability: String,
-): String? {
-  val marker = "/__openclaw__/cap/"
-  val markerStart = scopedUrl.indexOf(marker)
-  if (markerStart < 0) return null
-  val capabilityStart = markerStart + marker.length
-  val slashEnd = scopedUrl.indexOf("/", capabilityStart).takeIf { it >= 0 }
-  val queryEnd = scopedUrl.indexOf("?", capabilityStart).takeIf { it >= 0 }
-  val fragmentEnd = scopedUrl.indexOf("#", capabilityStart).takeIf { it >= 0 }
-  val capabilityEnd = listOfNotNull(slashEnd, queryEnd, fragmentEnd).minOrNull() ?: scopedUrl.length
-  if (capabilityEnd <= capabilityStart) return null
-  return scopedUrl.substring(0, capabilityStart) + capability + scopedUrl.substring(capabilityEnd)
 }
 
 internal fun resolveInvokeResultAckTimeoutMs(invokeTimeoutMs: Long?): Long {

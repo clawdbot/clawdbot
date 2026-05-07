@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { copyA2uiAssets } from "../../scripts/canvas-a2ui-copy.js";
+import { copyA2uiAssets } from "../../extensions/canvas/scripts/copy-a2ui.mjs";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
 const ORIGINAL_SKIP_MISSING = process.env.OPENCLAW_A2UI_SKIP_MISSING;

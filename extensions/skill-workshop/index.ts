@@ -38,6 +38,30 @@ export default definePluginEntry({
       },
     );
 
+    api.registerTrustedToolPolicy({
+      id: "skill-workshop-apply-approval",
+      description: "Require operator approval before applying queued workspace skill proposals.",
+      evaluate(event) {
+        const config = resolveCurrentConfig();
+        if (
+          !config.enabled ||
+          config.approvalPolicy === "auto" ||
+          event.toolName !== "skill_workshop" ||
+          event.params.action !== "apply"
+        ) {
+          return undefined;
+        }
+        return {
+          requireApproval: {
+            title: "Apply workspace skill proposal",
+            description: "Apply a queued workspace skill proposal.",
+            severity: "warning",
+            allowedDecisions: ["allow-once", "deny"],
+          },
+        };
+      },
+    });
+
     api.on("before_prompt_build", async () => {
       const config = resolveCurrentConfig();
       if (!config.enabled) {

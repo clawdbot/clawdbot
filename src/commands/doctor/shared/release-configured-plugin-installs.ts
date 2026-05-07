@@ -1,4 +1,5 @@
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
+import { modelSelectionShouldEnsureCodexPlugin } from "../../../agents/openai-codex-routing.js";
 import { listPotentialConfiguredChannelPresenceSignals } from "../../../channels/config-presence.js";
 import { normalizeChatChannelId } from "../../../channels/registry.js";
 import { isChannelConfigured } from "../../../config/channel-configured.js";
@@ -182,6 +183,14 @@ function collectProviderPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): 
   return [...ids].toSorted((left, right) => left.localeCompare(right));
 }
 
+function collectModelSelectedRuntimePluginIds(cfg: OpenClawConfig): string[] {
+  return collectConfiguredModelRefs(cfg).some(({ value }) =>
+    modelSelectionShouldEnsureCodexPlugin({ config: cfg, model: value }),
+  )
+    ? ["codex"]
+    : [];
+}
+
 function collectAgentHarnessRuntimePluginIds(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -288,6 +297,9 @@ export function collectReleaseConfiguredPluginIds(params: {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const pluginId of collectAgentHarnessRuntimePluginIds(params.cfg, env)) {
+    addEligiblePluginId(params.cfg, pluginIds, pluginId);
+  }
+  for (const pluginId of collectModelSelectedRuntimePluginIds(params.cfg)) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const pluginId of collectWebSearchPluginIds(params.cfg)) {

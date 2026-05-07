@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -60,8 +61,17 @@ type DiagnosticsTimelineOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
+export type ActiveDiagnosticsTimelineSpan = {
+  name: string;
+  phase?: string;
+  spanId: string;
+  parentSpanId?: string;
+  attributes?: DiagnosticsTimelineAttributes;
+};
+
 let warnedAboutTimelineWrite = false;
 const createdTimelineDirs = new Set<string>();
+const activeDiagnosticsTimelineSpan = new AsyncLocalStorage<ActiveDiagnosticsTimelineSpan>();
 
 function resolveDiagnosticsTimelineOptions(
   options: DiagnosticsTimelineOptions = {},
@@ -177,6 +187,10 @@ export function emitDiagnosticsTimelineEvent(
   }
 }
 
+export function getActiveDiagnosticsTimelineSpan(): ActiveDiagnosticsTimelineSpan | undefined {
+  return activeDiagnosticsTimelineSpan.getStore();
+}
+
 export async function measureDiagnosticsTimelineSpan<T>(
   name: string,
   run: () => Promise<T> | T,
@@ -186,28 +200,40 @@ export async function measureDiagnosticsTimelineSpan<T>(
   if (!isDiagnosticsTimelineEnabled({ config: options.config, env })) {
     return await run();
   }
+  const activeSpan = getActiveDiagnosticsTimelineSpan();
   const spanId = randomUUID();
+  const phase = options.phase ?? activeSpan?.phase;
+  const parentSpanId = options.parentSpanId ?? activeSpan?.spanId;
   const startedAt = performance.now();
   emitDiagnosticsTimelineEvent(
     {
       type: "span.start",
       name,
-      phase: options.phase,
+      phase,
       spanId,
-      parentSpanId: options.parentSpanId,
+      parentSpanId,
       attributes: options.attributes,
     },
     { config: options.config, env },
   );
   try {
-    const result = await run();
+    const result = await activeDiagnosticsTimelineSpan.run(
+      {
+        name,
+        ...(phase ? { phase } : {}),
+        spanId,
+        ...(parentSpanId ? { parentSpanId } : {}),
+        ...(options.attributes ? { attributes: options.attributes } : {}),
+      },
+      () => run(),
+    );
     emitDiagnosticsTimelineEvent(
       {
         type: "span.end",
         name,
-        phase: options.phase,
+        phase,
         spanId,
-        parentSpanId: options.parentSpanId,
+        parentSpanId,
         durationMs: performance.now() - startedAt,
         attributes: options.attributes,
       },
@@ -219,9 +245,9 @@ export async function measureDiagnosticsTimelineSpan<T>(
       {
         type: "span.error",
         name,
-        phase: options.phase,
+        phase,
         spanId,
-        parentSpanId: options.parentSpanId,
+        parentSpanId,
         durationMs: performance.now() - startedAt,
         attributes: options.attributes,
         errorName: error instanceof Error ? error.name : typeof error,
@@ -242,28 +268,40 @@ export function measureDiagnosticsTimelineSpanSync<T>(
   if (!isDiagnosticsTimelineEnabled({ config: options.config, env })) {
     return run();
   }
+  const activeSpan = getActiveDiagnosticsTimelineSpan();
   const spanId = randomUUID();
+  const phase = options.phase ?? activeSpan?.phase;
+  const parentSpanId = options.parentSpanId ?? activeSpan?.spanId;
   const startedAt = performance.now();
   emitDiagnosticsTimelineEvent(
     {
       type: "span.start",
       name,
-      phase: options.phase,
+      phase,
       spanId,
-      parentSpanId: options.parentSpanId,
+      parentSpanId,
       attributes: options.attributes,
     },
     { config: options.config, env },
   );
   try {
-    const result = run();
+    const result = activeDiagnosticsTimelineSpan.run(
+      {
+        name,
+        ...(phase ? { phase } : {}),
+        spanId,
+        ...(parentSpanId ? { parentSpanId } : {}),
+        ...(options.attributes ? { attributes: options.attributes } : {}),
+      },
+      run,
+    );
     emitDiagnosticsTimelineEvent(
       {
         type: "span.end",
         name,
-        phase: options.phase,
+        phase,
         spanId,
-        parentSpanId: options.parentSpanId,
+        parentSpanId,
         durationMs: performance.now() - startedAt,
         attributes: options.attributes,
       },
@@ -275,9 +313,9 @@ export function measureDiagnosticsTimelineSpanSync<T>(
       {
         type: "span.error",
         name,
-        phase: options.phase,
+        phase,
         spanId,
-        parentSpanId: options.parentSpanId,
+        parentSpanId,
         durationMs: performance.now() - startedAt,
         attributes: options.attributes,
         errorName: error instanceof Error ? error.name : typeof error,

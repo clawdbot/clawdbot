@@ -24,8 +24,16 @@ async function withGoogleApiEnvUnset<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } finally {
-    process.env.GEMINI_API_KEY = geminiApiKey;
-    process.env.GOOGLE_API_KEY = googleApiKey;
+    if (geminiApiKey === undefined) {
+      delete process.env.GEMINI_API_KEY;
+    } else {
+      process.env.GEMINI_API_KEY = geminiApiKey;
+    }
+    if (googleApiKey === undefined) {
+      delete process.env.GOOGLE_API_KEY;
+    } else {
+      process.env.GOOGLE_API_KEY = googleApiKey;
+    }
   }
 }
 

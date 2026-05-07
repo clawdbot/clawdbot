@@ -5,6 +5,7 @@ import {
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
 import { DEFAULT_ASSISTANT_AVATAR } from "../assistant-identity.ts";
+import { buildQualifiedChatModelValue } from "../chat-model-ref.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import type {
   AgentIdentityResult,
@@ -691,7 +692,7 @@ export function buildModelOptions(
   if (catalog) {
     for (const entry of catalog) {
       const provider = entry.provider?.trim();
-      const value = provider ? `${provider}/${entry.id}` : entry.id;
+      const value = buildQualifiedChatModelValue(entry.id, provider);
       const label = provider ? `${entry.id} · ${provider}` : entry.id;
       addOption(value, label);
     }

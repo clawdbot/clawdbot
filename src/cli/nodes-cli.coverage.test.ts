@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodesCli } from "./nodes-cli.js";
 
 type NodeInvokeCall = {
@@ -90,10 +90,13 @@ describe("nodes-cli coverage", () => {
     return getNodeInvokeCall();
   };
 
-  if (sharedProgram.commands.length === 0) {
+  beforeAll(async () => {
+    if (sharedProgram.commands.length > 0) {
+      return;
+    }
     sharedProgram.exitOverride();
-    registerNodesCli(sharedProgram);
-  }
+    await registerNodesCli(sharedProgram);
+  });
 
   beforeEach(() => {
     runtimeErrors.length = 0;

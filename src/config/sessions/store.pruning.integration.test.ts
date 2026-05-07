@@ -307,6 +307,92 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expect(fs.stat(freshOrphanTranscript)).resolves.toBeDefined();
   });
 
+  it("sessions cleanup previews stale direct DM rows after dmScope returns to main", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const directTranscript = path.join(testDir, "direct-session.jsonl");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            sessionId: "main-session",
+            updatedAt: now,
+          },
+          "agent:main:telegram:direct:6101296751": {
+            sessionId: "direct-session",
+            updatedAt: now,
+            lastChannel: "telegram",
+            lastTo: "6101296751",
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(path.join(testDir, "main-session.jsonl"), "main", "utf-8");
+    await fs.writeFile(directTranscript, "direct", "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: { session: { dmScope: "main" } },
+      opts: { store: storePath, dryRun: true, enforce: true, fixDmScope: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    const preview = dryRun.previewResults[0];
+    expect(preview?.summary.dmScopeRetired).toBe(1);
+    expect(preview?.summary.afterCount).toBe(1);
+    expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram:direct:6101296751")).toBe(true);
+    expect(preview?.summary.unreferencedArtifacts.removedFiles).toBe(0);
+    await expect(fs.stat(directTranscript)).resolves.toBeDefined();
+  });
+
+  it("sessions cleanup retires stale direct DM rows and archives their transcripts", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const directTranscript = path.join(testDir, "direct-session.jsonl");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            sessionId: "main-session",
+            updatedAt: now,
+          },
+          "agent:main:telegram:direct:6101296751": {
+            sessionId: "direct-session",
+            updatedAt: now,
+            sessionFile: directTranscript,
+            lastChannel: "telegram",
+            lastTo: "6101296751",
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(path.join(testDir, "main-session.jsonl"), "main", "utf-8");
+    await fs.writeFile(directTranscript, "direct", "utf-8");
+
+    const applied = await runSessionsCleanup({
+      cfg: { session: { dmScope: "main" } },
+      opts: { store: storePath, enforce: true, fixDmScope: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.dmScopeRetired).toBe(1);
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted["agent:main:main"]).toBeDefined();
+    expect(persisted["agent:main:telegram:direct:6101296751"]).toBeUndefined();
+    await expect(fs.stat(directTranscript)).rejects.toThrow();
+    const files = await fs.readdir(testDir);
+    expect(files.some((name) => name.startsWith("direct-session.jsonl.deleted."))).toBe(true);
+  });
+
   it("sessions cleanup dry-run does not double-count artifacts already covered by disk budget", async () => {
     mockLoadConfig.mockReturnValue({
       session: {

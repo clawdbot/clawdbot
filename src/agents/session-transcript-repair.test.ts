@@ -8,7 +8,14 @@ import {
 } from "./session-transcript-repair.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 
-const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
 
 function getAssistantToolCallBlocks(messages: AgentMessage[]) {
   const assistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
@@ -313,6 +320,29 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.messages).toHaveLength(1);
     expect(result.messages[0]?.role).toBe("user");
     expect(result.added).toHaveLength(0);
+  });
+});
+
+describe("sanitizeToolCallInputs", () => {
+  it("drops malformed snake_case tool call blocks", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "before" },
+          { type: "tool_use", id: "tool_1", name: "read" },
+          { type: "tool_call", tool_call_id: "tool_2", name: "write", arguments: {} },
+          { type: "function_call", call_id: "tool_3", name: "exec", arguments: "{}" },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["write", "exec"] });
+
+    expect(getAssistantToolCallBlocks(out)).toMatchObject([
+      { type: "tool_call", name: "write" },
+      { type: "function_call", name: "exec" },
+    ]);
   });
 });
 

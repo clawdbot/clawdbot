@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { isUpdatePlanToolEnabledForOpenClawTools } from "./openclaw-tools.registration.js";
+import { isToolWrappedWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 
 type UpdatePlanGatingParams = Parameters<typeof isUpdatePlanToolEnabledForOpenClawTools>[0];
@@ -49,6 +50,27 @@ describe("openclaw-tools update_plan gating", () => {
 
     expect(defaultTools.some((tool) => tool.name === "update_plan")).toBe(false);
     expect(emptyAllowlistTools.some((tool) => tool.name === "update_plan")).toBe(false);
+  });
+
+  it("wraps constructed tools with before-tool-call hooks by default", () => {
+    const tools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+    });
+    const unwrappedTools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+    });
+
+    expect(
+      isToolWrappedWithBeforeToolCallHook(tools.find((tool) => tool.name === "sessions_list")!),
+    ).toBe(true);
+    expect(
+      isToolWrappedWithBeforeToolCallHook(
+        unwrappedTools.find((tool) => tool.name === "sessions_list")!,
+      ),
+    ).toBe(false);
   });
 
   it("registers update_plan when explicitly enabled", () => {

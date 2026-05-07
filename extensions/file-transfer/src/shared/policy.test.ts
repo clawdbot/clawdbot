@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the plugin-sdk runtime-config surface so we can drive the policy
 // reader from the test without booting a gateway. mutateConfigFile is also
@@ -26,6 +26,12 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/runtime-config-snapshot");
+  vi.doUnmock("openclaw/plugin-sdk/config-mutation");
+  vi.resetModules();
 });
 
 function withConfig(fileTransfer: Record<string, unknown> | undefined) {

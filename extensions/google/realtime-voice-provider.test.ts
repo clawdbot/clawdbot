@@ -1,5 +1,5 @@
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 type MockGoogleLiveSession = {
@@ -45,6 +45,10 @@ vi.mock("./google-genai-runtime.js", () => ({
   })),
 }));
 
+const ENV_KEYS = ["GEMINI_API_KEY", "GOOGLE_API_KEY"] as const;
+
+let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
+
 function lastConnectParams(): MockGoogleLiveConnectParams {
   const params = connectMock.mock.calls.at(-1)?.[0];
   if (!params) {
@@ -55,6 +59,7 @@ function lastConnectParams(): MockGoogleLiveConnectParams {
 
 describe("buildGoogleRealtimeVoiceProvider", () => {
   beforeEach(() => {
+    envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
     connectMock.mockClear();
     createTokenMock.mockClear();
     session.close.mockClear();
@@ -63,6 +68,23 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     session.sendToolResponse.mockClear();
     delete process.env.GEMINI_API_KEY;
     delete process.env.GOOGLE_API_KEY;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    for (const key of ENV_KEYS) {
+      const value = envSnapshot[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./google-genai-runtime.js");
+    vi.resetModules();
   });
 
   it("declares realtime Talk capabilities for catalog selection", () => {

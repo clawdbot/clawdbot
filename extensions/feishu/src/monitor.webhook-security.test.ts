@@ -1,5 +1,5 @@
 import { createConnection } from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFeishuClientMockModule,
   createFeishuRuntimeMockModule,
@@ -153,6 +153,15 @@ async function waitForOversizedBodyResponse(url: string): Promise<string> {
 afterEach(() => {
   clearFeishuWebhookRateLimitStateForTest();
   stopFeishuMonitor();
+});
+
+afterAll(() => {
+  vi.doUnmock("./probe.js");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./runtime.js");
+  vi.doUnmock("@larksuiteoapi/node-sdk");
+  vi.doUnmock("./monitor.state.js");
+  vi.resetModules();
 });
 
 describe("Feishu webhook security hardening", () => {

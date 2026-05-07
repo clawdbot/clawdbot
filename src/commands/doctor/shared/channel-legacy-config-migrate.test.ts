@@ -1,12 +1,18 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const applyPluginDoctorCompatibilityMigrations = vi.hoisted(() => vi.fn());
+const { applyPluginDoctorCompatibilityMigrations, collectRelevantDoctorPluginIds } = vi.hoisted(
+  () => ({
+    applyPluginDoctorCompatibilityMigrations: vi.fn(),
+    collectRelevantDoctorPluginIds: vi.fn(),
+  }),
+);
 const loadBundledChannelDoctorContractApi = vi.hoisted(() => vi.fn());
 const getBootstrapChannelPlugin = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../plugins/doctor-contract-registry.js", () => ({
   applyPluginDoctorCompatibilityMigrations: (...args: unknown[]) =>
     applyPluginDoctorCompatibilityMigrations(...args),
+  collectRelevantDoctorPluginIds: (...args: unknown[]) => collectRelevantDoctorPluginIds(...args),
 }));
 
 vi.mock("../../../channels/plugins/doctor-contract-api.js", () => ({
@@ -30,12 +36,14 @@ beforeAll(async () => {
 
 beforeEach(() => {
   applyPluginDoctorCompatibilityMigrations.mockReset();
+  collectRelevantDoctorPluginIds.mockReset();
   loadBundledChannelDoctorContractApi.mockReset();
   getBootstrapChannelPlugin.mockReset();
 });
 
 describe("bundled channel legacy config migrations", () => {
   it("prefers bundled channel doctor contract normalizers before plugin registry fallback", () => {
+    collectRelevantDoctorPluginIds.mockReturnValueOnce([]);
     loadBundledChannelDoctorContractApi.mockImplementation((channelId: string) =>
       channelId === "slack"
         ? {
@@ -82,6 +90,7 @@ describe("bundled channel legacy config migrations", () => {
   });
 
   it("normalizes legacy private-network aliases exposed through bundled contract surfaces", () => {
+    collectRelevantDoctorPluginIds.mockReturnValueOnce(["mattermost"]);
     loadBundledChannelDoctorContractApi.mockReturnValue(undefined);
     getBootstrapChannelPlugin.mockReturnValue(undefined);
     applyPluginDoctorCompatibilityMigrations.mockReturnValueOnce({
@@ -121,6 +130,7 @@ describe("bundled channel legacy config migrations", () => {
     });
 
     expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledWith(expect.any(Object), {
+      config: expect.any(Object),
       pluginIds: ["mattermost"],
     });
 
@@ -146,5 +156,43 @@ describe("bundled channel legacy config migrations", () => {
         "Moved channels.mattermost.accounts.work.allowPrivateNetwork → channels.mattermost.accounts.work.network.dangerouslyAllowPrivateNetwork (false).",
       ]),
     );
+  });
+
+  it("applies plugin doctor normalizers for configured non-channel plugin entries", () => {
+    collectRelevantDoctorPluginIds.mockReturnValueOnce(["lossless-claw"]);
+    applyPluginDoctorCompatibilityMigrations.mockReturnValueOnce({
+      config: {
+        plugins: {
+          entries: {
+            "lossless-claw": {
+              llm: {
+                allowModelOverride: true,
+                allowedModels: ["openai-codex/gpt-5.4-mini"],
+              },
+            },
+          },
+        },
+      },
+      changes: ["Configured plugins.entries.lossless-claw.llm.allowedModels."],
+    });
+
+    const config = {
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            config: {
+              summaryModel: "openai-codex/gpt-5.4-mini",
+            },
+          },
+        },
+      },
+    };
+    const result = applyChannelDoctorCompatibilityMigrations(config);
+
+    expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledWith(expect.any(Object), {
+      config,
+      pluginIds: ["lossless-claw"],
+    });
+    expect(result.changes).toEqual(["Configured plugins.entries.lossless-claw.llm.allowedModels."]);
   });
 });

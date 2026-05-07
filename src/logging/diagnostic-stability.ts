@@ -27,6 +27,9 @@ export type DiagnosticStabilityEventRecord = {
   phase?: string;
   detector?: string;
   deliveryKind?: string;
+  talkEventType?: string;
+  transport?: string;
+  brain?: string;
   toolName?: string;
   activeWorkKind?: string;
   pairedToolName?: string;
@@ -40,6 +43,7 @@ export type DiagnosticStabilityEventRecord = {
   commandLength?: number;
   exitCode?: number;
   timedOut?: boolean;
+  final?: boolean;
   costUsd?: number;
   count?: number;
   bytes?: number;
@@ -227,6 +231,16 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.durationMs = event.durationMs;
       record.outcome = "error";
       assignReasonCode(record, event.errorCategory);
+      break;
+    case "talk.event":
+      record.talkEventType = event.talkEventType;
+      record.mode = event.mode;
+      record.transport = event.transport;
+      record.brain = event.brain;
+      record.provider = event.provider;
+      record.final = event.final;
+      record.durationMs = event.durationMs;
+      record.bytes = event.byteLength;
       break;
     case "session.state":
       record.outcome = event.state;

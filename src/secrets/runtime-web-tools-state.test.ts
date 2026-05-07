@@ -1,51 +1,30 @@
-import { beforeAll, describe, expect, it } from "vitest";
-import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
-
-let activateSecretsRuntimeSnapshot: typeof import("./runtime.js").activateSecretsRuntimeSnapshot;
-let getActiveRuntimeWebToolsMetadata: typeof import("./runtime.js").getActiveRuntimeWebToolsMetadata;
-const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  clearActiveRuntimeWebToolsMetadata,
+  getActiveRuntimeWebToolsMetadata,
+  setActiveRuntimeWebToolsMetadata,
+} from "./runtime-web-tools-state.js";
 
 describe("runtime web tools state", () => {
-  beforeAll(async () => {
-    ({ activateSecretsRuntimeSnapshot, getActiveRuntimeWebToolsMetadata } =
-      await import("./runtime.js"));
+  afterEach(() => {
+    clearActiveRuntimeWebToolsMetadata();
   });
 
-  it("exposes active runtime web tool metadata as a defensive clone", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        tools: {
-          web: {
-            search: {
-              provider: "gemini",
-            },
-          },
-        },
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: {
-                    source: "env",
-                    provider: "default",
-                    id: "WEB_SEARCH_GEMINI_API_KEY",
-                  },
-                },
-              },
-            },
-          },
-        },
-      }),
-      env: {
-        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref",
+  it("exposes active runtime web tool metadata as a defensive clone", () => {
+    setActiveRuntimeWebToolsMetadata({
+      search: {
+        providerConfigured: "gemini",
+        providerSource: "configured",
+        selectedProvider: "gemini",
+        selectedProviderKeySource: "secretRef",
+        diagnostics: [],
       },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadablePluginOrigins: new Map([["google", "bundled"]]),
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
+      fetch: {
+        providerSource: "none",
+        diagnostics: [],
+      },
+      diagnostics: [],
     });
-
-    activateSecretsRuntimeSnapshot(snapshot);
 
     const first = getActiveRuntimeWebToolsMetadata();
     expect(first?.search.providerConfigured).toBe("gemini");

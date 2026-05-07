@@ -249,11 +249,13 @@ function convertContentBlocks(
         source: { type: "base64"; media_type: string; data: string };
       }
   > = [];
+  let hasTextBlock = false;
   for (const block of content) {
     if (block.type === "text") {
       const text = sanitizeTransportPayloadText(block.text);
       if (text.trim().length > 0) {
         blocks.push({ type: "text", text });
+        hasTextBlock = true;
       }
     } else {
       blocks.push({
@@ -266,11 +268,8 @@ function convertContentBlocks(
       });
     }
   }
-  if (!blocks.some((block) => block.type === "text")) {
-    blocks.unshift({
-      type: "text",
-      text: "(see attached image)",
-    });
+  if (!hasTextBlock) {
+    return [{ type: "text", text: "(see attached image)" }, ...blocks];
   }
   return blocks;
 }
@@ -426,7 +425,16 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   if (!tools) {
     return [];
   }
-  return tools.flatMap((tool) => {
+  const converted: Array<{
+    name: string;
+    description?: string;
+    input_schema: {
+      type: "object";
+      properties: unknown;
+      required: unknown;
+    };
+  }> = [];
+  for (const tool of tools) {
     // Main quarantine happens when plugin tools materialize; this keeps Anthropic
     // safe for direct/custom tool arrays that bypass the plugin registry.
     const parameters =
@@ -434,20 +442,19 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
         ? (tool.parameters as Record<string, unknown>)
         : undefined;
     if (!parameters) {
-      return [];
+      continue;
     }
-    return [
-      {
-        name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
-        description: tool.description,
-        input_schema: {
-          type: "object",
-          properties: parameters.properties || {},
-          required: parameters.required || [],
-        },
+    converted.push({
+      name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
+      description: tool.description,
+      input_schema: {
+        type: "object",
+        properties: parameters.properties || {},
+        required: parameters.required || [],
       },
-    ];
-  });
+    });
+  }
+  return converted;
 }
 
 function mapStopReason(reason: string | undefined): string {

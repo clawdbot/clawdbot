@@ -1,5 +1,5 @@
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { hasAnthropicVertexAvailableAuthMock } = vi.hoisted(() => ({
   hasAnthropicVertexAvailableAuthMock: vi.fn(),
@@ -22,6 +22,11 @@ describe("anthropic-vertex provider plugin", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./api.js");
+    vi.resetModules();
   });
 
   it("resolves the ADC marker through the provider hook", async () => {

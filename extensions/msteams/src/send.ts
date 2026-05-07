@@ -391,12 +391,13 @@ async function sendTextWithMedia(
     tokenProvider,
     sharePointSiteId,
     mediaMaxBytes,
+    replyStyle,
   } = ctx;
 
   let platformMessageIds: string[];
   try {
     platformMessageIds = await sendMSTeamsMessages({
-      replyStyle: "top-level",
+      replyStyle,
       adapter,
       appId,
       conversationRef: ref,

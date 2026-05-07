@@ -49,6 +49,22 @@ export function toWhatsappJid(number: string): string {
   return `${digits}@s.whatsapp.net`;
 }
 
+// LID-aware outbound JID resolver. When a forward mapping file
+// `lid-mapping-{phone-digits}.json` is present in any candidate dir, prefer
+// the `{lid}@lid` JID over `{phone-digits}@s.whatsapp.net`. This avoids the
+// ghost-chat failure mode where messages route to a sender-only thread that
+// never reaches recipients whose contact is internally LID-based (#67378).
+export function toWhatsappJidWithLid(number: string, opts?: JidToE164Options): string {
+  const stripped = number.replace(/^whatsapp:/i, "").trim();
+  if (stripped.includes("@")) {
+    return stripped;
+  }
+  const e164 = normalizeE164(stripped);
+  const phoneDigits = e164.replace(/\D/g, "");
+  const lid = readLidForwardMapping({ phoneDigits, opts });
+  return lid ? `${lid}@lid` : `${phoneDigits}@s.whatsapp.net`;
+}
+
 export type JidToE164Options = {
   authDir?: string;
   lidMappingDirs?: string[];
@@ -88,6 +104,31 @@ function readLidReverseMapping(params: { lid: string; opts?: JidToE164Options })
         continue;
       }
       return normalizeE164(String(phone));
+    } catch {
+      // next location
+    }
+  }
+  return null;
+}
+
+function readLidForwardMapping(params: {
+  phoneDigits: string;
+  opts?: JidToE164Options;
+}): string | null {
+  const mappingFilename = `lid-mapping-${params.phoneDigits}.json`;
+  const mappingDirs = resolveLidMappingDirs({ opts: params.opts });
+  for (const dir of mappingDirs) {
+    const mappingPath = path.join(dir, mappingFilename);
+    try {
+      const data = fs.readFileSync(mappingPath, "utf8");
+      const lid = JSON.parse(data) as string | number | null;
+      if (lid === null || lid === undefined) {
+        continue;
+      }
+      const digits = String(lid).replace(/\D/g, "");
+      if (digits) {
+        return digits;
+      }
     } catch {
       // next location
     }

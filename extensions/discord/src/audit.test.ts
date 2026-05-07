@@ -1,7 +1,9 @@
+import { ChannelType } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   auditDiscordChannelPermissionsWithFetcher,
+  collectDiscordAuditChannelIdsForAccount,
   collectDiscordAuditChannelIdsForGuilds,
 } from "./audit-core.js";
 
@@ -142,4 +144,59 @@ describe("discord audit", () => {
     expect(collected.channelIds).toEqual(["111"]);
     expect(collected.unresolvedChannels).toBe(1);
   });
+
+  it("includes configured voice auto-join channels in permission audits", () => {
+    const collected = collectDiscordAuditChannelIdsForAccount({
+      guilds: {
+        "123": {
+          channels: {
+            "111": { enabled: true },
+          },
+        },
+      },
+      voice: {
+        autoJoin: [
+          { guildId: "123", channelId: "222" },
+          { guildId: "123", channelId: "general" },
+        ],
+      },
+    });
+
+    expect(collected.channelIds).toEqual(["111", "222"]);
+    expect(collected.unresolvedChannels).toBe(1);
+  });
+
+  it.each([ChannelType.GuildVoice, ChannelType.GuildStageVoice])(
+    "requires voice permissions for voice channel audit targets of type %s",
+    async (channelType) => {
+      const cfg = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      fetchChannelPermissionsDiscordMock.mockResolvedValueOnce({
+        channelId: "222",
+        permissions: ["ViewChannel", "SendMessages"],
+        channelType,
+        raw: "0",
+        isDm: false,
+      });
+
+      const audit = await auditDiscordChannelPermissionsWithFetcher({
+        cfg,
+        token: "t",
+        accountId: "default",
+        channelIds: ["222"],
+        timeoutMs: 1000,
+        fetchChannelPermissions: fetchChannelPermissionsDiscordMock,
+      });
+
+      expect(audit.ok).toBe(false);
+      expect(audit.channels[0]?.missing).toEqual(["Connect", "Speak", "ReadMessageHistory"]);
+    },
+  );
 });

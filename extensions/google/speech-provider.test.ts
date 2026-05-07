@@ -2,7 +2,7 @@ import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
@@ -60,6 +60,11 @@ describe("Google speech provider", () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     transcodeAudioBufferToOpusMock.mockReset();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/media-runtime");
+    vi.resetModules();
   });
 
   it("synthesizes Gemini PCM as WAV and preserves audio tags in the request text", async () => {

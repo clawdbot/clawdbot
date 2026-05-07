@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getMessageContentMock = vi.hoisted(() => vi.fn());
 const saveMediaBufferMock = vi.hoisted(() => vi.fn());
@@ -42,6 +42,13 @@ async function* chunks(parts: Buffer[]): AsyncGenerator<Buffer> {
 describe("downloadLineMedia", () => {
   beforeAll(async () => {
     ({ downloadLineMedia } = await import("./download.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("@line/bot-sdk");
+    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+    vi.doUnmock("openclaw/plugin-sdk/media-store");
+    vi.resetModules();
   });
 
   beforeEach(() => {

@@ -9,10 +9,10 @@ export const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.conf
 export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
 export const extensionRestartMetadataFiles = new Set(["openclaw.plugin.json", "package.json"]);
 
-const ignoredRunNodeRepoPaths = new Set([
-  "src/canvas-host/a2ui/.bundle.hash",
-  "src/canvas-host/a2ui/a2ui.bundle.js",
-]);
+const ignoredRunNodeRepoPathPatterns = [
+  /^extensions\/[^/]+\/src\/host\/.+\/\.bundle\.hash$/u,
+  /^extensions\/[^/]+\/src\/host\/.+\/[^/]+\.bundle\.js$/u,
+];
 const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
 
 export const normalizeRunNodePath = (filePath) => String(filePath ?? "").replaceAll("\\", "/");
@@ -41,7 +41,7 @@ const isRestartRelevantExtensionPath = (relativePath) => {
 
 const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
   const normalizedPath = normalizeRunNodePath(repoPath).replace(/^\.\/+/, "");
-  if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
+  if (ignoredRunNodeRepoPathPatterns.some((pattern) => pattern.test(normalizedPath))) {
     return false;
   }
   if (runNodeConfigFiles.includes(normalizedPath)) {

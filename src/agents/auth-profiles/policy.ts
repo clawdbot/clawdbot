@@ -61,7 +61,7 @@ function collectOAuthModeSecretRefViolations(params: {
   profileId: string;
   credential: AuthProfileCredential;
   defaults: SecretDefaults | undefined;
-  configuredMode?: "api_key" | "oauth" | "token";
+  configuredMode?: "api_key" | "aws-sdk" | "oauth" | "token";
   violations: OAuthSecretRefPolicyViolation[];
 }): void {
   if (params.configuredMode !== "oauth") {

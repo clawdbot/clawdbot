@@ -22,7 +22,12 @@ describe("base config schema", () => {
     );
   });
 
-  it("omits legacy hooks.internal.handlers from the public schema payload", () => {
+  it("omits legacy compatibility paths from the public schema payload", () => {
+    const rootProperties = (
+      BASE_CONFIG_SCHEMA.schema as {
+        properties?: Record<string, unknown>;
+      }
+    ).properties;
     const hooksInternalProperties = (
       BASE_CONFIG_SCHEMA.schema as {
         properties?: {
@@ -38,7 +43,9 @@ describe("base config schema", () => {
     ).properties?.hooks?.properties?.internal?.properties;
     const uiHints = BASE_CONFIG_SCHEMA.uiHints as Record<string, unknown>;
 
+    expect(rootProperties?.canvasHost).toBeUndefined();
     expect(hooksInternalProperties?.handlers).toBeUndefined();
+    expect(uiHints.canvasHost).toBeUndefined();
     expect(uiHints["hooks.internal.handlers"]).toBeUndefined();
   });
 

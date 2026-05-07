@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDefaultMenuConfig,
   createGridLayout,
@@ -24,6 +24,11 @@ const { setRichMenuImageMock, MessagingApiBlobClientMock } = vi.hoisted(() => {
 vi.mock("@line/bot-sdk", () => ({
   messagingApi: { MessagingApiBlobClient: MessagingApiBlobClientMock },
 }));
+
+afterAll(() => {
+  vi.doUnmock("@line/bot-sdk");
+  vi.resetModules();
+});
 
 describe("messageAction", () => {
   it("creates message actions with explicit or default text", () => {

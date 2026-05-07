@@ -2,7 +2,7 @@ import {
   createMessageReceiptFromOutboundResults,
   verifyChannelMessageAdapterCapabilityProofs,
 } from "openclaw/plugin-sdk/channel-message";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { bluebubblesPlugin } from "./channel.js";
 
 const sendMessageBlueBubblesMock = vi.hoisted(() => vi.fn());
@@ -16,6 +16,11 @@ vi.mock("./channel.runtime.js", () => ({
     resolveBlueBubblesMessageId: resolveBlueBubblesMessageIdMock,
   },
 }));
+
+afterAll(() => {
+  vi.doUnmock("./channel.runtime.js");
+  vi.resetModules();
+});
 
 describe("bluebubbles message adapter", () => {
   it("declares durable text, media, and reply target capabilities with receipt proofs", async () => {

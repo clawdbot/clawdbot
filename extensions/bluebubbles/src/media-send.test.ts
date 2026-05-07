@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendBlueBubblesMedia } from "./media-send.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
@@ -22,6 +22,13 @@ vi.mock("./send.js", () => ({
 vi.mock("./monitor-reply-cache.js", () => ({
   resolveBlueBubblesMessageId: resolveBlueBubblesMessageIdMock,
 }));
+
+afterAll(() => {
+  vi.doUnmock("./attachments.js");
+  vi.doUnmock("./send.js");
+  vi.doUnmock("./monitor-reply-cache.js");
+  vi.resetModules();
+});
 
 type RuntimeMocks = {
   detectMime: ReturnType<typeof vi.fn>;

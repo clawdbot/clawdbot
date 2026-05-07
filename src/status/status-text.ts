@@ -161,6 +161,9 @@ function resolveStatusAuthProvider(params: {
   if (harness === "codex" && provider === "openai") {
     return "openai-codex";
   }
+  if (harness === "claude-cli" && provider === "anthropic") {
+    return "claude-cli";
+  }
   return params.provider;
 }
 

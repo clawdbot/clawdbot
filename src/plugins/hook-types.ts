@@ -21,6 +21,7 @@ import type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
 } from "./hook-before-agent-start.types.js";
+import type { InputGateDecision } from "./hook-decision-types.js";
 import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
@@ -103,7 +104,8 @@ export type PluginHookName =
   | "cron_changed"
   | "before_dispatch"
   | "reply_dispatch"
-  | "before_install";
+  | "before_install"
+  | "before_agent_run";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -141,6 +143,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_dispatch",
   "reply_dispatch",
   "before_install",
+  "before_agent_run",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -168,10 +171,13 @@ export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
   promptInjectionHookNameSet.has(hookName);
 
 export const CONVERSATION_HOOK_NAMES = [
+  "before_model_resolve",
+  "before_agent_reply",
   "llm_input",
   "llm_output",
   "before_agent_finalize",
   "agent_end",
+  "before_agent_run",
 ] as const satisfies readonly PluginHookName[];
 
 export type ConversationHookName = (typeof CONVERSATION_HOOK_NAMES)[number];
@@ -259,6 +265,8 @@ export type PluginHookLlmOutputEvent = {
    * `resolvedRef` so provider/model consumers keep a stable parse contract.
    */
   harnessId?: string;
+  /** The original user prompt that produced this output. */
+  prompt?: string;
   assistantTexts: string[];
   lastAssistant?: unknown;
   usage?: {
@@ -408,6 +416,7 @@ export type PluginHookToolContext = {
   getSessionExtension?: <T extends PluginJsonValue = PluginJsonValue>(
     namespace: string,
   ) => T | undefined;
+  channelId?: string;
 };
 
 export type PluginHookBeforeToolCallEvent = {
@@ -438,6 +447,7 @@ export type PluginHookBeforeToolCallResult = {
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
+    allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
     pluginId?: string;
     onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
   };
@@ -802,6 +812,31 @@ export type PluginHookBeforeInstallResult = {
   blockReason?: string;
 };
 
+// ---------------------------------------------------------------------------
+// before_agent_run — Lifecycle Gate Hook
+// ---------------------------------------------------------------------------
+
+/** Event payload for the before_agent_run gate hook. */
+export type PluginHookBeforeAgentRunEvent = {
+  /** The user's message that triggered this run. */
+  prompt: string;
+  /** Loaded session history before the current prompt is submitted. */
+  messages: unknown[];
+  /** Active system prompt prepared for this run. */
+  systemPrompt?: string;
+  /** Account identity when available. */
+  accountId?: string;
+  /** Channel the message came from. */
+  channelId?: string;
+  /** Sender identity when available. */
+  senderId?: string;
+  /** Whether the sender is an owner. */
+  senderIsOwner?: boolean;
+};
+
+/** Result type for before_agent_run. Returns pass/block or void (= pass). */
+export type PluginHookBeforeAgentRunResult = InputGateDecision | void;
+
 export type PluginHookHandlerMap = {
   agent_turn_prepare: (
     event: PluginAgentTurnPrepareEvent,
@@ -950,6 +985,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeInstallEvent,
     ctx: PluginHookBeforeInstallContext,
   ) => Promise<PluginHookBeforeInstallResult | void> | PluginHookBeforeInstallResult | void;
+  before_agent_run: (
+    event: PluginHookBeforeAgentRunEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeAgentRunResult> | PluginHookBeforeAgentRunResult;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

@@ -90,6 +90,7 @@ vi.mock("openclaw/plugin-sdk/media-store", async () => {
 });
 
 const HOME = path.join(os.tmpdir(), `openclaw-inbound-media-${crypto.randomUUID()}`);
+const ORIGINAL_HOME = process.env.HOME;
 process.env.HOME = HOME;
 
 vi.mock("@whiskeysockets/baileys", async () => {
@@ -178,6 +179,11 @@ describe("web inbound media saves with extension", () => {
 
   afterAll(async () => {
     await fs.rm(HOME, { recursive: true, force: true });
+    if (ORIGINAL_HOME === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = ORIGINAL_HOME;
+    }
   });
 
   it("stores image extension and keeps document filename", async () => {

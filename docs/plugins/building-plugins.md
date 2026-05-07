@@ -35,6 +35,9 @@ install from npm during the launch cutover.
   <Card title="Provider plugin" icon="cpu" href="/plugins/sdk-provider-plugins">
     Add a model provider (LLM, proxy, or custom endpoint)
   </Card>
+  <Card title="CLI backend plugin" icon="terminal" href="/plugins/cli-backend-plugins">
+    Map a local AI CLI into OpenClaw's text fallback runner
+  </Card>
   <Card title="Tool / hook plugin" icon="wrench" href="/plugins/hooks">
     Register agent tools, event hooks, or services - continue below
   </Card>
@@ -160,7 +163,7 @@ A single plugin can register any number of capabilities via the `api` object:
 | Capability             | Registration method                              | Detailed guide                                                                  |
 | ---------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------- |
 | Text inference (LLM)   | `api.registerProvider(...)`                      | [Provider Plugins](/plugins/sdk-provider-plugins)                               |
-| CLI inference backend  | `api.registerCliBackend(...)`                    | [CLI Backends](/gateway/cli-backends)                                           |
+| CLI inference backend  | `api.registerCliBackend(...)`                    | [CLI Backend Plugins](/plugins/cli-backend-plugins)                             |
 | Channel / messaging    | `api.registerChannel(...)`                       | [Channel Plugins](/plugins/sdk-channel-plugins)                                 |
 | Speech (TTS/STT)       | `api.registerSpeechProvider(...)`                | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Realtime transcription | `api.registerRealtimeTranscriptionProvider(...)` | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
@@ -381,6 +384,9 @@ reserved surfaces, not as the default pattern for new third-party plugins.
   </Card>
   <Card title="Provider Plugins" icon="cpu" href="/plugins/sdk-provider-plugins">
     Build a model provider plugin
+  </Card>
+  <Card title="CLI Backend Plugins" icon="terminal" href="/plugins/cli-backend-plugins">
+    Register a local AI CLI backend
   </Card>
   <Card title="SDK Overview" icon="book-open" href="/plugins/sdk-overview">
     Import map and registration API reference

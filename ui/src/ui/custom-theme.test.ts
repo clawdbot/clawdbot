@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCustomThemeStyles,
   importCustomThemeFromUrl,
@@ -8,6 +8,10 @@ import {
   syncCustomThemeStyleTag,
 } from "./custom-theme.ts";
 import type { ImportedCustomTheme } from "./custom-theme.ts";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function createTweakcnPayload() {
   return {

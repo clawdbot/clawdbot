@@ -87,7 +87,9 @@ Previews or applies task and Task Flow reconciliation, cleanup stamping, and pru
 For cron tasks, reconciliation uses persisted run logs/job state before marking an
 old active task `lost`, so completed cron runs do not become false audit errors
 just because the in-memory Gateway runtime state is gone. Offline CLI audit is
-not authoritative for the Gateway's process-local cron active-job set.
+not authoritative for the Gateway's process-local cron active-job set. CLI tasks
+with a run id/source id are marked `lost` when their live Gateway run context is
+gone, even if an old child-session row remains.
 
 ### `flow`
 

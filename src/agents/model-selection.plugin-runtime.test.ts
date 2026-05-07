@@ -1,10 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const normalizeProviderModelIdWithPluginMock = vi.fn();
+const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+  configFingerprint: "model-selection-plugin-runtime-test-empty-plugin-metadata",
+  plugins: [
+    {
+      modelIdNormalization: {
+        providers: {
+          google: {
+            aliases: {
+              "gemini-3.1-pro": "gemini-3.1-pro-preview",
+            },
+          },
+        },
+      },
+    },
+  ],
+}));
 
 vi.mock("./provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: (params: unknown) =>
     normalizeProviderModelIdWithPluginMock(params),
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
 describe("model-selection plugin runtime normalization", () => {

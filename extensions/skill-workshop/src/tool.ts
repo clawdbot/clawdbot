@@ -2,14 +2,9 @@ import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import { jsonResult, type OpenClawPluginApi } from "../api.js";
 import type { SkillWorkshopConfig } from "./config.js";
-import {
-  applyProposalToWorkspace,
-  normalizeSkillName,
-  prepareProposalWrite,
-  writeSupportFile,
-} from "./skills.js";
+import { applyProposalToWorkspace, normalizeSkillName, writeSupportFile } from "./skills.js";
 import type { SkillChange, SkillProposal, SkillWorkshopStatus } from "./types.js";
-import { createStoreForContext, resolveWorkspaceDir } from "./workshop.js";
+import { applyOrStoreProposal, createStoreForContext, resolveWorkspaceDir } from "./workshop.js";
 
 type ToolParams = {
   action?: string;
@@ -150,65 +145,14 @@ export function createSkillWorkshopTool(params: {
       }
       if (action === "suggest") {
         const proposal = buildProposal({ workspaceDir, raw, source: "tool" });
-        const shouldApply =
-          raw.apply === true || (raw.apply !== false && params.config.approvalPolicy === "auto");
-        if (shouldApply) {
-          const prepared = await prepareProposalWrite({
-            proposal,
-            maxSkillBytes: params.config.maxSkillBytes,
-          });
-          const critical = prepared.findings.find((finding) => finding.severity === "critical");
-          if (critical) {
-            const stored = await store.add(
-              {
-                ...proposal,
-                status: "quarantined",
-                updatedAt: Date.now(),
-                scanFindings: prepared.findings,
-                quarantineReason: critical.message,
-              },
-              params.config.maxPending,
-            );
-            return jsonResult({ status: "quarantined", proposal: stored });
-          }
-          const applied = await applyProposalToWorkspace({
-            proposal,
-            maxSkillBytes: params.config.maxSkillBytes,
-          });
-          const stored = await store.add(
-            {
-              ...proposal,
-              status: "applied",
-              updatedAt: Date.now(),
-              scanFindings: applied.findings,
-            },
-            params.config.maxPending,
-          );
-          return jsonResult({ status: "applied", skillPath: applied.skillPath, proposal: stored });
-        }
-        const prepared = await prepareProposalWrite({
+        const result = await applyOrStoreProposal({
           proposal,
-          maxSkillBytes: params.config.maxSkillBytes,
+          store,
+          config: params.config,
+          workspaceDir,
+          skipAutoApply: raw.apply === false,
         });
-        const critical = prepared.findings.find((finding) => finding.severity === "critical");
-        if (critical) {
-          const stored = await store.add(
-            {
-              ...proposal,
-              status: "quarantined",
-              updatedAt: Date.now(),
-              scanFindings: prepared.findings,
-              quarantineReason: critical.message,
-            },
-            params.config.maxPending,
-          );
-          return jsonResult({ status: "quarantined", proposal: stored });
-        }
-        const stored = await store.add(
-          { ...proposal, scanFindings: prepared.findings },
-          params.config.maxPending,
-        );
-        return jsonResult({ status: "pending", proposal: stored });
+        return jsonResult(result);
       }
       if (action === "apply") {
         if (!raw.id) {

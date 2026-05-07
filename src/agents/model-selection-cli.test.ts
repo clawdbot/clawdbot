@@ -25,6 +25,10 @@ describe("isCliProvider", () => {
     expect(isCliProvider("claude-cli", {} as OpenClawConfig)).toBe(true);
   });
 
+  it("accepts the anthropic-cli auth-choice id as a Claude CLI provider alias", () => {
+    expect(isCliProvider("anthropic-cli", {} as OpenClawConfig)).toBe(true);
+  });
+
   it("returns false for provider ids", () => {
     expect(isCliProvider("example-cli", {} as OpenClawConfig)).toBe(false);
   });

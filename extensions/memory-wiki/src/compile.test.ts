@@ -170,6 +170,24 @@ describe("compileMemoryWikiVault", () => {
     );
   });
 
+  it("does not rewrite empty source pages into related-only stubs", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+    const emptySourcePath = path.join(rootDir, "sources", "empty.md");
+    const whitespaceSourcePath = path.join(rootDir, "sources", "whitespace.md");
+    await fs.writeFile(emptySourcePath, "", "utf8");
+    await fs.writeFile(whitespaceSourcePath, " \n\t", "utf8");
+
+    const result = await compileMemoryWikiVault(config);
+
+    await expect(fs.readFile(emptySourcePath, "utf8")).resolves.toBe("");
+    await expect(fs.readFile(whitespaceSourcePath, "utf8")).resolves.toBe(" \n\t");
+    expect(result.updatedFiles).not.toContain(emptySourcePath);
+    expect(result.updatedFiles).not.toContain(whitespaceSourcePath);
+  });
+
   it("does not relate every page through a broad shared source", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),

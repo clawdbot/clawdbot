@@ -234,7 +234,7 @@ describe("context notice", () => {
     resetContextNoticeThemeCacheForTest();
   });
 
-  it("renders only for fresh high current usage", () => {
+  it("renders persistent fresh context usage and keeps high-usage warning behavior", () => {
     const container = document.createElement("div");
     vi.spyOn(window, "getComputedStyle").mockReturnValue({
       getPropertyValue: (name: string) =>
@@ -242,19 +242,28 @@ describe("context notice", () => {
     } as CSSStyleDeclaration);
     resetContextNoticeThemeCacheForTest();
 
-    expect(
-      getContextNoticeViewModel(
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: null,
-          inputTokens: 757_300,
-          totalTokens: 46_000,
-          contextTokens: 200_000,
-        },
-        200_000,
-      ),
-    ).toBeNull();
+    const lowUsageSession: GatewaySessionRow = {
+      key: "main",
+      kind: "direct",
+      updatedAt: null,
+      inputTokens: 757_300,
+      totalTokens: 46_000,
+      contextTokens: 200_000,
+    };
+    const lowUsage = getContextNoticeViewModel(lowUsageSession, 200_000);
+    expect(lowUsage).toMatchObject({
+      pct: 23,
+      detail: "46k / 200k",
+      warning: false,
+      compactRecommended: false,
+    });
+    render(renderContextNotice(lowUsageSession, 200_000), container);
+    expect(container.textContent).toContain("23% context used");
+    expect(container.textContent).toContain("46k / 200k");
+    expect(container.querySelector(".context-notice--usage")).not.toBeNull();
+    expect(container.querySelector(".context-notice__meter")).not.toBeNull();
+    expect(container.querySelector(".context-notice__icon")).toBeNull();
+    expect(container.textContent).not.toContain("757.3k / 200k");
 
     const session: GatewaySessionRow = {
       key: "main",
@@ -272,6 +281,8 @@ describe("context notice", () => {
     expect(container.textContent).not.toContain("757.3k / 200k");
     const notice = container.querySelector<HTMLElement>(".context-notice");
     expect(notice).not.toBeNull();
+    expect(notice?.classList.contains("context-notice--warning")).toBe(true);
+    expect(notice?.getAttribute("title")).toBe("Session context usage: 190k / 200k (95%)");
     expect(notice?.style.getPropertyValue("--ctx-color")).toContain("rgb(");
     expect(notice?.style.getPropertyValue("--ctx-color")).toContain("4, 5, 6");
     expect(notice?.style.getPropertyValue("--ctx-color")).not.toContain("NaN");

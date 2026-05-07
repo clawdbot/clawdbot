@@ -9,6 +9,7 @@ import {
   normalizePluginsConfigWithResolver,
   resolveEffectivePluginActivationState,
 } from "../plugins/config-policy.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   isPluginMetadataSnapshotCompatible,
   loadPluginMetadataSnapshot,
@@ -38,6 +39,26 @@ function sanitizePiSettingsSnapshot(settings: PiSettingsSnapshot): PiSettingsSna
 
 function sanitizeProjectSettings(settings: PiSettingsSnapshot): PiSettingsSnapshot {
   return sanitizePiSettingsSnapshot(settings);
+}
+
+function canReuseUnscopedCurrentPluginMetadataSnapshot(config: OpenClawConfig): boolean {
+  return normalizePluginsConfigWithResolver(config.plugins).loadPaths.length === 0;
+}
+
+function resolveUnscopedCurrentPluginMetadataSnapshot(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+}): PluginMetadataSnapshot | undefined {
+  if (!canReuseUnscopedCurrentPluginMetadataSnapshot(params.config)) {
+    return undefined;
+  }
+  return getCurrentPluginMetadataSnapshot({
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+    allowWorkspaceScopedSnapshot: true,
+    requireDefaultDiscoveryContext: true,
+  });
 }
 
 function loadBundleSettingsFile(params: {
@@ -84,11 +105,21 @@ export function loadEnabledBundlePiSettingsSnapshot(params: {
       workspaceDir,
     })
       ? providedSnapshot
-      : loadPluginMetadataSnapshot({
+      : (getCurrentPluginMetadataSnapshot({
+          config,
+          env,
+          workspaceDir,
+        }) ??
+        resolveUnscopedCurrentPluginMetadataSnapshot({
+          config,
+          env,
+          workspaceDir,
+        }) ??
+        loadPluginMetadataSnapshot({
           workspaceDir,
           config,
           env,
-        });
+        }));
   const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
     return {};

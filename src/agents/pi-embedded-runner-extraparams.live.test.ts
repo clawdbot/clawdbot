@@ -7,14 +7,11 @@ import { applyExtraParamsToAgent } from "./pi-embedded-runner.js";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
-const GEMINI_KEY = process.env.GEMINI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["OPENAI_LIVE_TEST"]);
 const ANTHROPIC_LIVE = isLiveTestEnabled(["ANTHROPIC_LIVE_TEST"]);
-const GEMINI_LIVE = isLiveTestEnabled(["GEMINI_LIVE_TEST"]);
 
 const describeLive = LIVE && OPENAI_KEY ? describe : describe.skip;
 const describeAnthropicLive = ANTHROPIC_LIVE && ANTHROPIC_KEY ? describe : describe.skip;
-const describeGeminiLive = GEMINI_LIVE && GEMINI_KEY ? describe : describe.skip;
 
 describeLive("pi embedded extra params (live)", () => {
   it("applies config maxTokens to openai streamFn", async () => {
@@ -140,116 +137,4 @@ describeAnthropicLive("pi embedded extra params (anthropic live)", () => {
     expect(["standard", "priority"]).toContain(fast.usage?.service_tier);
     expect(fast.stop_reason).toBe("end_turn");
   }, 45_000);
-});
-
-describeGeminiLive("pi embedded extra params (gemini live)", () => {
-  function buildGeminiPayloadThroughWrapper(params: {
-    model: Model<"google-generative-ai">;
-    oneByOneRedPngBase64: string;
-    includeImage?: boolean;
-    prompt: string;
-  }): Record<string, unknown> {
-    const userContent: Array<
-      { type: "text"; text: string } | { type: "image"; mimeType: string; data: string }
-    > = [{ type: "text", text: params.prompt }];
-    if (params.includeImage ?? true) {
-      userContent.push({
-        type: "image",
-        mimeType: "image/png",
-        data: params.oneByOneRedPngBase64,
-      });
-    }
-
-    const payload: Record<string, unknown> = {
-      model: params.model.id,
-      contents: [{ role: "user", parts: userContent.map(mapGeminiContentPart) }],
-      config: {
-        maxOutputTokens: 64,
-        thinkingConfig: {
-          includeThoughts: true,
-          thinkingBudget: 32768,
-        },
-      },
-    };
-
-    const baseStreamFn = (
-      _model: Model<"google-generative-ai">,
-      _context: unknown,
-      options?: {
-        onPayload?: (payload: unknown) => unknown;
-      },
-    ) => {
-      options?.onPayload?.(payload);
-      return {} as ReturnType<typeof streamSimple>;
-    };
-    const agent = { streamFn: baseStreamFn as typeof streamSimple };
-    applyExtraParamsToAgent(agent, undefined, "google", params.model.id, undefined, "high");
-    void agent.streamFn(
-      params.model,
-      { messages: [] },
-      {
-        reasoning: "high",
-        maxTokens: 64,
-      },
-    );
-    return payload;
-  }
-
-  function mapGeminiContentPart(
-    part: { type: "text"; text: string } | { type: "image"; mimeType: string; data: string },
-  ): { text: string } | { inlineData: { mimeType: string; data: string } } {
-    if (part.type === "text") {
-      return { text: part.text };
-    }
-    return {
-      inlineData: {
-        mimeType: part.mimeType,
-        data: part.data,
-      },
-    };
-  }
-
-  // Payload mutation is covered by extra-params.google.test.ts, and Gemini
-  // roundtrips are exercised by the dedicated live gateway/model suites. This
-  // direct live test currently flakes on Vitest timeout teardown without
-  // providing unique signal.
-  it.skip("sanitizes Gemini thinking payload and keeps image parts with reasoning enabled", async () => {
-    const model = getModel("google", "gemini-2.5-pro") as unknown as Model<"google-generative-ai">;
-
-    const oneByOneRedPngBase64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGP4zwAAAgIBAJBzWgkAAAAASUVORK5CYII=";
-
-    const capturedPayload = buildGeminiPayloadThroughWrapper({
-      model,
-      oneByOneRedPngBase64,
-      includeImage: true,
-      prompt: "What color is this image? Reply with one word.",
-    });
-
-    expect(capturedPayload).toBeDefined();
-    const thinkingConfig = (
-      capturedPayload?.config as { thinkingConfig?: Record<string, unknown> } | undefined
-    )?.thinkingConfig;
-    const thinkingBudget = thinkingConfig?.thinkingBudget;
-    if (thinkingBudget !== undefined) {
-      expect(typeof thinkingBudget).toBe("number");
-      expect(thinkingBudget).toBeGreaterThanOrEqual(0);
-    }
-    // Gemini 3.1-specific thinkingLevel fill is covered by
-    // extra-params.google.test.ts. The live probe uses the stable 2.5 model and
-    // only verifies that we never forward an invalid negative budget.
-
-    const imagePart = (
-      capturedPayload?.contents as
-        | Array<{ parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> }>
-        | undefined
-    )?.[0]?.parts?.find((part) => part.inlineData !== undefined)?.inlineData;
-    expect(imagePart).toEqual({
-      mimeType: "image/png",
-      data: oneByOneRedPngBase64,
-    });
-
-    // End-to-end Gemini roundtrips are already covered elsewhere. This live
-    // check stays focused on the request payload we generate for those suites.
-  }, 60_000);
 });

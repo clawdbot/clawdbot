@@ -101,6 +101,16 @@ describe("extractNarrativeText", () => {
     expect(extractNarrativeText(messages)).toBe("First paragraph.\nSecond paragraph.");
   });
 
+  it("extracts from OpenAI output_text assistant parts", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "The light phase found a diary thread." }],
+      },
+    ];
+    expect(extractNarrativeText(messages)).toBe("The light phase found a diary thread.");
+  });
+
   it("returns null when no assistant message exists", () => {
     const messages = [{ role: "user", content: "hello" }];
     expect(extractNarrativeText(messages)).toBeNull();

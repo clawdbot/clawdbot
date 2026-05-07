@@ -9,6 +9,7 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 import {
   createPluginModuleLoaderCache,
   getCachedPluginModuleLoader,
+  type PluginModuleLoaderFactory,
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
@@ -87,8 +88,16 @@ const NOOP_LOGGER: PluginLogger = {
 };
 
 const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+let moduleLoaderFactoryForTest: PluginModuleLoaderFactory | undefined;
 
 export function clearPluginSetupRegistryCache(): void {
+  moduleLoaders.clear();
+}
+
+export function setPluginSetupRegistryModuleLoaderFactoryForTest(
+  factory: PluginModuleLoaderFactory | undefined,
+): void {
+  moduleLoaderFactoryForTest = factory;
   moduleLoaders.clear();
 }
 
@@ -97,6 +106,7 @@ function getModuleLoader(modulePath: string) {
     cache: moduleLoaders,
     modulePath,
     importerUrl: import.meta.url,
+    ...(moduleLoaderFactoryForTest ? { createLoader: moduleLoaderFactoryForTest } : {}),
   });
 }
 

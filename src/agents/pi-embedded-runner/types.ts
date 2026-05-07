@@ -140,7 +140,8 @@ export type EmbeddedPiRunMeta = {
       | "compaction_failure"
       | "role_ordering"
       | "image_size"
-      | "retry_limit";
+      | "retry_limit"
+      | "hook_block";
     message: string;
   };
   failureSignal?: EmbeddedRunFailureSignal;

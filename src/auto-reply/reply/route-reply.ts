@@ -155,11 +155,15 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   };
 
   let text = externalPayload.text ?? "";
-  let mediaUrls = (externalPayload.mediaUrls?.filter(Boolean) ?? []).length
-    ? (externalPayload.mediaUrls?.filter(Boolean) as string[])
-    : externalPayload.mediaUrl
-      ? [externalPayload.mediaUrl]
-      : [];
+  let mediaUrls: string[] = [];
+  for (const url of externalPayload.mediaUrls ?? []) {
+    if (url) {
+      mediaUrls.push(url);
+    }
+  }
+  if (mediaUrls.length === 0 && externalPayload.mediaUrl) {
+    mediaUrls = [externalPayload.mediaUrl];
+  }
   const replyToId = externalPayload.replyToId;
   const hasChannelData = messaging?.hasStructuredReplyPayload?.({
     payload: externalPayload,

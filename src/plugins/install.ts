@@ -11,6 +11,7 @@ import {
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
   readManagedNpmRootInstalledDependency,
+  readOpenClawManagedNpmRootOverrides,
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
   resolveManagedNpmRootDependencySpec,
@@ -485,12 +486,14 @@ async function installPluginFromManagedNpmRoot(
     npmRoot,
     packageName: params.packageName,
     dependencySpec: params.dependencySpec,
+    managedOverrides: await readOpenClawManagedNpmRootOverrides(),
   });
   const install = await runCommandWithTimeout(
     [
       "npm",
       ...createSafeNpmInstallArgs({
         omitDev: true,
+        omitPeer: true,
         loglevel: "error",
         legacyPeerDeps: true,
         noAudit: true,

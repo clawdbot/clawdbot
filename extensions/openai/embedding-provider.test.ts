@@ -85,4 +85,22 @@ describe("OpenAI embedding provider", () => {
       }),
     );
   });
+
+  it("sends outputDimensionality as OpenAI dimensions", async () => {
+    const { provider } = await createOpenAiEmbeddingProvider(
+      createOptions({ outputDimensionality: 512 }),
+    );
+
+    await provider.embedBatch(["doc"]);
+
+    expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: {
+          model: "text-embedding-3-small",
+          input: ["doc"],
+          dimensions: 512,
+        },
+      }),
+    );
+  });
 });

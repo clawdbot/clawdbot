@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
@@ -110,6 +114,22 @@ import type {
   RespondFn,
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+function filterSessionStoreToConfiguredAgents(
+  cfg: OpenClawConfig,
+  store: Record<string, SessionEntry>,
+): Record<string, SessionEntry> {
+  const configuredAgentIds = new Set(listAgentIds(cfg).map((agentId) => normalizeAgentId(agentId)));
+  return Object.fromEntries(
+    Object.entries(store).filter(([key]) => {
+      if (key === "global" || key === "unknown") {
+        return true;
+      }
+      const parsed = parseAgentSessionKey(key);
+      return parsed ? configuredAgentIds.has(normalizeAgentId(parsed.agentId)) : false;
+    }),
+  );
+}
 
 type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
 
@@ -670,11 +690,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params;
     const cfg = context.getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
+    const listStore =
+      p.configuredAgentsOnly === true ? filterSessionStoreToConfiguredAgents(cfg, store) : store;
     const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
     const result = await listSessionsFromStoreAsync({
       cfg,
       storePath,
-      store,
+      store: listStore,
       modelCatalog,
       opts: p,
     });
@@ -708,6 +730,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           enforce: params.enforce,
           activeKey: params.activeKey,
           fixMissing: params.fixMissing,
+          fixDmScope: params.fixDmScope,
         },
       });
       const result = serializeSessionCleanupResult({
@@ -1545,6 +1568,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         storeKey: primaryKey,
         patch: p,
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        ensureCodexRuntimePluginInstall: async ({ cfg: installCfg, model }) => {
+          const { repairCodexRuntimePluginInstallForModelSelection } =
+            await import("../../commands/codex-runtime-plugin-install.js");
+          return await repairCodexRuntimePluginInstallForModelSelection({
+            cfg: installCfg,
+            model,
+          });
+        },
       });
     });
     if (!applied.ok) {

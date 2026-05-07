@@ -285,7 +285,7 @@ Common failure quick-fixes:
 - `pairing required` before tests start:
   - approve pending device pairing (`openclaw devices approve --latest`) and rerun.
 - `A2UI host not reachable` / `A2UI_HOST_NOT_CONFIGURED`:
-  - ensure gateway canvas host is running and reachable, keep the app on the **Screen** tab. The app will auto-refresh canvas capability once; if it still fails, reconnect app and rerun.
+  - ensure the Canvas plugin host is running and reachable, keep the app on the **Screen** tab. The app refreshes the Canvas plugin surface URL once before failing; if it still fails, reconnect app and rerun.
 - `NODE_BACKGROUND_UNAVAILABLE: canvas unavailable`:
   - app is not effectively ready for canvas commands; keep app foregrounded and **Screen** tab active.
 

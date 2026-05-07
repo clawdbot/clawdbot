@@ -110,6 +110,9 @@ export function resolveProviderAuthOverview(params: {
         profileId,
       );
     }
+    if (profile.type === "aws-sdk") {
+      return withUnusableSuffix(`${profileId}=AWS SDK`, profileId);
+    }
     const display = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
     const suffix =
       display === profileId
@@ -123,6 +126,7 @@ export function resolveProviderAuthOverview(params: {
   const oauthCount = profiles.filter((id) => store.profiles[id]?.type === "oauth").length;
   const tokenCount = profiles.filter((id) => store.profiles[id]?.type === "token").length;
   const apiKeyCount = profiles.filter((id) => store.profiles[id]?.type === "api_key").length;
+  const awsSdkCount = profiles.filter((id) => store.profiles[id]?.type === "aws-sdk").length;
 
   const envKey = resolveEnvApiKey(provider, process.env, {
     config: cfg,
@@ -171,6 +175,7 @@ export function resolveProviderAuthOverview(params: {
       oauth: oauthCount,
       token: tokenCount,
       apiKey: apiKeyCount,
+      awsSdk: awsSdkCount,
       labels,
     },
     ...(envKey

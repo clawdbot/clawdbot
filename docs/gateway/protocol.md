@@ -44,8 +44,8 @@ Client → Gateway:
   "id": "…",
   "method": "connect",
   "params": {
-    "minProtocol": 3,
-    "maxProtocol": 3,
+    "minProtocol": 4,
+    "maxProtocol": 4,
     "client": {
       "id": "cli",
       "version": "1.2.3",
@@ -80,7 +80,7 @@ Gateway → Client:
   "ok": true,
   "payload": {
     "type": "hello-ok",
-    "protocol": 3,
+    "protocol": 4,
     "server": { "version": "…", "connId": "…" },
     "features": { "methods": ["…"], "events": ["…"] },
     "snapshot": { "…": "…" },
@@ -105,7 +105,15 @@ handshake failure.
 
 `server`, `features`, `snapshot`, and `policy` are all required by the schema
 (`src/gateway/protocol/schema/frames.ts`). `auth` is also required and reports
-the negotiated role/scopes. `canvasHostUrl` is optional.
+the negotiated role/scopes. `pluginSurfaceUrls` is optional and maps plugin
+surface names, such as `canvas`, to scoped hosted URLs.
+
+Scoped plugin surface URLs may expire. Nodes can call
+`node.pluginSurface.refresh` with `{ "surface": "canvas" }` to receive a fresh
+entry in `pluginSurfaceUrls`. The experimental Canvas plugin refactor does not
+support the deprecated `canvasHostUrl`, `canvasCapability`, or
+`node.canvas.capability.refresh` compatibility path; current native clients and
+gateways must use plugin surfaces.
 
 When no device token is issued, `hello-ok.auth` reports the negotiated
 permissions without token fields:
@@ -174,8 +182,8 @@ roles still need scopes under their own role prefix.
   "id": "…",
   "method": "connect",
   "params": {
-    "minProtocol": 3,
-    "maxProtocol": 3,
+    "minProtocol": 4,
+    "maxProtocol": 4,
     "client": {
       "id": "ios-node",
       "version": "1.2.3",
@@ -443,7 +451,6 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `node.invoke` forwards a command to a connected node.
     - `node.invoke.result` returns the result for an invoke request.
     - `node.event` carries node-originated events back into the gateway.
-    - `node.canvas.capability.refresh` refreshes scoped canvas-capability tokens.
     - `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
     - `node.pending.enqueue` and `node.pending.drain` manage durable pending work for offline/disconnected nodes.
 
@@ -572,7 +579,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
 ## Versioning
 
-- `PROTOCOL_VERSION` lives in `src/gateway/protocol/schema/protocol-schemas.ts`.
+- `PROTOCOL_VERSION` lives in `src/gateway/protocol/version.ts`.
 - Clients send `minProtocol` + `maxProtocol`; the server rejects mismatches.
 - Schemas + models are generated from TypeBox definitions:
   - `pnpm protocol:gen`
@@ -582,11 +589,11 @@ enumeration of `src/gateway/server-methods/*.ts`.
 ### Client constants
 
 The reference client in `src/gateway/client.ts` uses these defaults. Values are
-stable across protocol v3 and are the expected baseline for third-party clients.
+stable across protocol v4 and are the expected baseline for third-party clients.
 
 | Constant                                  | Default                                               | Source                                                                                     |
 | ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `PROTOCOL_VERSION`                        | `3`                                                   | `src/gateway/protocol/schema/protocol-schemas.ts`                                          |
+| `PROTOCOL_VERSION`                        | `4`                                                   | `src/gateway/protocol/version.ts`                                                          |
 | Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)                                               |
 | Preauth / connect-challenge timeout       | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts` (config/env can raise the paired server/client budget) |
 | Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                                                      |

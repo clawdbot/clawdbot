@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import {
   formatDiagnosticTraceparent,
   getActiveDiagnosticTraceContext,
@@ -112,6 +113,21 @@ export type DiagnosticMessageDeliveryErrorEvent = DiagnosticMessageDeliveryBaseE
   type: "message.delivery.error";
   durationMs: number;
   errorCategory: string;
+};
+
+export type DiagnosticTalkEvent = DiagnosticBaseEvent & {
+  type: "talk.event";
+  sessionId?: string;
+  turnId?: string;
+  captureId?: string;
+  talkEventType: TalkEventType;
+  mode: TalkMode;
+  transport: TalkTransport;
+  brain: TalkBrain;
+  provider?: string;
+  final?: boolean;
+  durationMs?: number;
+  byteLength?: number;
 };
 
 export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
@@ -372,8 +388,9 @@ export type DiagnosticRunStartedEvent = DiagnosticRunBaseEvent & {
 export type DiagnosticRunCompletedEvent = DiagnosticRunBaseEvent & {
   type: "run.completed";
   durationMs: number;
-  outcome: "completed" | "aborted" | "error";
+  outcome: "completed" | "aborted" | "blocked" | "error";
   errorCategory?: string;
+  blockedBy?: string;
 };
 
 export type DiagnosticHarnessRunPhase = "prepare" | "start" | "send" | "resolve" | "cleanup";
@@ -548,6 +565,7 @@ export type DiagnosticEventPayload =
   | DiagnosticMessageDeliveryStartedEvent
   | DiagnosticMessageDeliveryCompletedEvent
   | DiagnosticMessageDeliveryErrorEvent
+  | DiagnosticTalkEvent
   | DiagnosticSessionStateEvent
   | DiagnosticSessionLongRunningEvent
   | DiagnosticSessionStalledEvent
@@ -623,6 +641,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "message.delivery.started",
   "message.delivery.completed",
   "message.delivery.error",
+  "talk.event",
   "model.call.started",
   "model.call.completed",
   "model.call.error",

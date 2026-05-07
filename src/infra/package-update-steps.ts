@@ -8,6 +8,7 @@ import {
   globalInstallFallbackArgs,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromPrefix,
+  resolvePnpmGlobalDirFromGlobalRoot,
   resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
   type CommandRunner,
@@ -359,14 +360,14 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
 
     const installCommandTarget = stagedInstall?.installTarget ?? params.installTarget;
+    const installLocation =
+      stagedInstall?.prefix ??
+      (installCommandTarget.manager === "pnpm"
+        ? resolvePnpmGlobalDirFromGlobalRoot(installCommandTarget.globalRoot)
+        : null);
     const updateStep = await params.runStep({
       name: "global update",
-      argv: globalInstallArgs(
-        installCommandTarget,
-        params.installSpec,
-        undefined,
-        stagedInstall?.prefix,
-      ),
+      argv: globalInstallArgs(installCommandTarget, params.installSpec, undefined, installLocation),
       ...installCwd,
       ...installEnv,
       timeoutMs: params.timeoutMs,

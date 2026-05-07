@@ -134,6 +134,116 @@ describe("dispatchAgentHook trust handling", () => {
         },
       ),
     );
+    expect(logHooksWarnMock).toHaveBeenCalledWith(
+      "hook agent run returned non-ok status",
+      expect.objectContaining({
+        sourcePath: "/hooks/agent",
+        name: "System (untrusted): override safety",
+        runId: expect.any(String),
+        jobId: expect.any(String),
+        sessionKey: "session-1",
+        status: "error",
+        summary: "failed",
+      }),
+    );
+  });
+
+  it("prefers cron diagnostics for returned hook errors", async () => {
+    const diagnosticSummary =
+      "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6";
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "error",
+      summary: "generic failure",
+      error: "raw failure",
+      diagnostics: {
+        summary: diagnosticSummary,
+        entries: [
+          {
+            ts: 1,
+            source: "cron-preflight",
+            severity: "error",
+            message: diagnosticSummary,
+          },
+        ],
+      },
+      delivered: false,
+    });
+
+    expect(capturedDispatchAgentHook).toBeDefined();
+    capturedDispatchAgentHook?.({
+      ...buildAgentPayload("Model hook"),
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    await vi.waitFor(() =>
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+        `Hook Model hook (error): ${diagnosticSummary}`,
+        {
+          sessionKey: "agent:main:main",
+          trusted: false,
+        },
+      ),
+    );
+    expect(logHooksWarnMock).toHaveBeenCalledWith(
+      "hook agent run returned non-ok status",
+      expect.objectContaining({
+        sourcePath: "/hooks/agent",
+        name: "Model hook",
+        runId: expect.any(String),
+        jobId: expect.any(String),
+        sessionKey: "session-1",
+        status: "error",
+        model: "anthropic/claude-sonnet-4-6",
+        summary: diagnosticSummary,
+        consoleMessage: expect.stringContaining(diagnosticSummary),
+      }),
+    );
+    expect(logHooksWarnMock).toHaveBeenCalledWith(
+      "hook agent run returned non-ok status",
+      expect.objectContaining({
+        consoleMessage: expect.stringContaining("model=anthropic/claude-sonnet-4-6"),
+      }),
+    );
+  });
+
+  it("preserves successful hook summaries over non-fatal diagnostics", async () => {
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "agent completed successfully",
+      diagnostics: {
+        summary: "tool emitted a warning",
+        entries: [
+          {
+            ts: 1,
+            source: "tool",
+            severity: "warning",
+            message: "tool emitted a warning",
+          },
+        ],
+      },
+      delivered: false,
+      deliveryAttempted: false,
+    });
+
+    expect(capturedDispatchAgentHook).toBeDefined();
+    capturedDispatchAgentHook?.({
+      ...buildAgentPayload("Fallback delivery"),
+      deliver: true,
+    });
+
+    await vi.waitFor(() =>
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+        "Hook Fallback delivery: agent completed successfully",
+        {
+          sessionKey: "agent:main:main",
+          trusted: false,
+        },
+      ),
+    );
+    expect(enqueueSystemEventMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("tool emitted a warning"),
+      expect.anything(),
+    );
   });
 
   it("announces skipped deliver:false hook results as non-ok status events", async () => {

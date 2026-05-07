@@ -87,7 +87,7 @@ describe("tasks commands", () => {
         };
       };
 
-      expect(payload.summary.byCode.stale_running).toBe(1);
+      expect(payload.summary.byCode.lost).toBe(1);
       expect(payload.summary.taskFlows.byCode.stale_waiting).toBe(1);
       expect(payload.summary.taskFlows.byCode.missing_linked_tasks).toBe(1);
       expect(payload.summary.combined.total).toBe(3);

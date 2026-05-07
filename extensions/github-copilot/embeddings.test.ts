@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFirstGithubTokenMock = vi.hoisted(() => vi.fn());
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
@@ -23,6 +23,14 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 }));
 
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
+
+afterAll(() => {
+  vi.doUnmock("./auth.js");
+  vi.doUnmock("openclaw/plugin-sdk/secret-input-runtime");
+  vi.doUnmock("./token.js");
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
 
 const TEST_BASE_URL = "https://api.githubcopilot.test";
 

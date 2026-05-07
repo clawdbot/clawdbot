@@ -1,5 +1,6 @@
 import path from "node:path";
 import Ajv from "ajv";
+import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "../api.js";
@@ -40,6 +41,44 @@ function stripDuplicateProviderPrefix(provider: string | undefined, model: strin
   }
   const prefix = `${p}/`;
   return m.startsWith(prefix) ? m.slice(prefix.length) : m;
+}
+
+function resolveLlmTaskModelRef(params: {
+  api: OpenClawPluginApi;
+  provider?: string;
+  rawModel?: string;
+}): { provider?: string; model?: string } {
+  const defaultProvider =
+    normalizeOptionalString(params.provider) ??
+    normalizeOptionalString(params.api.runtime.agent.defaults.provider);
+  const rawModel = normalizeOptionalString(params.rawModel);
+  if (!rawModel || !defaultProvider) {
+    return {
+      provider: params.provider,
+      model: stripDuplicateProviderPrefix(params.provider, rawModel),
+    };
+  }
+
+  const cfg = params.api.config;
+  const aliasIndex = cfg
+    ? buildModelAliasIndex({
+        cfg,
+        defaultProvider,
+      })
+    : undefined;
+  const resolved = resolveModelRefFromString({
+    cfg,
+    raw: rawModel,
+    defaultProvider,
+    aliasIndex,
+  });
+  if (!resolved) {
+    return {
+      provider: params.provider,
+      model: stripDuplicateProviderPrefix(params.provider, rawModel),
+    };
+  }
+  return resolved.ref;
 }
 
 type PluginCfg = {
@@ -117,7 +156,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const primaryModel =
         typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
 
-      const provider =
+      const requestedProvider =
         (typeof params.provider === "string" && params.provider.trim()) ||
         (typeof pluginCfg.defaultProvider === "string" && pluginCfg.defaultProvider.trim()) ||
         primaryProvider ||
@@ -128,7 +167,12 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         (typeof pluginCfg.defaultModel === "string" && pluginCfg.defaultModel.trim()) ||
         primaryModel ||
         undefined;
-      const model = stripDuplicateProviderPrefix(provider, rawModel);
+      const { provider: resolvedProvider, model } = resolveLlmTaskModelRef({
+        api,
+        provider: requestedProvider,
+        rawModel,
+      });
+      const provider = resolvedProvider;
 
       const authProfileId =
         (typeof params.authProfileId === "string" && params.authProfileId.trim()) ||

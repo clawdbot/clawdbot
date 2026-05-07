@@ -378,11 +378,7 @@ function buildAssistantOutputDirectivesSection(isMinimal: boolean) {
   ];
 }
 
-function buildWebchatCanvasSection(params: {
-  isMinimal: boolean;
-  runtimeChannel?: string;
-  canvasRootDir?: string;
-}) {
+function buildWebchatCanvasSection(params: { isMinimal: boolean; runtimeChannel?: string }) {
   if (params.isMinimal || params.runtimeChannel !== "webchat") {
     return [];
   }
@@ -394,9 +390,7 @@ function buildWebchatCanvasSection(params: {
     '- Use self-closing form for hosted embed documents: `[embed ref="cv_123" title="Status" height="320" /]`.',
     '- You may also use an explicit hosted URL: `[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]`.',
     '- Never use local filesystem paths or `file://...` URLs in `[embed ...]`. Hosted embeds must point at `/__openclaw__/canvas/...` URLs or use `ref="..."`.',
-    params.canvasRootDir
-      ? `- The active hosted embed root for this session is: \`${sanitizeForPromptLiteral(params.canvasRootDir)}\`. If you manually stage a hosted embed file, write it there, not in the workspace.`
-      : "- The active hosted embed root is profile-scoped, not workspace-scoped. If you manually stage a hosted embed file, write it under the active profile embed root, not in the workspace.",
+    "- The active hosted embed root is profile-scoped, not workspace-scoped. If you manually stage a hosted embed file, write it under the active profile embed root, not in the workspace.",
     "- Quote all attribute values. Prefer `ref` for hosted documents unless you already have the full `/__openclaw__/canvas/documents/<id>/index.html` URL.",
     "",
   ];
@@ -603,7 +597,6 @@ export function buildAgentSystemPrompt(params: {
     channel?: string;
     capabilities?: string[];
     repoRoot?: string;
-    canvasRootDir?: string;
   };
   messageToolHints?: string[];
   sandboxInfo?: EmbeddedSandboxInfo;
@@ -1130,7 +1123,6 @@ export function buildAgentSystemPrompt(params: {
     ...buildWebchatCanvasSection({
       isMinimal,
       runtimeChannel,
-      canvasRootDir: params.runtimeInfo?.canvasRootDir,
     }),
     ...buildMessagingSection({
       isMinimal,

@@ -105,9 +105,13 @@ async function ensureCurrentBuildUnlocked(input: {
     say("Build Control UI for current head");
     run("pnpm", ["ui:build"]);
   }
-  const drift = run("git", ["status", "--porcelain", "--", "src/canvas-host/a2ui/.bundle.hash"], {
-    quiet: true,
-  }).stdout.trim();
+  const drift = run(
+    "git",
+    ["status", "--porcelain", "--", ":(glob)extensions/*/src/host/**/.bundle.hash"],
+    {
+      quiet: true,
+    },
+  ).stdout.trim();
   if (drift) {
     die(`generated file drift after build; commit or revert before Parallels packaging:\n${drift}`);
   }

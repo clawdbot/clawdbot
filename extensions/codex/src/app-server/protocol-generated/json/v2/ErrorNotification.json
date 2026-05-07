@@ -2,12 +2,25 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "ErrorNotification",
   "type": "object",
-  "required": ["error", "threadId", "turnId", "willRetry"],
+  "required": [
+    "error",
+    "threadId",
+    "turnId",
+    "willRetry"
+  ],
   "properties": {
-    "error": { "$ref": "#/definitions/TurnError" },
-    "threadId": { "type": "string" },
-    "turnId": { "type": "string" },
-    "willRetry": { "type": "boolean" }
+    "error": {
+      "$ref": "#/definitions/TurnError"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    },
+    "willRetry": {
+      "type": "boolean"
+    }
   },
   "definitions": {
     "CodexErrorInfo": {
@@ -30,12 +43,21 @@
         },
         {
           "type": "object",
-          "required": ["httpConnectionFailed"],
+          "required": [
+            "httpConnectionFailed"
+          ],
           "properties": {
             "httpConnectionFailed": {
               "type": "object",
               "properties": {
-                "httpStatusCode": { "type": ["integer", "null"], "format": "uint16", "minimum": 0 }
+                "httpStatusCode": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "uint16",
+                  "minimum": 0
+                }
               }
             }
           },
@@ -45,12 +67,21 @@
         {
           "description": "Failed to connect to the response SSE stream.",
           "type": "object",
-          "required": ["responseStreamConnectionFailed"],
+          "required": [
+            "responseStreamConnectionFailed"
+          ],
           "properties": {
             "responseStreamConnectionFailed": {
               "type": "object",
               "properties": {
-                "httpStatusCode": { "type": ["integer", "null"], "format": "uint16", "minimum": 0 }
+                "httpStatusCode": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "uint16",
+                  "minimum": 0
+                }
               }
             }
           },
@@ -60,12 +91,21 @@
         {
           "description": "The response SSE stream disconnected in the middle of a turn before completion.",
           "type": "object",
-          "required": ["responseStreamDisconnected"],
+          "required": [
+            "responseStreamDisconnected"
+          ],
           "properties": {
             "responseStreamDisconnected": {
               "type": "object",
               "properties": {
-                "httpStatusCode": { "type": ["integer", "null"], "format": "uint16", "minimum": 0 }
+                "httpStatusCode": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "uint16",
+                  "minimum": 0
+                }
               }
             }
           },
@@ -75,12 +115,21 @@
         {
           "description": "Reached the retry limit for responses.",
           "type": "object",
-          "required": ["responseTooManyFailedAttempts"],
+          "required": [
+            "responseTooManyFailedAttempts"
+          ],
           "properties": {
             "responseTooManyFailedAttempts": {
               "type": "object",
               "properties": {
-                "httpStatusCode": { "type": ["integer", "null"], "format": "uint16", "minimum": 0 }
+                "httpStatusCode": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "uint16",
+                  "minimum": 0
+                }
               }
             }
           },
@@ -90,12 +139,20 @@
         {
           "description": "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example `/review` or manual `/compact`.",
           "type": "object",
-          "required": ["activeTurnNotSteerable"],
+          "required": [
+            "activeTurnNotSteerable"
+          ],
           "properties": {
             "activeTurnNotSteerable": {
               "type": "object",
-              "required": ["turnKind"],
-              "properties": { "turnKind": { "$ref": "#/definitions/NonSteerableTurnKind" } }
+              "required": [
+                "turnKind"
+              ],
+              "properties": {
+                "turnKind": {
+                  "$ref": "#/definitions/NonSteerableTurnKind"
+                }
+              }
             }
           },
           "additionalProperties": false,
@@ -103,16 +160,39 @@
         }
       ]
     },
-    "NonSteerableTurnKind": { "type": "string", "enum": ["review", "compact"] },
+    "NonSteerableTurnKind": {
+      "type": "string",
+      "enum": [
+        "review",
+        "compact"
+      ]
+    },
     "TurnError": {
       "type": "object",
-      "required": ["message"],
+      "required": [
+        "message"
+      ],
       "properties": {
-        "additionalDetails": { "default": null, "type": ["string", "null"] },
-        "codexErrorInfo": {
-          "anyOf": [{ "$ref": "#/definitions/CodexErrorInfo" }, { "type": "null" }]
+        "additionalDetails": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
-        "message": { "type": "string" }
+        "codexErrorInfo": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CodexErrorInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
       }
     }
   }

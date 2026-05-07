@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright-core";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -93,10 +92,15 @@ async function saveDownloadPayload(download: DownloadPayload, outPath: string) {
   const suggested = download.suggestedFilename?.() || "download.bin";
   const requestedPath = outPath?.trim();
   const resolvedOutPath = path.resolve(requestedPath || buildTempDownloadPath(suggested));
-  await fs.mkdir(path.dirname(resolvedOutPath), { recursive: true });
 
   if (!requestedPath) {
-    await download.saveAs?.(resolvedOutPath);
+    await writeViaSiblingTempPath({
+      rootDir: path.dirname(resolvedOutPath),
+      targetPath: resolvedOutPath,
+      writeTemp: async (tempPath) => {
+        await download.saveAs?.(tempPath);
+      },
+    });
   } else {
     await writeViaSiblingTempPath({
       rootDir: path.dirname(resolvedOutPath),

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   normalizeBlueBubblesReactionInput,
   normalizeBlueBubblesReactionInputStrict,
@@ -19,6 +19,11 @@ const noopPrivateApiStatusMock = {
 installBlueBubblesFetchTestHooks({
   mockFetch,
   privateApiStatusMock: noopPrivateApiStatusMock,
+});
+
+afterAll(() => {
+  vi.doUnmock("./accounts.js");
+  vi.resetModules();
 });
 
 describe("reactions", () => {

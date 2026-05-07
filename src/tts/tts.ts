@@ -25,7 +25,9 @@ export {
   setTtsPersona,
   setTtsProvider,
   synthesizeSpeech,
+  streamSpeech,
   textToSpeech,
+  textToSpeechStream,
   textToSpeechTelephony,
   type ResolvedTtsConfig,
   type ResolvedTtsModelOverrides,
@@ -33,5 +35,7 @@ export {
   type TtsDirectiveParseResult,
   type TtsResult,
   type TtsSynthesisResult,
+  type TtsSynthesisStreamResult,
+  type TtsStreamResult,
   type TtsTelephonyResult,
 } from "../plugin-sdk/tts-runtime.js";

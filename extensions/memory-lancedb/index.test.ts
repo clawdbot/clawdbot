@@ -95,19 +95,26 @@ describe("memory plugin e2e", () => {
   });
 
   test("config schema resolves env vars", async () => {
-    // Set a test env var
-    process.env.TEST_MEMORY_API_KEY = "test-key-123";
+    const previousApiKey = process.env.TEST_MEMORY_API_KEY;
 
-    const config = memoryPlugin.configSchema?.parse?.({
-      embedding: {
-        apiKey: "${TEST_MEMORY_API_KEY}",
-      },
-      dbPath: getDbPath(),
-    }) as MemoryPluginTestConfig | undefined;
+    try {
+      process.env.TEST_MEMORY_API_KEY = "test-key-123";
 
-    expect(config?.embedding?.apiKey).toBe("test-key-123");
+      const config = memoryPlugin.configSchema?.parse?.({
+        embedding: {
+          apiKey: "${TEST_MEMORY_API_KEY}",
+        },
+        dbPath: getDbPath(),
+      }) as MemoryPluginTestConfig | undefined;
 
-    delete process.env.TEST_MEMORY_API_KEY;
+      expect(config?.embedding?.apiKey).toBe("test-key-123");
+    } finally {
+      if (previousApiKey === undefined) {
+        delete process.env.TEST_MEMORY_API_KEY;
+      } else {
+        process.env.TEST_MEMORY_API_KEY = previousApiKey;
+      }
+    }
   });
 
   test("config schema accepts provider-backed embeddings without apiKey", async () => {
@@ -1979,6 +1986,8 @@ describe("memory plugin e2e", () => {
 
   test("config schema resolves env vars in storageOptions", async () => {
     const { default: memoryPlugin } = await import("./index.js");
+    const previousAccessKey = process.env.TEST_MEMORY_STORAGE_ACCESS_KEY;
+    const previousSecretKey = process.env.TEST_MEMORY_STORAGE_SECRET_KEY;
     process.env.TEST_MEMORY_STORAGE_ACCESS_KEY = "env-access";
     process.env.TEST_MEMORY_STORAGE_SECRET_KEY = "env-secret";
 
@@ -2002,27 +2011,45 @@ describe("memory plugin e2e", () => {
         secret_key: "env-secret",
       });
     } finally {
-      delete process.env.TEST_MEMORY_STORAGE_ACCESS_KEY;
-      delete process.env.TEST_MEMORY_STORAGE_SECRET_KEY;
+      if (previousAccessKey === undefined) {
+        delete process.env.TEST_MEMORY_STORAGE_ACCESS_KEY;
+      } else {
+        process.env.TEST_MEMORY_STORAGE_ACCESS_KEY = previousAccessKey;
+      }
+      if (previousSecretKey === undefined) {
+        delete process.env.TEST_MEMORY_STORAGE_SECRET_KEY;
+      } else {
+        process.env.TEST_MEMORY_STORAGE_SECRET_KEY = previousSecretKey;
+      }
     }
   });
 
   test("config schema rejects missing env vars in storageOptions", async () => {
     const { default: memoryPlugin } = await import("./index.js");
-    delete process.env.TEST_MEMORY_STORAGE_MISSING;
+    const previousMissing = process.env.TEST_MEMORY_STORAGE_MISSING;
 
-    expect(() => {
-      memoryPlugin.configSchema?.parse?.({
-        embedding: {
-          apiKey: OPENAI_API_KEY,
-          model: "text-embedding-3-small",
-        },
-        dbPath: getDbPath(),
-        storageOptions: {
-          secret_key: "${TEST_MEMORY_STORAGE_MISSING}",
-        },
-      });
-    }).toThrow("Environment variable TEST_MEMORY_STORAGE_MISSING is not set");
+    try {
+      delete process.env.TEST_MEMORY_STORAGE_MISSING;
+
+      expect(() => {
+        memoryPlugin.configSchema?.parse?.({
+          embedding: {
+            apiKey: OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+          },
+          dbPath: getDbPath(),
+          storageOptions: {
+            secret_key: "${TEST_MEMORY_STORAGE_MISSING}",
+          },
+        });
+      }).toThrow("Environment variable TEST_MEMORY_STORAGE_MISSING is not set");
+    } finally {
+      if (previousMissing === undefined) {
+        delete process.env.TEST_MEMORY_STORAGE_MISSING;
+      } else {
+        process.env.TEST_MEMORY_STORAGE_MISSING = previousMissing;
+      }
+    }
   });
 
   test("config schema rejects storageOptions with non-string values", async () => {

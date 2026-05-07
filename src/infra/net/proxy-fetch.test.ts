@@ -180,6 +180,31 @@ describe("makeProxyFetch", () => {
     expect(undiciFetch.mock.calls[0]?.[1]?.body).toBe(body);
   });
 
+  it("drops symbol metadata from plain header dictionaries before undici fetch", async () => {
+    undiciFetch.mockResolvedValue({ ok: true });
+
+    const proxyFetch = makeProxyFetch("http://proxy.test:8080");
+    const headers = { "Content-Type": "application/json" } as Record<string, string> & {
+      [key: symbol]: unknown;
+    };
+    Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
+      value: new Set(["content-type"]),
+      enumerable: false,
+    });
+
+    await proxyFetch("https://api.example.com/json", {
+      method: "POST",
+      headers,
+      body: "{}",
+    });
+
+    const passedHeaders = undiciFetch.mock.calls[0]?.[1]?.headers;
+    expect(passedHeaders).not.toBe(headers);
+    expect(Object.getOwnPropertySymbols(passedHeaders as object)).toEqual([]);
+    expect(new Headers(passedHeaders).get("content-type")).toBe("application/json");
+    expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
+  });
+
   it("keeps undici FormData instances unchanged", async () => {
     undiciFetch.mockResolvedValue({ ok: true });
 

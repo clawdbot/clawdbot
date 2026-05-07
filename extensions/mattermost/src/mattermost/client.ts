@@ -394,16 +394,24 @@ function isRetryableError(error: Error): boolean {
     return false;
   }
 
-  const codes = candidates
-    .map((candidate) => readErrorCode(candidate))
-    .filter((code): code is string => Boolean(code));
+  const codes: string[] = [];
+  for (const candidate of candidates) {
+    const code = readErrorCode(candidate);
+    if (code) {
+      codes.push(code);
+    }
+  }
   if (codes.some((code) => RETRYABLE_NETWORK_ERROR_CODES.has(code))) {
     return true;
   }
 
-  const names = candidates
-    .map((candidate) => readErrorName(candidate))
-    .filter((name): name is string => Boolean(name));
+  const names: string[] = [];
+  for (const candidate of candidates) {
+    const name = readErrorName(candidate);
+    if (name) {
+      names.push(name);
+    }
+  }
   if (names.some((name) => RETRYABLE_NETWORK_ERROR_NAMES.has(name))) {
     return true;
   }
@@ -415,11 +423,13 @@ function isRetryableError(error: Error): boolean {
 
 function collectErrorCandidates(error: unknown): unknown[] {
   const queue: unknown[] = [error];
+  let queueIndex = 0;
   const seen = new Set<unknown>();
   const candidates: unknown[] = [];
 
-  while (queue.length > 0) {
-    const current = queue.shift();
+  while (queueIndex < queue.length) {
+    const current = queue[queueIndex];
+    queueIndex += 1;
     if (!current || seen.has(current)) {
       continue;
     }

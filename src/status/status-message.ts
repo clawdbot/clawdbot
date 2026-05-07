@@ -869,15 +869,16 @@ export function buildStatusMessage(args: StatusArgs): string {
     ? activeAuthMode
     : (selectedAuthMode ?? activeAuthMode);
   const showCost = effectiveCostAuthMode === "api-key" || effectiveCostAuthMode === "mixed";
-  const costConfig = showCost
-    ? resolveModelCostConfig({
-        provider: activeProvider,
-        model: activeModel,
-        config: args.config,
-        allowPluginNormalization: false,
-      })
-    : undefined;
   const hasUsage = typeof inputTokens === "number" || typeof outputTokens === "number";
+  const costConfig =
+    showCost && hasUsage
+      ? resolveModelCostConfig({
+          provider: activeProvider,
+          model: activeModel,
+          config: args.config,
+          allowPluginNormalization: false,
+        })
+      : undefined;
   const cost =
     showCost && hasUsage
       ? estimateUsageCost({

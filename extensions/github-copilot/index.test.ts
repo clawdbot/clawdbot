@@ -6,7 +6,7 @@ import {
   ensureAuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   githubCopilotLoginCommand: vi.fn(),
@@ -26,8 +26,14 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
   clearRuntimeAuthProfileStoreSnapshots();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+afterAll(() => {
+  vi.doUnmock("./register.runtime.js");
+  vi.resetModules();
 });
 
 async function createAgentDir() {

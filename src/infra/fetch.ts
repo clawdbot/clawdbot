@@ -1,4 +1,5 @@
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
+import { normalizeRequestInitHeadersForFetch } from "./fetch-headers.js";
 
 type FetchWithPreconnect = typeof fetch & {
   preconnect: (url: string, init?: { credentials?: RequestCredentials }) => void;
@@ -39,7 +40,7 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
   }
 
   const wrapped = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const patchedInit = withDuplex(init, input);
+    const patchedInit = normalizeRequestInitHeadersForFetch(withDuplex(init, input));
     const signal = patchedInit?.signal;
     if (!signal) {
       return fetchImpl(input, patchedInit);

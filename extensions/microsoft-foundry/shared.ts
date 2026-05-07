@@ -1,3 +1,4 @@
+import type { AuthConfig } from "openclaw/plugin-sdk/config-types";
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
@@ -98,17 +99,8 @@ type FoundryModelCompat = {
   maxTokensField: "max_completion_tokens" | "max_tokens";
 };
 
-type FoundryAuthProfileConfig = {
-  provider: string;
-  mode: "api_key" | "oauth" | "token";
-  email?: string;
-};
-
 type FoundryConfigShape = {
-  auth?: {
-    profiles?: Record<string, FoundryAuthProfileConfig>;
-    order?: Record<string, string[]>;
-  };
+  auth?: AuthConfig;
   models?: {
     providers?: Record<string, ModelProviderConfig>;
   };

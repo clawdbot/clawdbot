@@ -32,6 +32,10 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
+vi.mock("./provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
 const authSourceCheckMock = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => false),
 }));
@@ -357,6 +361,21 @@ const INSUFFICIENT_QUOTA_PAYLOAD =
   '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
 
 describe("runWithModelFallback", () => {
+  it("normalizes anthropic-cli refs to the Claude CLI provider before execution", async () => {
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runWithModelFallback({
+      cfg: {} as OpenClawConfig,
+      provider: "anthropic-cli",
+      model: "claude-opus-4-7",
+      run,
+    });
+
+    expect(run).toHaveBeenCalledWith("claude-cli", "claude-opus-4-7");
+    expect(result.provider).toBe("claude-cli");
+    expect(result.model).toBe("claude-opus-4-7");
+  });
+
   it("skips auth store bootstrap when no auth profile sources exist", async () => {
     authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReturnValue(false);
     const run = vi.fn().mockResolvedValueOnce("ok");
@@ -689,6 +708,28 @@ describe("runWithModelFallback", () => {
       classifyEmbeddedPiRunResultForModelFallback({
         provider: "openai-codex",
         model: "gpt-5.4",
+        result: runResult,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps before_agent_run hook blocks out of empty-result fallback", () => {
+    const runResult: EmbeddedPiRunResult = {
+      payloads: [{ text: "Blocked by before-run policy.", isError: true }],
+      meta: {
+        durationMs: 1,
+        livenessState: "blocked",
+        error: {
+          kind: "hook_block",
+          message: "Blocked by before-run policy.",
+        },
+      },
+    };
+
+    expect(
+      classifyEmbeddedPiRunResultForModelFallback({
+        provider: "atlassian-ai-gateway-openai",
+        model: "gpt-5.5-2026-04-23",
         result: runResult,
       }),
     ).toBeNull();

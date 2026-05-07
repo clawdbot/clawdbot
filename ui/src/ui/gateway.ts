@@ -129,7 +129,7 @@ export type GatewayHelloOk = {
     scopes: string[];
     issuedAtMs?: number;
   };
-  canvasHostUrl?: string;
+  pluginSurfaceUrls?: Record<string, string>;
   policy?: { tickIntervalMs?: number };
 };
 
@@ -182,8 +182,8 @@ export type GatewayConnectClientInfo = {
 };
 
 export type GatewayConnectParams = {
-  minProtocol: 3;
-  maxProtocol: 3;
+  minProtocol: 4;
+  maxProtocol: 4;
   client: GatewayConnectClientInfo;
   role: string;
   scopes: string[];
@@ -452,8 +452,8 @@ export class GatewayBrowserClient {
 
   private buildConnectParams(plan: ConnectPlan): GatewayConnectParams {
     return {
-      minProtocol: 3,
-      maxProtocol: 3,
+      minProtocol: 4,
+      maxProtocol: 4,
       client: plan.client,
       role: plan.role,
       scopes: plan.scopes,

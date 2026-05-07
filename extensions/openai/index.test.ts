@@ -144,6 +144,7 @@ describe("openai plugin", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 

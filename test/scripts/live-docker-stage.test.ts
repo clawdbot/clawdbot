@@ -7,6 +7,12 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const stageScriptPath = path.join(repoRoot, "scripts/lib/live-docker-stage.sh");
 
 describe("live Docker state staging", () => {
+  it("keeps repo-local generated artifacts out of the source copy", () => {
+    const script = readFileSync(stageScriptPath, "utf8");
+
+    expect(script).toContain("--exclude=.artifacts");
+  });
+
   it("keeps host-only generated registry state out of the container copy", () => {
     const script = readFileSync(stageScriptPath, "utf8");
 

@@ -16,6 +16,11 @@ import {
 } from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
+  formatInheritedThinkingLabel,
+  formatThinkingOverrideLabel,
+  normalizeThinkingOptionValue,
+} from "../thinking-labels.ts";
+import {
   listThinkingLevelLabels,
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
@@ -211,18 +216,14 @@ function buildThinkingOptions(
   const options: ChatThinkingSelectOption[] = [];
 
   const addOption = (value: string, label?: string) => {
-    const resolvedLabel =
-      label ??
-      value
-        .split(/[-_]/g)
-        .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
-        .join(" ");
-    pushUniqueTrimmedSelectOption(options, seen, value, () => resolvedLabel);
+    const normalizedValue = normalizeThinkingOptionValue(value);
+    pushUniqueTrimmedSelectOption(options, seen, normalizedValue, () =>
+      formatThinkingOverrideLabel(normalizedValue, label),
+    );
   };
 
   for (const level of levels) {
-    const normalized = normalizeThinkLevel(level.id) ?? normalizeLowercaseStringOrEmpty(level.id);
-    addOption(normalized, level.label);
+    addOption(level.id, level.label);
   }
   if (currentOverride) {
     addOption(currentOverride);
@@ -257,7 +258,7 @@ function resolveThinkingLevelOptions(
   }));
 }
 
-function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelectState {
+export function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelectState {
   const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
   const persisted = activeRow?.thinkingLevel;
   const currentOverride =
@@ -283,7 +284,7 @@ function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelect
       : "off");
   return {
     currentOverride,
-    defaultLabel: `Default (${defaultLevel})`,
+    defaultLabel: formatInheritedThinkingLabel(defaultLevel),
     options: buildThinkingOptions(levels, currentOverride),
   };
 }

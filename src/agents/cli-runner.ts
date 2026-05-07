@@ -1,11 +1,15 @@
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
+import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
+import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
 import {
   runAgentHarnessAgentEndHook,
@@ -14,6 +18,12 @@ import {
 } from "./harness/lifecycle-hook-helpers.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
+
+const log = createSubsystemLogger("agents/cli-runner");
+
+function flushSessionManagerFile(sessionManager: SessionManager): void {
+  (sessionManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
+}
 
 function buildHandledReplyPayloads(reply?: ReplyPayload) {
   const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
@@ -127,8 +137,9 @@ export async function runPreparedCliAgent(
   const hasLlmInputHooks = hookRunner?.hasHooks("llm_input") === true;
   const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
+  const hasBeforeAgentRunHooks = hookRunner?.hasHooks("before_agent_run") === true;
   const historyMessages =
-    hasLlmInputHooks || hasAgentEndHooks
+    hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks
       ? await loadCliSessionHistoryMessages({
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
@@ -174,6 +185,88 @@ export async function runPreparedCliAgent(
     error,
     durationMs: Date.now() - context.started,
   });
+
+  const buildBlockedAgentEndEvent = (message: string) => ({
+    messages: buildAgentHookConversationMessages({
+      historyMessages,
+      currentTurnMessages: [buildCliHookUserMessage(message)],
+    }),
+    success: false,
+    error: message,
+    durationMs: Date.now() - context.started,
+  });
+
+  const buildBlockedBeforeAgentRunResult = (message: string): EmbeddedPiRunResult => ({
+    payloads: [{ text: message, isError: true }],
+    meta: {
+      durationMs: Date.now() - context.started,
+      finalAssistantVisibleText: message,
+      finalAssistantRawText: message,
+      livenessState: "blocked",
+      error: {
+        kind: "hook_block",
+        message,
+      },
+      systemPromptReport: context.systemPromptReport,
+      executionTrace: {
+        winnerProvider: params.provider,
+        winnerModel: context.modelId,
+        attempts: [
+          {
+            provider: params.provider,
+            model: context.modelId,
+            result: "error",
+            reason: "before_agent_run blocked the run",
+          },
+        ],
+        fallbackUsed: false,
+        runner: "cli",
+      },
+      requestShaping: {
+        ...(params.thinkLevel ? { thinking: params.thinkLevel } : {}),
+        ...(context.effectiveAuthProfileId ? { authMode: "auth-profile" } : {}),
+      },
+      completion: {
+        finishReason: "blocked",
+        stopReason: "blocked",
+        refusal: true,
+      },
+      agentMeta: {
+        sessionId: params.sessionId ?? "",
+        provider: params.provider,
+        model: context.modelId,
+      },
+    },
+  });
+
+  const persistBlockedBeforeAgentRun = async (block: {
+    message: string;
+    pluginId: string;
+  }): Promise<void> => {
+    try {
+      const nowMs = Date.now();
+      const sessionManager = SessionManager.open(params.sessionFile);
+      sessionManager.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: block.message }],
+        timestamp: nowMs,
+        idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
+        __openclaw: {
+          beforeAgentRunBlocked: {
+            blockedBy: block.pluginId,
+            blockedAt: nowMs,
+          },
+        },
+      } as Parameters<typeof sessionManager.appendMessage>[0]);
+      flushSessionManagerFile(sessionManager);
+    } catch (err) {
+      log.warn(
+        `before_agent_run block: failed to persist redacted CLI user message: ${formatErrorMessage(
+          err,
+        )}`,
+      );
+    }
+  };
 
   const toCliRunFailure = (error: unknown): never => {
     if (isFailoverError(error)) {
@@ -304,6 +397,60 @@ export async function runPreparedCliAgent(
 
   // Try with the provided CLI session ID first
   try {
+    if (hasBeforeAgentRunHooks && hookRunner) {
+      let beforeRunResult:
+        | Awaited<ReturnType<NonNullable<typeof hookRunner>["runBeforeAgentRun"]>>
+        | undefined;
+      try {
+        beforeRunResult = await hookRunner.runBeforeAgentRun(
+          {
+            prompt: params.prompt,
+            systemPrompt: context.systemPrompt,
+            messages: buildAgentHookConversationMessages({
+              historyMessages,
+              currentTurnMessages: [],
+            }),
+            channelId: hookContext.channelId,
+            accountId: params.agentAccountId,
+            senderIsOwner: params.senderIsOwner,
+          },
+          buildAgentHookContext(hookContext),
+        );
+      } catch {
+        const blockMessage = resolveBlockMessage(
+          { outcome: "block", reason: "before_agent_run hook failed" },
+          { blockedBy: "before_agent_run" },
+        );
+        await persistBlockedBeforeAgentRun({
+          message: blockMessage,
+          pluginId: "before_agent_run",
+        });
+        runAgentHarnessAgentEndHook({
+          event: buildBlockedAgentEndEvent(blockMessage),
+          ctx: hookContext,
+          hookRunner,
+        });
+        return buildBlockedBeforeAgentRunResult(blockMessage);
+      }
+
+      const beforeRunDecision = beforeRunResult?.decision;
+      if (beforeRunDecision?.outcome === "block") {
+        const blockMessage = resolveBlockMessage(beforeRunDecision, {
+          blockedBy: beforeRunResult?.pluginId ?? "unknown",
+        });
+        await persistBlockedBeforeAgentRun({
+          message: blockMessage,
+          pluginId: beforeRunResult?.pluginId ?? "unknown",
+        });
+        runAgentHarnessAgentEndHook({
+          event: buildBlockedAgentEndEvent(blockMessage),
+          ctx: hookContext,
+          hookRunner,
+        });
+        return buildBlockedBeforeAgentRunResult(blockMessage);
+      }
+    }
+
     runAgentHarnessLlmInputHook({
       event: llmInputEvent,
       ctx: hookContext,

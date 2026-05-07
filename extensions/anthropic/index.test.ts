@@ -6,7 +6,7 @@ import {
   capturePluginRegistration,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { readClaudeCliCredentialsForSetupMock, readClaudeCliCredentialsForRuntimeMock } = vi.hoisted(
   () => ({
@@ -23,6 +23,16 @@ vi.mock("./cli-auth-seam.js", () => {
 });
 
 import anthropicPlugin from "./index.js";
+
+beforeEach(() => {
+  readClaudeCliCredentialsForSetupMock.mockReset();
+  readClaudeCliCredentialsForRuntimeMock.mockReset();
+});
+
+afterAll(() => {
+  vi.doUnmock("./cli-auth-seam.js");
+  vi.resetModules();
+});
 
 function createModelRegistry(models: ProviderRuntimeModel[]) {
   return {
@@ -255,6 +265,30 @@ describe("anthropic provider replay hooks", () => {
         } as never)
         ?.levels.some((level) => level.id === "xhigh" || level.id === "max"),
     ).toBe(false);
+  });
+
+  it("does not forward-compat case-mismatched Anthropic model ids", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "CLAUDE-OPUS-4-7",
+      modelRegistry: createModelRegistry([
+        {
+          id: "claude-opus-4-6",
+          name: "Claude Opus 4.6",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 32_000,
+        } as ProviderRuntimeModel,
+      ]),
+    } as ProviderResolveDynamicModelContext);
+
+    expect(resolved).toBeUndefined();
   });
 
   it("normalizes exact claude opus 4.7 variants to 1M context", async () => {

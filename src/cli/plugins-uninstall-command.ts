@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { assertConfigWriteAllowedInCurrentMode, readConfigFileSnapshot } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -31,6 +31,8 @@ export async function runPluginUninstallCommand(
   opts: PluginUninstallOptions = {},
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
+  assertConfigWriteAllowedInCurrentMode();
+
   const {
     loadInstalledPluginIndexInstallRecords,
     removePluginInstallRecordFromRecords,

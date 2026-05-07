@@ -6,6 +6,7 @@ export {
   markdownToWhatsApp,
   resolveJidToE164,
   toWhatsappJid,
+  toWhatsappJidWithLid,
   type JidToE164Options,
   type WebChannel,
 } from "./targets-runtime.js";

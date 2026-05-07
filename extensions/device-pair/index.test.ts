@@ -6,7 +6,7 @@ import type {
   PluginCommandContext,
 } from "openclaw/plugin-sdk/core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "./api.js";
 
 const pluginApiMocks = vi.hoisted(() => ({
@@ -63,6 +63,12 @@ import {
   resolveTailnetHostWithRunner,
 } from "./api.js";
 import registerDevicePair from "./index.js";
+
+afterAll(() => {
+  vi.doUnmock("./api.js");
+  vi.doUnmock("./notify.js");
+  vi.resetModules();
+});
 
 type ListedPendingPairingRequest = Awaited<ReturnType<typeof listDevicePairing>>["pending"][number];
 type ApproveDevicePairingResolved = Awaited<ReturnType<typeof approveDevicePairing>>;

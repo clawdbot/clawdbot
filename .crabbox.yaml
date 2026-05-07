@@ -1,12 +1,17 @@
 profile: openclaw-check
 provider: aws
-class: beast
+class: standard
 capacity:
   market: spot
   strategy: most-available
   fallback: on-demand-after-120s
+  hints: true
   regions:
     - eu-west-1
+    - eu-west-2
+    - eu-central-1
+    - us-east-1
+    - us-west-2
 actions:
   workflow: .github/workflows/crabbox-hydrate.yml
   job: hydrate

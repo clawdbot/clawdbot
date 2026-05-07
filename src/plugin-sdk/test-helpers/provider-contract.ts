@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ProviderPlugin } from "../provider-model-shared.js";
 import {
   providerContractLoadError,
-  resolveBundledExplicitProviderContractsFromPublicArtifacts,
   resolveProviderContractProvidersForPluginIds,
-} from "../testing.js";
+} from "../../plugins/contracts/registry.js";
+import { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../../plugins/provider-contract-public-artifacts.js";
+import type { ProviderPlugin } from "../provider-model-shared.js";
 import { installProviderPluginContractSuite } from "./provider-contract-suites.js";
 
 type ProviderContractEntry = {

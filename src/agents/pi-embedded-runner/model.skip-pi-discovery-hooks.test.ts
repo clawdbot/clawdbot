@@ -59,6 +59,7 @@ describe("resolveModelAsync skipPiDiscovery runtime hooks", () => {
   it("uses only target-provider dynamic hooks", async () => {
     const result = await resolveModelAsync("ollama", "llama3.2:latest", "/tmp/agent", undefined, {
       skipPiDiscovery: true,
+      workspaceDir: "/tmp/workspace",
     });
 
     expect(result.error).toBeUndefined();
@@ -70,8 +71,26 @@ describe("resolveModelAsync skipPiDiscovery runtime hooks", () => {
     expect(mocks.discoverAuthStorage).not.toHaveBeenCalled();
     expect(mocks.discoverModels).not.toHaveBeenCalled();
     expect(mocks.prepareProviderDynamicModel).toHaveBeenCalledTimes(1);
+    expect(mocks.prepareProviderDynamicModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        context: expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
+      }),
+    );
     expect(mocks.runProviderDynamicModel).toHaveBeenCalledTimes(1);
+    expect(mocks.runProviderDynamicModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        context: expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
+      }),
+    );
     expect(mocks.normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledTimes(1);
+    expect(mocks.normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        context: expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
+      }),
+    );
     expect(mocks.applyProviderResolvedModelCompatWithPlugins).not.toHaveBeenCalled();
     expect(mocks.applyProviderResolvedTransportWithPlugin).not.toHaveBeenCalled();
     expect(mocks.normalizeProviderTransportWithPlugin).not.toHaveBeenCalled();

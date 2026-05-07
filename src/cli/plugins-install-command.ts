@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { collectChannelDoctorStaleConfigMutations } from "../commands/doctor/shared/channel-doctor.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { assertConfigWriteAllowedInCurrentMode, readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { installHooksFromNpmSpec, installHooksFromPath } from "../hooks/install.js";
 import { resolveArchiveKind } from "../infra/archive.js";
@@ -564,6 +564,8 @@ export async function runPluginInstallCommand(params: {
   };
   runtime?: RuntimeEnv;
 }) {
+  assertConfigWriteAllowedInCurrentMode();
+
   const runtime = params.runtime ?? defaultRuntime;
   const shorthand = !params.opts.marketplace
     ? await tracePluginLifecyclePhaseAsync(

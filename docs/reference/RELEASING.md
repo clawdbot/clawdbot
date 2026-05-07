@@ -77,10 +77,13 @@ the maintainer-only release runbook.
    prior evidence stale.
 9. For beta, tag `vYYYY.M.D-beta.N`, then run `OpenClaw Release Publish` from
    the matching `release/YYYY.M.D` branch. It verifies `pnpm plugins:sync:check`,
-   publishes all publishable plugin packages to npm first, publishes the same
-   set to ClawHub second as ClawPack npm-pack tarballs, and then promotes the
-   prepared OpenClaw npm preflight artifact with the matching dist-tag. After
-   publish, run post-publish package
+   dispatches all publishable plugin packages to npm and the same set to
+   ClawHub in parallel, and then promotes the prepared OpenClaw npm preflight
+   artifact with the matching dist-tag as soon as plugin npm publish succeeds.
+   ClawHub publishing may still be running while OpenClaw npm publishes, but the
+   release publish workflow does not finish until both plugin publish paths and
+   the OpenClaw npm publish path have completed successfully. After publish, run
+   the post-publish package
    acceptance against the published `openclaw@YYYY.M.D-beta.N` or
    `openclaw@beta` package. If a pushed or published prerelease needs a fix,
    cut the next matching prerelease number; do not delete or rewrite the old

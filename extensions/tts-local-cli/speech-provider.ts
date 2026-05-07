@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import type {
   SpeechProviderConfig,
   SpeechProviderPlugin,
@@ -270,36 +271,50 @@ async function convertAudio(
   outputDir: string,
   target: OutputFormat,
 ): Promise<Buffer> {
-  const outputPath = path.join(outputDir, `converted${getFileExt(target)}`);
+  const outputFileName = `converted${getFileExt(target)}`;
+  const outputPath = path.join(outputDir, outputFileName);
   const args = ["-y", "-i", inputPath];
   if (target === "opus") {
-    args.push("-c:a", "libopus", "-b:a", "64k", outputPath);
+    args.push("-c:a", "libopus", "-b:a", "64k");
   } else if (target === "wav") {
-    args.push("-c:a", "pcm_s16le", outputPath);
+    args.push("-c:a", "pcm_s16le");
   } else {
-    args.push("-c:a", "libmp3lame", "-b:a", "128k", outputPath);
+    args.push("-c:a", "libmp3lame", "-b:a", "128k");
   }
-  await runFfmpeg(args);
+  await writeExternalFileWithinRoot({
+    rootDir: outputDir,
+    path: outputFileName,
+    write: async (tempPath) => {
+      await runFfmpeg([...args, tempPath]);
+    },
+  });
   return readFileSync(outputPath);
 }
 
 async function convertToRawPcm(inputPath: string, outputDir: string): Promise<Buffer> {
   // Output raw 16kHz mono 16-bit little-endian PCM (no WAV headers)
-  const outputPath = path.join(outputDir, "telephony.pcm");
-  await runFfmpeg([
-    "-y",
-    "-i",
-    inputPath,
-    "-c:a",
-    "pcm_s16le",
-    "-ar",
-    "16000",
-    "-ac",
-    "1",
-    "-f",
-    "s16le",
-    outputPath,
-  ]);
+  const outputFileName = "telephony.pcm";
+  const outputPath = path.join(outputDir, outputFileName);
+  await writeExternalFileWithinRoot({
+    rootDir: outputDir,
+    path: outputFileName,
+    write: async (tempPath) => {
+      await runFfmpeg([
+        "-y",
+        "-i",
+        inputPath,
+        "-c:a",
+        "pcm_s16le",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        "-f",
+        "s16le",
+        tempPath,
+      ]);
+    },
+  });
   return readFileSync(outputPath);
 }
 

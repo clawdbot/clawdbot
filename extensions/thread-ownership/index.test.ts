@@ -6,6 +6,8 @@ describe("thread-ownership plugin", () => {
   const hooks: Record<string, Function> = {};
   const fetchMock = vi.fn() as unknown as typeof globalThis.fetch;
   let configFile: Record<string, unknown> = {};
+  const originalSlackForwarderUrl = process.env.SLACK_FORWARDER_URL;
+  const originalSlackBotUserId = process.env.SLACK_BOT_USER_ID;
   const api = {
     pluginConfig: {},
     config: {
@@ -44,8 +46,16 @@ describe("thread-ownership plugin", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    delete process.env.SLACK_FORWARDER_URL;
-    delete process.env.SLACK_BOT_USER_ID;
+    if (originalSlackForwarderUrl === undefined) {
+      delete process.env.SLACK_FORWARDER_URL;
+    } else {
+      process.env.SLACK_FORWARDER_URL = originalSlackForwarderUrl;
+    }
+    if (originalSlackBotUserId === undefined) {
+      delete process.env.SLACK_BOT_USER_ID;
+    } else {
+      process.env.SLACK_BOT_USER_ID = originalSlackBotUserId;
+    }
     vi.restoreAllMocks();
   });
 

@@ -755,6 +755,119 @@ describe("handleToolExecutionEnd derived tool events", () => {
     );
   });
 
+  it("caps and throttles exec update output before live events", async () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx, onAgentEvent } = createTestContext();
+    const largeOutput = "x".repeat(9000);
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-large-update",
+        args: { command: "yes" },
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "exec",
+        toolCallId: "tool-exec-large-update",
+        partialResult: {
+          details: {
+            status: "running",
+            aggregated: largeOutput,
+          },
+        },
+      } as never,
+    );
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "exec",
+        toolCallId: "tool-exec-large-update",
+        partialResult: {
+          details: {
+            status: "running",
+            aggregated: `${largeOutput}again`,
+          },
+        },
+      } as never,
+    );
+
+    const updateEvents = events.filter(
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "update",
+    );
+    expect(updateEvents).toHaveLength(1);
+    const partialResult = updateEvents[0]?.data?.partialResult as
+      | { details?: { aggregated?: string } }
+      | undefined;
+    expect(partialResult?.details?.aggregated).toContain("...(live output truncated)...");
+    expect(partialResult?.details?.aggregated?.length).toBeLessThan(largeOutput.length);
+
+    const commandOutputCalls = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((arg: unknown) => (arg as { stream?: string })?.stream === "command_output");
+    expect(commandOutputCalls).toHaveLength(1);
+    const output = (commandOutputCalls[0] as { data?: { output?: string } }).data?.output;
+    expect(output).toContain("...(live output truncated)...");
+    expect(output?.length).toBeLessThan(largeOutput.length);
+
+    resetAgentEventsForTest();
+  });
+
+  it("caps exec final output before result and command output events", async () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx, onAgentEvent } = createTestContext();
+    const largeOutput = "z".repeat(9000);
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-large-result",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            aggregated: largeOutput,
+            exitCode: 0,
+          },
+        },
+      } as never,
+    );
+
+    const resultEvent = events.find(
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "result",
+    );
+    const result = resultEvent?.data?.result as { details?: { aggregated?: string } } | undefined;
+    expect(result?.details?.aggregated).toContain("...(live output truncated)...");
+    expect(result?.details?.aggregated?.length).toBeLessThan(largeOutput.length);
+
+    const commandOutputCalls = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((arg: unknown) => (arg as { stream?: string })?.stream === "command_output");
+    const output = (commandOutputCalls.at(-1) as { data?: { output?: string } } | undefined)?.data
+      ?.output;
+    expect(output).toContain("...(live output truncated)...");
+    expect(output?.length).toBeLessThan(largeOutput.length);
+
+    resetAgentEventsForTest();
+  });
+
   it("emits command output events for exec results", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 

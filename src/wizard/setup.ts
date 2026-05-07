@@ -617,7 +617,8 @@ export async function runSetupWizard(
       // Explicit skip should stay cold: do not bootstrap auth/profile machinery
       // or run model/auth checks when the caller already chose to skip setup.
       if (authChoiceFromPrompt) {
-        const { applyPrimaryModel, promptDefaultModel } = await loadModelPickerModule();
+        const { applyPrimaryModel, ensureCodexRuntimePluginForModelSelection, promptDefaultModel } =
+          await loadModelPickerModule();
         const modelSelection = await promptDefaultModel({
           config: nextConfig,
           prompter,
@@ -633,6 +634,15 @@ export async function runSetupWizard(
         }
         if (modelSelection.model) {
           nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
+          nextConfig = (
+            await ensureCodexRuntimePluginForModelSelection({
+              cfg: nextConfig,
+              model: modelSelection.model,
+              prompter,
+              runtime,
+              workspaceDir,
+            })
+          ).cfg;
         }
 
         const { warnIfModelConfigLooksOff } = await loadAuthChoiceModule();
@@ -643,7 +653,7 @@ export async function runSetupWizard(
 
     const [
       { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff },
-      { applyPrimaryModel, promptDefaultModel },
+      { applyPrimaryModel, ensureCodexRuntimePluginForModelSelection, promptDefaultModel },
     ] = await Promise.all([loadAuthChoiceModule(), loadModelPickerModule()]);
     const authResult = await applyAuthChoice({
       authChoice,
@@ -665,6 +675,15 @@ export async function runSetupWizard(
     }
     if (authResult.agentModelOverride) {
       nextConfig = applyPrimaryModel(nextConfig, authResult.agentModelOverride);
+      nextConfig = (
+        await ensureCodexRuntimePluginForModelSelection({
+          cfg: nextConfig,
+          model: authResult.agentModelOverride,
+          prompter,
+          runtime,
+          workspaceDir,
+        })
+      ).cfg;
     }
 
     const authChoiceModelSelectionPolicy = await resolveAuthChoiceModelSelectionPolicy({
@@ -692,6 +711,15 @@ export async function runSetupWizard(
       }
       if (modelSelection.model) {
         nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
+        nextConfig = (
+          await ensureCodexRuntimePluginForModelSelection({
+            cfg: nextConfig,
+            model: modelSelection.model,
+            prompter,
+            runtime,
+            workspaceDir,
+          })
+        ).cfg;
       }
     }
 

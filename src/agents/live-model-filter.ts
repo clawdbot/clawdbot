@@ -194,6 +194,21 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
   return isHighSignalClaudeModelId(id);
 }
 
+export function isPrioritizedHighSignalLiveModelRef(ref: ModelRef): boolean {
+  const key = toCanonicalHighSignalLiveModelKey(ref);
+  return key !== null && HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX.has(key);
+}
+
+export function listPrioritizedHighSignalLiveModelRefs(): Array<{ provider: string; id: string }> {
+  return HIGH_SIGNAL_LIVE_MODEL_PRIORITY.map((key) => {
+    const separatorIndex = key.indexOf("/");
+    return {
+      provider: key.slice(0, separatorIndex),
+      id: key.slice(separatorIndex + 1),
+    };
+  });
+}
+
 export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
   provider?: string | null;
   useExplicitModels: boolean;

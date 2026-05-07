@@ -334,7 +334,7 @@ describe("scripts/changed-lanes", () => {
       extensionTests: true,
       all: false,
     });
-    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions:test");
   });
 
@@ -853,6 +853,22 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
   });
 
+  it("routes A2UI bundle source changes as extension changes", () => {
+    const result = detectChangedLanes([
+      "extensions/canvas/src/host/a2ui-app/bootstrap.js",
+      "extensions/canvas/src/host/a2ui-app/rolldown.config.mjs",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      extensions: true,
+      extensionTests: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+  });
+
   it("keeps shared Vitest wiring changes out of check test execution", () => {
     const result = detectChangedLanes(["test/vitest/vitest.shared.config.ts"]);
     const plan = createChangedCheckPlan(result);
@@ -869,14 +885,14 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
   });
 
-  it("does not route generated A2UI artifacts as direct Vitest targets", () => {
+  it("does not route generated plugin bundle artifacts as direct Vitest targets", () => {
     const result = detectChangedLanes([
-      "src/canvas-host/a2ui/.bundle.hash",
+      "extensions/demo/src/host/assets/.bundle.hash",
       "test/scripts/bundle-a2ui.test.ts",
     ]);
     const plan = createChangedCheckPlan(result);
 
-    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
   });
 

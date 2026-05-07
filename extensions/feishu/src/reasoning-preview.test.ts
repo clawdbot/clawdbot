@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
 
 const { loadSessionStoreMock } = vi.hoisted(() => ({
@@ -12,6 +12,11 @@ vi.mock("./bot-runtime-api.js", async () => {
     ...actual,
     loadSessionStore: loadSessionStoreMock,
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("./bot-runtime-api.js");
+  vi.resetModules();
 });
 
 describe("resolveFeishuReasoningPreviewEnabled", () => {

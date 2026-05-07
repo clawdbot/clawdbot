@@ -32,6 +32,10 @@
     "target": "消息生命周期重构"
   },
   {
+    "source": "ACP lifecycle refactor",
+    "target": "ACP 生命周期重构"
+  },
+  {
     "source": "Channel message API",
     "target": "频道消息 API"
   },

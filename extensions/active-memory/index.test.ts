@@ -213,6 +213,7 @@ describe("active-memory plugin", () => {
   afterEach(async () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    __testing.resetActiveRecallCacheForTests();
     if (stateDir) {
       await fs.rm(stateDir, { recursive: true, force: true });
       stateDir = "";

@@ -60,10 +60,14 @@ import { ensureCodexComputerUse } from "./computer-use.js";
 import {
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
+  type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./config.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
-import { applyCodexDynamicToolProfile } from "./dynamic-tool-profile.js";
+import {
+  applyCodexDynamicToolProfile,
+  normalizeCodexDynamicToolName,
+} from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -121,6 +125,8 @@ const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
 const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
+const CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS =
+  CODEX_NATIVE_HOOK_RELAY_EVENTS.filter((event) => event !== "permission_request");
 const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["soul.md", 10],
   ["identity.md", 20],
@@ -370,6 +376,10 @@ export async function runCodexAppServerAttempt(
   const attemptClientFactory = resolveCodexAppServerClientFactory();
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+  const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
+    configuredEvents: options.nativeHookRelay?.events,
+    appServer,
+  });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey =
@@ -574,6 +584,7 @@ export async function runCodexAppServerAttempt(
     });
     nativeHookRelay = createCodexNativeHookRelay({
       options: options.nativeHookRelay,
+      events: nativeHookRelayEvents,
       agentId: sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
@@ -584,7 +595,7 @@ export async function runCodexAppServerAttempt(
     const nativeHookRelayConfig = nativeHookRelay
       ? buildCodexNativeHookRelayConfig({
           relay: nativeHookRelay,
-          events: options.nativeHookRelay?.events,
+          events: nativeHookRelayEvents,
           hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
         })
       : options.nativeHookRelay?.enabled === false
@@ -713,17 +724,19 @@ export async function runCodexAppServerAttempt(
   });
   let notificationQueue: Promise<void> = Promise.resolve();
   const turnCompletionIdleTimeoutMs = resolveCodexTurnCompletionIdleTimeoutMs(
-    options.turnCompletionIdleTimeoutMs,
+    options.turnCompletionIdleTimeoutMs ?? appServer.turnCompletionIdleTimeoutMs,
   );
   const turnTerminalIdleTimeoutMs = resolveCodexTurnTerminalIdleTimeoutMs(
     options.turnTerminalIdleTimeoutMs,
   );
   let turnCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnCompletionIdleWatchArmed = false;
+  let turnCompletionIdleWatchPinnedByTerminalError = false;
   let turnTerminalIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnTerminalIdleWatchArmed = false;
   let turnCompletionLastActivityAt = Date.now();
   let turnCompletionLastActivityReason = "startup";
+  let turnCompletionLastActivityDetails: Record<string, unknown> | undefined;
   let activeAppServerTurnRequests = 0;
 
   const clearTurnCompletionIdleTimer = () => {
@@ -765,6 +778,7 @@ export async function runCodexAppServerAttempt(
       idleMs,
       timeoutMs: turnCompletionIdleTimeoutMs,
       lastActivityReason: turnCompletionLastActivityReason,
+      ...turnCompletionLastActivityDetails,
     });
     embeddedAgentLog.warn("codex app-server turn idle timed out waiting for completion", {
       threadId: thread.threadId,
@@ -772,6 +786,7 @@ export async function runCodexAppServerAttempt(
       idleMs,
       timeoutMs: turnCompletionIdleTimeoutMs,
       lastActivityReason: turnCompletionLastActivityReason,
+      ...turnCompletionLastActivityDetails,
     });
     runAbortController.abort("turn_completion_idle_timeout");
   };
@@ -801,6 +816,7 @@ export async function runCodexAppServerAttempt(
       idleMs,
       timeoutMs: turnTerminalIdleTimeoutMs,
       lastActivityReason: turnCompletionLastActivityReason,
+      ...turnCompletionLastActivityDetails,
     });
     embeddedAgentLog.warn("codex app-server turn idle timed out waiting for terminal event", {
       threadId: thread.threadId,
@@ -808,6 +824,7 @@ export async function runCodexAppServerAttempt(
       idleMs,
       timeoutMs: turnTerminalIdleTimeoutMs,
       lastActivityReason: turnCompletionLastActivityReason,
+      ...turnCompletionLastActivityDetails,
     });
     runAbortController.abort("turn_terminal_idle_timeout");
   };
@@ -844,9 +861,13 @@ export async function runCodexAppServerAttempt(
     turnTerminalIdleTimer.unref?.();
   }
 
-  const touchTurnCompletionActivity = (reason: string, options?: { arm?: boolean }) => {
+  const touchTurnCompletionActivity = (
+    reason: string,
+    options?: { arm?: boolean; details?: Record<string, unknown> },
+  ) => {
     turnCompletionLastActivityAt = Date.now();
     turnCompletionLastActivityReason = reason;
+    turnCompletionLastActivityDetails = options?.details;
     emitTrustedDiagnosticEvent({
       type: "run.progress",
       runId: params.runId,
@@ -856,9 +877,22 @@ export async function runCodexAppServerAttempt(
     });
     if (options?.arm) {
       turnCompletionIdleWatchArmed = true;
+      turnCompletionIdleWatchPinnedByTerminalError = false;
     }
     scheduleTurnCompletionIdleWatch();
     scheduleTurnTerminalIdleWatch();
+  };
+
+  const disarmTurnCompletionIdleWatch = () => {
+    turnCompletionIdleWatchArmed = false;
+    turnCompletionIdleWatchPinnedByTerminalError = false;
+    clearTurnCompletionIdleTimer();
+  };
+
+  const armTurnCompletionIdleWatch = (options?: { pinnedByTerminalError?: boolean }) => {
+    turnCompletionIdleWatchArmed = true;
+    turnCompletionIdleWatchPinnedByTerminalError = options?.pinnedByTerminalError === true;
+    scheduleTurnCompletionIdleWatch();
   };
 
   const emitLifecycleStart = () => {
@@ -885,18 +919,41 @@ export async function runCodexAppServerAttempt(
   };
 
   const handleNotification = async (notification: CodexServerNotification) => {
-    touchTurnCompletionActivity(`notification:${notification.method}`);
+    touchTurnCompletionActivity(`notification:${notification.method}`, {
+      details: describeNotificationActivity(notification),
+    });
     userInputBridge?.handleNotification(notification);
     if (!projector || !turnId) {
       pendingNotifications.push(notification);
       return;
     }
+    const isCurrentTurnNotification = isTurnNotification(
+      notification.params,
+      thread.threadId,
+      turnId,
+    );
+    if (isCurrentTurnNotification && notification.method === "error") {
+      if (isRetryableErrorNotification(notification.params)) {
+        disarmTurnCompletionIdleWatch();
+      } else {
+        armTurnCompletionIdleWatch({ pinnedByTerminalError: true });
+      }
+    } else if (
+      turnCompletionIdleWatchArmed &&
+      !turnCompletionIdleWatchPinnedByTerminalError &&
+      notification.method !== "turn/completed" &&
+      isCurrentTurnNotification
+    ) {
+      // The short completion-idle watchdog only guards the blind gap after
+      // OpenClaw hands a turn-scoped request result back to Codex. Once Codex
+      // sends another current-turn notification, the app-server is alive again;
+      // the longer terminal watchdog remains the stuck-turn backstop.
+      disarmTurnCompletionIdleWatch();
+    }
     // Determine terminal-turn status before invoking the projector so a throw
     // inside projector.handleNotification still releases the session lane.
     // See openclaw/openclaw#67996.
-    const isTurnCompletion =
-      notification.method === "turn/completed" &&
-      isTurnNotification(notification.params, thread.threadId, turnId);
+    const isTurnCompletion = notification.method === "turn/completed" && isCurrentTurnNotification;
     try {
       await projector.handleNotification(notification);
     } catch (error) {
@@ -935,6 +992,7 @@ export async function runCodexAppServerAttempt(
         return refreshCodexAppServerAuthTokens({
           agentDir,
           authProfileId: startupAuthProfileId,
+          config: params.config,
         });
       }
       if (!turnId) {
@@ -1439,11 +1497,11 @@ function createCodexNativeHookRelay(params: {
   options:
     | {
         enabled?: boolean;
-        events?: readonly NativeHookRelayEvent[];
         ttlMs?: number;
         gatewayTimeoutMs?: number;
       }
     | undefined;
+  events: readonly NativeHookRelayEvent[];
   agentId: string | undefined;
   sessionId: string;
   sessionKey: string | undefined;
@@ -1466,13 +1524,29 @@ function createCodexNativeHookRelay(params: {
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
-    allowedEvents: params.options?.events ?? CODEX_NATIVE_HOOK_RELAY_EVENTS,
+    allowedEvents: params.events,
     ttlMs: params.options?.ttlMs,
     signal: params.signal,
     command: {
       timeoutMs: params.options?.gatewayTimeoutMs,
     },
   });
+}
+
+function resolveCodexNativeHookRelayEvents(params: {
+  configuredEvents?: readonly NativeHookRelayEvent[];
+  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy">;
+}): readonly NativeHookRelayEvent[] {
+  if (params.configuredEvents?.length) {
+    return params.configuredEvents;
+  }
+  // Codex emits PermissionRequest before the app-server approval reviewer has
+  // resolved the command. In native approval modes, let Codex's app-server
+  // approval bridge own the real escalation instead of surfacing a stale
+  // pre-guardian OpenClaw plugin approval prompt.
+  return params.appServer.approvalPolicy === "never"
+    ? CODEX_NATIVE_HOOK_RELAY_EVENTS
+    : CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS;
 }
 
 function buildCodexNativeHookRelayId(params: {
@@ -1515,6 +1589,17 @@ type DynamicToolBuildParams = {
   onYieldDetected: () => void;
 };
 
+function resolveOpenClawCodingToolsSessionKeys(
+  params: EmbeddedRunAttemptParams,
+  sandboxSessionKey: string,
+): Pick<OpenClawCodingToolsOptions, "sessionKey" | "runSessionKey"> {
+  return {
+    sessionKey: sandboxSessionKey,
+    runSessionKey:
+      params.sessionKey && params.sessionKey !== sandboxSessionKey ? params.sessionKey : undefined,
+  };
+}
+
 async function buildDynamicTools(input: DynamicToolBuildParams) {
   const { params } = input;
   if (params.disableTools || !supportsModelTools(params.model)) {
@@ -1525,6 +1610,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
   const createOpenClawCodingTools =
     openClawCodingToolsFactoryForTests ??
     (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools;
+  const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
     ...buildEmbeddedAttemptToolRunContext(params),
@@ -1547,11 +1633,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-    sessionKey: input.sandboxSessionKey,
-    runSessionKey:
-      params.sessionKey && params.sessionKey !== input.sandboxSessionKey
-        ? params.sessionKey
-        : undefined,
+    ...sessionKeys,
     sessionId: params.sessionId,
     runId: params.runId,
     agentDir,
@@ -1583,7 +1665,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     disableMessageTool: params.disableMessageTool,
-    forceMessageTool: params.sourceReplyDeliveryMode === "message_tool_only",
+    forceMessageTool: shouldForceMessageTool(params),
     enableHeartbeatTool: params.trigger === "heartbeat",
     forceHeartbeatTool: params.trigger === "heartbeat",
     onYield: (message) => {
@@ -1600,10 +1682,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelHasVision,
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
-  const filteredTools =
-    params.toolsAllow && params.toolsAllow.length > 0
-      ? visionFilteredTools.filter((tool) => params.toolsAllow?.includes(tool.name))
-      : visionFilteredTools;
+  const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, params.toolsAllow);
   return normalizeAgentRuntimeTools({
     runtimePlan: params.runtimePlan,
     tools: filteredTools,
@@ -1615,6 +1694,23 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelApi: params.model.api,
     model: params.model,
   });
+}
+
+function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
+  tools: T[],
+  toolsAllow?: string[],
+): T[] {
+  if (!toolsAllow || toolsAllow.length === 0) {
+    return tools;
+  }
+  const allowSet = new Set(
+    toolsAllow.map((name) => normalizeCodexDynamicToolName(name)).filter(Boolean),
+  );
+  return tools.filter((tool) => allowSet.has(normalizeCodexDynamicToolName(tool.name)));
+}
+
+function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
+  return params.sourceReplyDeliveryMode === "message_tool_only";
 }
 
 function shouldProjectMirroredHistoryForCodexStart(params: {
@@ -1769,6 +1865,48 @@ function readCodexErrorPayload(error: unknown): {
   };
 }
 
+function describeNotificationActivity(
+  notification: CodexServerNotification,
+): Record<string, unknown> | undefined {
+  if (!isJsonObject(notification.params)) {
+    return { lastNotificationMethod: notification.method };
+  }
+  if (notification.method !== "rawResponseItem/completed") {
+    return { lastNotificationMethod: notification.method };
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  if (!item) {
+    return { lastNotificationMethod: notification.method };
+  }
+  return {
+    lastNotificationMethod: notification.method,
+    lastNotificationItemId: readString(item, "id"),
+    lastNotificationItemType: readString(item, "type"),
+    lastNotificationItemRole: readString(item, "role"),
+    lastAssistantTextPreview: readRawAssistantTextPreview(item),
+  };
+}
+
+function readRawAssistantTextPreview(item: JsonObject): string | undefined {
+  if (readString(item, "role") !== "assistant" || !Array.isArray(item.content)) {
+    return undefined;
+  }
+  const text = item.content
+    .flatMap((content) => {
+      if (!isJsonObject(content)) {
+        return [];
+      }
+      const contentText = readString(content, "text");
+      return contentText ? [contentText] : [];
+    })
+    .join("\n")
+    .trim();
+  if (!text) {
+    return undefined;
+  }
+  return text.length > 240 ? `${text.slice(0, 237)}...` : text;
+}
+
 function isTurnNotification(
   value: JsonValue | undefined,
   threadId: string,
@@ -1778,6 +1916,13 @@ function isTurnNotification(
     return false;
   }
   return readString(value, "threadId") === threadId && readNotificationTurnId(value) === turnId;
+}
+
+function isRetryableErrorNotification(value: JsonValue | undefined): boolean {
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  return readBoolean(value, "willRetry") === true || readBoolean(value, "will_retry") === true;
 }
 
 function isTerminalTurnStatus(status: string | undefined): boolean {
@@ -1796,6 +1941,11 @@ function readNestedTurnId(record: JsonObject): string | undefined {
 function readString(record: JsonObject, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function readBoolean(record: JsonObject, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
 }
 
 async function readMirroredSessionHistoryMessages(
@@ -1981,8 +2131,11 @@ export const __testing = {
   buildCodexNativeHookRelayId,
   applyCodexDynamicToolProfile,
   buildDynamicTools,
+  filterCodexDynamicToolsForAllowlist,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
+  resolveOpenClawCodingToolsSessionKeys,
+  shouldForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {
     openClawCodingToolsFactoryForTests = factory;
   },

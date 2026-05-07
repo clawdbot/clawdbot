@@ -32,6 +32,7 @@ export type EmbeddedPiSubscribeState = {
   toolMetas: Array<{ toolName?: string; meta?: string }>;
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
+  execLiveUpdateStateById?: Map<string, { lastEmittedAtMs: number }>;
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;
@@ -194,6 +195,7 @@ type ToolHandlerState = Pick<
   | "toolMetaById"
   | "toolMetas"
   | "toolSummaryById"
+  | "execLiveUpdateStateById"
   | "itemActiveIds"
   | "itemStartedCount"
   | "itemCompletedCount"

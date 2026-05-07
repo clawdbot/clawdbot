@@ -82,22 +82,35 @@ function formatSlackMetadataLine(label: string, value: string): string {
 }
 
 function buildSlackMetadataLines(metadata: readonly { label: string; value: string }[]): string[] {
-  return metadata.map((item) => formatSlackMetadataLine(item.label, item.value));
+  const lines: string[] = [];
+  for (const item of metadata) {
+    lines.push(formatSlackMetadataLine(item.label, item.value));
+  }
+  return lines;
 }
 
 function buildSlackMetadataContextElements(metadata: readonly { label: string; value: string }[]) {
   const lines = buildSlackMetadataLines(metadata);
-  const visibleLines =
-    lines.length > SLACK_CONTEXT_ELEMENTS_MAX
-      ? [
-          ...lines.slice(0, SLACK_CONTEXT_ELEMENTS_MAX - 1),
-          `…+${lines.length - (SLACK_CONTEXT_ELEMENTS_MAX - 1)} more`,
-        ]
-      : lines;
-  return visibleLines.map((line) => ({
-    type: "mrkdwn" as const,
-    text: truncateSlackMrkdwn(line, SLACK_TEXT_OBJECT_MAX),
-  }));
+  const visibleLineCount =
+    lines.length > SLACK_CONTEXT_ELEMENTS_MAX ? SLACK_CONTEXT_ELEMENTS_MAX - 1 : lines.length;
+  const elements: Array<{ type: "mrkdwn"; text: string }> = [];
+  for (let index = 0; index < visibleLineCount; index += 1) {
+    const line = lines[index];
+    if (line === undefined) {
+      continue;
+    }
+    elements.push({
+      type: "mrkdwn",
+      text: truncateSlackMrkdwn(line, SLACK_TEXT_OBJECT_MAX),
+    });
+  }
+  if (lines.length > SLACK_CONTEXT_ELEMENTS_MAX) {
+    elements.push({
+      type: "mrkdwn",
+      text: `…+${lines.length - visibleLineCount} more`,
+    });
+  }
+  return elements;
 }
 
 function resolveSlackApprovalDecisionLabel(
@@ -120,7 +133,7 @@ function buildSlackPendingApprovalText(view: ExecApprovalPendingView): string {
     buildSlackCodeBlock(view.commandText),
     ...metadataLines,
   ];
-  return lines.filter(Boolean).join("\n");
+  return lines.join("\n");
 }
 
 function buildSlackPendingApprovalBlocks(view: ExecApprovalPendingView): SlackBlock[] {

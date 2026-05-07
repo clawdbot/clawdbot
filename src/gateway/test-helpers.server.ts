@@ -314,7 +314,6 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
   testState.gatewayControlUi = undefined;
   testState.hooksConfig = undefined;
-  testState.canvasHostPort = undefined;
   testState.legacyIssues = [];
   testState.legacyParsed = {};
   testState.migrationConfig = null;
@@ -406,7 +405,6 @@ async function resetGatewayTestRuntimeOnly() {
   testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
   testState.gatewayControlUi = undefined;
   testState.hooksConfig = undefined;
-  testState.canvasHostPort = undefined;
   testState.legacyIssues = [];
   testState.legacyParsed = {};
   testState.migrationConfig = null;

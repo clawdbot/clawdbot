@@ -27,7 +27,32 @@ function hasMeaningfulText(text: string): boolean {
 }
 
 export function hasMeaningfulConversationContent(message: AgentMessage): boolean {
+  if ((message as { role?: unknown }).role === "custom") {
+    const custom = message as { content?: unknown; display?: unknown };
+    return custom.display !== false && hasMeaningfulMessageContent(custom.content);
+  }
+  if ((message as { role?: unknown }).role === "bashExecution") {
+    const bash = message as {
+      command?: unknown;
+      output?: unknown;
+      excludeFromContext?: unknown;
+    };
+    if (bash.excludeFromContext === true) {
+      return false;
+    }
+    const command = typeof bash.command === "string" ? bash.command : "";
+    const output = typeof bash.output === "string" ? bash.output : "";
+    return hasMeaningfulText(`${command}\n${output}`);
+  }
+  if ((message as { role?: unknown }).role === "branchSummary") {
+    const summary = (message as { summary?: unknown }).summary;
+    return typeof summary === "string" && hasMeaningfulText(summary);
+  }
   const content = (message as { content?: unknown }).content;
+  return hasMeaningfulMessageContent(content);
+}
+
+function hasMeaningfulMessageContent(content: unknown): boolean {
   if (typeof content === "string") {
     return hasMeaningfulText(content);
   }
@@ -60,12 +85,29 @@ export function hasMeaningfulConversationContent(message: AgentMessage): boolean
   return sawMeaningfulNonTextBlock;
 }
 
+function isToolResultConversationAnchor(message: AgentMessage): boolean {
+  const role = (message as { role?: unknown }).role;
+  return (
+    (role === "user" ||
+      role === "custom" ||
+      role === "bashExecution" ||
+      role === "branchSummary") &&
+    hasMeaningfulConversationContent(message)
+  );
+}
+
 export function isRealConversationMessage(
   message: AgentMessage,
   messages: AgentMessage[],
   index: number,
 ): boolean {
-  if (message.role === "user" || message.role === "assistant") {
+  if (
+    message.role === "user" ||
+    message.role === "assistant" ||
+    message.role === "custom" ||
+    message.role === "bashExecution" ||
+    message.role === "branchSummary"
+  ) {
     return hasMeaningfulConversationContent(message);
   }
   if (message.role !== "toolResult") {
@@ -74,10 +116,10 @@ export function isRealConversationMessage(
   const start = Math.max(0, index - TOOL_RESULT_REAL_CONVERSATION_LOOKBACK);
   for (let i = index - 1; i >= start; i -= 1) {
     const candidate = messages[i];
-    if (!candidate || candidate.role !== "user") {
+    if (!candidate) {
       continue;
     }
-    if (hasMeaningfulConversationContent(candidate)) {
+    if (isToolResultConversationAnchor(candidate)) {
       return true;
     }
   }

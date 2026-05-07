@@ -25,6 +25,15 @@ openclaw doctor --repair --non-interactive
 openclaw doctor --generate-gateway-token
 ```
 
+For channel-specific permissions, use the channel probes instead of `doctor`:
+
+```bash
+openclaw channels capabilities --channel discord --target channel:<channel-id>
+openclaw channels status --probe
+```
+
+The targeted Discord capabilities probe reports the bot's effective channel permissions; the status probe audits configured Discord channels and voice auto-join targets.
+
 ## Options
 
 - `--no-workspace-suggestions`: disable workspace memory/search suggestions
@@ -38,6 +47,7 @@ openclaw doctor --generate-gateway-token
 
 Notes:
 
+- In Nix mode (`OPENCLAW_NIX_MODE=1`), read-only doctor checks still work, but `doctor --fix`, `doctor --repair`, `doctor --yes`, and `doctor --generate-gateway-token` are disabled because `openclaw.json` is immutable. Edit the Nix source for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
 - Interactive prompts (like keychain/OAuth fixes) only run when stdin is a TTY and `--non-interactive` is **not** set. Headless runs (cron, Telegram, no terminal) will skip prompts.
 - Performance: non-interactive `doctor` runs skip eager plugin loading so headless health checks stay fast. Interactive sessions still fully load plugins when a check needs their contribution.
 - `--fix` (alias for `--repair`) writes a backup to `~/.openclaw/openclaw.json.bak` and drops unknown config keys, listing each removal.
@@ -67,7 +77,7 @@ Notes:
 
 ## macOS: `launchctl` env overrides
 
-If you previously ran `launchctl setenv OPENCLAW_GATEWAY_TOKEN ...` (or `...PASSWORD`), that value overrides your config file and can cause persistent “unauthorized” errors.
+If you previously ran `launchctl setenv OPENCLAW_GATEWAY_TOKEN ...` (or `...PASSWORD`), that value overrides your config file and can cause persistent "unauthorized" errors.
 
 ```bash
 launchctl getenv OPENCLAW_GATEWAY_TOKEN

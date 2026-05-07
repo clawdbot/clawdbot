@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { handleIrcInbound } from "./inbound.js";
 import type { RuntimeEnv } from "./runtime-api.js";
-import { setIrcRuntime } from "./runtime.js";
+import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
 const {
@@ -81,11 +81,23 @@ function createMessage(overrides?: Partial<IrcInboundMessage>): IrcInboundMessag
   };
 }
 
+function resetInboundMocks() {
+  buildMentionRegexesMock.mockReset().mockReturnValue([]);
+  hasControlCommandMock.mockReset().mockReturnValue(false);
+  matchesMentionPatternsMock.mockReset().mockReturnValue(false);
+  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+  shouldHandleTextCommandsMock.mockReset().mockReturnValue(false);
+  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "CODE", created: true });
+}
+
 describe("irc inbound behavior", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    resetInboundMocks();
     installIrcRuntime();
-    readAllowFromStoreMock.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    clearIrcRuntime();
   });
 
   it("issues a DM pairing challenge and sends the reply to the sender nick", async () => {

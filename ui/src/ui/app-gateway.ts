@@ -15,6 +15,7 @@ import {
   loadCron,
   refreshActiveTab,
   setLastActiveSessionKey,
+  syncUrlWithSessionKey,
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
@@ -58,6 +59,7 @@ import {
 } from "./gateway.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import { buildAgentMainSessionKey, normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
 import type { UiSettings } from "./storage.ts";
 import type {
   AgentsListResult,
@@ -401,6 +403,60 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
   }
 }
 
+function resolveMainSessionFallback(host: GatewayHost): string {
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
+  if (mainSessionKey) {
+    return mainSessionKey;
+  }
+  const configuredMainKey =
+    snapshot?.sessionDefaults?.mainKey?.trim() || host.agentsList?.mainKey?.trim();
+  if (configuredMainKey && parseAgentSessionKey(configuredMainKey)) {
+    return configuredMainKey;
+  }
+  const defaultAgentId = host.agentsList?.defaultId?.trim() || "main";
+  return buildAgentMainSessionKey({
+    agentId: defaultAgentId,
+    mainKey: configuredMainKey,
+  });
+}
+
+function fallbackUnconfiguredSessionSelection(host: GatewayHost) {
+  const parsed = parseAgentSessionKey(host.sessionKey);
+  if (!parsed) {
+    return;
+  }
+  const configuredAgentIds = new Set(
+    (host.agentsList?.agents ?? []).map((entry) => normalizeAgentId(entry.id)),
+  );
+  if (configuredAgentIds.size === 0 || configuredAgentIds.has(normalizeAgentId(parsed.agentId))) {
+    return;
+  }
+  const nextSessionKey = resolveMainSessionFallback(host);
+  host.sessionKey = nextSessionKey;
+  applySettings(host as unknown as Parameters<typeof applySettings>[0], {
+    ...host.settings,
+    sessionKey: nextSessionKey,
+    lastActiveSessionKey: nextSessionKey,
+  });
+  syncUrlWithSessionKey(
+    host as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+    nextSessionKey,
+    true,
+  );
+}
+
+async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
+  try {
+    await loadAgents(host as unknown as AgentsState);
+    fallbackUnconfiguredSessionSelection(host);
+  } finally {
+    await refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+  }
+}
+
 export function connectGateway(host: GatewayHost, options?: ConnectGatewayOptions) {
   const shutdownHost = host as GatewayHostWithShutdownMessage;
   const reconnectReason = options?.reason ?? "initial";
@@ -486,11 +542,10 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       if (host.tab !== "chat") {
         void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
       }
-      void loadAgents(host as unknown as AgentsState);
       void loadHealthState(host as unknown as HealthState);
       void loadNodes(host as unknown as NodesState, { quiet: true });
       void loadDevices(host as unknown as DevicesState, { quiet: true });
-      void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+      void loadAgentsThenRefreshActiveTab(host);
       // Re-run push reconciliation now that the gateway client is available.
       void host.reconcileWebPushState?.();
       void verifyPendingUpdateVersion(host, client);

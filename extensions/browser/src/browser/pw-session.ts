@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
@@ -34,6 +33,7 @@ import {
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { writeViaSiblingTempPath } from "./output-atomic.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import { playwrightCore } from "./playwright-core.runtime.js";
 import { BROWSER_REF_MARKER_ATTRIBUTE, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
@@ -466,8 +466,13 @@ export function ensurePageState(page: Page): PageState {
         );
         const managedPath = buildManagedDownloadPath(suggested);
         const managedSave = (async () => {
-          await fs.mkdir(DEFAULT_DOWNLOAD_DIR, { recursive: true });
-          await download.saveAs?.(managedPath);
+          await writeViaSiblingTempPath({
+            rootDir: DEFAULT_DOWNLOAD_DIR,
+            targetPath: managedPath,
+            writeTemp: async (tempPath) => {
+              await download.saveAs?.(tempPath);
+            },
+          });
           return managedPath;
         })();
         managedSave.catch(() => {});

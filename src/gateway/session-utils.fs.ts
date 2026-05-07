@@ -360,8 +360,10 @@ function selectBoundedActiveTailRecords(entries: TailTranscriptRecord[]): TailTr
   const byId = new Map<string, TailTranscriptRecord>();
   let leafId: string | undefined;
   for (const entry of entries) {
-    if (tailRecordHasTreeLink(entry) && entry.id) {
+    if (entry.id) {
       byId.set(entry.id, entry);
+    }
+    if (tailRecordHasTreeLink(entry) && entry.id) {
       leafId = entry.id;
     }
   }
@@ -384,7 +386,18 @@ function selectBoundedActiveTailRecords(entries: TailTranscriptRecord[]): TailTr
     selected.push(entry);
     currentId = entry.parentId ?? undefined;
   }
-  return selected.toReversed();
+  const activeBranch = selected.toReversed();
+  const firstActiveRecord = activeBranch[0];
+  const firstActiveIndex = firstActiveRecord ? entries.indexOf(firstActiveRecord) : -1;
+  if (firstActiveIndex > 0) {
+    for (let index = firstActiveIndex - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (entry?.record.type === "compaction") {
+        return [entry, ...activeBranch];
+      }
+    }
+  }
+  return activeBranch;
 }
 
 function readTranscriptRecords(filePath: string): TailTranscriptRecord[] {

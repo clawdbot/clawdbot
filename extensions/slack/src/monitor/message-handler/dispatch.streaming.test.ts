@@ -1,13 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createSlackTurnDeliveryTracker,
   isSlackStreamingEnabled,
+  resetSlackStreamRecipientTeamCacheForTests,
   resolveSlackDisableBlockStreaming,
   resolveSlackStreamRecipientTeamId,
   resolveSlackStreamingThreadHint,
   shouldEnableSlackPreviewStreaming,
   shouldInitializeSlackDraftStream,
 } from "./dispatch.js";
+
+afterEach(() => {
+  resetSlackStreamRecipientTeamCacheForTests();
+});
 
 describe("slack native streaming defaults", () => {
   it("is enabled for partial mode when native streaming is on", () => {
@@ -92,6 +97,26 @@ describe("slack native streaming recipient team", () => {
         fallbackTeamId: "T_LOCAL",
       }),
     ).toBe("T_LOCAL");
+  });
+
+  it("caches resolved user teams for repeated stream starts", async () => {
+    const usersInfo = vi.fn(async () => ({
+      user: { team_id: "T_LOOKUP" },
+    }));
+    const params = {
+      client: {
+        users: {
+          info: usersInfo,
+        },
+      } as never,
+      token: "xoxb-test",
+      userId: "U_REMOTE",
+      fallbackTeamId: "T_LOCAL",
+    };
+
+    await expect(resolveSlackStreamRecipientTeamId(params)).resolves.toBe("T_LOOKUP");
+    await expect(resolveSlackStreamRecipientTeamId(params)).resolves.toBe("T_LOOKUP");
+    expect(usersInfo).toHaveBeenCalledTimes(1);
   });
 });
 

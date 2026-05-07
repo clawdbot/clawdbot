@@ -144,6 +144,22 @@ function extractTextFromToolResult(result: unknown): string | null {
   return trimmed ? trimmed : null;
 }
 
+function extractBlockedToolReason(result: unknown): string | null {
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+  const details = (result as { details?: unknown }).details;
+  if (!details || typeof details !== "object") {
+    return null;
+  }
+  const status = (details as { status?: unknown }).status;
+  if (status !== "blocked") {
+    return null;
+  }
+  const reason = (details as { reason?: unknown }).reason;
+  return typeof reason === "string" && reason.trim() ? reason.trim() : null;
+}
+
 export async function handleInlineActions(params: {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
@@ -246,6 +262,7 @@ export async function handleInlineActions(params: {
             skillFilter,
           })
         : [];
+  const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
 
   const skillInvocation =
     allowTextCommands && skillCommands.length > 0
@@ -285,6 +302,8 @@ export async function handleInlineActions(params: {
         config: cfg,
         allowGatewaySubagentBinding: true,
         senderIsOwner: command.senderIsOwner,
+        sessionId: targetSessionEntry?.sessionId,
+        currentChannelId: command.channelId,
       });
       const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 
@@ -301,7 +320,15 @@ export async function handleInlineActions(params: {
           commandName: skillInvocation.command.name,
           skillName: skillInvocation.command.skillName,
         };
-        const result = await tool.execute(toolCallId, toolArgs);
+        const result = await tool.execute(toolCallId, toolArgs, opts?.abortSignal);
+        const blockedReason = extractBlockedToolReason(result);
+        if (blockedReason) {
+          typing.cleanup();
+          return {
+            kind: "reply",
+            reply: { text: `❌ Tool call blocked: ${blockedReason}` },
+          };
+        }
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
         typing.cleanup();
         return { kind: "reply", reply: { text } };
@@ -342,7 +369,6 @@ export async function handleInlineActions(params: {
   };
 
   const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
-  const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
   if (!isStopLikeInbound && targetSessionEntry) {
     const cutoff = readAbortCutoffFromSessionEntry(targetSessionEntry);
     const incoming = resolveAbortCutoffFromContext(ctx);

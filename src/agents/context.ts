@@ -269,10 +269,13 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
 
 export function lookupContextTokens(
   modelId?: string,
-  options?: { allowAsyncLoad?: boolean },
+  options?: { allowAsyncLoad?: boolean; skipRuntimeConfigLoad?: boolean },
 ): number | undefined {
   if (!modelId) {
     return undefined;
+  }
+  if (options?.skipRuntimeConfigLoad) {
+    return lookupCachedContextTokens(modelId);
   }
   if (options?.allowAsyncLoad === false) {
     // Read-only callers still need synchronous config-backed overrides, but they
@@ -515,7 +518,10 @@ export function resolveContextTokensForModel(params: {
   if (params.provider && ref && !ref.model.includes("/")) {
     const qualifiedResult = lookupContextTokens(
       `${normalizeProviderId(ref.provider)}/${ref.model}`,
-      { allowAsyncLoad: params.allowAsyncLoad },
+      {
+        allowAsyncLoad: params.allowAsyncLoad,
+        skipRuntimeConfigLoad: Boolean(params.cfg),
+      },
     );
     if (qualifiedResult !== undefined) {
       return qualifiedResult;
@@ -526,6 +532,7 @@ export function resolveContextTokensForModel(params: {
   // (e.g. "google/gemini-2.5-pro") this IS the raw discovery cache key.
   const bareResult = lookupContextTokens(params.model, {
     allowAsyncLoad: params.allowAsyncLoad,
+    skipRuntimeConfigLoad: Boolean(params.cfg),
   });
   if (bareResult !== undefined) {
     return bareResult;
@@ -537,7 +544,10 @@ export function resolveContextTokensForModel(params: {
   if (!params.provider && ref && !ref.model.includes("/")) {
     const qualifiedResult = lookupContextTokens(
       `${normalizeProviderId(ref.provider)}/${ref.model}`,
-      { allowAsyncLoad: params.allowAsyncLoad },
+      {
+        allowAsyncLoad: params.allowAsyncLoad,
+        skipRuntimeConfigLoad: Boolean(params.cfg),
+      },
     );
     if (qualifiedResult !== undefined) {
       return qualifiedResult;

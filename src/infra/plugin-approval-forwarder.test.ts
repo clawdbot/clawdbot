@@ -154,6 +154,46 @@ describe("plugin approval forwarding", () => {
       });
     });
 
+    it("renders only request-scoped plugin approval decisions", async () => {
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+      const result = await forwarder.handlePluginApprovalRequested!(
+        makePluginRequest({
+          request: {
+            ...makePluginRequest().request,
+            allowedDecisions: ["allow-once", "deny"],
+          },
+        }),
+      );
+      expect(result).toBe(true);
+      await flushPendingDelivery();
+      const deliveryArgs = deliver.mock.calls[0]?.[0] as
+        | { payloads?: Array<{ text?: string; interactive?: unknown }> }
+        | undefined;
+      const payload = deliveryArgs?.payloads?.[0];
+      expect(payload?.text).toContain("Reply with: /approve <id> allow-once|deny");
+      expect(payload?.text).not.toContain("allow-always");
+      expect(payload?.interactive).toEqual({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow Once",
+                value: "/approve plugin-req-1 allow-once",
+                style: "success",
+              },
+              {
+                label: "Deny",
+                value: "/approve plugin-req-1 deny",
+                style: "danger",
+              },
+            ],
+          },
+        ],
+      });
+    });
+
     it("includes severity icon for critical", async () => {
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });

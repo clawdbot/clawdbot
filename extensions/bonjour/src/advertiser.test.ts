@@ -2,7 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const nodeRequire = createRequire(import.meta.url);
 const childProcessModule = nodeRequire("node:child_process") as {
@@ -94,6 +94,11 @@ vi.mock("@homebridge/ciao", () => {
 });
 
 const { startGatewayBonjourAdvertiser } = await import("./advertiser.js");
+
+afterAll(() => {
+  vi.doUnmock("@homebridge/ciao");
+  vi.resetModules();
+});
 
 type StartGatewayBonjourAdvertiser = typeof startGatewayBonjourAdvertiser;
 

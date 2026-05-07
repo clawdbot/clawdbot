@@ -372,27 +372,40 @@ function hasExplicitToolSection(section: unknown): boolean {
 
 /** Detect tool config sections that previously widened profiles implicitly.
  *  Used only for migration warnings — not merged into profileAlsoAllow.  #47487 */
+type ImplicitProfileGrantDetection = {
+  entries: Array<{ section: string; grants: string[] }>;
+};
+
 function detectImplicitProfileGrants(params: {
   globalTools?: OpenClawConfig["tools"];
   agentTools?: AgentToolsConfig;
-}): string[] | undefined {
-  const implicit = new Set<string>();
+  includeGlobalSections: boolean;
+}): ImplicitProfileGrantDetection | undefined {
+  const entries: ImplicitProfileGrantDetection["entries"] = [];
   if (
     hasExplicitToolSection(params.agentTools?.exec) ||
-    hasExplicitToolSection(params.globalTools?.exec)
+    (params.includeGlobalSections && hasExplicitToolSection(params.globalTools?.exec))
   ) {
-    implicit.add("exec");
-    implicit.add("process");
+    entries.push({ section: "tools.exec", grants: ["exec", "process"] });
   }
   if (
     hasExplicitToolSection(params.agentTools?.fs) ||
-    hasExplicitToolSection(params.globalTools?.fs)
+    (params.includeGlobalSections && hasExplicitToolSection(params.globalTools?.fs))
   ) {
-    implicit.add("read");
-    implicit.add("write");
-    implicit.add("edit");
+    entries.push({ section: "tools.fs", grants: ["read", "write", "edit"] });
   }
-  return implicit.size > 0 ? Array.from(implicit) : undefined;
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return { entries };
+}
+
+function formatImplicitToolSections(sections: string[]): string {
+  return sections.join(" / ");
+}
+
+function formatToolListForWarning(toolNames: string[]): string {
+  return toolNames.map((toolName) => `"${toolName}"`).join(", ");
 }
 
 export function resolveEffectiveToolPolicy(params: {
@@ -415,6 +428,7 @@ export function resolveEffectiveToolPolicy(params: {
   const globalTools = params.config?.tools;
 
   const profile = agentTools?.profile ?? globalTools?.profile;
+  const profileSource = agentTools?.profile ? "agent" : globalTools?.profile ? "global" : undefined;
   const providerPolicy = resolveProviderToolPolicy({
     byProvider: globalTools?.byProvider,
     modelProvider: params.modelProvider,
@@ -431,20 +445,30 @@ export function resolveEffectiveToolPolicy(params: {
   // Warn affected users about removed implicit grants (#47487), but only when
   // the active profile/explicit alsoAllow do not already grant those tools.
   if (profile) {
-    const implicitGrants = detectImplicitProfileGrants({ globalTools, agentTools });
+    const implicitGrants = detectImplicitProfileGrants({
+      globalTools,
+      agentTools,
+      includeGlobalSections: profileSource === "global",
+    });
     if (implicitGrants) {
       const profilePolicy = mergeAlsoAllowPolicy(
         resolveToolProfilePolicy(profile),
         explicitProfileAlsoAllow,
       );
-      const uncovered = implicitGrants.filter(
-        (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
-      );
+      const uncoveredEntries = implicitGrants.entries
+        .map((entry) => ({
+          section: entry.section,
+          grants: entry.grants.filter(
+            (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
+          ),
+        }))
+        .filter((entry) => entry.grants.length > 0);
+      const uncovered = uncoveredEntries.flatMap((entry) => entry.grants);
       if (uncovered.length > 0) {
         logWarn(
           `tools policy: profile "${profile}"${agentId ? ` (agent "${agentId}")` : ""} has ` +
-            `configured tool sections (tools.exec / tools.fs) that no longer implicitly widen ` +
-            `the profile. Add alsoAllow: [${uncovered.map((t) => `"${t}"`).join(", ")}] ` +
+            `configured tool sections (${formatImplicitToolSections(uncoveredEntries.map((entry) => entry.section))}) that no longer implicitly widen ` +
+            `the profile. Add alsoAllow: [${formatToolListForWarning(uncovered)}] ` +
             `explicitly if these tools should be available. See #47487.`,
         );
       }

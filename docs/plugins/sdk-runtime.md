@@ -25,7 +25,7 @@ register(api) {
 }
 ```
 
-## Config Loading And Writes
+## Config loading and writes
 
 Prefer config that was already passed into the active call path, for example `api.config` during registration or a `cfg` argument on channel/provider callbacks. This keeps one process snapshot flowing through the work instead of reparsing config on hot paths.
 

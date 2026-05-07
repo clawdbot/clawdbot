@@ -1,10 +1,4 @@
-type SubagentDeliveryPath =
-  | "queued"
-  | "steered"
-  | "direct"
-  | "direct-fallback"
-  | "direct-thread-fallback"
-  | "none";
+type SubagentDeliveryPath = "queued" | "steered" | "direct" | "none";
 
 type SubagentAnnounceQueueOutcome = "steered" | "queued" | "none" | "dropped";
 

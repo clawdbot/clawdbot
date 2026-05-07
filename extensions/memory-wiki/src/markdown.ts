@@ -109,8 +109,11 @@ const RELATED_BLOCK_PATTERN = new RegExp(
 );
 const MAX_WIKI_SEGMENT_BYTES = 240;
 const MAX_WIKI_FILENAME_COMPONENT_BYTES = 255;
+const FS_SAFE_PINNED_WRITE_TEMP_SUFFIX = ".00000000-0000-4000-8000-000000000000.fallback.tmp";
 const MAX_WIKI_SAFE_WRITE_FILENAME_COMPONENT_BYTES =
-  MAX_WIKI_FILENAME_COMPONENT_BYTES - Buffer.byteLength(".fallback.tmp") - 1;
+  MAX_WIKI_FILENAME_COMPONENT_BYTES -
+  Buffer.byteLength(FS_SAFE_PINNED_WRITE_TEMP_SUFFIX) -
+  Buffer.byteLength(".");
 const WIKI_SEGMENT_HASH_BYTES = 12;
 
 function truncateUtf8CodePointSafe(value: string, maxBytes: number): string {

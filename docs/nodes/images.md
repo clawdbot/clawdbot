@@ -5,8 +5,6 @@ read_when:
 title: "Image and media support"
 ---
 
-# Image & Media Support (2025-12-05)
-
 The WhatsApp channel runs via **Baileys Web**. This document captures the current media handling rules for send, gateway, and agent replies.
 
 ## Goals

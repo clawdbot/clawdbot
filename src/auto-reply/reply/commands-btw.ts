@@ -4,7 +4,7 @@ import { extractBtwQuestion } from "./btw-command.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
-const BTW_USAGE = "Usage: /btw <side question>";
+const BTW_USAGE = "Usage: /btw [side question]";
 
 export const handleBtwCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {

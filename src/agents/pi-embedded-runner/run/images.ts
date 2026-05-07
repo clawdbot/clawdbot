@@ -30,7 +30,10 @@ const IMAGE_EXTENSION_NAMES = [
   "heic",
   "heif",
 ] as const;
-const IMAGE_EXTENSIONS = new Set(IMAGE_EXTENSION_NAMES.map((ext) => `.${ext}`));
+const IMAGE_EXTENSIONS = new Set<string>();
+for (const ext of IMAGE_EXTENSION_NAMES) {
+  IMAGE_EXTENSIONS.add(`.${ext}`);
+}
 const IMAGE_EXTENSION_PATTERN = IMAGE_EXTENSION_NAMES.join("|");
 const MEDIA_ATTACHED_PATH_REGEX_SOURCE =
   "^\\s*(.+?\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\s*(?:\\(|$|\\|)";
@@ -159,7 +162,12 @@ function extractTrailingAttachmentMediaUris(prompt: string, count: number): stri
     if (!match?.[1]) {
       break;
     }
-    uris.unshift(match[1]);
+    uris.push(match[1]);
+  }
+  for (let left = 0, right = uris.length - 1; left < right; left += 1, right -= 1) {
+    const uri = uris[left];
+    uris[left] = uris[right];
+    uris[right] = uri;
   }
   return uris;
 }

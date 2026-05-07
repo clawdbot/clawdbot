@@ -918,6 +918,7 @@ export async function attachWebInboxToSocket(
     },
     defaultAccountId: options.accountId,
     resolveOutboundMentions: ({ jid, text }) => resolveOutboundMentionsForGroup(jid, text),
+    authDir: options.authDir,
   });
 
   return {

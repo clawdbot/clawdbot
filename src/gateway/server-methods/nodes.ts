@@ -25,15 +25,15 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import {
-  buildCanvasScopedHostUrl,
-  CANVAS_CAPABILITY_TTL_MS,
-  mintCanvasCapabilityToken,
-} from "../canvas-capability.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
-import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import {
+  isForegroundRestrictedPluginNodeCommand,
+  isNodeCommandAllowed,
+  resolveNodeCommandAllowlist,
+} from "../node-command-policy.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
+import { refreshClientPluginNodeCapability } from "../plugin-node-capability.js";
 import {
   type ConnectParams,
   ErrorCodes,
@@ -66,7 +66,7 @@ import {
   respondUnavailableOnThrow,
   safeParseJson,
 } from "./nodes.helpers.js";
-import type { GatewayRequestContext } from "./shared-types.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-types.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export {
@@ -140,6 +140,49 @@ function isForbiddenBrowserProxyMutation(params: unknown): boolean {
   return Boolean(method && path && isPersistentBrowserProxyMutation(method, path));
 }
 
+function normalizePluginSurfaceRefreshParams(params: unknown): { surface: string } | undefined {
+  if (!params || typeof params !== "object") {
+    return undefined;
+  }
+  const surface = normalizeOptionalString((params as { surface?: unknown }).surface);
+  if (!surface) {
+    return undefined;
+  }
+  return { surface };
+}
+
+function respondRefreshedPluginSurface(params: {
+  surface: string;
+  client: GatewayClient | null;
+  respond: RespondFn;
+}) {
+  const refreshed = params.client
+    ? refreshClientPluginNodeCapability({
+        client: params.client,
+        surface: params.client.pluginNodeCapabilitySurfaces?.[params.surface] ?? {
+          surface: params.surface,
+        },
+      })
+    : undefined;
+  if (!refreshed) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, `${params.surface} plugin surface unavailable`),
+    );
+    return;
+  }
+  params.respond(
+    true,
+    {
+      surface: refreshed.surface,
+      pluginSurfaceUrls: { [refreshed.surface]: refreshed.scopedUrl },
+      expiresAtMs: refreshed.expiresAtMs,
+    },
+    undefined,
+  );
+}
+
 async function resolveDirectNodePushConfig() {
   const auth = await resolveApnsAuthConfigFromEnv(process.env);
   return auth.ok
@@ -179,9 +222,7 @@ async function delayMs(ms: number): Promise<void> {
 
 function isForegroundRestrictedIosCommand(command: string): boolean {
   return (
-    command === "canvas.present" ||
-    command === "canvas.navigate" ||
-    command.startsWith("canvas.") ||
+    isForegroundRestrictedPluginNodeCommand(command) ||
     command.startsWith("camera.") ||
     command.startsWith("screen.") ||
     command.startsWith("talk.")
@@ -845,50 +886,17 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(true, { ts: Date.now(), ...node }, undefined);
     });
   },
-  "node.canvas.capability.refresh": async ({ params, respond, client }) => {
-    if (!validateNodeListParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.canvas.capability.refresh",
-        validator: validateNodeListParams,
-      });
+  "node.pluginSurface.refresh": async ({ params, respond, client }) => {
+    const parsed = normalizePluginSurfaceRefreshParams(params);
+    if (!parsed) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "surface required"));
       return;
     }
-    const baseCanvasHostUrl = normalizeOptionalString(client?.canvasHostUrl) ?? "";
-    if (!baseCanvasHostUrl) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "canvas host unavailable for this node session"),
-      );
-      return;
-    }
-
-    const canvasCapability = mintCanvasCapabilityToken();
-    const canvasCapabilityExpiresAtMs = Date.now() + CANVAS_CAPABILITY_TTL_MS;
-    const scopedCanvasHostUrl = buildCanvasScopedHostUrl(baseCanvasHostUrl, canvasCapability);
-    if (!scopedCanvasHostUrl) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "failed to mint scoped canvas host URL"),
-      );
-      return;
-    }
-
-    if (client) {
-      client.canvasCapability = canvasCapability;
-      client.canvasCapabilityExpiresAtMs = canvasCapabilityExpiresAtMs;
-    }
-    respond(
-      true,
-      {
-        canvasCapability,
-        canvasCapabilityExpiresAtMs,
-        canvasHostUrl: scopedCanvasHostUrl,
-      },
-      undefined,
-    );
+    respondRefreshedPluginSurface({
+      surface: parsed.surface,
+      client,
+      respond,
+    });
   },
   "node.pending.pull": async ({ params, respond, client, context }) => {
     if (!validateNodeListParams(params)) {

@@ -7,8 +7,15 @@ import {
   type CodexComputerUseConfig,
   type ResolvedCodexComputerUseConfig,
 } from "./config.js";
-import type { v2 } from "./protocol-generated/typescript/index.js";
-import type { JsonValue } from "./protocol.js";
+import type {
+  CodexListMcpServerStatusResponse,
+  CodexMcpServerStatus,
+  CodexPluginDetail,
+  CodexPluginListResponse,
+  CodexPluginReadResponse,
+  CodexRequestObject,
+  JsonValue,
+} from "./protocol.js";
 import { requestCodexAppServerJson } from "./request.js";
 
 export type CodexComputerUseRequest = <T = JsonValue | undefined>(
@@ -83,7 +90,7 @@ type MarketplaceResolution = {
 type PluginInspection =
   | {
       ok: true;
-      plugin: v2.PluginDetail;
+      plugin: CodexPluginDetail;
     }
   | {
       ok: false;
@@ -184,12 +191,9 @@ async function inspectCodexComputerUse(params: {
 }): Promise<CodexComputerUseStatus> {
   const request = createComputerUseRequest(params);
   if (params.installPlugin) {
-    await request<v2.ExperimentalFeatureEnablementSetResponse>(
-      "experimentalFeature/enablement/set",
-      {
-        enablement: { plugins: true },
-      } satisfies v2.ExperimentalFeatureEnablementSetParams,
-    );
+    await request<JsonValue>("experimentalFeature/enablement/set", {
+      enablement: { plugins: true },
+    } satisfies CodexRequestObject);
   }
 
   const marketplace = await resolveMarketplaceRef({
@@ -262,12 +266,9 @@ async function ensureComputerUsePlugin(params: {
         }),
       };
     }
-    await params.request<v2.PluginInstallResponse>(
+    await params.request<JsonValue>(
       "plugin/install",
-      pluginRequestParams(
-        params.marketplace,
-        params.config.pluginName,
-      ) satisfies v2.PluginInstallParams,
+      pluginRequestParams(params.marketplace, params.config.pluginName),
     );
     await reloadMcpServers(params.request);
     plugin = await readComputerUsePlugin(
@@ -294,7 +295,7 @@ async function ensureComputerUsePlugin(params: {
 async function readComputerUseTools(params: {
   request: CodexComputerUseRequest;
   config: ResolvedCodexComputerUseConfig;
-  plugin: v2.PluginDetail;
+  plugin: CodexPluginDetail;
   installPlugin: boolean;
 }): Promise<CodexComputerUseStatus> {
   let server = await readMcpServerStatus(params.request, params.config.mcpServerName);
@@ -330,9 +331,9 @@ async function resolveMarketplaceRef(params: {
 }): Promise<MarketplaceResolution> {
   let preferredMarketplaceName = params.config.marketplaceName;
   if (params.config.marketplaceSource && params.allowAdd) {
-    const added = await params.request<v2.MarketplaceAddResponse>("marketplace/add", {
+    const added = await params.request<{ marketplaceName?: string }>("marketplace/add", {
       source: params.config.marketplaceSource,
-    } satisfies v2.MarketplaceAddParams);
+    } satisfies CodexRequestObject);
     preferredMarketplaceName ??= added.marketplaceName;
   }
 
@@ -347,9 +348,9 @@ async function resolveMarketplaceRef(params: {
   if (candidates.length === 0 && shouldAddBundledComputerUseMarketplace(params)) {
     const bundledMarketplacePath =
       params.defaultBundledMarketplacePath ?? DEFAULT_CODEX_BUNDLED_MARKETPLACE_PATH;
-    const added = await params.request<v2.MarketplaceAddResponse>("marketplace/add", {
+    const added = await params.request<{ marketplaceName?: string }>("marketplace/add", {
       source: bundledMarketplacePath,
-    } satisfies v2.MarketplaceAddParams);
+    } satisfies CodexRequestObject);
     preferredMarketplaceName ??= added.marketplaceName;
     candidates = await listComputerUseMarketplaceCandidates(params.request, params.config);
   }
@@ -398,9 +399,9 @@ async function listComputerUseMarketplaceCandidates(
   request: CodexComputerUseRequest,
   config: ResolvedCodexComputerUseConfig,
 ): Promise<MarketplaceRef[]> {
-  const listed = await request<v2.PluginListResponse>("plugin/list", {
+  const listed = await request<CodexPluginListResponse>("plugin/list", {
     cwds: [],
-  } satisfies v2.PluginListParams);
+  } satisfies CodexRequestObject);
   return findComputerUseMarketplaces(listed, config.pluginName);
 }
 
@@ -434,7 +435,7 @@ function shouldAddBundledComputerUseMarketplace(params: {
 }
 
 function findComputerUseMarketplaces(
-  listed: v2.PluginListResponse,
+  listed: CodexPluginListResponse,
   pluginName: string,
 ): MarketplaceRef[] {
   return listed.marketplaces
@@ -509,10 +510,10 @@ async function readComputerUsePlugin(
   request: CodexComputerUseRequest,
   marketplace: MarketplaceRef,
   pluginName: string,
-): Promise<v2.PluginDetail> {
-  const response = await request<v2.PluginReadResponse>(
+): Promise<CodexPluginDetail> {
+  const response = await request<CodexPluginReadResponse>(
     "plugin/read",
-    pluginRequestParams(marketplace, pluginName) satisfies v2.PluginReadParams,
+    pluginRequestParams(marketplace, pluginName),
   );
   return response.plugin;
 }
@@ -520,14 +521,14 @@ async function readComputerUsePlugin(
 async function readMcpServerStatus(
   request: CodexComputerUseRequest,
   serverName: string,
-): Promise<v2.McpServerStatus | undefined> {
+): Promise<CodexMcpServerStatus | undefined> {
   let cursor: string | null | undefined;
   do {
-    const response = await request<v2.ListMcpServerStatusResponse>("mcpServerStatus/list", {
+    const response = await request<CodexListMcpServerStatusResponse>("mcpServerStatus/list", {
       cursor,
       limit: 100,
       detail: "toolsAndAuthOnly",
-    } satisfies v2.ListMcpServerStatusParams);
+    } satisfies CodexRequestObject);
     const found = response.data.find((server) => server.name === serverName);
     if (found) {
       return found;
@@ -552,7 +553,7 @@ function pluginRequestParams(marketplace: MarketplaceRef, pluginName: string) {
 }
 
 function pluginSetupReason(
-  plugin: v2.PluginDetail,
+  plugin: CodexPluginDetail,
   marketplace: MarketplaceRef,
 ): CodexComputerUseStatusReason {
   if (marketplace.kind === "remote") {
@@ -563,7 +564,7 @@ function pluginSetupReason(
 
 function pluginSetupMessage(
   config: ResolvedCodexComputerUseConfig,
-  plugin: v2.PluginDetail,
+  plugin: CodexPluginDetail,
   marketplace: MarketplaceRef,
 ): string {
   if (marketplace.kind === "remote") {
@@ -576,7 +577,7 @@ function pluginSetupMessage(
 }
 
 function remoteInstallUnsupportedMessage(
-  plugin: v2.PluginDetail,
+  plugin: CodexPluginDetail,
   marketplace: MarketplaceRef,
 ): string {
   const marketplaceName = marketplace.name ?? plugin.marketplaceName;
@@ -586,7 +587,7 @@ function remoteInstallUnsupportedMessage(
 
 function statusFromPlugin(params: {
   config: ResolvedCodexComputerUseConfig;
-  plugin: v2.PluginDetail;
+  plugin: CodexPluginDetail;
   tools: string[];
   reason: CodexComputerUseStatusReason;
   message: string;

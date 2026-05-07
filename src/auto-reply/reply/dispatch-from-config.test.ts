@@ -4581,6 +4581,38 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
   });
 
+  it("preserves hook-blocked metadata when source delivery is message-tool-only", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const blockedReply = setReplyPayloadMetadata(
+      { text: "Your message could not be sent: blocked by policy-plugin", isError: true },
+      { beforeAgentRunBlocked: true },
+    );
+    const replyResolver = vi.fn(async () => blockedReply satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(result.beforeAgentRunBlocked).toBe(true);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
   it("delivers marked runtime failure notices in message-tool-only mode", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
@@ -4659,6 +4691,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         ChatType: "channel",
+        CommandSource: undefined,
         SessionKey: "test:discord:channel:C1",
       }),
       cfg: emptyConfig,
@@ -4683,6 +4716,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         ChatType: "channel",
+        CommandSource: undefined,
         Provider: "discord",
         Surface: "discord",
         OriginatingChannel: "discord",
@@ -4749,6 +4783,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         ChatType: "direct",
+        CommandSource: undefined,
         SessionKey: "agent:main:main",
       }),
       cfg: emptyConfig,

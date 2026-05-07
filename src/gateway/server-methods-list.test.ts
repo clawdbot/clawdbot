@@ -11,6 +11,10 @@ describe("GATEWAY_EVENTS", () => {
 });
 
 describe("listGatewayMethods", () => {
+  it("advertises plugin surface refresh for capability rotation", () => {
+    expect(listGatewayMethods()).toEqual(expect.arrayContaining(["node.pluginSurface.refresh"]));
+  });
+
   it("advertises the versioned Talk session RPCs", () => {
     expect(listGatewayMethods()).toEqual(
       expect.arrayContaining([

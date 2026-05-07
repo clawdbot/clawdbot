@@ -37,6 +37,7 @@ describe("OpenAI memory embedding adapter", () => {
         model: "text-embedding-3-small",
         inputType: "passage",
         documentInputType: "document",
+        outputDimensionality: 512,
       },
     });
   });
@@ -66,6 +67,7 @@ describe("OpenAI memory embedding adapter", () => {
             body: {
               model: "text-embedding-3-small",
               input: "doc one",
+              dimensions: 512,
               input_type: "document",
             },
           }),

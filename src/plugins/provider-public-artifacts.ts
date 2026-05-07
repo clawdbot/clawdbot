@@ -102,10 +102,13 @@ export function resolveBundledProviderPolicySurface(
   if (!normalizedProviderId) {
     return null;
   }
-  return (
-    tryLoadBundledProviderPolicySurface(normalizedProviderId) ??
-    tryLoadBundledProviderPolicySurface(
-      resolveBundledProviderPolicyPluginId(normalizedProviderId, options) ?? normalizedProviderId,
-    )
-  );
+  const directSurface = tryLoadBundledProviderPolicySurface(normalizedProviderId);
+  if (directSurface) {
+    return directSurface;
+  }
+  const ownerPluginId = resolveBundledProviderPolicyPluginId(normalizedProviderId, options);
+  if (!ownerPluginId || ownerPluginId === normalizedProviderId) {
+    return null;
+  }
+  return tryLoadBundledProviderPolicySurface(ownerPluginId);
 }

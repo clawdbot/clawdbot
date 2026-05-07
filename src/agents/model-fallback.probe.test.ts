@@ -13,10 +13,6 @@ vi.mock("./auth-profiles/store.js", () => ({
   loadAuthProfileStoreForRuntime: vi.fn(),
 }));
 
-vi.mock("./auth-profiles/source-check.js", () => ({
-  hasAnyAuthProfileStoreSource: vi.fn(),
-}));
-
 vi.mock("./auth-profiles/usage.js", () => ({
   getSoonestCooldownExpiry: vi.fn(),
   isProfileInCooldown: vi.fn(),
@@ -25,6 +21,19 @@ vi.mock("./auth-profiles/usage.js", () => ({
 
 vi.mock("./auth-profiles/order.js", () => ({
   resolveAuthProfileOrder: vi.fn(),
+}));
+
+vi.mock("./provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
+const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+  configFingerprint: "model-fallback-probe-test-empty-plugin-metadata",
+  plugins: [],
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
 vi.mock("./auth-profiles/source-check.js", () => ({

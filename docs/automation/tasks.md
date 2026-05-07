@@ -151,11 +151,12 @@ Agent run completion is authoritative for active task records. A successful deta
 - Cron tasks: the cron runtime no longer tracks the job as active and durable
   cron run history does not show a terminal result for that run. Offline CLI
   audit does not treat its own empty in-process cron runtime state as authority.
-- CLI tasks: isolated child-session tasks use the child session; chat-backed
-  CLI tasks use the live run context instead, so lingering
-  channel/group/direct session rows do not keep them alive. Gateway-backed
-  `openclaw agent` runs also finalize from their run result, so completed runs
-  do not sit active until the sweeper marks them `lost`.
+- CLI tasks: tasks with a run id/source id use the live run context, so
+  lingering child-session or chat-session rows do not keep them alive after the
+  gateway-owned run disappears. Legacy CLI tasks without run identity still fall
+  back to the child session. Gateway-backed `openclaw agent` runs also finalize
+  from their run result, so completed runs do not sit active until the sweeper
+  marks them `lost`.
 
 ## Delivery and notifications
 
@@ -249,7 +250,7 @@ openclaw tasks notify <lookup> state_changes
     - ACP/subagent tasks check their backing child session.
     - Subagent tasks whose child session has a restart-recovery tombstone are marked lost instead of being treated as recoverable backing sessions.
     - Cron tasks check whether the cron runtime still owns the job, then recover terminal status from persisted cron run logs/job state before falling back to `lost`. Only the Gateway process is authoritative for the in-memory cron active-job set; offline CLI audit uses durable history but does not mark a cron task lost solely because that local Set is empty.
-    - Chat-backed CLI tasks check the owning live run context, not just the chat session row.
+    - CLI tasks with run identity check the owning live run context, not just child-session or chat-session rows.
 
     Completion cleanup is also runtime-aware:
 
@@ -316,7 +317,7 @@ A sweeper runs every **60 seconds** and handles four things:
 
 <Steps>
   <Step title="Reconciliation">
-    Checks whether active tasks still have authoritative runtime backing. ACP/subagent tasks use child-session state, cron tasks use active-job ownership, and chat-backed CLI tasks use the owning run context. If that backing state is gone for more than 5 minutes, the task is marked `lost`.
+    Checks whether active tasks still have authoritative runtime backing. ACP/subagent tasks use child-session state, cron tasks use active-job ownership, and CLI tasks with run identity use the owning run context. If that backing state is gone for more than 5 minutes, the task is marked `lost`.
   </Step>
   <Step title="ACP session repair">
     Closes terminal or orphaned parent-owned one-shot ACP sessions, and closes stale terminal or orphaned persistent ACP sessions only when no active conversation binding remains.

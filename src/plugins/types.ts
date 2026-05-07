@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
@@ -70,6 +71,8 @@ import type {
   SpeechProviderId,
   SpeechSynthesisRequest,
   SpeechSynthesisResult,
+  SpeechSynthesisStreamRequest,
+  SpeechSynthesisStreamResult,
   SpeechTelephonySynthesisRequest,
   SpeechTelephonySynthesisResult,
   SpeechVoiceOption,
@@ -439,7 +442,7 @@ export type ProviderCatalogContext = {
   ) => {
     apiKey: string | undefined;
     discoveryApiKey?: string;
-    mode: "api_key" | "oauth" | "token" | "none";
+    mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
     source: "env" | "profile" | "none";
     profileId?: string;
   };
@@ -539,6 +542,8 @@ export type {
  * plugin-owned transport family.
  */
 export type ProviderNormalizeTransportContext = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
   provider: string;
   api?: string | null;
   baseUrl?: string;
@@ -1805,6 +1810,7 @@ export type SpeechProviderPlugin = {
     | Promise<SpeechProviderPreparedSynthesis | undefined>;
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
+  streamSynthesize?: (req: SpeechSynthesisStreamRequest) => Promise<SpeechSynthesisStreamResult>;
   synthesizeTelephony?: (
     req: SpeechTelephonySynthesisRequest,
   ) => Promise<SpeechTelephonySynthesisResult>;
@@ -2024,17 +2030,39 @@ export type OpenClawPluginHttpRouteHandler = (
   res: ServerResponse,
 ) => Promise<boolean | void> | boolean | void;
 
+export type OpenClawPluginHttpRouteUpgradeHandler = (
+  req: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+) => Promise<boolean | void> | boolean | void;
+
 export type OpenClawPluginHttpRouteParams = {
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
+  handleUpgrade?: OpenClawPluginHttpRouteUpgradeHandler;
   auth: OpenClawPluginHttpRouteAuth;
   match?: OpenClawPluginHttpRouteMatch;
   gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
+  nodeCapability?: {
+    surface: string;
+    ttlMs?: number;
+  };
   replaceExisting?: boolean;
 };
 
+export type OpenClawPluginHostedMediaResolver = (
+  mediaUrl: string,
+) => string | null | undefined | Promise<string | null | undefined>;
+
 export type OpenClawPluginCliContext = {
+  /**
+   * Command object where this plugin should register its commands.
+   *
+   * For root CLI registrations this is the root `openclaw` program. For nested
+   * registrations it is the resolved parent command from `parentPath`.
+   */
   program: Command;
+  parentPath: readonly string[];
   config: OpenClawConfig;
   workspaceDir?: string;
   logger: PluginLogger;
@@ -2054,6 +2082,18 @@ export type OpenClawPluginCliCommandDescriptor = {
   name: string;
   description: string;
   hasSubcommands: boolean;
+};
+
+export type OpenClawPluginNodeCliFeatureOptions = {
+  /** Explicit node feature command names owned under `openclaw nodes`. */
+  commands?: string[];
+  /**
+   * Parse-time command descriptors for lazy node feature CLI registration.
+   *
+   * Descriptors are registered under `openclaw nodes`, so a descriptor named
+   * `"camera"` exposes `openclaw nodes camera`.
+   */
+  descriptors?: OpenClawPluginCliCommandDescriptor[];
 };
 
 export type OpenClawPluginReloadRegistration = {
@@ -2143,6 +2183,21 @@ export type OpenClawPluginNodeInvokePolicyResult =
 
 export type OpenClawPluginNodeInvokePolicy = {
   commands: string[];
+  /**
+   * Platforms where these node-handled commands should be allowlisted by default.
+   * Omit for commands that require explicit `gateway.nodes.allowCommands`.
+   */
+  defaultPlatforms?: Array<"ios" | "android" | "macos" | "windows" | "linux" | "unknown">;
+  /**
+   * Dangerous policy commands are filtered out of default allowlists unless
+   * explicitly allowed by config.
+   */
+  dangerous?: boolean;
+  /**
+   * iOS foreground-restricted commands should be queued for foreground delivery
+   * when an iOS node reports BACKGROUND_UNAVAILABLE.
+   */
+  foregroundRestrictedOnIos?: boolean;
   handle: (
     ctx: OpenClawPluginNodeInvokePolicyContext,
   ) => Promise<OpenClawPluginNodeInvokePolicyResult> | OpenClawPluginNodeInvokePolicyResult;
@@ -2389,6 +2444,8 @@ export type OpenClawPluginApi = {
     opts?: OpenClawPluginHookOptions,
   ) => void;
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
+  /** Register a plugin-owned resolver for browser-style hosted media URLs. */
+  registerHostedMediaResolver: (resolver: OpenClawPluginHostedMediaResolver) => void;
   /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
   /**
@@ -2406,17 +2463,29 @@ export type OpenClawPluginApi = {
   registerCli: (
     registrar: OpenClawPluginCliRegistrar,
     opts?: {
-      /** Explicit top-level command roots owned by this registrar. */
+      /** Parent command path for nested command groups, for example `["nodes"]`. */
+      parentPath?: string[];
+      /** Explicit command names owned by this registrar at `parentPath`. */
       commands?: string[];
       /**
-       * Parse-time command descriptors for lazy root CLI registration.
+       * Parse-time command descriptors for lazy CLI registration.
        *
-       * When descriptors cover every top-level command root, OpenClaw can keep
-       * the plugin registrar lazy in the normal root CLI path. Command-only
-       * registrations stay on the eager compatibility path.
+       * When descriptors cover every command exposed at `parentPath`, OpenClaw
+       * can keep the plugin registrar lazy. Command-only registrations stay on
+       * the eager compatibility path.
        */
       descriptors?: OpenClawPluginCliCommandDescriptor[];
     },
+  ) => void;
+  /**
+   * Register a plugin-owned node feature command group under `openclaw nodes`.
+   *
+   * This is equivalent to `registerCli(registrar, { parentPath: ["nodes"], ... })`
+   * and is intended for paired-node capabilities such as camera, screen, or Canvas.
+   */
+  registerNodeCliFeature: (
+    registrar: OpenClawPluginCliRegistrar,
+    opts?: OpenClawPluginNodeCliFeatureOptions,
   ) => void;
   registerReload: (registration: OpenClawPluginReloadRegistration) => void;
   registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => void;

@@ -1266,7 +1266,6 @@ export async function loadSessionCostSummaryFromCache(params: {
             pricingFingerprint,
             requireSessionSummary: true,
           });
-        requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId });
       } else {
         requestCostUsageCacheRefresh({
           config: params.config,

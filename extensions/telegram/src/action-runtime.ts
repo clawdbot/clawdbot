@@ -19,6 +19,7 @@ import {
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
+import { notifyTelegramInboundTurnOutboundSuccess } from "./inbound-turn-delivery.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
@@ -228,6 +229,7 @@ export async function handleTelegramAction(
   options?: {
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
+    sessionKey?: string | null;
   },
 ): Promise<AgentToolResult<unknown>> {
   const { action, accountId } = {
@@ -393,6 +395,11 @@ export async function handleTelegramAction(
         readBooleanParam(params, "forceDocument") ??
         readBooleanParam(params, "asDocument") ??
         false,
+    });
+    notifyTelegramInboundTurnOutboundSuccess({
+      sessionKey: options?.sessionKey ?? undefined,
+      to,
+      accountId,
     });
     await maybePinTelegramActionSend({
       args: params,

@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { createGoogleGenAIMock, downloadMock, generateVideosMock, getVideosOperationMock } =
   vi.hoisted(() => {
@@ -37,6 +39,11 @@ describe("google video generation provider", () => {
     generateVideosMock.mockReset();
     getVideosOperationMock.mockReset();
     createGoogleGenAIMock.mockClear();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./google-genai-runtime.js");
+    vi.resetModules();
   });
 
   it("declares explicit mode capabilities", () => {
@@ -193,6 +200,44 @@ describe("google video generation provider", () => {
     expect(downloadMock).not.toHaveBeenCalled();
     expect(result.videos[0]?.buffer).toEqual(Buffer.from("direct-mp4"));
     expect(result.videos[0]?.mimeType).toBe("video/mp4");
+  });
+
+  it("stages SDK file downloads before finalizing generated video bytes", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              name: "files/generated-video",
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+    downloadMock.mockImplementation(async ({ downloadPath }: { downloadPath: string }) => {
+      await writeFile(downloadPath, "sdk-video");
+    });
+
+    const provider = buildGoogleVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "google",
+      model: "veo-3.1-fast-generate-preview",
+      prompt: "A tiny robot watering a windowsill garden",
+      cfg: {},
+      durationSeconds: 3,
+    });
+
+    const [{ downloadPath }] = downloadMock.mock.calls[0] ?? [{}];
+    expect(path.basename(String(downloadPath))).toBe("video-1.mp4");
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("sdk-video"));
+    expect(result.videos[0]?.fileName).toBe("video-1.mp4");
   });
 
   it("falls back to REST predictLongRunning when text-only SDK video generation returns 404", async () => {

@@ -1,5 +1,6 @@
 import { logWarn } from "../../logger.js";
 import { formatErrorMessage } from "../errors.js";
+import { normalizeHeadersInitForFetch } from "../fetch-headers.js";
 import { resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
 import { loadUndiciRuntimeDeps, type UndiciRuntimeDeps } from "./undici-runtime.js";
 
@@ -44,18 +45,21 @@ function normalizeInitForUndici(
   if (!init) {
     return init;
   }
+  const normalizedHeaders = normalizeHeadersInitForFetch(init.headers);
+  const initWithNormalizedHeaders =
+    normalizedHeaders === init.headers ? init : { ...init, headers: normalizedHeaders };
   const body = init.body;
   if (!isFormDataLike(body) || body instanceof UndiciFormData) {
-    return init;
+    return initWithNormalizedHeaders;
   }
   const form = new UndiciFormData();
   for (const [key, value] of body.entries()) {
     appendFormDataEntry(form, key, value);
   }
-  const headers = new Headers(init.headers);
+  const headers = new Headers(normalizedHeaders);
   headers.delete("content-length");
   headers.delete("content-type");
-  return { ...init, headers, body: form as unknown as BodyInit };
+  return { ...initWithNormalizedHeaders, headers, body: form as unknown as BodyInit };
 }
 
 /**

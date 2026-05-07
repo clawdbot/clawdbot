@@ -42,7 +42,7 @@ export type ModelAuthExpiry = {
 
 export type ModelAuthStatusProfile = {
   profileId: string;
-  type: "oauth" | "token" | "api_key";
+  type: "oauth" | "token" | "api_key" | "aws-sdk";
   status: AuthProfileHealthStatus;
   expiry?: ModelAuthExpiry;
 };

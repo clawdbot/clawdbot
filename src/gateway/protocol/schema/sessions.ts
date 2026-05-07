@@ -47,6 +47,11 @@ export const SessionsListParamsSchema = Type.Object(
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
     /**
+     * Limit returned agent-scoped rows to agents currently present in config.
+     * Broad disk discovery remains the default for recovery/ACP consumers.
+     */
+    configuredAgentsOnly: Type.Optional(Type.Boolean()),
+    /**
      * Read first 8KB of each session transcript to derive title from first user message.
      * Performs a file read per session - use `limit` to bound result set on large stores.
      */
@@ -71,6 +76,7 @@ export const SessionsCleanupParamsSchema = Type.Object(
     enforce: Type.Optional(Type.Boolean()),
     activeKey: Type.Optional(NonEmptyString),
     fixMissing: Type.Optional(Type.Boolean()),
+    fixDmScope: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

@@ -9,17 +9,6 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import type { NodeSession } from "./node-registry.js";
 
-const CANVAS_COMMANDS = [
-  "canvas.present",
-  "canvas.hide",
-  "canvas.navigate",
-  "canvas.eval",
-  "canvas.snapshot",
-  "canvas.a2ui.push",
-  "canvas.a2ui.pushJSONL",
-  "canvas.a2ui.reset",
-];
-
 const CAMERA_COMMANDS = ["camera.list"];
 const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
 
@@ -61,7 +50,6 @@ const SYSTEM_COMMANDS = [
   NODE_BROWSER_PROXY_COMMAND,
 ];
 const UNKNOWN_PLATFORM_COMMANDS = [
-  ...CANVAS_COMMANDS,
   ...CAMERA_COMMANDS,
   ...LOCATION_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
@@ -80,7 +68,6 @@ export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
 
 const PLATFORM_DEFAULTS: Record<string, string[]> = {
   ios: [
-    ...CANVAS_COMMANDS,
     ...CAMERA_COMMANDS,
     ...LOCATION_COMMANDS,
     ...DEVICE_COMMANDS,
@@ -92,7 +79,6 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...IOS_SYSTEM_COMMANDS,
   ],
   android: [
-    ...CANVAS_COMMANDS,
     ...CAMERA_COMMANDS,
     ...LOCATION_COMMANDS,
     ...ANDROID_NOTIFICATION_COMMANDS,
@@ -106,7 +92,6 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...MOTION_COMMANDS,
   ],
   macos: [
-    ...CANVAS_COMMANDS,
     ...CAMERA_COMMANDS,
     ...LOCATION_COMMANDS,
     ...DEVICE_COMMANDS,
@@ -120,7 +105,6 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   ],
   linux: [...SYSTEM_COMMANDS],
   windows: [
-    ...CANVAS_COMMANDS,
     ...CAMERA_COMMANDS,
     ...LOCATION_COMMANDS,
     ...DEVICE_COMMANDS,
@@ -195,9 +179,42 @@ export function listDangerousPluginNodeCommands(): string[] {
     ...(registry.nodeHostCommands ?? [])
       .filter((entry) => entry.command.dangerous === true)
       .map((entry) => entry.command.command),
-    ...(registry.nodeInvokePolicies ?? []).flatMap((entry) => entry.policy.commands),
+    ...(registry.nodeInvokePolicies ?? [])
+      .filter((entry) => entry.policy.dangerous === true)
+      .flatMap((entry) => entry.policy.commands),
   ];
   return [...new Set(commands.map((command) => command.trim()).filter(Boolean))];
+}
+
+function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
+  const registry = getActiveRuntimePluginRegistry();
+  if (!registry) {
+    return [];
+  }
+  const commands = (registry.nodeInvokePolicies ?? []).flatMap((entry) => {
+    if (entry.policy.dangerous === true) {
+      return [];
+    }
+    const defaults = entry.policy.defaultPlatforms ?? [];
+    return defaults.includes(platformId) ? entry.policy.commands : [];
+  });
+  return [...new Set(commands.map((command) => command.trim()).filter(Boolean))];
+}
+
+export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {
+  const registry = getActiveRuntimePluginRegistry();
+  if (!registry) {
+    return false;
+  }
+  const normalized = command.trim();
+  if (!normalized) {
+    return false;
+  }
+  return (registry.nodeInvokePolicies ?? []).some(
+    (entry) =>
+      entry.policy.foregroundRestrictedOnIos === true &&
+      entry.policy.commands.some((policyCommand) => policyCommand.trim() === normalized),
+  );
 }
 
 type NodeCommandPolicyNode = Pick<NodeSession, "platform" | "deviceFamily"> &
@@ -224,11 +241,12 @@ export function resolveNodeCommandAllowlist(
   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);
   const base = PLATFORM_DEFAULTS[platformId] ?? PLATFORM_DEFAULTS.unknown;
   const talkCommands = hasTalkSurface(node) ? TALK_PTT_COMMANDS : [];
+  const pluginDefaults = listDefaultPluginNodeCommands(platformId);
   const extra = cfg.gateway?.nodes?.allowCommands ?? [];
   const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
   const dangerousPluginCommands = new Set(listDangerousPluginNodeCommands());
   const allow = new Set(
-    [...base, ...talkCommands, ...extra]
+    [...base, ...talkCommands, ...pluginDefaults, ...extra]
       .map((cmd) => cmd.trim())
       .filter((cmd) => cmd && !dangerousPluginCommands.has(cmd)),
   );

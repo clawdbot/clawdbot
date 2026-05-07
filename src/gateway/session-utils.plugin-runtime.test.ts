@@ -3,10 +3,18 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 
 const normalizeProviderModelIdWithPluginMock = vi.fn();
+const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+  configFingerprint: "gateway-session-utils-plugin-runtime-test-empty-plugin-metadata",
+  plugins: [],
+}));
 
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: (params: unknown) =>
     normalizeProviderModelIdWithPluginMock(params),
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
 describe("gateway session list plugin runtime normalization", () => {

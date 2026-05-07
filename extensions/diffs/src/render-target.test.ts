@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { preloadFileDiffMock, preloadMultiFileDiffMock } = vi.hoisted(() => ({
   preloadFileDiffMock: vi.fn(async ({ fileDiff }: { fileDiff: unknown }) => ({
@@ -18,6 +18,11 @@ vi.mock("@pierre/diffs/ssr", () => ({
   preloadFileDiff: preloadFileDiffMock,
   preloadMultiFileDiff: preloadMultiFileDiffMock,
 }));
+
+afterAll(() => {
+  vi.doUnmock("@pierre/diffs/ssr");
+  vi.resetModules();
+});
 
 import { DEFAULT_DIFFS_TOOL_DEFAULTS, resolveDiffImageRenderOptions } from "./config.js";
 import { renderDiffDocument } from "./render.js";

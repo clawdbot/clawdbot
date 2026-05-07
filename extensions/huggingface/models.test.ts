@@ -10,9 +10,17 @@ import { HUGGINGFACE_DISCOVERY_TIMEOUT_MS } from "./models.js";
 const ORIGINAL_VITEST = process.env.VITEST;
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 
+function restoreEnv(key: "VITEST" | "NODE_ENV", value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+}
+
 afterEach(() => {
-  process.env.VITEST = ORIGINAL_VITEST;
-  process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+  restoreEnv("VITEST", ORIGINAL_VITEST);
+  restoreEnv("NODE_ENV", ORIGINAL_NODE_ENV);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });

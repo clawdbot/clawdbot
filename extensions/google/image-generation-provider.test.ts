@@ -46,6 +46,7 @@ function installGoogleFetchMock(params?: {
 describe("Google image-generation provider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("generates image buffers from the Gemini generateContent API", async () => {

@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerPluginHttpRoute } from "../../plugins/http-registry.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
@@ -11,6 +12,7 @@ import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gatew
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
 import {
+  createGatewayPluginUpgradeHandler,
   createGatewayPluginRequestHandler,
   isRegisteredPluginHttpRoutePath,
   shouldEnforceGatewayAuthForPluginPath,
@@ -28,6 +30,11 @@ function createRoute(params: {
   auth?: "gateway" | "plugin";
   match?: "exact" | "prefix";
   handler?: (req: IncomingMessage, res: ServerResponse) => boolean | void | Promise<boolean | void>;
+  handleUpgrade?: (
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+  ) => boolean | void | Promise<boolean | void>;
 }) {
   return {
     pluginId: params.pluginId ?? "route",
@@ -35,8 +42,23 @@ function createRoute(params: {
     auth: params.auth ?? "plugin",
     match: params.match ?? "exact",
     handler: params.handler ?? (() => {}),
+    handleUpgrade: params.handleUpgrade,
     source: params.pluginId ?? "route",
   };
+}
+
+function createMockUpgradeSocket() {
+  const socket = {
+    chunks: [] as string[],
+    destroyed: false,
+    write(chunk: string) {
+      socket.chunks.push(chunk);
+    },
+    destroy() {
+      socket.destroyed = true;
+    },
+  } as unknown as Duplex & { chunks: string[]; destroyed: boolean };
+  return socket;
 }
 
 function buildRepeatedEncodedSlash(depth: number): string {
@@ -390,6 +412,73 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(res.statusCode).toBe(500);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
     expect(end).toHaveBeenCalledWith("Internal Server Error");
+  });
+});
+
+describe("createGatewayPluginUpgradeHandler", () => {
+  afterEach(() => {
+    releasePinnedPluginHttpRouteRegistry();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("claims and rejects matched gateway upgrades when auth was not satisfied", async () => {
+    const routeUpgradeHandler = vi.fn(async () => true);
+    const handler = createGatewayPluginUpgradeHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/__openclaw__/canvas/ws",
+            auth: "gateway",
+            handleUpgrade: routeUpgradeHandler,
+          }),
+        ],
+      }),
+      log: createPluginLog(),
+    });
+    const socket = createMockUpgradeSocket();
+
+    const handled = await handler(
+      { url: "/__openclaw__/canvas/ws" } as IncomingMessage,
+      socket,
+      Buffer.alloc(0),
+      undefined,
+      { gatewayAuthSatisfied: false },
+    );
+
+    expect(handled).toBe(true);
+    expect(routeUpgradeHandler).not.toHaveBeenCalled();
+    expect(socket.destroyed).toBe(true);
+    expect(socket.chunks.join("")).toContain("HTTP/1.1 401 Unauthorized");
+  });
+
+  it("dispatches gateway upgrades after gateway auth succeeds", async () => {
+    const routeUpgradeHandler = vi.fn(async () => true);
+    const handler = createGatewayPluginUpgradeHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/__openclaw__/canvas/ws",
+            auth: "gateway",
+            handleUpgrade: routeUpgradeHandler,
+          }),
+        ],
+      }),
+      log: createPluginLog(),
+    });
+    const socket = createMockUpgradeSocket();
+
+    const handled = await handler(
+      { url: "/__openclaw__/canvas/ws" } as IncomingMessage,
+      socket,
+      Buffer.alloc(0),
+      undefined,
+      { gatewayAuthSatisfied: true, gatewayRequestOperatorScopes: ["operator.read"] },
+    );
+
+    expect(handled).toBe(true);
+    expect(routeUpgradeHandler).toHaveBeenCalledTimes(1);
+    expect(socket.destroyed).toBe(false);
+    expect(socket.chunks).toEqual([]);
   });
 });
 

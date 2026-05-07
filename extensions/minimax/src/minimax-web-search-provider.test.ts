@@ -9,6 +9,14 @@ const {
   resolveMiniMaxRegion,
 } = minimaxWebSearchTesting;
 
+function restoreEnvValue(key: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+}
+
 describe("minimax web search provider", () => {
   const originalApiHost = process.env.MINIMAX_API_HOST;
   const originalCodePlanKey = process.env.MINIMAX_CODE_PLAN_KEY;
@@ -25,11 +33,11 @@ describe("minimax web search provider", () => {
   });
 
   afterEach(() => {
-    process.env.MINIMAX_API_HOST = originalApiHost;
-    process.env.MINIMAX_CODE_PLAN_KEY = originalCodePlanKey;
-    process.env.MINIMAX_CODING_API_KEY = originalCodingApiKey;
-    process.env.MINIMAX_OAUTH_TOKEN = originalOauthToken;
-    process.env.MINIMAX_API_KEY = originalApiKey;
+    restoreEnvValue("MINIMAX_API_HOST", originalApiHost);
+    restoreEnvValue("MINIMAX_CODE_PLAN_KEY", originalCodePlanKey);
+    restoreEnvValue("MINIMAX_CODING_API_KEY", originalCodingApiKey);
+    restoreEnvValue("MINIMAX_OAUTH_TOKEN", originalOauthToken);
+    restoreEnvValue("MINIMAX_API_KEY", originalApiKey);
   });
 
   describe("resolveMiniMaxRegion", () => {

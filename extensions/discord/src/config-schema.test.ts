@@ -152,11 +152,13 @@ describe("discord config schema", () => {
       voice: {
         connectTimeoutMs: 45_000,
         reconnectGraceMs: 20_000,
+        captureSilenceGraceMs: 3_500,
       },
     });
 
     expect(cfg.voice?.connectTimeoutMs).toBe(45_000);
     expect(cfg.voice?.reconnectGraceMs).toBe(20_000);
+    expect(cfg.voice?.captureSilenceGraceMs).toBe(3_500);
   });
 
   it("rejects invalid Discord voice timing overrides", () => {
@@ -165,6 +167,8 @@ describe("discord config schema", () => {
       { connectTimeoutMs: 120_001 },
       { reconnectGraceMs: -1 },
       { reconnectGraceMs: 1.5 },
+      { captureSilenceGraceMs: 0 },
+      { captureSilenceGraceMs: 30_001 },
     ]) {
       expectInvalidDiscordConfig({ voice });
     }

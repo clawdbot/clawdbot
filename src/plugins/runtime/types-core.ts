@@ -4,6 +4,7 @@ import type { MediaUnderstandingRuntime } from "../../media-understanding/runtim
 import type {
   ListSpeechVoices,
   TextToSpeech,
+  TextToSpeechStream,
   TextToSpeechTelephony,
 } from "../../plugin-sdk/tts-runtime.types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
@@ -190,6 +191,7 @@ export type PluginRuntimeCore = {
   };
   tts: {
     textToSpeech: TextToSpeech;
+    textToSpeechStream: TextToSpeechStream;
     textToSpeechTelephony: TextToSpeechTelephony;
     listVoices: ListSpeechVoices;
   };

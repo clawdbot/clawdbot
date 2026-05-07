@@ -51,7 +51,12 @@ function inferLegacyCredentialType(
   record: Record<string, unknown>,
 ): AuthProfileCredential["type"] | undefined {
   const explicit = readNonEmptyString(record.type) ?? readNonEmptyString(record.mode);
-  if (explicit === "api_key" || explicit === "token" || explicit === "oauth") {
+  if (
+    explicit === "api_key" ||
+    explicit === "aws-sdk" ||
+    explicit === "token" ||
+    explicit === "oauth"
+  ) {
     return explicit;
   }
   if (readNonEmptyString(record.key) ?? readNonEmptyString(record.apiKey)) {

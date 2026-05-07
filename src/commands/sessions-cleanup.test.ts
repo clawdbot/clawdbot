@@ -119,7 +119,11 @@ describe("sessionsCleanupCommand", () => {
         staleKeys: Set<string>;
         cappedKeys: Set<string>;
         budgetEvictedKeys: Set<string>;
+        dmScopeRetiredKeys: Set<string>;
       }) => {
+        if (params.dmScopeRetiredKeys.has(params.key)) {
+          return "retire-dm-scope";
+        }
         if (params.missingKeys.has(params.key)) {
           return "prune-missing";
         }
@@ -181,6 +185,7 @@ describe("sessionsCleanupCommand", () => {
           beforeCount: 3,
           afterCount: 1,
           missing: 0,
+          dmScopeRetired: 0,
           pruned: 0,
           capped: 2,
           diskBudget: {
@@ -245,6 +250,7 @@ describe("sessionsCleanupCommand", () => {
       beforeCount: 3,
       afterCount: 1,
       missing: 0,
+      dmScopeRetired: 0,
       pruned: 2,
       capped: 0,
       diskBudget: null,
@@ -286,6 +292,7 @@ describe("sessionsCleanupCommand", () => {
             beforeCount: 2,
             afterCount: 1,
             missing: 0,
+            dmScopeRetired: 0,
             pruned: 1,
             capped: 0,
             diskBudget: {
@@ -305,6 +312,7 @@ describe("sessionsCleanupCommand", () => {
           staleKeys: new Set<string>(),
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
@@ -347,6 +355,7 @@ describe("sessionsCleanupCommand", () => {
             beforeCount: 1,
             afterCount: 0,
             missing: 1,
+            dmScopeRetired: 0,
             pruned: 0,
             capped: 0,
             diskBudget: null,
@@ -357,6 +366,7 @@ describe("sessionsCleanupCommand", () => {
           staleKeys: new Set<string>(),
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
@@ -393,6 +403,7 @@ describe("sessionsCleanupCommand", () => {
             beforeCount: 2,
             afterCount: 1,
             missing: 0,
+            dmScopeRetired: 0,
             pruned: 1,
             capped: 0,
             unreferencedArtifacts: {
@@ -412,6 +423,7 @@ describe("sessionsCleanupCommand", () => {
           staleKeys: new Set(["stale"]),
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
@@ -450,6 +462,7 @@ describe("sessionsCleanupCommand", () => {
             beforeCount: 1,
             afterCount: 0,
             missing: 0,
+            dmScopeRetired: 0,
             pruned: 1,
             capped: 0,
             diskBudget: null,
@@ -460,6 +473,7 @@ describe("sessionsCleanupCommand", () => {
           staleKeys: new Set(["stale"]),
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
         },
         {
           summary: {
@@ -470,6 +484,7 @@ describe("sessionsCleanupCommand", () => {
             beforeCount: 1,
             afterCount: 0,
             missing: 0,
+            dmScopeRetired: 0,
             pruned: 1,
             capped: 0,
             diskBudget: null,
@@ -480,6 +495,7 @@ describe("sessionsCleanupCommand", () => {
           staleKeys: new Set(["stale"]),
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],

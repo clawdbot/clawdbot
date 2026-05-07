@@ -11,7 +11,7 @@ const nodeBin = process.execPath;
 const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
 const BUILD_CACHE_VERSION = 2;
 export const BUILD_ALL_STEPS = [
-  { label: "canvas:a2ui:bundle", kind: "pnpm", pnpmArgs: ["canvas:a2ui:bundle"] },
+  { label: "plugins:assets:build", kind: "pnpm", pnpmArgs: ["plugins:assets:build"] },
   { label: "tsdown", kind: "node", args: ["scripts/tsdown-build.mjs"] },
   {
     label: "check-cli-bootstrap-imports",
@@ -53,13 +53,9 @@ export const BUILD_ALL_STEPS = [
     args: ["scripts/check-plugin-sdk-exports.mjs"],
   },
   {
-    label: "canvas-a2ui-copy",
-    kind: "node",
-    args: ["--import", "tsx", "scripts/canvas-a2ui-copy.ts"],
-    cache: {
-      inputs: ["scripts/canvas-a2ui-copy.ts", "src/canvas-host/a2ui"],
-      outputs: ["dist/canvas-host/a2ui/index.html", "dist/canvas-host/a2ui/a2ui.bundle.js"],
-    },
+    label: "plugins:assets:copy",
+    kind: "pnpm",
+    pnpmArgs: ["plugins:assets:copy"],
   },
   {
     label: "copy-hook-metadata",
@@ -99,7 +95,7 @@ export const BUILD_ALL_STEPS = [
 export const BUILD_ALL_PROFILES = {
   full: BUILD_ALL_STEPS.map((step) => step.label),
   ciArtifacts: [
-    "canvas:a2ui:bundle",
+    "plugins:assets:build",
     "tsdown",
     "check-cli-bootstrap-imports",
     "runtime-postbuild",
@@ -108,7 +104,7 @@ export const BUILD_ALL_PROFILES = {
     "build:plugin-sdk:dts",
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
-    "canvas-a2ui-copy",
+    "plugins:assets:copy",
     "copy-hook-metadata",
     "copy-export-html-templates",
     "write-build-info",

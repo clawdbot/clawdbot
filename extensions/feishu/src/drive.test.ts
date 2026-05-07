@@ -1,5 +1,5 @@
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, PluginRuntime } from "../runtime-api.js";
 
 const createFeishuToolClientMock = vi.hoisted(() => vi.fn());
@@ -41,6 +41,16 @@ describe("registerFeishuDriveTools", () => {
 
   beforeAll(async () => {
     ({ registerFeishuDriveTools } = await import("./drive.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./tool-account.js");
+    vi.doUnmock("./comment-reaction.js");
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   beforeEach(() => {

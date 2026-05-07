@@ -374,6 +374,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/blacksmith-testbox-state.mjs", ["test/scripts/blacksmith-testbox-state.test.ts"]],
   ["scripts/blacksmith-testbox-runner.mjs", ["test/scripts/blacksmith-testbox-runner.test.ts"]],
   ["scripts/testbox-sync-sanity.mjs", ["test/scripts/testbox-sync-sanity.test.ts"]],
+  ["scripts/bundled-plugin-assets.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  ["scripts/bundle-a2ui.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  ["extensions/canvas/scripts/bundle-a2ui.mjs", ["test/scripts/bundle-a2ui.test.ts"]],
+  ["extensions/canvas/scripts/copy-a2ui.mjs", ["src/scripts/canvas-a2ui-copy.test.ts"]],
 ]);
 const TOOLING_TEST_TARGETS = new Map([
   ["test/scripts/barnacle-auto-response.test.ts", ["test/scripts/barnacle-auto-response.test.ts"]],
@@ -494,10 +498,10 @@ const SOURCE_TEST_TARGETS = new Map([
     ["src/auto-reply/reply/dispatch-acp-command-bypass.test.ts"],
   ],
 ]);
-const GENERATED_CHANGED_TEST_TARGETS = new Set([
-  "src/canvas-host/a2ui/.bundle.hash",
-  "src/canvas-host/a2ui/a2ui.bundle.js",
-]);
+const GENERATED_CHANGED_TEST_TARGET_PATTERNS = [
+  /^extensions\/[^/]+\/src\/host\/.+\/\.bundle\.hash$/u,
+  /^extensions\/[^/]+\/src\/host\/.+\/[^/]+\.bundle\.js$/u,
+];
 const SOURCE_ROOTS_FOR_IMPORT_GRAPH = ["src", "extensions", "packages", "ui/src", "test"];
 const IMPORTABLE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
 const IMPORT_SPECIFIER_PATTERN =
@@ -939,7 +943,7 @@ function shouldUseBroadChangedTargets(env = process.env) {
 }
 
 function isRoutableChangedTarget(changedPath) {
-  if (GENERATED_CHANGED_TEST_TARGETS.has(changedPath)) {
+  if (GENERATED_CHANGED_TEST_TARGET_PATTERNS.some((pattern) => pattern.test(changedPath))) {
     return false;
   }
   if (changedPath.endsWith(".live.test.ts")) {

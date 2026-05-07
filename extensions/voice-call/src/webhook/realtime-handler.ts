@@ -7,6 +7,7 @@ import {
   createTalkSessionController,
   createRealtimeVoiceBridgeSession,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  recordTalkObservabilityEvent,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
@@ -507,13 +508,16 @@ export class RealtimeCallHandler {
 
     const { callId, initialGreetingInstructions } = registration;
     const callRecord = this.manager.getCallByProviderCallId(callSid);
-    const talk: TalkSessionController = createTalkSessionController({
-      sessionId: `voice-call:${callId}:realtime`,
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-      provider: this.realtimeProvider.id,
-    });
+    const talk: TalkSessionController = createTalkSessionController(
+      {
+        sessionId: `voice-call:${callId}:realtime`,
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: this.realtimeProvider.id,
+      },
+      { onEvent: recordTalkObservabilityEvent },
+    );
     const rememberTalkEvent = (event: TalkEvent | undefined): TalkEvent | undefined => {
       if (event) {
         appendRecentTalkEventMetadata(callRecord, event);

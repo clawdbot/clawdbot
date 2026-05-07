@@ -269,6 +269,15 @@ export function createSessionsSendTool(opts?: {
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
+      if (parseSessionThreadInfoFast(resolvedKey).threadId) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error:
+            "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",
+          sessionKey: displayKey,
+        });
+      }
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "send",
         requesterSessionKey: effectiveRequesterKey,
@@ -281,15 +290,6 @@ export function createSessionsSendTool(opts?: {
           runId: crypto.randomUUID(),
           status: access.status,
           error: access.error,
-          sessionKey: displayKey,
-        });
-      }
-      if (parseSessionThreadInfoFast(resolvedKey).threadId) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "error",
-          error:
-            "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",
           sessionKey: displayKey,
         });
       }

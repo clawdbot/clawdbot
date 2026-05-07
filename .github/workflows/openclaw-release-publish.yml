@@ -33,7 +33,7 @@ on:
         required: false
         type: string
       publish_openclaw_npm:
-        description: Publish the OpenClaw npm package after plugin npm and ClawHub publish complete
+        description: Publish the OpenClaw npm package after plugin npm succeeds; ClawHub may still run
         required: true
         default: true
         type: boolean
@@ -169,15 +169,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          dispatch_and_wait() {
+          dispatch_workflow() {
             local workflow="$1"
             shift
 
-            local before_json dispatch_output run_id status conclusion url
+            local before_json dispatch_output run_id
             before_json="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
             dispatch_output="$(gh workflow run --repo "$GITHUB_REPOSITORY" "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
-            printf '%s\n' "$dispatch_output"
+            printf '%s\n' "$dispatch_output" >&2
             run_id="$(
               printf '%s\n' "$dispatch_output" |
                 sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
@@ -202,15 +202,14 @@ jobs:
               exit 1
             fi
 
-            echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
+            printf '%s\n' "${run_id}"
+          }
 
-            cancel_child() {
-              if [[ -n "${run_id:-}" ]]; then
-                echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
-                gh run cancel --repo "$GITHUB_REPOSITORY" "$run_id" >/dev/null 2>&1 || true
-              fi
-            }
-            trap cancel_child EXIT INT TERM
+          wait_for_run() {
+            local workflow="$1"
+            local run_id="$2"
+            local status conclusion url
 
             while true; do
               status="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status --jq '.status')"
@@ -219,7 +218,6 @@ jobs:
               fi
               sleep 30
             done
-            trap - EXIT INT TERM
 
             conclusion="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json conclusion --jq '.conclusion')"
             url="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json url --jq '.url')"
@@ -229,8 +227,22 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
             if [[ "$conclusion" != "success" ]]; then
               gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
-              exit 1
+              return 1
             fi
+          }
+
+          wait_for_run_background() {
+            local workflow="$1"
+            local run_id="$2"
+            local result_file="$3"
+            (
+              if wait_for_run "${workflow}" "${run_id}"; then
+                printf 'success\n' > "${result_file}"
+              else
+                printf 'failure\n' > "${result_file}"
+              fi
+            ) &
+            wait_run_pid="$!"
           }
 
           {
@@ -239,6 +251,12 @@ jobs:
             echo "- Workflow ref: \`${CHILD_WORKFLOW_REF}\`"
             echo "- Release tag: \`${RELEASE_TAG}\`"
             echo "- Release SHA: \`${TARGET_SHA}\`"
+            echo "- Plugin npm and ClawHub publish: dispatched in parallel"
+            if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
+              echo "- OpenClaw npm publish: starts after plugin npm succeeds; ClawHub may still be running"
+            else
+              echo "- OpenClaw npm publish: skipped by input"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}")
@@ -248,15 +266,53 @@ jobs:
             clawhub_args+=(-f plugins="${PLUGINS}")
           fi
 
-          dispatch_and_wait plugin-npm-release.yml "${npm_args[@]}"
-          dispatch_and_wait plugin-clawhub-release.yml "${clawhub_args[@]}"
+          plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"
+          plugin_clawhub_run_id="$(dispatch_workflow plugin-clawhub-release.yml "${clawhub_args[@]}")"
 
+          if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}"; then
+            echo "Plugin npm publish failed; cancelling ClawHub publish child ${plugin_clawhub_run_id}." >&2
+            gh run cancel --repo "$GITHUB_REPOSITORY" "${plugin_clawhub_run_id}" >/dev/null 2>&1 || true
+            exit 1
+          fi
+
+          openclaw_npm_run_id=""
           if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-            dispatch_and_wait openclaw-npm-release.yml \
+            openclaw_npm_run_id="$(dispatch_workflow openclaw-npm-release.yml \
               -f tag="${RELEASE_TAG}" \
               -f preflight_only=false \
               -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
-              -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}"
+              -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}")"
           else
             echo "- OpenClaw npm publish: skipped by input" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          clawhub_result="$RUNNER_TEMP/clawhub-result.txt"
+          wait_run_pid=""
+          wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${clawhub_result}"
+          clawhub_pid="${wait_run_pid}"
+
+          openclaw_result=""
+          openclaw_pid=""
+          if [[ -n "${openclaw_npm_run_id}" ]]; then
+            openclaw_result="$RUNNER_TEMP/openclaw-npm-result.txt"
+            wait_run_pid=""
+            wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${openclaw_result}"
+            openclaw_pid="${wait_run_pid}"
+          fi
+
+          failed=0
+          if ! wait "${clawhub_pid}"; then
+            failed=1
+          fi
+          if [[ -n "${openclaw_pid}" ]] && ! wait "${openclaw_pid}"; then
+            failed=1
+          fi
+          if [[ -f "${clawhub_result}" && "$(cat "${clawhub_result}")" != "success" ]]; then
+            failed=1
+          fi
+          if [[ -n "${openclaw_result}" && -f "${openclaw_result}" && "$(cat "${openclaw_result}")" != "success" ]]; then
+            failed=1
+          fi
+          if [[ "${failed}" != "0" ]]; then
+            exit 1
           fi

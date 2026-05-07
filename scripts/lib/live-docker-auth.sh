@@ -18,6 +18,34 @@ openclaw_live_trim() {
   printf '%s' "$value"
 }
 
+openclaw_live_truthy() {
+  case "${1:-}" in
+    1 | true | TRUE | yes | YES | on | ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+openclaw_live_is_ci() {
+  openclaw_live_truthy "${CI:-}" || openclaw_live_truthy "${GITHUB_ACTIONS:-}"
+}
+
+openclaw_live_default_profile_file() {
+  if [[ -n "${OPENCLAW_PROFILE_FILE:-}" ]]; then
+    printf '%s\n' "$OPENCLAW_PROFILE_FILE"
+    return 0
+  fi
+  local testbox_profile="$HOME/.openclaw-testbox-live.profile"
+  if [[ -f "$testbox_profile" ]]; then
+    printf '%s\n' "$testbox_profile"
+    return 0
+  fi
+  printf '%s\n' "$HOME/.profile"
+}
+
 openclaw_live_validate_relative_home_path() {
   local value
   value="$(openclaw_live_trim "${1:-}")"

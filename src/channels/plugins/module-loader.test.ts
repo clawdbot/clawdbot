@@ -9,9 +9,6 @@ import type { PluginModuleLoaderFactory } from "../../plugins/plugin-module-load
 import { resolveExistingPluginModulePath } from "./module-loader.js";
 
 const tempDirs: string[] = [];
-const pluginModuleLoaderJitiFactoryOverrideKey = Symbol.for(
-  "openclaw.pluginModuleLoaderJitiFactoryOverride",
-);
 const testRequire = createRequire(import.meta.url);
 
 afterEach(() => {
@@ -21,20 +18,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("jiti");
-  delete (
-    globalThis as typeof globalThis & {
-      [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
-    }
-  )[pluginModuleLoaderJitiFactoryOverrideKey];
 });
-
-function stubPluginModuleLoaderJitiFactory(createJiti: PluginModuleLoaderFactory): void {
-  (
-    globalThis as typeof globalThis & {
-      [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
-    }
-  )[pluginModuleLoaderJitiFactoryOverrideKey] = createJiti;
-}
 
 function createTempDir(): string {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-module-loader-"));
@@ -95,10 +79,12 @@ describe("channel plugin module loader helpers", () => {
       delete testRequire.extensions[extension];
     }
     vi.resetModules();
-    stubPluginModuleLoaderJitiFactory(createJiti as unknown as PluginModuleLoaderFactory);
     const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
       import.meta.url,
       "./module-loader.js?scope=source-ts-jiti-fallback",
+    );
+    loaderModule.setChannelPluginModuleLoaderFactoryForTest(
+      createJiti as unknown as PluginModuleLoaderFactory,
     );
     const rootDir = createTempDir();
     const modulePath = path.join(rootDir, "extensions", "demo", "index.ts");

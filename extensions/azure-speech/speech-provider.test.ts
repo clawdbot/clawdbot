@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { azureSpeechTTSMock, listAzureSpeechVoicesMock } = vi.hoisted(() => ({
   azureSpeechTTSMock: vi.fn(async () => Buffer.from("audio-bytes")),
@@ -37,6 +37,11 @@ describe("buildAzureSpeechProvider", () => {
     azureSpeechTTSMock.mockClear();
     listAzureSpeechVoicesMock.mockClear();
     vi.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./tts.js");
+    vi.resetModules();
   });
 
   it("reports configured only when key plus region or endpoint is available", () => {

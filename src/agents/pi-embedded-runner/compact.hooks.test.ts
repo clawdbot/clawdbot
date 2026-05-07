@@ -309,64 +309,6 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     );
   });
 
-  it("uses the session model fallback chain when implicit compaction fails", async () => {
-    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
-      model: { provider, api: "responses", id: modelId, input: [] },
-      error: null,
-      authStorage: { setRuntimeApiKey: vi.fn() },
-      modelRegistry: {},
-    }));
-    sessionCompactImpl
-      .mockRejectedValueOnce(
-        Object.assign(
-          new Error(
-            "400 The response was filtered due to the prompt triggering Azure OpenAI's content management policy.",
-          ),
-          { status: 400 },
-        ),
-      )
-      .mockResolvedValueOnce({
-        summary: "fallback summary",
-        firstKeptEntryId: "entry-fallback",
-        tokensBefore: 120,
-        details: { ok: true },
-      });
-
-    const result = await compactEmbeddedPiSessionDirect({
-      sessionId: "session-1",
-      sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp/workspace",
-      provider: "openai",
-      model: "gpt-primary",
-      config: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-primary",
-              fallbacks: ["anthropic/claude-fallback"],
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.result?.summary).toBe("fallback summary");
-    expect(resolveModelMock).toHaveBeenCalledWith(
-      "openai",
-      "gpt-primary",
-      expect.any(String),
-      expect.anything(),
-    );
-    expect(resolveModelMock).toHaveBeenCalledWith(
-      "anthropic",
-      "claude-fallback",
-      expect.any(String),
-      expect.anything(),
-    );
-  });
-
   it("uses the session model fallback chain when overflow compaction fails", async () => {
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
       model: { provider, api: "responses", id: modelId, input: [] },
@@ -471,6 +413,19 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
 
     expect(result.ok).toBe(true);
+    expect(result.result?.summary).toBe("fallback summary");
+    expect(resolveModelMock).toHaveBeenCalledWith(
+      "openai",
+      "gpt-primary",
+      expect.any(String),
+      expect.anything(),
+    );
+    expect(resolveModelMock).toHaveBeenCalledWith(
+      "anthropic",
+      "claude-fallback",
+      expect.any(String),
+      expect.anything(),
+    );
     expect(config).toEqual(configBefore);
   });
 
@@ -987,6 +942,30 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
         2,
       ),
     ).toBe(true);
+  });
+
+  it("counts visible custom prompts as real conversation anchors for tool output", () => {
+    const messages = [
+      {
+        role: "custom",
+        customType: "cron-request",
+        content: "prepare the daily report",
+        display: true,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "read",
+        content: [{ type: "text", text: "report source data" }],
+      },
+    ] as AgentMessage[];
+
+    expect(compactTesting.hasRealConversationContent(messages[0], messages, 0)).toBe(true);
+    expect(compactTesting.hasRealConversationContent(messages[2], messages, 2)).toBe(true);
   });
 
   it("registers the Ollama api provider before compaction", async () => {

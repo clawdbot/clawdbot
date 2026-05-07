@@ -6,13 +6,11 @@ read_when:
   - Configuring an external forward proxy for OpenClaw runtime traffic
 ---
 
-# Network Proxy
-
 OpenClaw can route runtime HTTP and WebSocket traffic through an operator-managed forward proxy. This is optional defense in depth for deployments that want central egress control, stronger SSRF protection, and better network auditability.
 
 OpenClaw does not ship, download, start, configure, or certify a proxy. You run the proxy technology that fits your environment, and OpenClaw routes normal process-local HTTP and WebSocket clients through it.
 
-## Why Use a Proxy?
+## Why use a proxy
 
 A proxy gives operators one network control point for outbound HTTP and WebSocket traffic. That can be useful even outside SSRF hardening:
 
@@ -25,7 +23,7 @@ A proxy gives operators one network control point for outbound HTTP and WebSocke
 
 Proxy routing is a process-level guardrail for normal HTTP and WebSocket egress. It gives operators a fail-closed path for routing supported JavaScript HTTP clients through their own filtering proxy, but it is not an OS-level network sandbox and does not make OpenClaw certify the proxy's destination policy.
 
-## How OpenClaw Routes Traffic
+## How OpenClaw routes traffic
 
 When `proxy.enabled=true` and a proxy URL is configured, protected runtime processes such as `openclaw gateway run`, `openclaw node run`, and `openclaw agent --local` route normal HTTP and WebSocket egress through the configured proxy:
 
@@ -51,7 +49,7 @@ While the proxy is active, OpenClaw clears `no_proxy`, `NO_PROXY`, and `GLOBAL_A
 
 On shutdown, OpenClaw restores the previous proxy environment and resets cached process routing state.
 
-## Related Proxy Terms
+## Related proxy terms
 
 - `proxy.enabled` / `proxy.proxyUrl`: outbound forward-proxy routing for OpenClaw runtime egress. This page documents that feature.
 - `gateway.auth.mode: "trusted-proxy"`: inbound identity-aware reverse-proxy authentication for Gateway access. See [Trusted proxy auth](/gateway/trusted-proxy-auth).
@@ -120,7 +118,7 @@ Configure the proxy to:
 - Log destination, decision, status, and reason without logging request bodies, authorization headers, cookies, or other secrets.
 - Keep proxy policy under version control and review changes like security-sensitive configuration.
 
-## Recommended Blocked Destinations
+## Recommended blocked destinations
 
 Use this denylist as the starting point for any forward proxy, firewall, or egress policy.
 

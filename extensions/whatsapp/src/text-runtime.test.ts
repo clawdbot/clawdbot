@@ -8,6 +8,7 @@ import {
   markdownToWhatsApp,
   resolveJidToE164,
   toWhatsappJid,
+  toWhatsappJidWithLid,
 } from "./text-runtime.js";
 
 async function withTempDir<T>(
@@ -94,10 +95,10 @@ describe("jidToE164", () => {
         const { jidToE164: freshJidToE164 } = await import("./text-runtime.js");
         expect(freshJidToE164("123@lid")).toBe("+5551234");
       } finally {
-        if (previousStateDir) {
-          process.env.OPENCLAW_STATE_DIR = previousStateDir;
-        } else {
+        if (previousStateDir === undefined) {
           delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
         }
         vi.resetModules();
       }
@@ -131,6 +132,43 @@ describe("jidToE164", () => {
         fs.writeFileSync(mappingPath, JSON.stringify("123321"));
         expect(jidToE164("321@lid", { lidMappingDirs: [first, second] })).toBe("+123321");
       });
+    });
+  });
+});
+
+describe("toWhatsappJidWithLid (issue #67378)", () => {
+  it("resolves PN to LID when forward mapping file exists in authDir", async () => {
+    await withTempDir("openclaw-fwd-", (authDir) => {
+      const mappingPath = path.join(authDir, "lid-mapping-15555550000.json");
+      fs.writeFileSync(mappingPath, JSON.stringify("987654"));
+      expect(toWhatsappJidWithLid("+15555550000", { authDir })).toBe("987654@lid");
+    });
+  });
+
+  it("falls back to PN s.whatsapp.net JID when no forward mapping exists", async () => {
+    await withTempDir("openclaw-fwd-", (authDir) => {
+      expect(toWhatsappJidWithLid("+33123456789", { authDir })).toBe("33123456789@s.whatsapp.net");
+    });
+  });
+
+  it("accepts numeric LID values in mapping files (Baileys writes either string or number)", async () => {
+    await withTempDir("openclaw-fwd-", (authDir) => {
+      const mappingPath = path.join(authDir, "lid-mapping-447700900123.json");
+      fs.writeFileSync(mappingPath, JSON.stringify(42424242));
+      expect(toWhatsappJidWithLid("+447700900123", { authDir })).toBe("42424242@lid");
+    });
+  });
+
+  it("preserves already-formed JIDs without consulting mapping", async () => {
+    await withTempDir("openclaw-fwd-", (authDir) => {
+      // Existing JIDs (group, s.whatsapp.net, lid) should pass through.
+      expect(toWhatsappJidWithLid("123456789-987654321@g.us", { authDir })).toBe(
+        "123456789-987654321@g.us",
+      );
+      expect(toWhatsappJidWithLid("1555123@s.whatsapp.net", { authDir })).toBe(
+        "1555123@s.whatsapp.net",
+      );
+      expect(toWhatsappJidWithLid("999@lid", { authDir })).toBe("999@lid");
     });
   });
 });

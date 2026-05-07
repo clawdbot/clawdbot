@@ -14,16 +14,13 @@ const source = await generateExperimentalCodexAppServerProtocolSource();
 try {
   await fs.rm(targetRoot, { recursive: true, force: true });
   await fs.mkdir(targetRoot, { recursive: true });
-  await fs.cp(source.typescriptRoot, path.join(targetRoot, "typescript"), {
-    recursive: true,
-  });
 
   for (const schema of selectedCodexAppServerJsonSchemas) {
     await fs.mkdir(path.dirname(path.join(targetRoot, "json", schema)), { recursive: true });
     const schemaSource = await fs.readFile(path.join(source.jsonRoot, schema), "utf8");
     await fs.writeFile(
       path.join(targetRoot, "json", schema),
-      `${JSON.stringify(JSON.parse(schemaSource))}\n`,
+      `${JSON.stringify(JSON.parse(schemaSource), null, 2)}\n`,
     );
   }
 } finally {

@@ -5,7 +5,7 @@ import {
   createTestWizardPrompter,
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FeishuProbeResult } from "./types.js";
 
 const { probeFeishuMock } = vi.hoisted(() => ({
@@ -75,6 +75,12 @@ async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: st
 
 const feishuConfigure = createPluginSetupWizardConfigure(feishuPlugin);
 const feishuGetStatus = createPluginSetupWizardStatus(feishuPlugin);
+
+afterAll(() => {
+  vi.doUnmock("./probe.js");
+  vi.doUnmock("./app-registration.js");
+  vi.resetModules();
+});
 
 describe("feishu setup wizard", () => {
   beforeEach(() => {

@@ -98,11 +98,15 @@ function summarizeBackgroundTaskText(text: string): string {
 }
 
 function appendBackgroundTaskProgressSummary(current: string, chunk: string): string {
-  const normalizedChunk = normalizeText(chunk)?.replace(/\s+/g, " ");
+  const normalizedChunk = chunk.replace(/\s+/g, " ");
   if (!normalizedChunk) {
     return current;
   }
-  const combined = current ? `${current} ${normalizedChunk}` : normalizedChunk;
+  const chunkToAppend = current ? normalizedChunk : normalizedChunk.trimStart();
+  if (!chunkToAppend) {
+    return current;
+  }
+  const combined = `${current}${chunkToAppend}`.replace(/\s+/g, " ");
   if (combined.length <= ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH) {
     return combined;
   }

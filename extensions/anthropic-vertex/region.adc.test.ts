@@ -1,6 +1,6 @@
 import { platform } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { existsSyncMock, readFileSyncMock } = vi.hoisted(() => ({
   existsSyncMock: vi.fn(),
@@ -33,6 +33,11 @@ describe("anthropic-vertex ADC reads", () => {
   afterEach(() => {
     existsSyncMock.mockClear();
     readFileSyncMock.mockClear();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("node:fs");
+    vi.resetModules();
   });
 
   it("reads explicit ADC credentials without an existsSync preflight", () => {

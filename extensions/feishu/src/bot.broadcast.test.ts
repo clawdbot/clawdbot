@@ -1,5 +1,5 @@
 import type { EnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { clearGroupNameCache, handleFeishuMessage } from "./bot.js";
@@ -175,6 +175,12 @@ describe("broadcast dispatch", () => {
       detectMime: vi.fn(async () => "application/octet-stream"),
     },
   } as unknown as PluginRuntime;
+
+  afterAll(() => {
+    vi.doUnmock("./reply-dispatcher.js");
+    vi.doUnmock("./client.js");
+    vi.resetModules();
+  });
 
   function createBroadcastConfig(): ClawdbotConfig {
     return {

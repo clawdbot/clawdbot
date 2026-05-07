@@ -5,6 +5,7 @@ import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index
 import { loadInstalledPluginIndex, type InstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
 
@@ -20,6 +21,7 @@ function makeTempDir() {
 function createHermeticEnv(rootDir: string): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(rootDir, "bundled"),
+    OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
     OPENCLAW_VERSION: "2026.4.26",
     VITEST: "true",
   };
@@ -48,61 +50,6 @@ function writePackagePlugin(rootDir: string) {
     JSON.stringify({ name: "demo", version: "1.0.0" }),
     "utf8",
   );
-}
-
-function writeManagedNpmPlugin(params: {
-  stateDir: string;
-  packageName: string;
-  pluginId: string;
-  version: string;
-  dependencySpec?: string;
-}): string {
-  const npmRoot = path.join(params.stateDir, "npm");
-  const rootManifestPath = path.join(npmRoot, "package.json");
-  fs.mkdirSync(npmRoot, { recursive: true });
-  const rootManifest = fs.existsSync(rootManifestPath)
-    ? (JSON.parse(fs.readFileSync(rootManifestPath, "utf8")) as {
-        dependencies?: Record<string, string>;
-      })
-    : {};
-  fs.writeFileSync(
-    rootManifestPath,
-    JSON.stringify(
-      {
-        ...rootManifest,
-        private: true,
-        dependencies: {
-          ...rootManifest.dependencies,
-          [params.packageName]: params.dependencySpec ?? params.version,
-        },
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
-
-  const packageDir = path.join(npmRoot, "node_modules", params.packageName);
-  fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
-  fs.writeFileSync(
-    path.join(packageDir, "package.json"),
-    JSON.stringify({
-      name: params.packageName,
-      version: params.version,
-      openclaw: { extensions: ["./dist/index.js"] },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(packageDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: params.pluginId,
-      configSchema: { type: "object" },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(packageDir, "dist", "index.js"), "export {};\n", "utf8");
-  return packageDir;
 }
 
 function replaceFilePreservingSizeAndMtime(filePath: string, contents: string) {

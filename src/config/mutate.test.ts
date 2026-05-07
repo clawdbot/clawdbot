@@ -43,12 +43,18 @@ function createSnapshot(params: {
 
 describe("config mutate helpers", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-mutate-" });
+  const originalNixMode = process.env.OPENCLAW_NIX_MODE;
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
   });
 
   afterAll(async () => {
+    if (originalNixMode === undefined) {
+      delete process.env.OPENCLAW_NIX_MODE;
+    } else {
+      process.env.OPENCLAW_NIX_MODE = originalNixMode;
+    }
     await suiteRootTracker.cleanup();
   });
 
@@ -58,6 +64,7 @@ describe("config mutate helpers", () => {
     ioMocks.resolveConfigSnapshotHash.mockImplementation(
       (snapshot: { hash?: string }) => snapshot.hash ?? null,
     );
+    delete process.env.OPENCLAW_NIX_MODE;
   });
 
   it("mutates source config with optimistic hash protection", async () => {
@@ -115,6 +122,50 @@ describe("config mutate helpers", () => {
         nextConfig: { gateway: { port: 19002 } },
       }),
     ).rejects.toBeInstanceOf(ConfigMutationConflictError);
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses replace writes in Nix mode before touching disk", async () => {
+    process.env.OPENCLAW_NIX_MODE = "1";
+    const snapshot = createSnapshot({
+      hash: "hash-1",
+      sourceConfig: { gateway: { port: 18789 } },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    await expect(
+      replaceConfigFile({
+        nextConfig: { gateway: { port: 19001 } },
+      }),
+    ).rejects.toThrow(
+      "Agent-first Nix setup: https://github.com/openclaw/nix-openclaw#quick-start",
+    );
+
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses mutate writes in Nix mode before touching disk", async () => {
+    process.env.OPENCLAW_NIX_MODE = "1";
+    const snapshot = createSnapshot({
+      hash: "hash-1",
+      sourceConfig: { gateway: { port: 18789 } },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    await expect(
+      mutateConfigFile({
+        mutate(draft) {
+          draft.gateway = { ...draft.gateway, port: 19001 };
+        },
+      }),
+    ).rejects.toThrow("OpenClaw Nix overview: https://docs.openclaw.ai/install/nix");
+
     expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 

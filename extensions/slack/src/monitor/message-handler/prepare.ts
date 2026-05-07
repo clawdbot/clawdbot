@@ -67,6 +67,8 @@ import { isSlackSubteamMentionForBot } from "./subteam-mentions.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
+const SLACK_ANY_MENTION_RE = /<@[^>]+>|<!subteam\^[^>]+>/;
+const SLACK_SUBTEAM_MENTION_MARKER = "<!subteam^";
 
 function resolveCachedMentionRegexes(
   ctx: SlackMonitorContext,
@@ -286,17 +288,20 @@ export async function prepareSlackMessage(params: {
     return null;
   }
   const { senderId, allowFromLower } = authorization;
-  const hasAnyMention = /<@[^>]+>|<!subteam\^[^>]+>/.test(message.text ?? "");
+  const messageText = message.text ?? "";
+  const hasAnyMention = SLACK_ANY_MENTION_RE.test(messageText);
+  const hasSubteamMention = messageText.includes(SLACK_SUBTEAM_MENTION_MARKER);
   const explicitlyMentioned = Boolean(
     ctx.botUserId &&
-    (message.text?.includes(`<@${ctx.botUserId}>`) ||
-      (await isSlackSubteamMentionForBot({
-        client: ctx.app.client,
-        text: message.text,
-        botUserId: ctx.botUserId,
-        teamId: ctx.teamId,
-        log: logVerbose,
-      }))),
+    (messageText.includes(`<@${ctx.botUserId}>`) ||
+      (hasSubteamMention &&
+        (await isSlackSubteamMentionForBot({
+          client: ctx.app.client,
+          text: messageText,
+          botUserId: ctx.botUserId,
+          teamId: ctx.teamId,
+          log: logVerbose,
+        })))),
   );
   const seedTopLevelRoomThreadBySource =
     opts.source === "app_mention" || opts.wasMentioned === true || explicitlyMentioned;
@@ -315,7 +320,7 @@ export async function prepareSlackMessage(params: {
     opts.wasMentioned ??
     (!isDirectMessage &&
       matchesMentionWithExplicit({
-        text: message.text ?? "",
+        text: messageText,
         mentionRegexes,
         explicit: {
           hasAnyMention,
@@ -364,20 +369,30 @@ export async function prepareSlackMessage(params: {
       `slack: routed via bound conversation ${runtimeBinding.conversation.conversationId} -> ${runtimeBinding.targetSessionKey}`,
     );
   }
-  const implicitMentionKinds =
-    isDirectMessage || !ctx.botUserId || !message.thread_ts
-      ? []
-      : [
-          ...implicitMentionKindWhen("reply_to_bot", message.parent_user_id === ctx.botUserId),
-          ...implicitMentionKindWhen(
+  let implicitMentionKinds: ReturnType<typeof implicitMentionKindWhen> = [];
+  if (
+    !isDirectMessage &&
+    ctx.botUserId &&
+    message.thread_ts &&
+    !ctx.threadRequireExplicitMention &&
+    !wasMentioned
+  ) {
+    const replyToBotKinds = implicitMentionKindWhen(
+      "reply_to_bot",
+      message.parent_user_id === ctx.botUserId,
+    );
+    implicitMentionKinds =
+      replyToBotKinds.length > 0
+        ? replyToBotKinds
+        : implicitMentionKindWhen(
             "bot_thread_participant",
             await hasSlackThreadParticipationWithPersistence({
               accountId: account.accountId,
               channelId: message.channel,
               threadTs: message.thread_ts,
             }),
-          ),
-        ];
+          );
+  }
 
   let resolvedSenderName = normalizeOptionalString(message.username);
   const resolveSenderName = async (): Promise<string> => {

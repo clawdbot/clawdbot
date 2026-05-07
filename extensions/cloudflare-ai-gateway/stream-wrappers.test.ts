@@ -1,5 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
   createCloudflareAiGatewayAnthropicThinkingPrefillWrapper,
@@ -18,6 +18,11 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
     warn: warnMock,
   }),
 }));
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+  vi.resetModules();
+});
 
 function createPayloadBaseStream(payload: Record<string, unknown>): StreamFn {
   return ((model, _context, options) => {

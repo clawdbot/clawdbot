@@ -16,6 +16,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-transcription";
 import {
   createTalkSessionController,
+  recordTalkObservabilityEvent,
   type TalkEvent,
   type TalkEventInput,
   type TalkSessionController,
@@ -784,14 +785,17 @@ export class MediaStreamHandler {
   }
 
   private createTalkEvents(callId: string, streamSid: string): TalkSessionController {
-    return createTalkSessionController({
-      sessionId: `voice-call:${callId}:${streamSid}`,
-      mode: "stt-tts",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-      provider: this.config.transcriptionProvider.id,
-      turnIdPrefix: `${streamSid}:turn`,
-    });
+    return createTalkSessionController(
+      {
+        sessionId: `voice-call:${callId}:${streamSid}`,
+        mode: "stt-tts",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: this.config.transcriptionProvider.id,
+        turnIdPrefix: `${streamSid}:turn`,
+      },
+      { onEvent: recordTalkObservabilityEvent },
+    );
   }
 
   private emitTalkEvent(session: StreamSession, input: TalkEventInput): void {

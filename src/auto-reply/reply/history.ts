@@ -61,8 +61,9 @@ export function appendHistoryEntry<T extends HistoryEntry>(params: {
   }
   const history = historyMap.get(historyKey) ?? [];
   history.push(entry);
-  while (history.length > params.limit) {
-    history.shift();
+  const overflowCount = history.length - params.limit;
+  if (overflowCount > 0) {
+    history.splice(0, overflowCount);
   }
   if (historyMap.has(historyKey)) {
     // Refresh insertion order so eviction keeps recently used histories.

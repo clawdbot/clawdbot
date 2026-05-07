@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "./internal/discord.js";
@@ -71,7 +72,14 @@ describe("ensureOggOpus", () => {
 
   it("re-encodes .ogg opus when sample rate is not 48kHz", async () => {
     runFfprobeMock.mockResolvedValueOnce("opus,24000\n");
-    runFfmpegMock.mockResolvedValueOnce();
+    runFfmpegMock.mockImplementationOnce(async (...callArgs: unknown[]) => {
+      const args = callArgs[0] as string[];
+      const outputPath = args.at(-1);
+      if (typeof outputPath !== "string") {
+        throw new Error("missing ffmpeg output path");
+      }
+      await fs.writeFile(outputPath, "ogg");
+    });
 
     const result = await ensureOggOpus("/tmp/input.ogg");
 
@@ -79,20 +87,35 @@ describe("ensureOggOpus", () => {
     expect(path.dirname(result.path)).toBe(path.normalize("/tmp"));
     expect(path.basename(result.path)).toMatch(/^voice-.*\.ogg$/);
     expect(runFfmpegMock).toHaveBeenCalledWith(
-      expect.arrayContaining(["-t", "1200", "-ar", "48000", "/tmp/input.ogg", result.path]),
+      expect.arrayContaining(["-t", "1200", "-ar", "48000", "/tmp/input.ogg"]),
     );
+    const ffmpegOutputPath = (runFfmpegMock.mock.calls[0]?.[0] as string[] | undefined)?.at(-1);
+    expect(ffmpegOutputPath).not.toBe(result.path);
+    expect(path.basename(ffmpegOutputPath ?? "")).toBe(path.basename(result.path));
+    await expect(fs.readFile(result.path, "utf8")).resolves.toBe("ogg");
   });
 
   it("re-encodes non-ogg input with bounded ffmpeg execution", async () => {
-    runFfmpegMock.mockResolvedValueOnce();
+    runFfmpegMock.mockImplementationOnce(async (...callArgs: unknown[]) => {
+      const args = callArgs[0] as string[];
+      const outputPath = args.at(-1);
+      if (typeof outputPath !== "string") {
+        throw new Error("missing ffmpeg output path");
+      }
+      await fs.writeFile(outputPath, "ogg");
+    });
 
     const result = await ensureOggOpus("/tmp/input.mp3");
 
     expect(result.cleanup).toBe(true);
     expect(runFfprobeMock).not.toHaveBeenCalled();
     expect(runFfmpegMock).toHaveBeenCalledWith(
-      expect.arrayContaining(["-vn", "-sn", "-dn", "/tmp/input.mp3", result.path]),
+      expect.arrayContaining(["-vn", "-sn", "-dn", "/tmp/input.mp3"]),
     );
+    const ffmpegOutputPath = (runFfmpegMock.mock.calls[0]?.[0] as string[] | undefined)?.at(-1);
+    expect(ffmpegOutputPath).not.toBe(result.path);
+    expect(path.basename(ffmpegOutputPath ?? "")).toBe(path.basename(result.path));
+    await expect(fs.readFile(result.path, "utf8")).resolves.toBe("ogg");
   });
 });
 

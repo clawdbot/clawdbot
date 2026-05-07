@@ -15,6 +15,7 @@ import {
   type ConfigWriteOptions,
 } from "./io.js";
 import { applyUnsetPathsForWrite, resolveManagedUnsetPathsForWrite } from "./io.write-prepare.js";
+import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import {
   createRuntimeConfigWriteNotification,
   finalizeRuntimeSnapshotWrite,
@@ -228,6 +229,7 @@ export async function replaceConfigFile(params: {
       ? { snapshot: params.snapshot, writeOptions: params.writeOptions }
       : await (params.io?.readConfigFileSnapshotForWrite ?? readConfigFileSnapshotForWrite)();
   const { snapshot, writeOptions } = prepared;
+  assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
   const previousHash = assertBaseHashMatches(snapshot, params.baseHash);
   const afterWrite = resolveConfigWriteAfterWrite(
     params.afterWrite ?? params.writeOptions?.afterWrite,
@@ -271,6 +273,7 @@ export async function mutateConfigFile<T = void>(params: {
   const { snapshot, writeOptions } = await (
     params.io?.readConfigFileSnapshotForWrite ?? readConfigFileSnapshotForWrite
   )();
+  assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
   const previousHash = assertBaseHashMatches(snapshot, params.baseHash);
   const baseConfig = params.base === "runtime" ? snapshot.runtimeConfig : snapshot.sourceConfig;
   const draft = structuredClone(baseConfig) as OpenClawConfig;

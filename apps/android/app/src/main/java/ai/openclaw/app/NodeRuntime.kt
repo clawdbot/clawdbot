@@ -233,13 +233,13 @@ class NodeRuntime(
       smsTelephonyAvailable = { sms.hasTelephonyFeature() },
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
       debugBuild = { BuildConfig.DEBUG },
-      refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
       onCanvasA2uiPush = {
         _canvasA2uiHydrated.value = true
         _canvasRehydratePending.value = false
         _canvasRehydrateErrorText.value = null
       },
       onCanvasA2uiReset = { _canvasA2uiHydrated.value = false },
+      refreshCanvasHostUrl = { nodeSession.refreshCanvasHostUrl() },
       motionActivityAvailable = { motionHandler.isActivityAvailable() },
       motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
     )

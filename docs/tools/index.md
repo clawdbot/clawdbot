@@ -60,7 +60,6 @@ These tools ship with OpenClaw and are available without installing any plugins:
 | `read` / `write` / `edit`                  | File I/O in the workspace                                             |                                                              |
 | `apply_patch`                              | Multi-hunk file patches                                               | [Apply Patch](/tools/apply-patch)                            |
 | `message`                                  | Send messages across all channels                                     | [Agent Send](/tools/agent-send)                              |
-| `canvas`                                   | Drive node Canvas (present, eval, snapshot)                           |                                                              |
 | `nodes`                                    | Discover and target paired devices                                    |                                                              |
 | `cron` / `gateway`                         | Manage scheduled jobs; inspect, patch, restart, or update the gateway |                                                              |
 | `image` / `image_generate`                 | Analyze or generate images                                            | [Image Generation](/tools/image-generation)                  |
@@ -104,6 +103,7 @@ legacy `tools.bash.*` aliases normalize to the same protected exec paths.
 
 Plugins can register additional tools. Some examples:
 
+- [Canvas](/plugins/reference/canvas) — experimental bundled plugin for node Canvas control and A2UI rendering
 - [Diffs](/tools/diffs) — diff viewer and renderer
 - [LLM Task](/tools/llm-task) — JSON-only LLM step for structured output
 - [Lobster](/tools/lobster) — typed workflow runtime with resumable approvals
@@ -195,7 +195,7 @@ Use `group:*` shorthands in allow/deny lists:
 | `group:sessions`   | sessions_list, sessions_history, sessions_send, sessions_spawn, sessions_yield, subagents, session_status |
 | `group:memory`     | memory_search, memory_get                                                                                 |
 | `group:web`        | web_search, x_search, web_fetch                                                                           |
-| `group:ui`         | browser, canvas                                                                                           |
+| `group:ui`         | browser, canvas when the bundled Canvas plugin is enabled                                                 |
 | `group:automation` | heartbeat_respond, cron, gateway                                                                          |
 | `group:messaging`  | message                                                                                                   |
 | `group:nodes`      | nodes                                                                                                     |

@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { inspect } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
@@ -14,6 +16,12 @@ import {
   toAcpMcpServers,
   type ResolvedAcpxPluginConfig,
 } from "./config.js";
+import { createAcpxProcessLeaseStore, type AcpxProcessLeaseStore } from "./process-lease.js";
+import {
+  cleanupOpenClawOwnedAcpxProcessTree,
+  reapStaleOpenClawOwnedAcpxOrphans,
+  type AcpxProcessCleanupDeps,
+} from "./process-reaper.js";
 
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
@@ -33,12 +41,16 @@ let runtimeModulePromise: Promise<AcpxRuntimeModule> | null = null;
 
 type AcpxRuntimeFactoryParams = {
   pluginConfig: ResolvedAcpxPluginConfig;
+  gatewayInstanceId: string;
+  processLeaseStore: AcpxProcessLeaseStore;
+  wrapperRoot: string;
   logger?: PluginLogger;
 };
 
 type CreateAcpxRuntimeServiceParams = {
   pluginConfig?: unknown;
   runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike | Promise<AcpxRuntimeLike>;
+  processCleanupDeps?: AcpxProcessCleanupDeps;
 };
 
 function loadRuntimeModule(): Promise<AcpxRuntimeModule> {
@@ -57,6 +69,9 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
     runtimePromise ??= loadRuntimeModule().then((module) => {
       runtime = new module.AcpxRuntime({
         cwd: params.pluginConfig.cwd,
+        openclawGatewayInstanceId: params.gatewayInstanceId,
+        openclawProcessLeaseStore: params.processLeaseStore,
+        openclawWrapperRoot: params.wrapperRoot,
         sessionStore: module.createFileSessionStore({
           stateDir: params.pluginConfig.stateDir,
         }),
@@ -188,6 +203,73 @@ function shouldRunStartupProbe(env: NodeJS.ProcessEnv = process.env): boolean {
   return env[ENABLE_STARTUP_PROBE_ENV] === "1";
 }
 
+async function resolveGatewayInstanceId(stateDir: string): Promise<string> {
+  const filePath = path.join(stateDir, "gateway-instance-id");
+  try {
+    const existing = (await fs.readFile(filePath, "utf8")).trim();
+    if (existing) {
+      return existing;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  const next = randomUUID();
+  await fs.mkdir(stateDir, { recursive: true });
+  await fs.writeFile(filePath, `${next}\n`, { mode: 0o600 });
+  return next;
+}
+
+async function reapOpenAcpxProcessLeases(params: {
+  gatewayInstanceId: string;
+  leaseStore: AcpxProcessLeaseStore;
+  deps?: AcpxProcessCleanupDeps;
+}): Promise<{ inspectedPids: number[]; terminatedPids: number[] }> {
+  const leases = await params.leaseStore.listOpen(params.gatewayInstanceId);
+  const inspectedPids: number[] = [];
+  const terminatedPids: number[] = [];
+  const pendingLeaseRootResults = new Map<
+    string,
+    { inspectedPids: number[]; terminatedPids: number[] }
+  >();
+  for (const lease of leases) {
+    if (lease.rootPid <= 0) {
+      await params.leaseStore.markState(lease.leaseId, "closing");
+      let result = pendingLeaseRootResults.get(lease.wrapperRoot);
+      if (!result) {
+        result = await reapStaleOpenClawOwnedAcpxOrphans({
+          wrapperRoot: lease.wrapperRoot,
+          deps: params.deps,
+        });
+        pendingLeaseRootResults.set(lease.wrapperRoot, result);
+        inspectedPids.push(...result.inspectedPids);
+        terminatedPids.push(...result.terminatedPids);
+      }
+      await params.leaseStore.markState(
+        lease.leaseId,
+        result.terminatedPids.length > 0 ? "closed" : "lost",
+      );
+      continue;
+    }
+    await params.leaseStore.markState(lease.leaseId, "closing");
+    const result = await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: lease.rootPid,
+      expectedLeaseId: lease.leaseId,
+      expectedGatewayInstanceId: lease.gatewayInstanceId,
+      wrapperRoot: lease.wrapperRoot,
+      deps: params.deps,
+    });
+    inspectedPids.push(...result.inspectedPids);
+    terminatedPids.push(...result.terminatedPids);
+    await params.leaseStore.markState(
+      lease.leaseId,
+      result.terminatedPids.length > 0 ? "closed" : "lost",
+    );
+  }
+  return { inspectedPids, terminatedPids };
+}
+
 export function createAcpxRuntimeService(
   params: CreateAcpxRuntimeServiceParams = {},
 ): OpenClawPluginService {
@@ -215,7 +297,21 @@ export function createAcpxRuntimeService(
         stateDir: ctx.stateDir,
         logger: ctx.logger,
       });
+      const wrapperRoot = path.join(ctx.stateDir, "acpx");
       await fs.mkdir(pluginConfig.stateDir, { recursive: true });
+      await fs.mkdir(wrapperRoot, { recursive: true });
+      const gatewayInstanceId = await resolveGatewayInstanceId(ctx.stateDir);
+      const processLeaseStore = createAcpxProcessLeaseStore({ stateDir: wrapperRoot });
+      const startupReap = await reapOpenAcpxProcessLeases({
+        gatewayInstanceId,
+        leaseStore: processLeaseStore,
+        deps: params.processCleanupDeps,
+      });
+      if (startupReap.terminatedPids.length > 0) {
+        ctx.logger.info(
+          `reaped ${startupReap.terminatedPids.length} stale OpenClaw-owned ACPX process${startupReap.terminatedPids.length === 1 ? "" : "es"}`,
+        );
+      }
       warnOnIgnoredLegacyCompatibilityConfig({
         pluginConfig,
         logger: ctx.logger,
@@ -224,10 +320,16 @@ export function createAcpxRuntimeService(
       runtime = params.runtimeFactory
         ? await params.runtimeFactory({
             pluginConfig,
+            gatewayInstanceId,
+            processLeaseStore,
+            wrapperRoot,
             logger: ctx.logger,
           })
         : createLazyDefaultRuntime({
             pluginConfig,
+            gatewayInstanceId,
+            processLeaseStore,
+            wrapperRoot,
             logger: ctx.logger,
           });
 

@@ -1,4 +1,5 @@
 import type { Dispatcher } from "undici";
+import { normalizeHeadersInitForFetch } from "../fetch-headers.js";
 import { loadUndiciRuntimeDeps, type UndiciRuntimeDeps } from "./undici-runtime.js";
 
 export type DispatcherAwareRequestInit = RequestInit & { dispatcher?: Dispatcher };
@@ -50,20 +51,26 @@ function normalizeRuntimeRequestInit(
   init: DispatcherAwareRequestInit | undefined,
   RuntimeFormData: RuntimeFormDataCtor | undefined,
 ): DispatcherAwareRequestInit | undefined {
-  if (!init?.body) {
+  if (!init) {
     return init;
+  }
+  const normalizedHeaders = normalizeHeadersInitForFetch(init.headers);
+  const initWithNormalizedHeaders =
+    normalizedHeaders === init.headers ? init : { ...init, headers: normalizedHeaders };
+  if (!init.body) {
+    return initWithNormalizedHeaders;
   }
 
   const body = normalizeRuntimeFormData(init.body, RuntimeFormData);
   if (body === init.body) {
-    return init;
+    return initWithNormalizedHeaders;
   }
 
-  const headers = new Headers(init.headers);
+  const headers = new Headers(normalizedHeaders);
   headers.delete("content-length");
   headers.delete("content-type");
   return {
-    ...init,
+    ...initWithNormalizedHeaders,
     headers,
     body,
   };

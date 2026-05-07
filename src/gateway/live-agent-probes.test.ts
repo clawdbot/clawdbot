@@ -5,6 +5,7 @@ import {
   buildLiveCronProbeMessage,
   createLiveCronProbeSpec,
   isClaudeLikeLiveAgent,
+  shouldRunLiveImageProbe,
 } from "./live-agent-probes.js";
 
 describe("live-agent-probes", () => {
@@ -26,6 +27,13 @@ describe("live-agent-probes", () => {
     ).not.toThrow();
     expect(() => assertLiveImageProbeReply("horse")).toThrow("image probe expected 'cat'");
     expect(() => assertLiveImageProbeReply("caterpillar")).toThrow("image probe expected 'cat'");
+  });
+
+  it("skips the shared image probe for text-only live agents unless forced", () => {
+    expect(shouldRunLiveImageProbe({ agent: "claude" })).toBe(true);
+    expect(shouldRunLiveImageProbe({ agent: "opencode" })).toBe(false);
+    expect(shouldRunLiveImageProbe({ agent: "opencode", override: "1" })).toBe(true);
+    expect(shouldRunLiveImageProbe({ agent: "claude", override: "0" })).toBe(false);
   });
 
   it("builds a retryable cron prompt with provider-specific fallback wording", () => {

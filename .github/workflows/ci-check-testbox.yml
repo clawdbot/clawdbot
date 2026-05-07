@@ -18,6 +18,7 @@ env:
 
 jobs:
   check:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     permissions:
       contents: read
     name: "check"

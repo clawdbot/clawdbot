@@ -24,7 +24,7 @@ function installGeminiFetch() {
         }),
     } as Response),
   );
-  global.fetch = withFetchPreconnect(mockFetch);
+  vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
   return mockFetch;
 }
 
@@ -69,6 +69,7 @@ function parseGeminiFetchBody(mockFetch: ReturnType<typeof installGeminiFetch>):
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("google web search provider", () => {

@@ -63,8 +63,12 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         let mainSessionKey = await GatewayConnection.shared.cachedMainSessionKey()
         let defaults = decoded.defaults.map {
             OpenClawChatSessionsDefaults(
+                modelProvider: $0.modelProvider,
                 model: $0.model,
                 contextTokens: $0.contextTokens,
+                thinkingLevels: $0.thinkingLevels,
+                thinkingOptions: $0.thinkingOptions,
+                thinkingDefault: $0.thinkingDefault,
                 mainSessionKey: mainSessionKey)
         } ?? OpenClawChatSessionsDefaults(
             model: nil,

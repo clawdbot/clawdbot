@@ -37,6 +37,49 @@ function shouldAnnounceHookRunResult(params: {
   );
 }
 
+function resolveHookRunSummary(result: RunCronAgentTurnResult): string {
+  const diagnosticsSummary =
+    result.status !== "ok" ? normalizeOptionalString(result.diagnostics?.summary) : undefined;
+  return (
+    diagnosticsSummary ||
+    normalizeOptionalString(result.summary) ||
+    normalizeOptionalString(result.error) ||
+    result.status
+  );
+}
+
+function sanitizeHookConsoleValue(value: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  const withoutControlChars = Array.from(normalized, (char) => {
+    const code = char.charCodeAt(0);
+    return code < 32 || code === 127 ? " " : char;
+  }).join("");
+  return withoutControlChars.replace(/\s+/gu, " ").trim().slice(0, 500);
+}
+
+function formatHookRunWarningConsoleMessage(params: {
+  status: string;
+  model: string | undefined;
+  summary: string;
+}): string {
+  const parts = [
+    "hook agent run returned non-ok status",
+    `status=${sanitizeHookConsoleValue(params.status) ?? "unknown"}`,
+  ];
+  const model = sanitizeHookConsoleValue(params.model);
+  if (model) {
+    parts.push(`model=${model}`);
+  }
+  const summary = sanitizeHookConsoleValue(params.summary);
+  if (summary) {
+    parts.push(`summary=${summary}`);
+  }
+  return parts.join(" ");
+}
+
 export function createGatewayHooksRequestHandler(params: {
   deps: CliDeps;
   getHooksConfig: () => HooksConfigResolved | null;
@@ -108,13 +151,28 @@ export function createGatewayHooksRequestHandler(params: {
           sessionKey,
           lane: "cron",
         });
-        const summary =
-          normalizeOptionalString(result.summary) ||
-          normalizeOptionalString(result.error) ||
-          result.status;
+        const summary = resolveHookRunSummary(result);
         const prefix =
           result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
         const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
+        if (result.status !== "ok") {
+          logHooks.warn("hook agent run returned non-ok status", {
+            sourcePath: value.sourcePath,
+            name: safeName,
+            runId,
+            jobId,
+            agentId: value.agentId,
+            sessionKey,
+            status: result.status,
+            model: value.model,
+            summary,
+            consoleMessage: formatHookRunWarningConsoleMessage({
+              status: result.status,
+              model: value.model,
+              summary,
+            }),
+          });
+        }
         if (shouldAnnounce) {
           const eventSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {

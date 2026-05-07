@@ -127,6 +127,7 @@ describe("buildXiaomiSpeechProvider", () => {
     });
 
     afterEach(() => {
+      vi.unstubAllGlobals();
       globalThis.fetch = savedFetch;
       vi.restoreAllMocks();
     });
@@ -217,7 +218,9 @@ describe("buildXiaomiSpeechProvider", () => {
           }),
         ).rejects.toThrow("Xiaomi API key missing");
       } finally {
-        if (savedKey) {
+        if (savedKey === undefined) {
+          delete process.env.XIAOMI_API_KEY;
+        } else {
           process.env.XIAOMI_API_KEY = savedKey;
         }
       }

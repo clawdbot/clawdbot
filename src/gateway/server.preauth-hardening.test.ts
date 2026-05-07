@@ -89,7 +89,6 @@ describe("gateway pre-auth hardening", () => {
     const clients = new Set<GatewayWsClient>();
     const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
     const httpServer = createGatewayHttpServer({
-      canvasHost: null,
       clients,
       controlUiEnabled: false,
       controlUiBasePath: "/__control__",
@@ -102,7 +101,6 @@ describe("gateway pre-auth hardening", () => {
     attachGatewayUpgradeHandler({
       httpServer,
       wss,
-      canvasHost: null,
       clients,
       preauthConnectionBudget: createPreauthConnectionBudget(1),
       resolvedAuth,
@@ -216,8 +214,8 @@ describe("gateway pre-auth hardening", () => {
           id: "oversized-connect",
           method: "connect",
           params: {
-            minProtocol: 3,
-            maxProtocol: 3,
+            minProtocol: 4,
+            maxProtocol: 4,
             client: { id: "test", version: "1.0.0", platform: "test", mode: "test" },
             pathEnv: large,
             role: "operator",

@@ -80,7 +80,7 @@ function isProfileConfigCompatible(params: {
   cfg?: OpenClawConfig;
   profileId: string;
   provider: string;
-  mode: "api_key" | "token" | "oauth";
+  mode: "api_key" | "aws-sdk" | "token" | "oauth";
   allowOAuthTokenCompatibility?: boolean;
 }): boolean {
   const profileConfig = params.cfg?.auth?.profiles?.[params.profileId];
@@ -310,6 +310,9 @@ export async function resolveApiKeyForProfile(
       return null;
     }
     return buildApiKeyProfileResult({ apiKey: key, provider: cred.provider, email: cred.email });
+  }
+  if (cred.type === "aws-sdk") {
+    return null;
   }
   if (cred.type === "token") {
     const expiryState = resolveTokenExpiryState(cred.expires);

@@ -138,11 +138,19 @@ describe("pw-session role refs cache", () => {
 describe("pw-session ensurePageState", () => {
   it("stores unmanaged downloads under unique managed paths", async () => {
     const { page, handlers } = fakePage();
-    const mkdirSpy = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    const mkdirActual = fs.mkdir.bind(fs);
+    const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (target, options) => {
+      await mkdirActual(target, options);
+      return undefined;
+    });
     ensurePageState(page);
 
-    const saveAsA = vi.fn(async () => {});
-    const saveAsB = vi.fn(async () => {});
+    const saveAsA = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "download-a", "utf8");
+    });
+    const saveAsB = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "download-b", "utf8");
+    });
     const downloadA: MutableDownload = {
       suggestedFilename: () => "report.pdf",
       saveAs: saveAsA,
@@ -163,8 +171,10 @@ describe("pw-session ensurePageState", () => {
     expect(path.dirname(managedPathB ?? "")).toBe(DEFAULT_DOWNLOAD_DIR);
     expect(path.basename(managedPathA ?? "")).toMatch(/-report\.pdf$/);
     expect(path.basename(managedPathB ?? "")).toMatch(/-report\.pdf$/);
-    expect(saveAsA).toHaveBeenCalledWith(managedPathA);
-    expect(saveAsB).toHaveBeenCalledWith(managedPathB);
+    expect(saveAsA.mock.calls[0]?.[0]).not.toBe(managedPathA);
+    expect(saveAsB.mock.calls[0]?.[0]).not.toBe(managedPathB);
+    await expect(fs.readFile(managedPathA ?? "", "utf8")).resolves.toBe("download-a");
+    await expect(fs.readFile(managedPathB ?? "", "utf8")).resolves.toBe("download-b");
     expect(mkdirSpy).toHaveBeenCalledWith(DEFAULT_DOWNLOAD_DIR, { recursive: true });
   });
 

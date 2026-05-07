@@ -436,14 +436,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
     const keywordResults =
       hybrid.enabled && this.fts.enabled && this.fts.available
-        ? await this.searchKeyword(cleaned, candidates, undefined, sourceFilterList).catch(
-            (err) => {
-              log.warn(
-                `memory search: FTS hybrid keyword query failed: ${formatErrorMessage(err)}`,
-              );
-              return [];
-            },
-          )
+        ? await this.searchKeyword(
+            cleaned,
+            candidates,
+            { boostFallbackRanking: true },
+            sourceFilterList,
+          ).catch((err) => {
+            log.warn(`memory search: FTS hybrid keyword query failed: ${formatErrorMessage(err)}`);
+            return [];
+          })
         : [];
 
     const queryVec = await this.embedQueryWithTimeout(cleaned);
@@ -472,11 +473,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return strict.slice(0, maxResults);
     }
 
-    // Hybrid defaults can produce keyword-only matches with max score equal to
-    // textWeight (for example 0.3). If minScore is higher (for example 0.35),
-    // these exact lexical hits get filtered out even when they are the only
-    // relevant results.
-    const relaxedMinScore = Math.min(minScore, hybrid.textWeight);
+    // Hybrid defaults can produce keyword-only matches below minScore after
+    // weighting. If strict vector+keyword results are empty, preserve the FTS
+    // matches; FTS already established lexical relevance.
+    const relaxedMinScore = 0;
     const keywordKeys = new Set(
       keywordResults.map(
         (entry) => `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,

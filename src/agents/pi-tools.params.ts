@@ -33,16 +33,22 @@ function formatReceivedParamHint(
   record: Record<string, unknown>,
   groups: readonly RequiredParamGroup[],
 ): string {
-  const allowEmptyKeys = new Set(
-    groups.filter((group) => group.allowEmpty).flatMap((group) => group.keys),
-  );
-  const received = Object.keys(record).flatMap((key) => {
+  const allowEmptyKeys = new Set<string>();
+  for (const group of groups) {
+    if (group.allowEmpty) {
+      for (const key of group.keys) {
+        allowEmptyKeys.add(key);
+      }
+    }
+  }
+  const received: string[] = [];
+  for (const key of Object.keys(record)) {
     const detail = describeReceivedParamValue(record[key], allowEmptyKeys.has(key));
     if (record[key] === undefined || record[key] === null) {
-      return [];
+      continue;
     }
-    return [detail ? `${key}=${detail}` : key];
-  });
+    received.push(detail ? `${key}=${detail}` : key);
+  }
   return received.length > 0 ? ` (received: ${received.join(", ")})` : "";
 }
 

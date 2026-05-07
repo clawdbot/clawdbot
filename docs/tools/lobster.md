@@ -100,7 +100,19 @@ Enable the tool:
 }
 ```
 
-Use it in a pipeline:
+### Important limitation: embedded Lobster vs `openclaw.invoke`
+
+The bundled Lobster plugin runs workflows **in-process** inside the gateway. In that embedded mode, `openclaw.invoke` does **not** automatically inherit a gateway URL/auth context for nested OpenClaw CLI tool calls.
+
+That means this pattern is **not currently reliable in the embedded runner**:
+
+```lobster
+openclaw.invoke --tool llm-task --action json --args-json '{ ... }'
+```
+
+Use the example below only when running the **standalone Lobster CLI** in an environment where `openclaw.invoke` is already configured with the correct gateway/auth context.
+
+Use it in a standalone Lobster CLI pipeline:
 
 ```lobster
 openclaw.invoke --tool llm-task --action json --args-json '{
@@ -118,6 +130,11 @@ openclaw.invoke --tool llm-task --action json --args-json '{
   }
 }'
 ```
+
+If you are using the embedded Lobster plugin today, prefer either:
+
+- a direct `llm-task` tool call outside Lobster, or
+- non-`openclaw.invoke` steps inside the Lobster pipeline until a supported embedded bridge is added.
 
 See [LLM Task](/tools/llm-task) for details and configuration options.
 

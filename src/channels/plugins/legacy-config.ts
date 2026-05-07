@@ -1,4 +1,5 @@
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { listPluginDoctorLegacyConfigRules } from "../../plugins/doctor-contract-registry.js";
 import { getBootstrapChannelPlugin } from "./bootstrap-registry.js";
 import { loadBundledChannelDoctorContractApi } from "./doctor-contract-api.js";
@@ -101,7 +102,12 @@ export function collectChannelLegacyConfigRules(
     unresolvedChannelIds.push(channelId);
   }
   if (unresolvedChannelIds.length > 0) {
-    rules.push(...listPluginDoctorLegacyConfigRules({ pluginIds: unresolvedChannelIds }));
+    rules.push(
+      ...listPluginDoctorLegacyConfigRules({
+        config: raw as OpenClawConfig,
+        pluginIds: unresolvedChannelIds,
+      }),
+    );
   }
 
   const seen = new Set<string>();

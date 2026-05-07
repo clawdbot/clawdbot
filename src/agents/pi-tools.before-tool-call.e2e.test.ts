@@ -960,6 +960,33 @@ describe("before_tool_call requireApproval handling", () => {
     expect(onResolution).toHaveBeenCalledWith("allow-once");
   });
 
+  it("allows allow-always decisions for tool approvals", async () => {
+    const onResolution = vi.fn();
+
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Needs durable approval",
+        description: "Check this durable approval",
+        onResolution,
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-allow-always", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "server-id-allow-always",
+      decision: "allow-always",
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "echo ok" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toEqual({ blocked: false, params: { command: "echo ok" } });
+    expect(onResolution).toHaveBeenCalledWith("allow-always");
+  });
+
   it("does not await onResolution before returning approval outcome", async () => {
     const onResolution = vi.fn(() => new Promise<void>(() => {}));
 

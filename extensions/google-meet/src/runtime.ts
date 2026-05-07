@@ -634,7 +634,7 @@ export class GoogleMeetRuntime {
     );
     const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
-      await sleep(250);
+      await sleep(Math.min(250, Math.max(0, deadline - Date.now())));
       result = await this.speak(session.id, instructions);
       if (result.spoken) {
         return true;

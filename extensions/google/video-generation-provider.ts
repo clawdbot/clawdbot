@@ -6,6 +6,7 @@ import {
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
+import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -154,10 +155,17 @@ async function downloadGeneratedVideo(params: {
   return await withTempWorkspace(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-google-video-" },
     async ({ dir: tempDir }) => {
-      const downloadPath = path.join(tempDir, `video-${params.index + 1}.mp4`);
-      await params.client.files.download({
-        file: params.file as never,
-        downloadPath,
+      const fileName = `video-${params.index + 1}.mp4`;
+      const downloadPath = path.join(tempDir, fileName);
+      await writeExternalFileWithinRoot({
+        rootDir: tempDir,
+        path: fileName,
+        write: async (downloadPath) => {
+          await params.client.files.download({
+            file: params.file as never,
+            downloadPath,
+          });
+        },
       });
       const buffer = await readFile(downloadPath);
       return {

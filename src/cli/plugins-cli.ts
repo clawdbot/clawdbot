@@ -1,5 +1,10 @@
 import type { Command } from "commander";
-import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import {
+  assertConfigWriteAllowedInCurrentMode,
+  getRuntimeConfig,
+  readConfigFileSnapshot,
+  replaceConfigFile,
+} from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
@@ -136,6 +141,8 @@ export function registerPluginsCli(program: Command) {
     .description("Enable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
+      assertConfigWriteAllowedInCurrentMode();
+
       const { enablePluginInConfig } = await import("../plugins/enable.js");
       const { normalizePluginId } = await import("../plugins/config-state.js");
       const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
@@ -185,6 +192,8 @@ export function registerPluginsCli(program: Command) {
     .description("Disable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
+      assertConfigWriteAllowedInCurrentMode();
+
       const { normalizePluginId } = await import("../plugins/config-state.js");
       const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
       const { setPluginEnabledInConfig } = await import("./plugins-config.js");

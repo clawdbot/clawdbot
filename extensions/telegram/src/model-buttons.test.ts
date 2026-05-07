@@ -18,6 +18,7 @@ describe("parseModelCallbackData", () => {
       ["mdl_back", { type: "back" }],
       ["mdl_list_anthropic_2", { type: "list", provider: "anthropic", page: 2 }],
       ["mdl_list_open-ai_1", { type: "list", provider: "open-ai", page: 1 }],
+      ["mdl_list_hf.co_1", { type: "list", provider: "hf.co", page: 1 }],
       [
         "mdl_sel_anthropic/claude-sonnet-4-5",
         { type: "select", provider: "anthropic", model: "claude-sonnet-4-5" },

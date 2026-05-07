@@ -170,6 +170,50 @@ describe("configured plugin install release step", () => {
     expect(result.channelIds).toEqual([]);
   });
 
+  it("collects Codex from canonical OpenAI model selections", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["codex"]);
+    expect(result.channelIds).toEqual([]);
+  });
+
+  it("does not collect Codex from custom OpenAI-compatible model selections", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/custom-gpt" },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://compatible.example.test/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual([]);
+    expect(result.channelIds).toEqual([]);
+  });
+
   it("collects external web search and ACP runtime plugins from config-only usage", async () => {
     const { collectReleaseConfiguredPluginIds } =
       await import("./release-configured-plugin-installs.js");

@@ -151,6 +151,7 @@ type NativeHookRelayProviderAdapter = {
 const DEFAULT_RELAY_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_RELAY_TIMEOUT_MS = 5_000;
 const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;
+const PERMISSION_ALLOW_ALWAYS_TTL_MS = 30 * 60 * 1000;
 const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;
 const MAX_NATIVE_HOOK_RELAY_JSON_DEPTH = 64;
 const MAX_NATIVE_HOOK_RELAY_JSON_NODES = 20_000;
@@ -167,6 +168,7 @@ const MAX_APPROVAL_TITLE_LENGTH = 80;
 const MAX_APPROVAL_DESCRIPTION_LENGTH = 700;
 const MAX_PERMISSION_APPROVALS_PER_WINDOW = 12;
 const PERMISSION_APPROVAL_WINDOW_MS = 60_000;
+const MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES = 512;
 const MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES = 5_000_000;
 const MAX_NATIVE_HOOK_BRIDGE_RESPONSE_BYTES = 5_000_000;
 const NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS = 25;
@@ -179,11 +181,15 @@ const pendingPermissionApprovals = new Map<
   Promise<NativeHookRelayPermissionApprovalResult>
 >();
 const permissionApprovalWindows = new Map<string, number[]>();
+const permissionAllowAlwaysApprovals = new Map<string, { expiresAtMs: number }>();
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
 type NativeHookRelayPermissionDecision = "allow" | "deny";
 
-type NativeHookRelayPermissionApprovalResult = NativeHookRelayPermissionDecision | "defer";
+type NativeHookRelayPermissionApprovalResult =
+  | NativeHookRelayPermissionDecision
+  | "allow-always"
+  | "defer";
 
 type NativeHookRelayPermissionApprovalRequest = {
   provider: NativeHookRelayProvider;
@@ -285,6 +291,7 @@ export function registerNativeHookRelay(
   params: RegisterNativeHookRelayParams,
 ): NativeHookRelayRegistrationHandle {
   pruneExpiredNativeHookRelays();
+  pruneNativeHookRelayPermissionAllowAlways();
   const relayId = normalizeRelayId(params.relayId) ?? randomUUID();
   const allowedEvents = normalizeAllowedEvents(params.allowedEvents);
   unregisterNativeHookRelay(relayId);
@@ -921,6 +928,13 @@ async function runNativeHookRelayPermissionRequest(params: {
     registration: params.registration,
     request,
   });
+  const allowAlwaysKey = nativeHookRelayPermissionAllowAlwaysKey({
+    registration: params.registration,
+    request,
+  });
+  if (hasNativeHookRelayPermissionAllowAlways(allowAlwaysKey)) {
+    return params.adapter.renderPermissionDecisionResponse("allow");
+  }
   const pendingApproval = pendingPermissionApprovals.get(approvalKey);
   try {
     const decision = await (pendingApproval ??
@@ -930,6 +944,10 @@ async function runNativeHookRelayPermissionRequest(params: {
         request,
       }));
     if (decision === "allow") {
+      return params.adapter.renderPermissionDecisionResponse("allow");
+    }
+    if (decision === "allow-always") {
+      rememberNativeHookRelayPermissionAllowAlways(allowAlwaysKey);
       return params.adapter.renderPermissionDecisionResponse("allow");
     }
     if (decision === "deny") {
@@ -1017,6 +1035,25 @@ function nativeHookRelayPermissionApprovalKey(params: {
   ].join(":");
 }
 
+function nativeHookRelayPermissionAllowAlwaysKey(params: {
+  registration: NativeHookRelayRegistration;
+  request: NativeHookRelayPermissionApprovalRequest;
+}): string {
+  const hash = createHash("sha256");
+  hash.update("openclaw:native-hook-relay:permission-allow-always:v2");
+  hash.update("\0");
+  hash.update(params.registration.relayId);
+  hash.update("\0");
+  hash.update(params.request.provider);
+  hash.update("\0");
+  hash.update(params.request.agentId ?? "");
+  hash.update("\0");
+  hash.update(params.request.sessionKey ?? params.request.sessionId);
+  hash.update("\0");
+  hash.update(permissionRequestContentFingerprint(params.request));
+  return hash.digest("hex");
+}
+
 function permissionRequestFallbackKey(request: NativeHookRelayPermissionApprovalRequest): string {
   const command = readOptionalString(request.toolInput.command);
   if (command) {
@@ -1048,6 +1085,8 @@ function permissionRequestContentFingerprint(
 ): string {
   const hash = createHash("sha256");
   hash.update(request.toolName);
+  hash.update("\0");
+  hash.update(request.cwd ?? "");
   hash.update("\0");
   updateJsonHash(hash, request.toolInput);
   return hash.digest("hex");
@@ -1138,6 +1177,40 @@ function consumeNativeHookRelayPermissionBudget(relayId: string, now = Date.now(
   timestamps.push(now);
   permissionApprovalWindows.set(relayId, timestamps);
   return true;
+}
+
+function hasNativeHookRelayPermissionAllowAlways(key: string, now = Date.now()): boolean {
+  const entry = permissionAllowAlwaysApprovals.get(key);
+  if (!entry) {
+    return false;
+  }
+  if (entry.expiresAtMs <= now) {
+    permissionAllowAlwaysApprovals.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function rememberNativeHookRelayPermissionAllowAlways(key: string, now = Date.now()): void {
+  pruneNativeHookRelayPermissionAllowAlways(now);
+  permissionAllowAlwaysApprovals.set(key, {
+    expiresAtMs: now + PERMISSION_ALLOW_ALWAYS_TTL_MS,
+  });
+  while (permissionAllowAlwaysApprovals.size > MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES) {
+    const oldestKey = permissionAllowAlwaysApprovals.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    permissionAllowAlwaysApprovals.delete(oldestKey);
+  }
+}
+
+function pruneNativeHookRelayPermissionAllowAlways(now = Date.now()): void {
+  for (const [key, entry] of permissionAllowAlwaysApprovals) {
+    if (entry.expiresAtMs <= now) {
+      permissionAllowAlwaysApprovals.delete(key);
+    }
+  }
 }
 
 function removeNativeHookRelayPermissionState(relayId: string): void {
@@ -1316,6 +1389,11 @@ async function requestNativeHookRelayPermissionApproval(
       severity: "warning",
       toolName: request.toolName,
       toolCallId: request.toolCallId,
+      allowedDecisions: [
+        PluginApprovalResolutions.ALLOW_ONCE,
+        PluginApprovalResolutions.ALLOW_ALWAYS,
+        PluginApprovalResolutions.DENY,
+      ],
       agentId: request.agentId,
       sessionKey: request.sessionKey,
       timeoutMs,
@@ -1338,11 +1416,11 @@ async function requestNativeHookRelayPermissionApproval(
     });
     decision = waitResult?.decision;
   }
-  if (
-    decision === PluginApprovalResolutions.ALLOW_ONCE ||
-    decision === PluginApprovalResolutions.ALLOW_ALWAYS
-  ) {
+  if (decision === PluginApprovalResolutions.ALLOW_ONCE) {
     return "allow";
+  }
+  if (decision === PluginApprovalResolutions.ALLOW_ALWAYS) {
+    return "allow-always";
   }
   if (decision === PluginApprovalResolutions.DENY) {
     return "deny";
@@ -1629,6 +1707,7 @@ export const __testing = {
     invocations.length = 0;
     pendingPermissionApprovals.clear();
     permissionApprovalWindows.clear();
+    permissionAllowAlwaysApprovals.clear();
     nativeHookRelayPermissionApprovalRequester = requestNativeHookRelayPermissionApproval;
   },
   getNativeHookRelayInvocationsForTests(): NativeHookRelayInvocation[] {

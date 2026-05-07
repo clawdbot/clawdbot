@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { vi } from "vitest";
-import { __testing as beforeToolCallTesting } from "../../../agents/pi-tools.before-tool-call.js";
+import { resetAdjustedParamsByToolCallIdForTests } from "../../../agents/pi-tools.before-tool-call.state.js";
 import type {
   CodexAppServerExtensionFactory,
   CodexAppServerToolResultEvent,
@@ -90,5 +90,5 @@ export function installCodexToolResultMiddleware(
 export function resetOpenClawOwnedToolHooks(): void {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
-  beforeToolCallTesting.adjustedParamsByToolCallId.clear();
+  resetAdjustedParamsByToolCallIdForTests();
 }

@@ -37,6 +37,7 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Available model overrides:",
   "Available model overrides exposed in this session",
   "Available model overrides here:",
+  "Available model overrides listed for this session:",
   "Available model overrides listed in this session:",
   "Available model overrides shown in this session:",
   "Available model overrides in this session:",
@@ -86,6 +87,7 @@ export const EXPECTED_CODEX_STATUS_COMMAND_TEXT = [
   "model `codex/",
   "session `agent:dev:live-codex-harness`",
   "Model/status card shown above",
+  "OpenClaw status shown above.",
   "Status shown above.",
 ] as const;
 
@@ -124,9 +126,11 @@ export function isExpectedCodexStatusCommandText(text: string): boolean {
     mentionsModel;
   const isRunningSessionStatus =
     normalized.includes("session is running on") &&
-    normalized.includes("context used") &&
-    normalized.includes("cache hit") &&
+    (normalized.includes("context used") ||
+      normalized.includes("context is about") ||
+      normalized.includes("context is at")) &&
     normalized.includes("no compactions") &&
+    (normalized.includes("current session is") || normalized.includes("cache hit")) &&
     mentionsModel;
 
   return (
@@ -208,6 +212,7 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
     normalized.includes("visible options:") ||
     normalized.includes("available codex agent model:") ||
     normalized.includes("available codex agent models:") ||
+    normalized.includes("available model overrides listed for this session:") ||
     normalized.includes("available model overrides listed in this session:") ||
     normalized.includes("available model overrides shown in this session:") ||
     normalized.includes("available here:") ||

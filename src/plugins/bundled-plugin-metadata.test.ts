@@ -113,14 +113,20 @@ function expectArtifactPresence(
   }
 }
 
+let repoBundledPluginMetadataCache: readonly BundledPluginMetadata[] | undefined;
+let repoBundledPluginManifestsCache:
+  | ReturnType<typeof listRepoBundledPluginManifestsUncached>
+  | undefined;
+
 function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
-  return listBundledPluginMetadata({
+  repoBundledPluginMetadataCache ??= listBundledPluginMetadata({
     rootDir: repoRoot,
     includeSyntheticChannelConfigs: false,
   });
+  return repoBundledPluginMetadataCache;
 }
 
-function listRepoBundledPluginManifests() {
+function listRepoBundledPluginManifestsUncached() {
   const bundledPluginsDir = path.join(repoRoot, "extensions");
   return fs
     .readdirSync(bundledPluginsDir, { withFileTypes: true })
@@ -129,6 +135,11 @@ function listRepoBundledPluginManifests() {
       const result = loadPluginManifest(path.join(bundledPluginsDir, entry.name), false);
       return result.ok ? [{ dirName: entry.name, manifest: result.manifest }] : [];
     });
+}
+
+function listRepoBundledPluginManifests() {
+  repoBundledPluginManifestsCache ??= listRepoBundledPluginManifestsUncached();
+  return repoBundledPluginManifestsCache;
 }
 
 function createRepoBundledManifestRegistry(): PluginManifestRegistry {

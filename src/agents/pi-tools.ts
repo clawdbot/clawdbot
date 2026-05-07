@@ -508,51 +508,56 @@ export function createOpenClawCodingTools(options?: {
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   options?.recordToolPrepStage?.("workspace-policy");
 
-  const base = includeBaseCodingTools
-    ? (createCodingTools(workspaceRoot) as unknown as AnyAgentTool[]).flatMap((tool) => {
-        if (tool.name === "read") {
-          if (sandboxRoot) {
-            const sandboxed = createSandboxedReadTool({
-              root: sandboxRoot,
-              bridge: sandboxFsBridge!,
-              modelContextWindowTokens: options?.modelContextWindowTokens,
-              imageSanitization,
-            });
-            return [
-              workspaceOnly
-                ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
-                    containerWorkdir: sandbox.containerWorkdir,
-                  })
-                : sandboxed,
-            ];
-          }
-          const freshReadTool = createReadTool(workspaceRoot);
-          const wrapped = createOpenClawReadTool(freshReadTool, {
+  const base: AnyAgentTool[] = [];
+  if (includeBaseCodingTools) {
+    for (const tool of createCodingTools(workspaceRoot) as unknown as AnyAgentTool[]) {
+      if (tool.name === "read") {
+        if (sandboxRoot) {
+          const sandboxed = createSandboxedReadTool({
+            root: sandboxRoot,
+            bridge: sandboxFsBridge!,
             modelContextWindowTokens: options?.modelContextWindowTokens,
             imageSanitization,
           });
-          return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+          base.push(
+            workspaceOnly
+              ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
+                  containerWorkdir: sandbox.containerWorkdir,
+                })
+              : sandboxed,
+          );
+          continue;
         }
-        if (tool.name === "bash" || tool.name === execToolName) {
-          return [];
+        const freshReadTool = createReadTool(workspaceRoot);
+        const wrapped = createOpenClawReadTool(freshReadTool, {
+          modelContextWindowTokens: options?.modelContextWindowTokens,
+          imageSanitization,
+        });
+        base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped);
+        continue;
+      }
+      if (tool.name === "bash" || tool.name === execToolName) {
+        continue;
+      }
+      if (tool.name === "write") {
+        if (sandboxRoot) {
+          continue;
         }
-        if (tool.name === "write") {
-          if (sandboxRoot) {
-            return [];
-          }
-          const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
-          return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+        const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
+        base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped);
+        continue;
+      }
+      if (tool.name === "edit") {
+        if (sandboxRoot) {
+          continue;
         }
-        if (tool.name === "edit") {
-          if (sandboxRoot) {
-            return [];
-          }
-          const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
-          return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
-        }
-        return [tool];
-      })
-    : [];
+        const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
+        base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped);
+        continue;
+      }
+      base.push(tool);
+    }
+  }
   options?.recordToolPrepStage?.("base-coding-tools");
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
   const execTool = includeShellTools
@@ -741,6 +746,7 @@ export function createOpenClawCodingTools(options?: {
           disableMessageTool: options?.disableMessageTool,
           enableHeartbeatTool,
           disablePluginTools: !includePluginTools,
+          wrapBeforeToolCallHook: false,
           ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
           requesterAgentIdOverride: agentId,
           requesterSenderId: options?.senderId,
@@ -754,28 +760,29 @@ export function createOpenClawCodingTools(options?: {
       : pluginToolsOnly),
   ];
   options?.recordToolPrepStage?.("openclaw-tools");
-  const toolsForMemoryFlush =
-    isMemoryFlushRun && memoryFlushWritePath
-      ? tools.flatMap((tool) => {
-          if (!MEMORY_FLUSH_ALLOWED_TOOL_NAMES.has(tool.name)) {
-            return [];
-          }
-          if (tool.name === "write") {
-            return [
-              wrapToolMemoryFlushAppendOnlyWrite(tool, {
-                root: sandboxRoot ?? workspaceRoot,
-                relativePath: memoryFlushWritePath,
-                containerWorkdir: sandbox?.containerWorkdir,
-                sandbox:
-                  sandboxRoot && sandboxFsBridge
-                    ? { root: sandboxRoot, bridge: sandboxFsBridge }
-                    : undefined,
-              }),
-            ];
-          }
-          return [tool];
-        })
-      : tools;
+  const toolsForMemoryFlush: AnyAgentTool[] = isMemoryFlushRun && memoryFlushWritePath ? [] : tools;
+  if (isMemoryFlushRun && memoryFlushWritePath) {
+    for (const tool of tools) {
+      if (!MEMORY_FLUSH_ALLOWED_TOOL_NAMES.has(tool.name)) {
+        continue;
+      }
+      if (tool.name === "write") {
+        toolsForMemoryFlush.push(
+          wrapToolMemoryFlushAppendOnlyWrite(tool, {
+            root: sandboxRoot ?? workspaceRoot,
+            relativePath: memoryFlushWritePath,
+            containerWorkdir: sandbox?.containerWorkdir,
+            sandbox:
+              sandboxRoot && sandboxFsBridge
+                ? { root: sandboxRoot, bridge: sandboxFsBridge }
+                : undefined,
+          }),
+        );
+        continue;
+      }
+      toolsForMemoryFlush.push(tool);
+    }
+  }
   const toolsForMessageProvider = filterToolsByMessageProvider(
     toolsForMemoryFlush,
     options?.messageProvider,

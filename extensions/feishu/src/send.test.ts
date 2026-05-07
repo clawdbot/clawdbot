@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildMarkdownCard } from "./send.js";
 
@@ -73,6 +73,15 @@ describe("getMessageFeishu", () => {
       resolveFeishuCardTemplate,
       sendMessageFeishu,
     } = await import("./send.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/text-runtime");
+    vi.doUnmock("./client.js");
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./runtime.js");
+    vi.resetModules();
   });
 
   beforeEach(() => {

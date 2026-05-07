@@ -367,7 +367,7 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
       sidebarContent: null,
       sidebarError: null,
       splitRatio: 0.6,
-      canvasHostUrl: null,
+      canvasPluginSurfaceUrl: null,
       embedSandboxMode: "scripts",
       allowExternalEmbedUrls: false,
       assistantName: "Val",
@@ -1041,7 +1041,7 @@ describe("chat session controls", () => {
       [...(thinkingSelect?.options ?? [])]
         .find((option) => option.value === "max")
         ?.textContent?.trim(),
-    ).toBe("maximum");
+    ).toBe("Override: maximum");
   });
 
   it("labels chat thinking default from the active session row", () => {
@@ -1058,8 +1058,8 @@ describe("chat session controls", () => {
     );
 
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Default (adaptive)");
-    expect(thinkingSelect?.title).toBe("Default (adaptive)");
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
+    expect(thinkingSelect?.title).toBe("Inherited: adaptive");
   });
 
   it("always renders full thinking labels", () => {
@@ -1089,14 +1089,14 @@ describe("chat session controls", () => {
 
     expect(container.querySelector('select[data-chat-thinking-select-compact="true"]')).toBeNull();
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.title).toBe("Default (high)");
+    expect(thinkingSelect?.title).toBe("Inherited: high");
     expect([...thinkingSelect!.options].map((option) => option.textContent?.trim())).toEqual([
-      "Default (high)",
-      "off",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
+      "Inherited: high",
+      "Off",
+      "Override: low",
+      "Override: medium",
+      "Override: high",
+      "Override: xhigh",
     ]);
   });
 
@@ -1113,7 +1113,7 @@ describe("chat session controls", () => {
     );
 
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Default (adaptive)");
-    expect(thinkingSelect?.title).toBe("Default (adaptive)");
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
+    expect(thinkingSelect?.title).toBe("Inherited: adaptive");
   });
 });

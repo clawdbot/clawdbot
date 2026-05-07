@@ -26,6 +26,7 @@ import {
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import { adjustedParamsByToolCallId } from "./pi-tools.before-tool-call.state.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -38,6 +39,16 @@ export type ToolOutcomeObservation = {
 
 export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
 
+export function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean {
+  if (!signal?.aborted) {
+    return false;
+  }
+  if (err === signal.reason) {
+    return true;
+  }
+  return err instanceof Error && err.name === "AbortError";
+}
+
 export type HookContext = {
   agentId?: string;
   config?: OpenClawConfig;
@@ -46,6 +57,7 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   trace?: DiagnosticTraceContext;
+  channelId?: string;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
 };
@@ -67,7 +79,6 @@ const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
-const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
@@ -112,19 +123,6 @@ function mergeParamsWithApprovalOverrides(
     return approvalParams;
   }
   return originalParams;
-}
-
-function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean {
-  if (!signal?.aborted) {
-    return false;
-  }
-  if (err === signal.reason) {
-    return true;
-  }
-  if (err instanceof Error && err.name === "AbortError") {
-    return true;
-  }
-  return false;
 }
 
 function unwrapErrorCause(err: unknown): unknown {
@@ -180,6 +178,7 @@ async function requestPluginToolApproval(params: {
         title: approval.title,
         description: approval.description,
         severity: approval.severity,
+        allowedDecisions: approval.allowedDecisions,
         toolName: params.toolName,
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
@@ -504,6 +503,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.runId && { runId: args.ctx.runId }),
       ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
+      ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
     };
     const trustedPolicyResult = await runTrustedToolPolicies(
       {

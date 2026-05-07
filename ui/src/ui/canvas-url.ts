@@ -38,7 +38,7 @@ function sanitizeCanvasEntryUrl(
 
 export function resolveCanvasIframeUrl(
   entryUrl: string | undefined,
-  canvasHostUrl?: string | null,
+  canvasPluginSurfaceUrl?: string | null,
   allowExternalEmbedUrls = false,
 ): string | undefined {
   const rawEntryUrl = entryUrl?.trim();
@@ -49,11 +49,11 @@ export function resolveCanvasIframeUrl(
   if (!safeEntryUrl) {
     return undefined;
   }
-  if (!canvasHostUrl?.trim()) {
+  if (!canvasPluginSurfaceUrl?.trim()) {
     return safeEntryUrl;
   }
   try {
-    const scopedHostUrl = new URL(canvasHostUrl);
+    const scopedHostUrl = new URL(canvasPluginSurfaceUrl);
     const scopedPrefix = scopedHostUrl.pathname.replace(/\/+$/, "");
     if (!scopedPrefix.startsWith(CANVAS_CAPABILITY_PATH_PREFIX)) {
       return safeEntryUrl;

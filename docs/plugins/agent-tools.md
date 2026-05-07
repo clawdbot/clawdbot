@@ -5,8 +5,6 @@ read_when:
 title: "Registering tools"
 ---
 
-# Registering Tools in Plugins
-
 This page has moved. See [Building Plugins: Registering agent tools](/plugins/building-plugins#registering-agent-tools).
 
 ## Related

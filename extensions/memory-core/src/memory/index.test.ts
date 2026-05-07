@@ -330,7 +330,7 @@ describe("memory index", () => {
     return manager.status().fts?.available ? manager : null;
   }
 
-  it.skip("indexes memory files and searches", async () => {
+  it("indexes memory files and searches", async () => {
     const cfg = createCfg({
       storePath: indexMainPath,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
@@ -381,7 +381,7 @@ describe("memory index", () => {
     expect(audioResults.some((result) => result.path.endsWith("meeting.wav"))).toBe(true);
   });
 
-  it.skip("finds keyword matches via hybrid search when query embedding is zero", async () => {
+  it("finds keyword matches via hybrid search when query embedding is zero", async () => {
     await expectHybridKeywordSearchFindsMemory(
       createCfg({
         storePath: indexMainPath,
@@ -390,7 +390,7 @@ describe("memory index", () => {
     );
   });
 
-  it.skip("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {
+  it("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {
     await expectHybridKeywordSearchFindsMemory(
       createCfg({
         storePath: indexMainPath,

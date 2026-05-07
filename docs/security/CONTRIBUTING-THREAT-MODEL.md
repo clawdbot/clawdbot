@@ -6,13 +6,11 @@ read_when:
   - Reviewing or updating the threat model
 ---
 
-# Contributing to the OpenClaw Threat Model
-
 Thanks for helping make OpenClaw more secure. This threat model is a living document and we welcome contributions from anyone - you don't need to be a security expert.
 
-## Ways to Contribute
+## Ways to contribute
 
-### Add a Threat
+### Add a threat
 
 Spotted an attack vector or risk we haven't covered? Open an issue on [openclaw/trust](https://github.com/openclaw/trust/issues) and describe it in your own words. You don't need to know any frameworks or fill in every field - just describe the scenario.
 
@@ -27,25 +25,25 @@ We'll handle the ATLAS mapping, threat IDs, and risk assessment during review. I
 
 > **This is for adding to the threat model, not reporting live vulnerabilities.** If you've found an exploitable vulnerability, see our [Trust page](https://trust.openclaw.ai) for responsible disclosure instructions.
 
-### Suggest a Mitigation
+### Suggest a mitigation
 
 Have an idea for how to address an existing threat? Open an issue or PR referencing the threat. Useful mitigations are specific and actionable - for example, "per-sender rate limiting of 10 messages/minute at the gateway" is better than "implement rate limiting."
 
-### Propose an Attack Chain
+### Propose an attack chain
 
 Attack chains show how multiple threats combine into a realistic attack scenario. If you see a dangerous combination, describe the steps and how an attacker would chain them together. A short narrative of how the attack unfolds in practice is more valuable than a formal template.
 
-### Fix or Improve Existing Content
+### Fix or improve existing content
 
 Typos, clarifications, outdated info, better examples - PRs welcome, no issue needed.
 
 ## What we use
 
-### MITRE ATLAS
+### MITRE ATLAS framework
 
 This threat model is built on [MITRE ATLAS](https://atlas.mitre.org/) (Adversarial Threat Landscape for AI Systems), a framework designed specifically for AI/ML threats like prompt injection, tool misuse, and agent exploitation. You don't need to know ATLAS to contribute - we map submissions to the framework during review.
 
-### Threat IDs
+### Threat ids
 
 Each threat gets an ID like `T-EXEC-003`. The categories are:
 

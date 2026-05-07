@@ -78,6 +78,42 @@ describe("debug proxy runtime", () => {
     expect(sessionEvents.some((event) => event.kind === "response")).toBe(true);
   });
 
+  it("normalizes symbol-bearing request headers before calling patched fetch targets", async () => {
+    fetchTarget.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("content-type")).toBe("application/json");
+      expect(headers.get("x-hidden")).toBe("yes");
+      return new Response("{}", { status: 200 });
+    };
+    const headers = { "content-type": "application/json" } as Record<string, string> & {
+      [key: symbol]: unknown;
+    };
+    Object.defineProperty(headers, "x-hidden", {
+      value: "yes",
+      enumerable: false,
+    });
+    Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
+      value: new Set(["content-type"]),
+      enumerable: false,
+    });
+
+    initializeDebugProxyCapture("test", settings, deps);
+    await fetchTarget.fetch("https://api.example.com/messages", {
+      method: "POST",
+      headers,
+      body: "{}",
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    finalizeDebugProxyCapture(settings, deps);
+
+    const request = events.find((event) => event.kind === "request");
+    expect(JSON.parse(String(request?.headersJson))).toMatchObject({
+      "content-type": "application/json",
+      "x-hidden": "yes",
+    });
+    expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
+  });
+
   it("redacts sensitive request and response headers before persistence", async () => {
     initializeDebugProxyCapture("test", settings, deps);
     captureHttpExchange(

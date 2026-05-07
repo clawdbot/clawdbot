@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceBrowserAudioContract,
@@ -160,13 +161,16 @@ export function createTalkRealtimeRelaySession(
   enforceRelaySessionLimits(params.connId);
   const relaySessionId = randomUUID();
   const expiresAtMs = Date.now() + RELAY_SESSION_TTL_MS;
-  const talk = createTalkSessionController({
-    sessionId: relaySessionId,
-    mode: "realtime",
-    transport: "gateway-relay",
-    brain: "agent-consult",
-    provider: params.provider.id,
-  });
+  const talk = createTalkSessionController(
+    {
+      sessionId: relaySessionId,
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: params.provider.id,
+    },
+    { onEvent: recordTalkObservabilityEvent },
+  );
   let relay: RelaySession | undefined;
   const emit = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) =>
     broadcastToOwner(params.context, params.connId, {

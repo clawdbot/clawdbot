@@ -113,9 +113,10 @@ describe("docker build cache layout", () => {
     expect(dockerfile).toContain(
       "npm install -g --prefix /tmp/openclaw-prefix /tmp/openclaw-current.tgz --no-fund --no-audit",
     );
-    expect(dockerfile).toContain(
+    expect(dockerfile).not.toContain(
       "cp -a /tmp/openclaw-prefix/lib/node_modules/. /app/node_modules/",
     );
+    expect(dockerfile).toContain("cp -a /tmp/openclaw-prefix/lib/node_modules/openclaw/. /app/");
     expect(dockerfile).toContain("rm -rf /app/node_modules/openclaw");
     expect(dockerfile).toContain("ln -sf /app /app/node_modules/openclaw");
   });

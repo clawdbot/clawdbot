@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
 
 vi.mock("./audit.js", () => ({
@@ -24,6 +24,12 @@ const testUnlessWindows = process.platform === "win32" ? it.skip : it;
 afterEach(async () => {
   await Promise.all(tmpRoots.map((tmpRoot) => fs.rm(tmpRoot, { recursive: true, force: true })));
   tmpRoots.length = 0;
+});
+
+afterAll(() => {
+  vi.doUnmock("./audit.js");
+  vi.doUnmock("./policy.js");
+  vi.resetModules();
 });
 
 async function tarEntries(entries: Record<string, string>): Promise<string> {

@@ -49,6 +49,36 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 
+  it("emits the before_agent_run hook block message as the agent payload", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        promptError: new Error("Blocked by before-run policy."),
+        promptErrorSource: "hook:before_agent_run",
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-before-agent-run-hook-block",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([{ text: "Blocked by before-run policy.", isError: true }]);
+    expect(result.meta).toMatchObject({
+      finalAssistantVisibleText: "Blocked by before-run policy.",
+      finalAssistantRawText: "Blocked by before-run policy.",
+      finalPromptText: undefined,
+      livenessState: "blocked",
+      error: { kind: "hook_block", message: "Blocked by before-run policy." },
+    });
+    expect(result.meta?.error).toEqual({
+      kind: "hook_block",
+      message: "Blocked by before-run policy.",
+    });
+    expect(result.meta?.livenessState).toBe("blocked");
+  });
+
   it("warns before retrying when an incomplete turn already sent a message", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(

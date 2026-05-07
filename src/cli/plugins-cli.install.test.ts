@@ -39,6 +39,7 @@ import {
 
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
 const ORIGINAL_OPENCLAW_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 const PROFILE_STATE_ROOT = "/tmp/openclaw-ledger-profile";
 
 const OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY = listOfficialExternalPluginCatalogEntries()
@@ -305,6 +306,11 @@ describe("plugins cli install", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_OPENCLAW_STATE_DIR;
     }
+    if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {
+      delete process.env.OPENCLAW_NIX_MODE;
+    } else {
+      process.env.OPENCLAW_NIX_MODE = ORIGINAL_OPENCLAW_NIX_MODE;
+    }
   });
 
   it("shows the force overwrite option in install help", async () => {
@@ -320,6 +326,19 @@ describe("plugins cli install", () => {
     expect(helpText).toContain("--force");
     expect(helpText).toContain("Overwrite an existing installed plugin or");
     expect(helpText).toContain("hook pack");
+  });
+
+  it("refuses plugin installs in Nix mode before installer side effects", async () => {
+    process.env.OPENCLAW_NIX_MODE = "1";
+
+    await expect(runPluginsCommand(["plugins", "install", "@acme/demo"])).rejects.toThrow(
+      "OPENCLAW_NIX_MODE=1",
+    );
+
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(installPluginFromPath).not.toHaveBeenCalled();
+    expect(installPluginFromMarketplace).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("exits when --marketplace is combined with --link", async () => {

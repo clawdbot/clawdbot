@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   loadConfig,
@@ -15,6 +15,8 @@ import {
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
+
+const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 
 function createTrackedPluginConfig(params: {
   pluginId: string;
@@ -40,6 +42,14 @@ describe("plugins cli update", () => {
     resetPluginsCliTestState();
   });
 
+  afterEach(() => {
+    if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {
+      delete process.env.OPENCLAW_NIX_MODE;
+    } else {
+      process.env.OPENCLAW_NIX_MODE = ORIGINAL_OPENCLAW_NIX_MODE;
+    }
+  });
+
   it("shows the dangerous unsafe install override in update help", () => {
     const program = new Command();
     registerPluginsCli(program);
@@ -51,6 +61,26 @@ describe("plugins cli update", () => {
     expect(helpText).toContain("--dangerously-force-unsafe-install");
     expect(helpText).toContain("Bypass built-in dangerous-code update");
     expect(helpText).toContain("blocking for plugins");
+  });
+
+  it("refuses plugin updates in Nix mode before package-manager work", async () => {
+    const previous = process.env.OPENCLAW_NIX_MODE;
+    process.env.OPENCLAW_NIX_MODE = "1";
+    try {
+      await expect(runPluginsCommand(["plugins", "update", "--all"])).rejects.toThrow(
+        "OPENCLAW_NIX_MODE=1",
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_NIX_MODE;
+      } else {
+        process.env.OPENCLAW_NIX_MODE = previous;
+      }
+    }
+
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("updates tracked hook packs through plugins update", async () => {

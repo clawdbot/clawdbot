@@ -39,26 +39,4 @@ class GatewaySessionInvokeTimeoutTest {
     assertEquals(120_000L, resolveInvokeResultAckTimeoutMs(121_000L))
     assertEquals(120_000L, resolveInvokeResultAckTimeoutMs(Long.MAX_VALUE))
   }
-
-  @Test
-  fun replaceCanvasCapabilityInScopedHostUrl_rewritesTerminalCapabilitySegment() {
-    assertEquals(
-      "http://127.0.0.1:18789/__openclaw__/cap/new-token",
-      replaceCanvasCapabilityInScopedHostUrl(
-        "http://127.0.0.1:18789/__openclaw__/cap/old-token",
-        "new-token",
-      ),
-    )
-  }
-
-  @Test
-  fun replaceCanvasCapabilityInScopedHostUrl_rewritesWhenQueryAndFragmentPresent() {
-    assertEquals(
-      "http://127.0.0.1:18789/__openclaw__/cap/new-token?a=1#frag",
-      replaceCanvasCapabilityInScopedHostUrl(
-        "http://127.0.0.1:18789/__openclaw__/cap/old-token?a=1#frag",
-        "new-token",
-      ),
-    )
-  }
 }

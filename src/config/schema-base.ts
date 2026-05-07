@@ -32,7 +32,7 @@ type JsonSchemaObject = Record<string, unknown> & {
   allOf?: JsonSchemaObject[];
 };
 
-const LEGACY_HIDDEN_PUBLIC_PATHS = ["hooks.internal.handlers"] as const;
+const LEGACY_HIDDEN_PUBLIC_PATHS = ["canvasHost", "hooks.internal.handlers"] as const;
 
 const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
   asSchemaObject(value) as JsonSchemaObject | null;

@@ -1,12 +1,18 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   parseArgs,
   readArtifactPackageCandidateMetadata,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mjs";
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
 
 describe("resolve-openclaw-package-candidate", () => {
   it("accepts only OpenClaw release package specs for npm candidates", () => {
@@ -66,6 +72,7 @@ describe("resolve-openclaw-package-candidate", () => {
 
   it("reads package source metadata from package artifacts", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-candidate-"));
+    tempDirs.push(dir);
     await writeFile(
       path.join(dir, "package-candidate.json"),
       JSON.stringify(

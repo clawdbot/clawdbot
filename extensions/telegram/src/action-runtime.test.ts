@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleTelegramAction, telegramActionRuntime } from "./action-runtime.js";
+import { beginTelegramInboundTurnDeliveryCorrelation } from "./inbound-turn-delivery.js";
 
 const originalTelegramActionRuntime = { ...telegramActionRuntime };
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
@@ -355,6 +356,27 @@ describe("handleTelegramAction", () => {
       type: "text",
       text: expect.stringContaining('"ok": true'),
     });
+  });
+
+  it("marks the matching inbound turn delivered after a successful send", async () => {
+    let count = 0;
+    const end = beginTelegramInboundTurnDeliveryCorrelation("telegram-session", {
+      outboundTo: "@testchannel",
+      markInboundTurnDelivered: () => {
+        count += 1;
+      },
+    });
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Hello, Telegram!",
+      },
+      telegramConfig(),
+      { sessionKey: "telegram-session" },
+    );
+    expect(count).toBe(1);
+    end();
   });
 
   it("accepts shared send action aliases", async () => {

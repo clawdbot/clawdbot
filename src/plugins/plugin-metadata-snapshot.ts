@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { measureDiagnosticsTimelineSpanSync } from "../infra/diagnostics-timeline.js";
+import {
+  getActiveDiagnosticsTimelineSpan,
+  measureDiagnosticsTimelineSpanSync,
+} from "../infra/diagnostics-timeline.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
@@ -173,11 +176,12 @@ export function listPluginOriginsFromMetadataSnapshot(
 export function loadPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
+  const activeTimelineSpan = getActiveDiagnosticsTimelineSpan();
   return measureDiagnosticsTimelineSpanSync(
     "plugins.metadata.scan",
     () => loadPluginMetadataSnapshotImpl(params),
     {
-      phase: "startup",
+      phase: activeTimelineSpan?.phase ?? "startup",
       config: params.config,
       env: params.env,
       attributes: {

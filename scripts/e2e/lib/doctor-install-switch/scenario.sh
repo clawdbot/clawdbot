@@ -32,7 +32,7 @@ tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
   git commit -qm "test fixture"
 )
 npm_log="/tmp/openclaw-doctor-switch-npm-install.log"
-if ! npm install -g --prefix /tmp/npm-prefix "$package_tgz" >"$npm_log" 2>&1; then
+if ! npm install -g --prefix /tmp/npm-prefix --omit=optional "$package_tgz" >"$npm_log" 2>&1; then
   cat "$npm_log"
   exit 1
 fi

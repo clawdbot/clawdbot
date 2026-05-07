@@ -13,7 +13,7 @@ type BlockReplyPipelineLike = NonNullable<
 >;
 
 describe("createBlockReplyDeliveryHandler", () => {
-  it("keeps captioned media-bearing block replies buffered when block streaming is disabled", async () => {
+  it("sends captioned media-bearing block replies when block streaming is disabled", async () => {
     const onBlockReply = vi.fn(async () => {});
     const normalizeStreamingText = vi.fn((payload: { text?: string }) => ({
       text: payload.text,
@@ -40,9 +40,55 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToCurrent: true,
     });
 
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(directlySentBlockKeys).toEqual(new Set());
+    const expectedPayload = {
+      text: "here's the vibe",
+      mediaUrl: "/tmp/generated.png",
+      mediaUrls: ["/tmp/generated.png"],
+      replyToCurrent: true,
+      replyToId: undefined,
+      replyToTag: undefined,
+      audioAsVoice: false,
+    };
+
+    expect(onBlockReply).toHaveBeenCalledWith(expectedPayload);
+    expect(directlySentBlockKeys).toEqual(new Set([createBlockReplyContentKey(expectedPayload)]));
     expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("here's the vibe");
+  });
+
+  it("sends captioned audio-as-voice block replies when block streaming is disabled", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const directlySentBlockKeys = new Set<string>();
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+    });
+
+    await handler({
+      text: "spoken confirmation",
+      mediaUrls: ["/tmp/voice.opus"],
+      audioAsVoice: true,
+    });
+
+    const expectedPayload = {
+      text: "spoken confirmation",
+      mediaUrl: "/tmp/voice.opus",
+      mediaUrls: ["/tmp/voice.opus"],
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: undefined,
+      audioAsVoice: true,
+    };
+
+    expect(onBlockReply).toHaveBeenCalledWith(expectedPayload);
+    expect(directlySentBlockKeys).toEqual(new Set([createBlockReplyContentKey(expectedPayload)]));
   });
 
   it("sends media-only block replies when block streaming is disabled", async () => {

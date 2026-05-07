@@ -60,6 +60,56 @@ type PluginHandledResult = {
   toolResult: AgentToolResult<unknown>;
 };
 
+type SendMessageParams = Parameters<typeof sendMessage>[0];
+
+async function sendCoreMessage(params: {
+  ctx: OutboundSendContext;
+  to: string;
+  message: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  asVoice?: boolean;
+  gifPlayback?: boolean;
+  forceDocument?: boolean;
+  bestEffort?: boolean;
+  replyToId?: string;
+  threadId?: string | number;
+  queuePolicy: NonNullable<SendMessageParams["queuePolicy"]>;
+  payloads?: SendMessageParams["payloads"];
+}): Promise<MessageSendResult> {
+  return await sendMessage({
+    cfg: params.ctx.cfg,
+    to: params.to,
+    content: params.message,
+    ...(params.payloads ? { payloads: params.payloads } : {}),
+    agentId: params.ctx.agentId,
+    requesterSessionKey: params.ctx.sessionKey,
+    requesterAccountId: params.ctx.requesterAccountId ?? params.ctx.accountId ?? undefined,
+    requesterSenderId: params.ctx.requesterSenderId,
+    requesterSenderName: params.ctx.requesterSenderName,
+    requesterSenderUsername: params.ctx.requesterSenderUsername,
+    requesterSenderE164: params.ctx.requesterSenderE164,
+    mediaUrl: params.mediaUrl || undefined,
+    mediaUrls: params.mediaUrls,
+    asVoice: params.asVoice,
+    channel: params.ctx.channel || undefined,
+    accountId: params.ctx.accountId ?? undefined,
+    replyToId: params.replyToId,
+    threadId: params.threadId,
+    gifPlayback: params.gifPlayback,
+    forceDocument: params.forceDocument,
+    dryRun: params.ctx.dryRun,
+    bestEffort: params.bestEffort ?? undefined,
+    queuePolicy: params.queuePolicy,
+    deps: params.ctx.deps,
+    gateway: params.ctx.gateway,
+    mirror: params.ctx.mirror,
+    abortSignal: params.ctx.abortSignal,
+    silent: params.ctx.silent,
+    mediaAccess: params.ctx.mediaAccess,
+  });
+}
+
 function collectActionMediaSources(params: Record<string, unknown>): string[] {
   const sources: string[] = [];
   for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl"] as const) {
@@ -216,36 +266,10 @@ export async function executeSendAction(params: {
   });
   if (preparedPayload) {
     throwIfAborted(params.ctx.abortSignal);
-    const result: MessageSendResult = await sendMessage({
-      cfg: params.ctx.cfg,
-      to: params.to,
-      content: params.message,
-      payloads: [preparedPayload],
-      agentId: params.ctx.agentId,
-      requesterSessionKey: params.ctx.sessionKey,
-      requesterAccountId: params.ctx.requesterAccountId ?? params.ctx.accountId ?? undefined,
-      requesterSenderId: params.ctx.requesterSenderId,
-      requesterSenderName: params.ctx.requesterSenderName,
-      requesterSenderUsername: params.ctx.requesterSenderUsername,
-      requesterSenderE164: params.ctx.requesterSenderE164,
-      mediaUrl: params.mediaUrl || undefined,
-      mediaUrls: params.mediaUrls,
-      asVoice: params.asVoice,
-      channel: params.ctx.channel || undefined,
-      accountId: params.ctx.accountId ?? undefined,
-      replyToId: params.replyToId,
-      threadId: params.threadId,
-      gifPlayback: params.gifPlayback,
-      forceDocument: params.forceDocument,
-      dryRun: params.ctx.dryRun,
-      bestEffort: params.bestEffort ?? undefined,
+    const result = await sendCoreMessage({
+      ...params,
       queuePolicy,
-      deps: params.ctx.deps,
-      gateway: params.ctx.gateway,
-      mirror: params.ctx.mirror,
-      abortSignal: params.ctx.abortSignal,
-      silent: params.ctx.silent,
-      mediaAccess: params.ctx.mediaAccess,
+      payloads: [preparedPayload],
     });
 
     return {
@@ -282,35 +306,9 @@ export async function executeSendAction(params: {
   }
 
   throwIfAborted(params.ctx.abortSignal);
-  const result: MessageSendResult = await sendMessage({
-    cfg: params.ctx.cfg,
-    to: params.to,
-    content: params.message,
-    agentId: params.ctx.agentId,
-    requesterSessionKey: params.ctx.sessionKey,
-    requesterAccountId: params.ctx.requesterAccountId ?? params.ctx.accountId ?? undefined,
-    requesterSenderId: params.ctx.requesterSenderId,
-    requesterSenderName: params.ctx.requesterSenderName,
-    requesterSenderUsername: params.ctx.requesterSenderUsername,
-    requesterSenderE164: params.ctx.requesterSenderE164,
-    mediaUrl: params.mediaUrl || undefined,
-    mediaUrls: params.mediaUrls,
-    asVoice: params.asVoice,
-    channel: params.ctx.channel || undefined,
-    accountId: params.ctx.accountId ?? undefined,
-    replyToId: params.replyToId,
-    threadId: params.threadId,
-    gifPlayback: params.gifPlayback,
-    forceDocument: params.forceDocument,
-    dryRun: params.ctx.dryRun,
-    bestEffort: params.bestEffort ?? undefined,
+  const result = await sendCoreMessage({
+    ...params,
     queuePolicy,
-    deps: params.ctx.deps,
-    gateway: params.ctx.gateway,
-    mirror: params.ctx.mirror,
-    abortSignal: params.ctx.abortSignal,
-    silent: params.ctx.silent,
-    mediaAccess: params.ctx.mediaAccess,
   });
 
   return {

@@ -17,7 +17,7 @@ export type AuthProfileHealthStatus = "ok" | "expiring" | "expired" | "missing" 
 type AuthProfileHealth = {
   profileId: string;
   provider: string;
-  type: "oauth" | "token" | "api_key";
+  type: "oauth" | "token" | "api_key" | "aws-sdk";
   status: AuthProfileHealthStatus;
   reasonCode?: AuthCredentialReasonCode;
   expiresAt?: number;
@@ -121,6 +121,17 @@ function buildProfileHealth(params: {
       profileId,
       provider,
       type: "api_key",
+      status: "static",
+      source,
+      label,
+    };
+  }
+
+  if (healthCredential.type === "aws-sdk") {
+    return {
+      profileId,
+      provider,
+      type: "aws-sdk",
       status: "static",
       source,
       label,
@@ -262,28 +273,46 @@ export function buildAuthHealthSummary(params: {
       continue;
     }
 
-    const oauthProfiles = provider.profiles.filter((p) => p.type === "oauth");
-    const tokenProfiles = provider.profiles.filter((p) => p.type === "token");
-    const apiKeyProfiles = provider.profiles.filter((p) => p.type === "api_key");
+    let hasApiKeyProfile = false;
+    let hasExpirableProfile = false;
+    let hasExpiredOrMissing = false;
+    let hasExpiring = false;
+    let earliestExpiry: number | undefined;
+    for (const profile of provider.profiles) {
+      if (profile.type === "api_key") {
+        hasApiKeyProfile = true;
+        continue;
+      }
+      if (profile.type !== "oauth" && profile.type !== "token") {
+        continue;
+      }
+      hasExpirableProfile = true;
+      if (typeof profile.expiresAt === "number" && Number.isFinite(profile.expiresAt)) {
+        earliestExpiry =
+          earliestExpiry === undefined
+            ? profile.expiresAt
+            : Math.min(earliestExpiry, profile.expiresAt);
+      }
+      if (profile.status === "expired" || profile.status === "missing") {
+        hasExpiredOrMissing = true;
+      } else if (profile.status === "expiring") {
+        hasExpiring = true;
+      }
+    }
 
-    const expirable = [...oauthProfiles, ...tokenProfiles];
-    if (expirable.length === 0) {
-      provider.status = apiKeyProfiles.length > 0 ? "static" : "missing";
+    if (!hasExpirableProfile) {
+      provider.status = hasApiKeyProfile ? "static" : "missing";
       continue;
     }
 
-    const expiryCandidates = expirable
-      .map((p) => p.expiresAt)
-      .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
-    if (expiryCandidates.length > 0) {
-      provider.expiresAt = Math.min(...expiryCandidates);
+    if (earliestExpiry !== undefined) {
+      provider.expiresAt = earliestExpiry;
       provider.remainingMs = provider.expiresAt - now;
     }
 
-    const statuses = new Set(expirable.map((p) => p.status));
-    if (statuses.has("expired") || statuses.has("missing")) {
+    if (hasExpiredOrMissing) {
       provider.status = "expired";
-    } else if (statuses.has("expiring")) {
+    } else if (hasExpiring) {
       provider.status = "expiring";
     } else {
       provider.status = "ok";

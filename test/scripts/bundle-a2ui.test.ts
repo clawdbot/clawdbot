@@ -6,30 +6,20 @@ import {
   getBundleHashRepoInputPaths,
   getLocalRolldownCliCandidates,
   isBundleHashInputPath,
-} from "../../scripts/bundle-a2ui.mjs";
+} from "../../extensions/canvas/scripts/bundle-a2ui.mjs";
 
 describe("scripts/bundle-a2ui.mjs", () => {
-  it("keeps generated renderer output out of bundle hash inputs", () => {
+  it("uses package metadata and plugin-owned A2UI sources as bundle hash inputs", () => {
     const repoRoot = path.resolve("repo-root");
+    const inputPaths = getBundleHashRepoInputPaths(repoRoot);
 
-    expect(
-      isBundleHashInputPath(
-        path.join(repoRoot, "vendor", "a2ui", "renderers", "lit", "src", "index.ts"),
-        repoRoot,
-      ),
-    ).toBe(true);
-    expect(
-      isBundleHashInputPath(
-        path.join(repoRoot, "vendor", "a2ui", "renderers", "lit", "dist"),
-        repoRoot,
-      ),
-    ).toBe(false);
-    expect(
-      isBundleHashInputPath(
-        path.join(repoRoot, "vendor", "a2ui", "renderers", "lit", "dist", "src", "index.js"),
-        repoRoot,
-      ),
-    ).toBe(false);
+    expect(inputPaths).toContain(path.join(repoRoot, "package.json"));
+    expect(inputPaths).toContain(path.join(repoRoot, "pnpm-lock.yaml"));
+    expect(inputPaths).toContain(
+      path.join(repoRoot, "extensions", "canvas", "src", "host", "a2ui-app"),
+    );
+    expect(inputPaths).not.toContain(path.join(repoRoot, "vendor", "a2ui", "renderers", "lit"));
+    expect(isBundleHashInputPath(path.join(repoRoot, "package.json"), repoRoot)).toBe(true);
   });
 
   it("prefers the installed rolldown CLI over a network dlx fallback", () => {
@@ -51,21 +41,18 @@ describe("scripts/bundle-a2ui.mjs", () => {
     ]);
   });
 
-  it("keeps unrelated repo dependency churn out of bundle hash inputs", () => {
+  it("keeps unrelated package metadata out of bundle hash inputs", () => {
     const repoRoot = path.resolve("repo-root");
     const inputPaths = getBundleHashRepoInputPaths(repoRoot);
 
-    expect(inputPaths).toContain(path.join(repoRoot, "ui", "package.json"));
-    expect(inputPaths).not.toContain(path.join(repoRoot, "package.json"));
-    expect(inputPaths).not.toContain(path.join(repoRoot, "pnpm-lock.yaml"));
+    expect(inputPaths).not.toContain(path.join(repoRoot, "ui", "package.json"));
+    expect(inputPaths).not.toContain(path.join(repoRoot, "packages", "plugin-sdk", "package.json"));
   });
 
   it("keeps local node_modules state out of bundle hash inputs", () => {
     const repoRoot = process.cwd();
     const inputPaths = getBundleHashInputPaths(repoRoot);
 
-    expect(inputPaths).not.toContain(path.join(repoRoot, "package.json"));
-    expect(inputPaths).not.toContain(path.join(repoRoot, "pnpm-lock.yaml"));
     expect(inputPaths).not.toContain(path.join(repoRoot, "node_modules", "lit", "package.json"));
     expect(inputPaths).not.toContain(
       path.join(repoRoot, "ui", "node_modules", "lit", "package.json"),

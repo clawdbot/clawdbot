@@ -1,17 +1,25 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const helperPath = path.join(
   repoRoot,
   ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh",
 );
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 function runHelper(args: string[]) {
   const dir = mkdtempSync(path.join(tmpdir(), "github-activity-helper-"));
+  tempDirs.push(dir);
   const binDir = path.join(dir, "bin");
   const logPath = path.join(dir, "gh.log");
   const ghPath = path.join(binDir, "gh");

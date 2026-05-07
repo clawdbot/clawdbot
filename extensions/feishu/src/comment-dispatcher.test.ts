@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFeishuRuntimeAccountMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -35,6 +35,16 @@ vi.mock("./runtime.js", () => ({
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
 
 describe("createFeishuCommentReplyDispatcher", () => {
+  afterAll(() => {
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./client.js");
+    vi.doUnmock("./comment-dispatcher-runtime-api.js");
+    vi.doUnmock("./comment-reaction.js");
+    vi.doUnmock("./drive.js");
+    vi.doUnmock("./runtime.js");
+    vi.resetModules();
+  });
+
   function createTestCommentReplyDispatcher() {
     createFeishuCommentReplyDispatcher({
       cfg: {} as never,

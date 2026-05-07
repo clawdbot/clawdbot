@@ -1,9 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
+const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+  configFingerprint: "models-list-configured-test-empty-plugin-metadata",
+  plugins: [],
+}));
+
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: vi.fn(() => {
     throw new Error("runtime model normalization should not load for models list entries");
   }),
+}));
+
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
 import { resolveConfiguredEntries } from "./list.configured.js";

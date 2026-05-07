@@ -24,7 +24,9 @@ export {
   setTtsPersona,
   setTtsProvider,
   synthesizeSpeech,
+  streamSpeech,
   textToSpeech,
+  textToSpeechStream,
   textToSpeechTelephony,
   _test,
   type ResolvedTtsConfig,
@@ -33,5 +35,7 @@ export {
   type TtsDirectiveParseResult,
   type TtsResult,
   type TtsSynthesisResult,
+  type TtsSynthesisStreamResult,
+  type TtsStreamResult,
   type TtsTelephonyResult,
 } from "./src/tts.js";

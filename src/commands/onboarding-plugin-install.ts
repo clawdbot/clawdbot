@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
@@ -787,6 +788,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       status: "skipped",
     };
   }
+  assertConfigWriteAllowedInCurrentMode();
 
   if (choice === "local" && localPath) {
     const enableResult = await applyPluginEnablement({

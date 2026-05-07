@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGoogleMeetConfig } from "./config.js";
 import {
   endMeetVoiceCallGatewayCall,
@@ -30,6 +30,15 @@ describe("Google Meet voice-call gateway", () => {
     gatewayMocks.request.mockResolvedValue({ callId: "call-1" });
     gatewayMocks.stopAndWait.mockClear();
     gatewayMocks.startGatewayClientWhenEventLoopReady.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/gateway-runtime");
+    vi.resetModules();
   });
 
   it("starts Twilio Meet calls with pre-connect DTMF, then speaks the intro without TwiML fallback", async () => {

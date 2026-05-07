@@ -22,8 +22,8 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringArrayParam, readStringParam } from "./common.js";
 import {
-  createSessionVisibilityGuard,
   createAgentToAgentPolicy,
+  createSessionVisibilityRowChecker,
   classifySessionKind,
   deriveChannel,
   resolveDisplaySessionKey,
@@ -136,7 +136,7 @@ export function createSessionsListTool(opts?: {
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
       const storePath = typeof list?.path === "string" ? list.path : undefined;
-      const visibilityGuard = await createSessionVisibilityGuard({
+      const visibilityGuard = createSessionVisibilityRowChecker({
         action: "list",
         requesterSessionKey: effectiveRequesterKey,
         visibility,
@@ -160,7 +160,17 @@ export function createSessionsListTool(opts?: {
         if (!key) {
           continue;
         }
-        const access = visibilityGuard.check(key);
+        const access = visibilityGuard.check({
+          key,
+          agentId: typeof entry.agentId === "string" ? entry.agentId : undefined,
+          ownerSessionKey:
+            typeof (entry as { ownerSessionKey?: unknown }).ownerSessionKey === "string"
+              ? (entry as { ownerSessionKey?: string }).ownerSessionKey
+              : undefined,
+          spawnedBy: typeof entry.spawnedBy === "string" ? entry.spawnedBy : undefined,
+          parentSessionKey:
+            typeof entry.parentSessionKey === "string" ? entry.parentSessionKey : undefined,
+        });
         if (!access.allowed) {
           continue;
         }

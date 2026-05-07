@@ -996,6 +996,25 @@ describe("ensureAuthProfileStore", () => {
     }
   });
 
+  it("accepts aws-sdk auth profiles without static credential material (#69708)", () => {
+    withTempAgentDir("openclaw-auth-aws-sdk-", (agentDir) => {
+      writeAuthProfileStore(agentDir, {
+        "amazon-bedrock:default": {
+          type: "aws-sdk",
+          provider: "amazon-bedrock",
+          createdAt: "2026-03-15T10:00:00.000Z",
+        },
+      });
+
+      const profile = loadAuthProfile(agentDir, "amazon-bedrock:default");
+
+      expect(profile).toMatchObject({
+        type: "aws-sdk",
+        provider: "amazon-bedrock",
+      });
+    });
+  });
+
   it.each([
     {
       name: "migrates SecretRef object in `key` to `keyRef` and clears `key`",

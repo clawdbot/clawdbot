@@ -56,7 +56,7 @@ No external `zca`/`openzca` CLI binary is required.
 - Runs entirely in-process via `zca-js`.
 - Uses native event listeners to receive inbound messages.
 - Sends replies directly through the JS API (text/media/link).
-- Designed for “personal account” use cases where Zalo Bot API is not available.
+- Designed for "personal account" use cases where Zalo Bot API is not available.
 
 ## Naming
 

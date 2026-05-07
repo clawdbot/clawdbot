@@ -163,9 +163,9 @@ export async function resolveSlackThreadHistory(params: {
           continue;
         }
         retained.push(msg);
-        if (retained.length > maxMessages) {
-          retained.shift();
-        }
+      }
+      if (retained.length > maxMessages) {
+        retained.splice(0, retained.length - maxMessages);
       }
 
       const next = response.response_metadata?.next_cursor;

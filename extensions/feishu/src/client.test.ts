@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -204,6 +204,21 @@ afterEach(() => {
     process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = priorFeishuTimeoutEnv;
   }
   setFeishuClientRuntimeForTest();
+});
+
+afterAll(() => {
+  vi.doUnmock("./channel.js");
+  vi.doUnmock("./docx.js");
+  vi.doUnmock("./chat.js");
+  vi.doUnmock("./wiki.js");
+  vi.doUnmock("./drive.js");
+  vi.doUnmock("./perm.js");
+  vi.doUnmock("./bitable.js");
+  vi.doUnmock("./runtime.js");
+  vi.doUnmock("./subagent-hooks.js");
+  vi.doUnmock("@larksuiteoapi/node-sdk");
+  vi.doUnmock("proxy-agent");
+  vi.resetModules();
 });
 
 describe("createFeishuClient HTTP timeout", () => {

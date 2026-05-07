@@ -83,6 +83,41 @@ describe("ensureOnboardingPluginInstalled", () => {
     refreshPluginRegistryAfterConfigMutation.mockResolvedValue(undefined);
   });
 
+  it("refuses non-skipped installs in Nix mode before package work", async () => {
+    const previous = process.env.OPENCLAW_NIX_MODE;
+    process.env.OPENCLAW_NIX_MODE = "1";
+    try {
+      await expect(
+        ensureOnboardingPluginInstalled({
+          cfg: {},
+          entry: {
+            pluginId: "demo-plugin",
+            label: "Demo Provider",
+            install: {
+              npmSpec: "@openclaw/demo-plugin@1.2.3",
+            },
+          },
+          promptInstall: false,
+          prompter: {
+            select: vi.fn(async () => "npm"),
+            progress: vi.fn(),
+          } as never,
+          runtime: {} as never,
+        }),
+      ).rejects.toThrow("OPENCLAW_NIX_MODE=1");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_NIX_MODE;
+      } else {
+        process.env.OPENCLAW_NIX_MODE = previous;
+      }
+    }
+
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(enablePluginInConfig).not.toHaveBeenCalled();
+  });
+
   it("installs and records ClawHub provider plugins with source facts", async () => {
     installPluginFromClawHub.mockImplementation(async (params) => {
       params.logger?.info?.("Downloading demo-plugin from ClawHub…");

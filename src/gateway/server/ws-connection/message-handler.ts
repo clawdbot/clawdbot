@@ -57,11 +57,6 @@ import { resolveRuntimeServiceVersion } from "../../../version.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
-import {
-  buildCanvasScopedHostUrl,
-  CANVAS_CAPABILITY_TTL_MS,
-  mintCanvasCapabilityToken,
-} from "../../canvas-capability.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import {
@@ -76,6 +71,14 @@ import {
   shouldAutoApproveNodePairingFromTrustedCidrs,
 } from "../../node-pairing-auto-approve.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
+import {
+  buildPluginNodeCapabilityScopedHostUrl,
+  indexPluginNodeCapabilitySurfaces,
+  mintPluginNodeCapabilityToken,
+  type PluginNodeCapabilitySurface,
+  resolvePluginNodeCapabilityTtlMs,
+  setClientPluginNodeCapability,
+} from "../../plugin-node-capability.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
 import {
   buildPairingConnectCloseReason,
@@ -187,7 +190,8 @@ export type GatewayWsMessageHandlerParams = {
   requestHost?: string;
   requestOrigin?: string;
   requestUserAgent?: string;
-  canvasHostUrl?: string;
+  pluginSurfaceBaseUrl?: string;
+  pluginNodeCapabilities?: PluginNodeCapabilitySurface[];
   connectNonce: string;
   getResolvedAuth: () => ResolvedGatewayAuth;
   getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
@@ -231,7 +235,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     requestHost,
     requestOrigin,
     requestUserAgent,
-    canvasHostUrl,
+    pluginSurfaceBaseUrl,
+    pluginNodeCapabilities = [],
     connectNonce,
     getResolvedAuth,
     getRequiredSharedGatewaySessionGeneration,
@@ -1312,19 +1317,35 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           return;
         }
 
-        const canvasCapability = canvasHostUrl ? mintCanvasCapabilityToken() : undefined;
-        const canvasCapabilityExpiresAtMs = canvasCapability
-          ? Date.now() + CANVAS_CAPABILITY_TTL_MS
-          : undefined;
+        const pluginSurfaceUrls: Record<string, string> = {};
+        const pluginNodeCapabilitySurfaces =
+          indexPluginNodeCapabilitySurfaces(pluginNodeCapabilities);
+        const pendingPluginNodeCapabilities: Array<{
+          surface: PluginNodeCapabilitySurface;
+          capability: string;
+          expiresAtMs: number;
+        }> = [];
+        if (pluginSurfaceBaseUrl) {
+          for (const pluginCapabilitySurface of Object.values(pluginNodeCapabilitySurfaces)) {
+            const capability = mintPluginNodeCapabilityToken();
+            const expiresAtMs =
+              Date.now() + resolvePluginNodeCapabilityTtlMs(pluginCapabilitySurface);
+            const scopedUrl =
+              buildPluginNodeCapabilityScopedHostUrl(pluginSurfaceBaseUrl, capability) ??
+              pluginSurfaceBaseUrl;
+            pluginSurfaceUrls[pluginCapabilitySurface.surface] = scopedUrl;
+            pendingPluginNodeCapabilities.push({
+              surface: pluginCapabilitySurface,
+              capability,
+              expiresAtMs,
+            });
+          }
+        }
         const usesSharedGatewayAuth =
           authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
         const sharedGatewaySessionGeneration = usesSharedGatewayAuth
           ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
           : undefined;
-        const scopedCanvasHostUrl =
-          canvasHostUrl && canvasCapability
-            ? (buildCanvasScopedHostUrl(canvasHostUrl, canvasCapability) ?? canvasHostUrl)
-            : canvasHostUrl;
         clearHandshakeTimer();
         const nextClient: GatewayWsClient = {
           socket,
@@ -1335,10 +1356,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           sharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,
-          canvasHostUrl,
-          canvasCapability,
-          canvasCapabilityExpiresAtMs,
+          ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
+          ...(Object.keys(pluginNodeCapabilitySurfaces).length > 0
+            ? { pluginNodeCapabilitySurfaces }
+            : {}),
         };
+        for (const entry of pendingPluginNodeCapabilities) {
+          setClientPluginNodeCapability({
+            client: nextClient,
+            surface: entry.surface,
+            capability: entry.capability,
+            expiresAtMs: entry.expiresAtMs,
+          });
+        }
         setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
         if (!setClient(nextClient)) {
           setCloseCause("connect-aborted-before-register", {
@@ -1461,7 +1491,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           },
           features: { methods: gatewayMethods, events },
           snapshot,
-          canvasHostUrl: scopedCanvasHostUrl,
+          ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
           auth: {
             role,
             scopes: helloOkAuthScopes,

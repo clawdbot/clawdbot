@@ -43,6 +43,7 @@ describe("telegramMessageActions", () => {
       cfg: {} as never,
       accountId: "default",
       mediaLocalRoots: [],
+      sessionKey: "telegram-session",
     } as never);
 
     expect(handleTelegramActionMock).toHaveBeenCalledWith(
@@ -62,6 +63,7 @@ describe("telegramMessageActions", () => {
       expect.anything(),
       expect.objectContaining({
         mediaLocalRoots: [],
+        sessionKey: "telegram-session",
       }),
     );
   });

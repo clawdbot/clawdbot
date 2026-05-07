@@ -59,21 +59,30 @@ export function getContextNoticeViewModel(
   detail: string;
   color: string;
   bg: string;
+  warning: boolean;
   compactRecommended: boolean;
 } | null {
   if (session?.totalTokensFresh === false) {
     return null;
   }
-  const used = session?.totalTokens ?? 0;
+  const used = session?.totalTokens;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
-  if (!used || !limit) {
+  if (typeof used !== "number" || !Number.isFinite(used) || used < 0 || !limit) {
     return null;
   }
   const ratio = used / limit;
-  if (ratio < CONTEXT_NOTICE_RATIO) {
-    return null;
-  }
   const pct = Math.min(Math.round(ratio * 100), 100);
+  const warning = ratio >= CONTEXT_NOTICE_RATIO;
+  if (!warning) {
+    return {
+      pct,
+      detail: `${formatTokensCompact(used)} / ${formatTokensCompact(limit)}`,
+      color: "var(--muted)",
+      bg: "color-mix(in srgb, var(--muted) 8%, transparent)",
+      warning,
+      compactRecommended: false,
+    };
+  }
   // Read theme semantic tokens so color tracks the active theme (Dash, dark, light ...).
   const { warnRgb, dangerRgb } = getThemeNoticeColors();
   const [wr, wg, wb] = warnRgb;
@@ -90,6 +99,7 @@ export function getContextNoticeViewModel(
     detail: `${formatTokensCompact(used)} / ${formatTokensCompact(limit)}`,
     color,
     bg,
+    warning,
     compactRecommended: ratio >= CONTEXT_COMPACT_RATIO,
   };
 }
@@ -107,25 +117,34 @@ export function renderContextNotice(
   const compactDisabled = options.compactDisabled === true || options.compactBusy === true;
   return html`
     <div
-      class="context-notice"
+      class="context-notice ${model.warning ? "context-notice--warning" : "context-notice--usage"}"
       role="status"
       style="--ctx-color:${model.color};--ctx-bg:${model.bg}"
+      title=${`Session context usage: ${model.detail} (${model.pct}%)`}
     >
-      <svg
-        class="context-notice__icon"
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      >
-        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-        <line x1="12" y1="9" x2="12" y2="13" />
-        <line x1="12" y1="17" x2="12.01" y2="17" />
-      </svg>
+      ${model.warning
+        ? html`
+            <svg
+              class="context-notice__icon"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+          `
+        : html`
+            <span class="context-notice__meter" aria-hidden="true">
+              <span class="context-notice__meter-fill" style="width:${model.pct}%"></span>
+            </span>
+          `}
       <span>${model.pct}% context used</span>
       <span class="context-notice__detail">${model.detail}</span>
       ${canRenderCompact

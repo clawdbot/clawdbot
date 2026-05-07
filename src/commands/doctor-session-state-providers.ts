@@ -108,6 +108,8 @@ export function resolveConfiguredDoctorSessionStateRoute(params: {
     }
   }
   const runtime = resolveAgentHarnessPolicy({
+    provider: primary.provider,
+    modelId: primary.model,
     config: params.cfg,
     agentId,
     sessionKey: params.sessionKey,
@@ -121,9 +123,33 @@ export function resolveConfiguredDoctorSessionStateRoute(params: {
 }
 
 function resolvePluginDoctorSessionRouteStateOwners(params: {
+  cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): DoctorSessionRouteStateOwner[] {
-  return listPluginDoctorSessionRouteStateOwners({ env: params.env });
+  return listPluginDoctorSessionRouteStateOwners({ config: params.cfg, env: params.env });
+}
+
+function entryMayContainPluginSessionRouteState(entry: SessionEntry): boolean {
+  const record = entry as unknown as Record<string, unknown>;
+  return (
+    normalizeString(record.providerOverride) !== undefined ||
+    normalizeString(record.modelOverride) !== undefined ||
+    normalizeString(record.modelOverrideSource) !== undefined ||
+    record.liveModelSwitchPending !== undefined ||
+    normalizeString(record.modelProvider) !== undefined ||
+    normalizeString(record.model) !== undefined ||
+    normalizeString(record.agentHarnessId) !== undefined ||
+    record.cliSessionBindings !== undefined ||
+    record.cliSessionIds !== undefined ||
+    normalizeString(record.authProfileOverride) !== undefined ||
+    normalizeString(record.authProfileOverrideSource) !== undefined
+  );
+}
+
+export function storeMayContainPluginSessionRouteState(
+  store: Record<string, SessionEntry>,
+): boolean {
+  return Object.values(store).some((entry) => entryMayContainPluginSessionRouteState(entry));
 }
 
 export type DoctorSessionRouteState = {
@@ -192,6 +218,36 @@ function routeAllowsOwnerState(params: {
   );
 }
 
+function routeHasConfiguredProvider(
+  route: DoctorSessionRouteState | undefined,
+  providerId: string,
+): boolean {
+  const normalizedProvider = normalizeProviderId(providerId);
+  if (!route || !normalizedProvider) {
+    return false;
+  }
+  if (normalizeProviderId(route.defaultProvider) === normalizedProvider) {
+    return true;
+  }
+  return route.configuredModelRefs.some((ref) => {
+    const slash = ref.indexOf("/");
+    return slash > 0 && normalizeProviderId(ref.slice(0, slash)) === normalizedProvider;
+  });
+}
+
+function routeAllowsOpenAICodexAuthState(params: {
+  ownerProviderIds: ReadonlySet<string>;
+  authProfilePrefixes: readonly string[];
+  entry: Record<string, unknown>;
+  route: DoctorSessionRouteState | undefined;
+}): boolean {
+  return (
+    params.ownerProviderIds.has("openai-codex") &&
+    ownsPrefixedValue(params.authProfilePrefixes, params.entry.authProfileOverride) &&
+    routeHasConfiguredProvider(params.route, "openai")
+  );
+}
+
 function hasOwnedCliSession(params: {
   entry: Record<string, unknown>;
   cliSessionKeys: readonly string[];
@@ -230,7 +286,14 @@ function scanEntryForOwner(params: {
   const runtimeIds = normalizeIdSet(params.owner.runtimeIds);
   const cliSessionKeys = [...normalizeIdSet(params.owner.cliSessionKeys)];
   const authProfilePrefixes = normalizePrefixList(params.owner.authProfilePrefixes);
-  const routeAllowsOwner = routeAllowsOwnerState({ owner: params.owner, route: params.route });
+  const routeAllowsOwner =
+    routeAllowsOwnerState({ owner: params.owner, route: params.route }) ||
+    routeAllowsOpenAICodexAuthState({
+      ownerProviderIds: providerIds,
+      authProfilePrefixes,
+      entry: params.entry,
+      route: params.route,
+    });
   const reasons: string[] = [];
   const directOverride = resolvePersistedOverrideModelRef({
     defaultProvider: params.route?.defaultProvider ?? "",
@@ -434,7 +497,10 @@ export async function runPluginSessionStateDoctorRepairs(params: {
   warnings: string[];
   changes: string[];
 }): Promise<void> {
-  const owners = resolvePluginDoctorSessionRouteStateOwners({ env: params.env });
+  if (!storeMayContainPluginSessionRouteState(params.store)) {
+    return;
+  }
+  const owners = resolvePluginDoctorSessionRouteStateOwners({ cfg: params.cfg, env: params.env });
   if (owners.length === 0) {
     return;
   }

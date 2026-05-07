@@ -1262,6 +1262,83 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
   });
 
+  it("repairs a missing Codex plugin selected by a canonical OpenAI model", async () => {
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "codex",
+      targetDir: "/tmp/openclaw-plugins/codex",
+      version: "2026.5.2",
+      npmResolution: {
+        name: "@openclaw/codex",
+        version: "2026.5.2",
+        resolvedSpec: "@openclaw/codex@2026.5.2",
+        integrity: "sha512-codex",
+        resolvedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "codex",
+        label: "Codex",
+        install: {
+          npmSpec: "@openclaw/codex",
+          defaultChoice: "npm",
+        },
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/codex",
+        expectedPluginId: "codex",
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
+    expect(result).toEqual({
+      changes: ['Installed missing configured plugin "codex" from @openclaw/codex.'],
+      warnings: [],
+    });
+  });
+
+  it("does not repair Codex for custom OpenAI-compatible models", async () => {
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/custom-gpt" },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://compatible.example.test/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(result).toEqual({ changes: [], warnings: [] });
+  });
+
   it("does not install a blocked downloadable plugin from explicit channel ids", async () => {
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {

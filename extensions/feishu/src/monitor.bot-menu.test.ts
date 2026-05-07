@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { expectFirstSentCardUsesFillWidthOnly } from "./card-test-helpers.js";
 import { createFeishuBotMenuHandler } from "./monitor.bot-menu-handler.js";
@@ -55,6 +55,12 @@ async function registerHandlers() {
 }
 
 describe("Feishu bot menu handler", () => {
+  afterAll(() => {
+    vi.doUnmock("./bot.js");
+    vi.doUnmock("./send.js");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.OPENCLAW_STATE_DIR = `/tmp/openclaw-feishu-bot-menu-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;

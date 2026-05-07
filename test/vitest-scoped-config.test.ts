@@ -321,7 +321,7 @@ describe("scoped vitest configs", () => {
       expect(normalizeConfigPath(config.test?.runner)).toBe("test/non-isolated-runner.ts");
     }
 
-    expect(defaultCommandsConfig.test?.pool).toBe("forks");
+    expect(defaultCommandsConfig.test?.pool).toBe("threads");
     expect(defaultCommandsConfig.test?.isolate).toBe(false);
     expect(normalizeConfigPath(defaultCommandsConfig.test?.runner)).toBe(
       "test/non-isolated-runner.ts",

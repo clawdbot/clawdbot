@@ -5,7 +5,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { verifyGoogleChatRequest } from "./auth.js";
@@ -157,6 +157,11 @@ function mockSecondVerifierSuccess() {
 describe("Google Chat webhook routing", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./auth.js");
+    vi.resetModules();
   });
 
   it("rejects ambiguous routing when multiple targets on the same path verify successfully", async () => {

@@ -1,21 +1,14 @@
 import fs from "node:fs";
 import {
-  ensureAuthProfileStore,
-  resolveAuthProfileOrder,
-  resolveProfileUnusableUntilForDisplay,
-} from "../../../agents/auth-profiles.js";
-import { evaluateStoredCredentialEligibility } from "../../../agents/auth-profiles/credential-state.js";
+  hasOpenAICodexAuthProfileOverride,
+  openAIRouteRequiresCodexRuntime,
+} from "../../../agents/openai-codex-routing.js";
 import { AGENT_MODEL_CONFIG_KEYS } from "../../../config/model-refs.js";
 import { loadSessionStore, updateSessionStore } from "../../../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../../../config/sessions/targets.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import {
-  getInstalledPluginRecord,
-  isInstalledPluginEnabled,
-  loadInstalledPluginIndex,
-} from "../../../plugins/installed-plugin-index.js";
 
 type CodexRouteHit = {
   path: string;
@@ -53,6 +46,10 @@ function isOpenAICodexModelRef(model: string | undefined): model is string {
   return normalizeString(model)?.startsWith("openai-codex/") === true;
 }
 
+function isOpenAIModelRef(model: string | undefined): model is string {
+  return normalizeString(model)?.startsWith("openai/") === true;
+}
+
 function toCanonicalOpenAIModelRef(model: string): string | undefined {
   if (!isOpenAICodexModelRef(model)) {
     return undefined;
@@ -78,7 +75,7 @@ function resolveRuntime(params: {
     normalizeString(params.env?.OPENCLAW_AGENT_RUNTIME) ??
     normalizeString(params.agentRuntime?.id) ??
     normalizeString(params.defaultsRuntime?.id) ??
-    "pi"
+    "codex"
   );
 }
 
@@ -101,6 +98,36 @@ function recordCodexModelHit(params: {
     ...(params.setsRuntime ? { setsRuntime: true } : {}),
   });
   return canonicalModel;
+}
+
+function recordOpenAICodexRuntimeHit(params: {
+  hits: CodexRouteHit[];
+  path: string;
+  model: string;
+  runtime?: string;
+}): boolean {
+  if (!isOpenAIModelRef(params.model)) {
+    return false;
+  }
+  params.hits.push({
+    path: params.path,
+    model: params.model,
+    canonicalModel: params.model,
+    ...(params.runtime ? { runtime: params.runtime } : {}),
+    setsRuntime: true,
+  });
+  return true;
+}
+
+function resolvePrimaryModelConfigValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value.trim() || undefined;
+  }
+  const record = asMutableRecord(value);
+  if (typeof record?.primary === "string") {
+    return record.primary.trim() || undefined;
+  }
+  return undefined;
 }
 
 function collectStringModelSlot(params: {
@@ -195,6 +222,7 @@ function collectAgentModelRefs(params: {
   path: string;
   runtime?: string;
   collectModelsMap?: boolean;
+  openAIRequiresCodexRuntime?: boolean;
 }): void {
   const agent = asMutableRecord(params.agent);
   if (!agent) {
@@ -207,6 +235,20 @@ function collectAgentModelRefs(params: {
       value: agent[key],
       runtime: key === "model" ? params.runtime : undefined,
       setsRuntimeOnPrimary: key === "model",
+    });
+  }
+  const primaryModel = resolvePrimaryModelConfigValue(agent.model);
+  if (
+    params.openAIRequiresCodexRuntime === true &&
+    normalizeString(params.runtime) === "pi" &&
+    primaryModel &&
+    isOpenAIModelRef(primaryModel)
+  ) {
+    recordOpenAICodexRuntimeHit({
+      hits: params.hits,
+      path: `${params.path}.model`,
+      model: primaryModel,
+      runtime: params.runtime,
     });
   }
   collectStringModelSlot({
@@ -243,12 +285,17 @@ function collectConfigModelRefs(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): C
   const hits: CodexRouteHit[] = [];
   const defaults = cfg.agents?.defaults;
   const defaultsRuntime = defaults?.agentRuntime;
+  const openAIRequiresCodexRuntime = openAIRouteRequiresCodexRuntime({
+    provider: "openai",
+    config: cfg,
+  });
   collectAgentModelRefs({
     hits,
     agent: defaults,
     path: "agents.defaults",
     runtime: resolveRuntime({ env, defaultsRuntime }),
     collectModelsMap: true,
+    openAIRequiresCodexRuntime,
   });
 
   for (const [index, agent] of (cfg.agents?.list ?? []).entries()) {
@@ -262,6 +309,7 @@ function collectConfigModelRefs(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): C
         agentRuntime: agent.agentRuntime,
         defaultsRuntime,
       }),
+      openAIRequiresCodexRuntime,
     });
   }
 
@@ -423,10 +471,12 @@ function rewriteAgentModelRefs(params: {
   runtime: CodexRepairRuntime;
   currentRuntime: string;
   rewriteModelsMap?: boolean;
+  openAIRequiresCodexRuntime?: boolean;
 }): void {
   if (!params.agent) {
     return;
   }
+  let rewrotePrimaryModel = false;
   for (const key of AGENT_MODEL_CONFIG_KEYS) {
     const rewrotePrimary = rewriteModelConfigSlot({
       hits: params.hits,
@@ -437,10 +487,28 @@ function rewriteAgentModelRefs(params: {
       setsRuntimeOnPrimary: key === "model",
     });
     if (key === "model" && rewrotePrimary) {
+      rewrotePrimaryModel = true;
       const agentRuntime = asMutableRecord(params.agent.agentRuntime) ?? {};
       agentRuntime.id = params.runtime;
       params.agent.agentRuntime = agentRuntime;
     }
+  }
+  const primaryModel = resolvePrimaryModelConfigValue(params.agent.model);
+  if (
+    !rewrotePrimaryModel &&
+    params.openAIRequiresCodexRuntime === true &&
+    normalizeString(params.currentRuntime) === "pi" &&
+    primaryModel &&
+    recordOpenAICodexRuntimeHit({
+      hits: params.hits,
+      path: `${params.path}.model`,
+      model: primaryModel,
+      runtime: params.currentRuntime,
+    })
+  ) {
+    const agentRuntime = asMutableRecord(params.agent.agentRuntime) ?? {};
+    agentRuntime.id = params.runtime;
+    params.agent.agentRuntime = agentRuntime;
   }
   rewriteStringModelSlot({
     hits: params.hits,
@@ -484,6 +552,10 @@ function rewriteConfigModelRefs(params: {
   const nextConfig = structuredClone(params.cfg);
   const hits: CodexRouteHit[] = [];
   const defaultsRuntime = nextConfig.agents?.defaults?.agentRuntime;
+  const openAIRequiresCodexRuntime = openAIRouteRequiresCodexRuntime({
+    provider: "openai",
+    config: nextConfig,
+  });
   rewriteAgentModelRefs({
     hits,
     agent: asMutableRecord(nextConfig.agents?.defaults),
@@ -491,6 +563,7 @@ function rewriteConfigModelRefs(params: {
     runtime: params.runtime,
     currentRuntime: resolveRuntime({ env: params.env, defaultsRuntime }),
     rewriteModelsMap: true,
+    openAIRequiresCodexRuntime,
   });
   for (const [index, agent] of (nextConfig.agents?.list ?? []).entries()) {
     const id = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
@@ -504,6 +577,7 @@ function rewriteConfigModelRefs(params: {
         agentRuntime: agent.agentRuntime,
         defaultsRuntime,
       }),
+      openAIRequiresCodexRuntime,
     });
   }
   const channelsModelByChannel = asMutableRecord(nextConfig.channels?.modelByChannel);
@@ -561,52 +635,26 @@ function rewriteConfigModelRefs(params: {
   };
 }
 
-function hasUsableCodexOAuthProfile(cfg: OpenClawConfig): boolean {
-  try {
-    const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false, config: cfg });
-    const now = Date.now();
-    return resolveAuthProfileOrder({ cfg, store, provider: "openai-codex" }).some((profileId) => {
-      const credential = store.profiles[profileId];
-      if (!credential || credential.type !== "oauth") {
-        return false;
-      }
-      const unusableUntil = resolveProfileUnusableUntilForDisplay(store, profileId);
-      if (unusableUntil && now < unusableUntil) {
-        return false;
-      }
-      return evaluateStoredCredentialEligibility({ credential, now }).eligible;
-    });
-  } catch {
-    return false;
-  }
-}
-
-function isCodexPluginInstalledAndEnabled(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): boolean {
-  const index = loadInstalledPluginIndex({ config: cfg, env });
-  const record = getInstalledPluginRecord(index, "codex");
-  if (!record || !record.startup.agentHarnesses.includes("codex")) {
-    return false;
-  }
-  return isInstalledPluginEnabled(index, "codex", cfg);
-}
-
 function resolveCodexRepairRuntime(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   codexRuntimeReady?: boolean;
 }): CodexRepairRuntime {
-  if (params.codexRuntimeReady !== undefined) {
-    return params.codexRuntimeReady ? "codex" : "pi";
-  }
-  return isCodexPluginInstalledAndEnabled(params.cfg, params.env) &&
-    hasUsableCodexOAuthProfile(params.cfg)
-    ? "codex"
-    : "pi";
+  void params;
+  return "codex";
 }
 
 function formatCodexRouteChange(hit: CodexRouteHit, runtime: CodexRepairRuntime): string {
   const suffix = hit.setsRuntime ? `; set agentRuntime.id to "${runtime}"` : "";
   return `${hit.path}: ${hit.model} -> ${hit.canonicalModel}${suffix}.`;
+}
+
+function formatCodexRouteWarning(hit: CodexRouteHit): string {
+  const runtime = hit.runtime ? `; current runtime is "${hit.runtime}"` : "";
+  if (hit.model === hit.canonicalModel) {
+    return `- ${hit.path}: ${hit.model} should use agentRuntime.id "codex"${runtime}.`;
+  }
+  return `- ${hit.path}: ${hit.model} should become ${hit.canonicalModel}${runtime}.`;
 }
 
 export function collectCodexRouteWarnings(params: {
@@ -619,14 +667,9 @@ export function collectCodexRouteWarnings(params: {
   }
   return [
     [
-      "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
-      ...hits.map(
-        (hit) =>
-          `- ${hit.path}: ${hit.model} should become ${hit.canonicalModel}${
-            hit.runtime ? `; current runtime is "${hit.runtime}"` : ""
-          }.`,
-      ),
-      '- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions; primary routes select `agentRuntime.id: "codex"` only when Codex is installed, enabled, and has usable OAuth, otherwise they select OpenClaw PI.',
+      '- OpenAI Codex routes should use canonical `openai/*` model refs with `agentRuntime.id: "codex"`.',
+      ...hits.map(formatCodexRouteWarning),
+      '- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*` with `agentRuntime.id: "codex"`.',
     ].join("\n"),
   ];
 }
@@ -722,9 +765,29 @@ function clearStaleCodexAuthOverride(entry: SessionEntry, runtime: CodexRepairRu
   return true;
 }
 
+function hasOpenAIAgentRoute(entry: SessionEntry): boolean {
+  return (
+    normalizeString(entry.modelProvider) === "openai" ||
+    normalizeString(entry.providerOverride) === "openai" ||
+    isOpenAIModelRef(entry.model) ||
+    isOpenAIModelRef(entry.modelOverride)
+  );
+}
+
+function hasOpenAIPiRuntimePin(entry: SessionEntry, cfg?: OpenClawConfig): boolean {
+  return (
+    hasOpenAIAgentRoute(entry) &&
+    (hasOpenAICodexAuthProfileOverride(entry.authProfileOverride) ||
+      openAIRouteRequiresCodexRuntime({ provider: "openai", config: cfg })) &&
+    (normalizeString(entry.agentHarnessId) === "pi" ||
+      normalizeString(entry.agentRuntimeOverride) === "pi")
+  );
+}
+
 export function repairCodexSessionStoreRoutes(params: {
   store: Record<string, SessionEntry>;
   runtime: CodexRepairRuntime;
+  cfg?: OpenClawConfig;
   now?: number;
 }): SessionRouteRepairResult {
   const now = params.now ?? Date.now();
@@ -746,16 +809,16 @@ export function repairCodexSessionStoreRoutes(params: {
     const changedModelRoute = changedRuntimeModelRoute || changedOverrideModelRoute;
     const changedFallbackNotice = clearStaleCodexFallbackNotice(entry);
     const changedAuthOverride = clearStaleCodexAuthOverride(entry, params.runtime);
-    const shouldRepinCodexHarness = entry.agentHarnessId === "codex" && params.runtime !== "codex";
+    const shouldRepairOpenAIPiPin = hasOpenAIPiRuntimePin(entry, params.cfg);
     if (
       !changedModelRoute &&
       !changedFallbackNotice &&
       !changedAuthOverride &&
-      !shouldRepinCodexHarness
+      !shouldRepairOpenAIPiPin
     ) {
       continue;
     }
-    if (changedModelRoute || shouldRepinCodexHarness) {
+    if (changedModelRoute || shouldRepairOpenAIPiPin) {
       entry.agentHarnessId = params.runtime;
       entry.agentRuntimeOverride = params.runtime;
     }
@@ -771,7 +834,9 @@ export function repairCodexSessionStoreRoutes(params: {
 function scanCodexSessionStoreRoutes(
   store: Record<string, SessionEntry>,
   runtime: CodexRepairRuntime,
+  cfg?: OpenClawConfig,
 ): string[] {
+  void runtime;
   return Object.entries(store).flatMap(([sessionKey, entry]) => {
     if (!entry) {
       return [];
@@ -783,8 +848,7 @@ function scanCodexSessionStoreRoutes(
       isOpenAICodexModelRef(entry.modelOverride) ||
       isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel) ||
       isOpenAICodexModelRef(entry.fallbackNoticeActiveModel) ||
-      (runtime !== "codex" && entry.authProfileOverride?.startsWith("openai-codex:") === true) ||
-      (runtime !== "codex" && entry.agentHarnessId === "codex");
+      hasOpenAIPiRuntimePin(entry, cfg);
     return hasLegacyRoute ? [sessionKey] : [];
   });
 }
@@ -814,7 +878,11 @@ export async function maybeRepairCodexSessionRoutes(params: {
       codexRuntimeReady: params.codexRuntimeReady,
     });
     const stale = targets.flatMap((target) => {
-      const sessionKeys = scanCodexSessionStoreRoutes(loadSessionStore(target.storePath), runtime);
+      const sessionKeys = scanCodexSessionStoreRoutes(
+        loadSessionStore(target.storePath),
+        runtime,
+        params.cfg,
+      );
       return sessionKeys.map((sessionKey) => `${target.agentId}:${sessionKey}`);
     });
     return {
@@ -845,13 +913,14 @@ export async function maybeRepairCodexSessionRoutes(params: {
     const staleSessionKeys = scanCodexSessionStoreRoutes(
       loadSessionStore(target.storePath),
       runtime,
+      params.cfg,
     );
     if (staleSessionKeys.length === 0) {
       continue;
     }
     const result = await updateSessionStore(
       target.storePath,
-      (store) => repairCodexSessionStoreRoutes({ store, runtime }),
+      (store) => repairCodexSessionStoreRoutes({ store, runtime, cfg: params.cfg }),
       { skipMaintenance: true },
     );
     if (!result.changed) {

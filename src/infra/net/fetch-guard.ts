@@ -1,6 +1,10 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
+import {
+  normalizeHeadersInitForFetch,
+  normalizeRequestInitHeadersForFetch,
+} from "../fetch-headers.js";
 import { hasProxyEnvConfigured, shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
@@ -277,7 +281,7 @@ function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
   if (!headers) {
     return headers;
   }
-  const nextHeaders = new Headers(headers);
+  const nextHeaders = new Headers(normalizeHeadersInitForFetch(headers));
   nextHeaders.delete("content-encoding");
   nextHeaders.delete("content-language");
   nextHeaders.delete("content-length");
@@ -368,7 +372,9 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
   const visited = new Set<string>([params.url]);
   let currentUrl = params.url;
-  let currentInit = params.init ? { ...params.init } : undefined;
+  let currentInit = normalizeRequestInitHeadersForFetch(
+    params.init ? { ...params.init } : undefined,
+  );
   let redirectCount = 0;
 
   while (true) {

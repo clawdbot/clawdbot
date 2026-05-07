@@ -97,6 +97,28 @@ describe("createTalkSessionController", () => {
     expect(talk.outputAudioActive).toBe(false);
   });
 
+  it("notifies an event hook for emitted and controller-created events", () => {
+    const events: string[] = [];
+    const talk = createTalkSessionController(
+      {
+        sessionId: "talk-session",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      {
+        now: () => "2026-05-05T00:00:00.000Z",
+        onEvent: (event) => events.push(event.type),
+      },
+    );
+
+    talk.emit({ type: "session.started", payload: {} });
+    const turn = talk.ensureTurn();
+    talk.endTurn({ turnId: turn.turnId });
+
+    expect(events).toEqual(["session.started", "turn.started", "turn.ended"]);
+  });
+
   it("clears stale output audio state when a replacement turn starts", () => {
     const talk = createController();
 

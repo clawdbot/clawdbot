@@ -22,7 +22,7 @@ Common use cases:
 - Keep exec **sandboxed** on the gateway, but delegate approved runs to other hosts.
 - Provide a lightweight, headless execution target for automation or CI nodes.
 
-Execution is still guarded by **exec approvals** and per‑agent allowlists on the
+Execution is still guarded by **exec approvals** and per-agent allowlists on the
 node host, so you can keep command access scoped and explicit.
 
 ## Browser proxy (zero-config)

@@ -275,7 +275,9 @@ export class SessionHistorySseState {
         this.target.sessionId,
         this.target.storePath,
         this.target.sessionFile,
-        resolveSessionHistoryTailReadOptions(this.limit),
+        {
+          ...resolveSessionHistoryTailReadOptions(this.limit),
+        },
       );
       return {
         rawMessages: snapshot.messages,

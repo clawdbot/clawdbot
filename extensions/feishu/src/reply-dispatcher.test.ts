@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type StreamingSessionStub = {
   active: boolean;
@@ -97,6 +97,18 @@ import {
   clearFeishuStreamingStartBackoffForTests,
   createFeishuReplyDispatcher,
 } from "./reply-dispatcher.js";
+
+afterAll(() => {
+  vi.doUnmock("./accounts.js");
+  vi.doUnmock("./runtime.js");
+  vi.doUnmock("./send.js");
+  vi.doUnmock("./media.js");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./targets.js");
+  vi.doUnmock("./typing.js");
+  vi.doUnmock("./streaming-card.js");
+  vi.resetModules();
+});
 
 describe("createFeishuReplyDispatcher streaming behavior", () => {
   type ReplyDispatcherArgs = Parameters<typeof createFeishuReplyDispatcher>[0];

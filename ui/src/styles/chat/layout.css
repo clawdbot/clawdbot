@@ -146,7 +146,7 @@
   flex-shrink: 0;
 }
 
-/* Context usage warning pill */
+/* Context usage pill */
 .context-notice {
   align-self: center;
   display: inline-flex;
@@ -168,11 +168,33 @@
   animation: fade-in 0.2s var(--ease-out);
 }
 
+.context-notice--usage {
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+}
+
 .context-notice__icon {
   width: 16px;
   height: 16px;
   flex-shrink: 0;
   stroke: currentColor;
+}
+
+.context-notice__meter {
+  position: relative;
+  width: 46px;
+  height: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.context-notice__meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  max-width: 100%;
+  border-radius: inherit;
+  background: currentColor;
 }
 
 .context-notice__detail {

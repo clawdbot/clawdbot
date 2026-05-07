@@ -1,3 +1,4 @@
+import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveOpenDmAllowlistAccess } from "openclaw/plugin-sdk/security-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
@@ -163,6 +164,11 @@ export async function handleFeishuCommentEvent(
         runtime: core,
         senderOpenId: turn.senderId,
         dynamicCfg,
+        configWritesAllowed: resolveChannelConfigWrites({
+          cfg: params.cfg,
+          channelId: "feishu",
+          accountId: account.accountId,
+        }),
         log: (message) => log(message),
       });
       if (dynamicResult.created) {

@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   generateExperimentalCodexAppServerProtocolSource,
-  normalizeGeneratedTypeScript,
   selectedCodexAppServerJsonSchemas,
 } from "./lib/codex-app-server-protocol-source.js";
 
@@ -76,7 +75,7 @@ const failures: string[] = [];
 const source = await generateExperimentalCodexAppServerProtocolSource();
 
 try {
-  await compareGeneratedProtocolMirror(source.typescriptRoot, source.jsonRoot);
+  await compareGeneratedProtocolMirror(source.jsonRoot);
 
   for (const check of checks) {
     const filePath = path.join(source.typescriptRoot, check.file);
@@ -112,35 +111,7 @@ console.log(
   `Codex app-server generated protocol matches OpenClaw bridge assumptions: ${source.codexRepo}`,
 );
 
-async function compareGeneratedProtocolMirror(
-  sourceTsRoot: string,
-  sourceJsonRoot: string,
-): Promise<void> {
-  const targetTsRoot = path.join(generatedRoot, "typescript");
-  const sourceFiles = await listFiles(sourceTsRoot, ".ts");
-  const targetFiles = await listFiles(targetTsRoot, ".ts");
-  const sourceSet = new Set(sourceFiles);
-  const targetSet = new Set(targetFiles);
-
-  for (const file of sourceFiles) {
-    if (!targetSet.has(file)) {
-      failures.push(`protocol-generated/typescript/${file}: missing local mirror`);
-      continue;
-    }
-    const source = normalizeGeneratedTypeScript(
-      await fs.readFile(path.join(sourceTsRoot, file), "utf8"),
-    );
-    const target = await fs.readFile(path.join(targetTsRoot, file), "utf8");
-    if (source !== target) {
-      failures.push(`protocol-generated/typescript/${file}: differs from normalized source schema`);
-    }
-  }
-  for (const file of targetFiles) {
-    if (!sourceSet.has(file)) {
-      failures.push(`protocol-generated/typescript/${file}: no longer present in source schema`);
-    }
-  }
-
+async function compareGeneratedProtocolMirror(sourceJsonRoot: string): Promise<void> {
   for (const schema of selectedCodexAppServerJsonSchemas) {
     const sourcePath = path.join(sourceJsonRoot, schema);
     const targetPath = path.join(generatedRoot, "json", schema);
@@ -168,21 +139,4 @@ async function compareGeneratedProtocolMirror(
 
 function normalizeJsonSchema(source: string): string {
   return JSON.stringify(JSON.parse(source));
-}
-
-async function listFiles(root: string, suffix: string): Promise<string[]> {
-  const files: string[] = [];
-  async function visit(dir: string): Promise<void> {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await visit(fullPath);
-      } else if (entry.isFile() && entry.name.endsWith(suffix)) {
-        files.push(path.relative(root, fullPath));
-      }
-    }
-  }
-  await visit(root);
-  return files.toSorted();
 }

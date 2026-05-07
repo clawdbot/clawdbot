@@ -14,7 +14,10 @@ import {
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,
 } from "./exec-approvals.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
+import {
+  resolvePluginApprovalRequestAllowedDecisions,
+  type PluginApprovalRequest,
+} from "./plugin-approvals.js";
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
@@ -105,6 +108,7 @@ export function buildPendingApprovalView(request: ApprovalRequest): PendingAppro
       ...buildPluginViewBase(pluginRequest, "pending"),
       actions: buildExecApprovalActionDescriptors({
         approvalCommandId: pluginRequest.id,
+        allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(pluginRequest.request),
       }),
       expiresAtMs: pluginRequest.expiresAtMs,
     };

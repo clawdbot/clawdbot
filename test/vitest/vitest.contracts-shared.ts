@@ -83,9 +83,6 @@ export function createContractsVitestConfig(
       ...baseTest,
       name: options.name ?? "contracts",
       isolate: false,
-      // Contract shards intentionally run non-isolated and load broad registries.
-      // Use forks so full-suite parallel runs do not hit worker-thread heap limits.
-      pool: "forks",
       runner: nonIsolatedRunnerPath,
       setupFiles: baseTest.setupFiles ?? [],
       include: envIncludePatterns ?? cliIncludePatterns ?? includePatterns,

@@ -9,6 +9,7 @@ export {
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   type ChannelMessageActionAdapter,
+  type ChannelMessageActionName,
   type ChannelStatusIssue,
   type OpenClawConfig,
 } from "../runtime-api.js";

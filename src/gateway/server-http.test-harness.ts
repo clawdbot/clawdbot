@@ -141,7 +141,6 @@ export function createTestGatewayServer(options: {
   overrides?: GatewayServerOptions;
 }): GatewayHttpServer {
   return createGatewayHttpServer({
-    canvasHost: null,
     clients: new Set(),
     controlUiEnabled: false,
     controlUiBasePath: "/__control__",

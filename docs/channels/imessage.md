@@ -1,22 +1,20 @@
 ---
-summary: "Legacy iMessage support via imsg (JSON-RPC over stdio). New setups should use BlueBubbles."
+summary: "Native iMessage support via imsg (JSON-RPC over stdio). Preferred for new OpenClaw iMessage setups when host requirements fit."
 read_when:
   - Setting up iMessage support
   - Debugging iMessage send/receive
 title: "iMessage"
 ---
 
-<Warning>
-For new iMessage deployments, use <a href="/channels/bluebubbles">BlueBubbles</a>.
+<Note>
+For new OpenClaw iMessage deployments, start here when you can run `imsg` on a signed-in macOS Messages host. BlueBubbles remains available as a legacy fallback for existing setups that depend on its HTTP server, webhooks, or richer private-API actions.
+</Note>
 
-The `imsg` integration is legacy and may be removed in a future release.
-</Warning>
-
-Status: legacy external CLI integration. Gateway spawns `imsg rpc` and communicates over JSON-RPC on stdio (no separate daemon/port).
+Status: native external CLI integration. Gateway spawns `imsg rpc` and communicates over JSON-RPC on stdio (no separate daemon/port).
 
 <CardGroup cols={3}>
-  <Card title="BlueBubbles (recommended)" icon="message-circle" href="/channels/bluebubbles">
-    Preferred iMessage path for new setups.
+  <Card title="BlueBubbles (legacy fallback)" icon="message-circle" href="/channels/bluebubbles">
+    Keep using it for existing BlueBubbles-backed routing; avoid it for new setups when imsg fits.
   </Card>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     iMessage DMs default to pairing mode.

@@ -449,6 +449,33 @@ describe("task-registry maintenance issue #60299", () => {
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
   });
 
+  it("does not keep stale CLI run-context tasks alive through stale subagent session rows", async () => {
+    const childSessionKey = "agent:main:subagent:stale-cli";
+    const task = makeStaleTask({
+      taskId: "task-cli-stale-subagent",
+      runtime: "cli",
+      sourceId: "run-cli-stale-subagent",
+      runId: "run-cli-stale-subagent",
+      childSessionKey,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: { [childSessionKey]: { sessionId: childSessionKey, updatedAt: Date.now() } },
+    });
+
+    expect(reconcileInspectableTasks()).toEqual([
+      expect.objectContaining({
+        taskId: task.taskId,
+        status: "lost",
+        error: "backing session missing",
+      }),
+    ]);
+    expect(getInspectableActiveTaskRestartBlockers()).toEqual([]);
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
+  });
+
   it("keeps chat-backed cli tasks live while the owning run context is still active", async () => {
     const channelKey = "agent:main:workspace:channel:C1234567890";
     const task = makeStaleTask({

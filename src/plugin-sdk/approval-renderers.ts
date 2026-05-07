@@ -5,6 +5,7 @@ import {
 import {
   buildPluginApprovalRequestMessage,
   buildPluginApprovalResolvedMessage,
+  resolvePluginApprovalRequestAllowedDecisions,
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
@@ -77,7 +78,9 @@ export function buildPluginApprovalPendingReplyPayload(params: {
     approvalId: params.request.id,
     approvalSlug: params.approvalSlug ?? params.request.id.slice(0, 8),
     text: params.text ?? buildPluginApprovalRequestMessage(params.request, params.nowMs),
-    allowedDecisions: params.allowedDecisions,
+    allowedDecisions:
+      params.allowedDecisions ??
+      resolvePluginApprovalRequestAllowedDecisions(params.request.request),
     channelData: params.channelData,
   });
 }

@@ -1,11 +1,11 @@
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveUserPath } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
-} from "openclaw/plugin-sdk/agent-harness";
-import { resolveUserPath } from "openclaw/plugin-sdk/agent-harness";
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   appendRegularFile,
   resolveRegularFileAppendFlags,

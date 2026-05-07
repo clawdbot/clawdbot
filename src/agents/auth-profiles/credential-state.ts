@@ -85,6 +85,10 @@ export function evaluateStoredCredentialEligibility(params: {
     return { eligible: true, reasonCode: "ok" };
   }
 
+  if (credential.type === "aws-sdk") {
+    return { eligible: true, reasonCode: "ok" };
+  }
+
   if (credential.type === "token") {
     const hasToken = hasConfiguredSecretString(credential.token);
     const hasTokenRef = hasConfiguredSecretRef(credential.tokenRef);

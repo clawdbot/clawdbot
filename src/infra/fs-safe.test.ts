@@ -38,7 +38,9 @@ async function runWriteOpenRace(params: {
         await params.runWrite();
       } catch (err) {
         expect(err).toMatchObject({
-          code: expect.stringMatching(/outside-workspace|path-mismatch|path-alias|invalid-path/),
+          code: expect.stringMatching(
+            /outside-workspace|path-mismatch|path-alias|invalid-path|not-file/,
+          ),
         });
       }
     },

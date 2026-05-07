@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
+import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   type TalkEvent,
   type TalkEventInput,
@@ -138,13 +139,16 @@ export function createTalkTranscriptionRelaySession(
   enforceTranscriptionSessionLimits(params.connId);
   const transcriptionSessionId = randomUUID();
   const expiresAtMs = Date.now() + TRANSCRIPTION_SESSION_TTL_MS;
-  const talk = createTalkSessionController({
-    sessionId: transcriptionSessionId,
-    mode: "transcription",
-    transport: "gateway-relay",
-    brain: "none",
-    provider: params.provider.id,
-  });
+  const talk = createTalkSessionController(
+    {
+      sessionId: transcriptionSessionId,
+      mode: "transcription",
+      transport: "gateway-relay",
+      brain: "none",
+      provider: params.provider.id,
+    },
+    { onEvent: recordTalkObservabilityEvent },
+  );
   let relay: TranscriptionRelaySession | undefined;
   const emit = (event: TalkTranscriptionRelayEventPayload, talkEvent?: TalkEventInput): void => {
     broadcastToOwner(params.context, params.connId, {

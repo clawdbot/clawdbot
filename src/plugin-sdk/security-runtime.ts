@@ -32,7 +32,10 @@ export {
   resolveRegularFileAppendFlags,
   root,
   statRegularFileSync,
+  writeExternalFileWithinRoot,
   withTimeout,
+  type ExternalFileWriteOptions,
+  type ExternalFileWriteResult,
   type FsSafeErrorCode as SafeOpenErrorCode,
 } from "../infra/fs-safe.js";
 

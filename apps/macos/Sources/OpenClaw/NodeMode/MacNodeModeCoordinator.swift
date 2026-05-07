@@ -8,9 +8,17 @@ final class MacNodeModeCoordinator {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "mac-node")
     private var task: Task<Void, Never>?
-    private let runtime = MacNodeRuntime()
-    private let session = GatewayNodeSession()
+    private let runtime: MacNodeRuntime
+    private let session: GatewayNodeSession
     private var autoRepairedTLSFingerprintsByStoreKey: [String: String] = [:]
+
+    private init() {
+        let session = GatewayNodeSession()
+        self.session = session
+        self.runtime = MacNodeRuntime(
+            canvasSurfaceUrl: { await session.currentCanvasHostUrl() },
+            refreshCanvasSurfaceUrl: { await session.refreshCanvasHostUrl() })
+    }
 
     func start() {
         guard self.task == nil else { return }

@@ -9,7 +9,7 @@ import {
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import ts from "typescript";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { lineGatewayAdapter } from "./gateway.js";
@@ -29,6 +29,11 @@ const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
 vi.mock("@line/bot-sdk", () => ({
   messagingApi: { MessagingApiClient: MessagingApiClientMock },
 }));
+
+afterAll(() => {
+  vi.doUnmock("@line/bot-sdk");
+  vi.resetModules();
+});
 
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
 const LINE_SRC_PREFIX = `../../${bundledPluginRoot("line")}/src/`;

@@ -1,5 +1,5 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   getZcaUserInfo,
@@ -18,6 +18,8 @@ vi.mock("./zalo-js.js", () => ({
 
 const mockCheckAuthenticated = vi.mocked(checkZaloAuthenticated);
 const mockGetUserInfo = vi.mocked(getZaloUserInfo);
+const originalZalouserProfile = process.env.ZALOUSER_PROFILE;
+const originalZcaProfile = process.env.ZCA_PROFILE;
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -29,6 +31,19 @@ describe("zalouser account resolution", () => {
     mockGetUserInfo.mockReset();
     delete process.env.ZALOUSER_PROFILE;
     delete process.env.ZCA_PROFILE;
+  });
+
+  afterEach(() => {
+    if (originalZalouserProfile === undefined) {
+      delete process.env.ZALOUSER_PROFILE;
+    } else {
+      process.env.ZALOUSER_PROFILE = originalZalouserProfile;
+    }
+    if (originalZcaProfile === undefined) {
+      delete process.env.ZCA_PROFILE;
+    } else {
+      process.env.ZCA_PROFILE = originalZcaProfile;
+    }
   });
 
   it("returns default account id when no accounts are configured", () => {

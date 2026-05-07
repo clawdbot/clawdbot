@@ -131,6 +131,12 @@ Maintenance preserves durable external conversation pointers, including group
 sessions and thread-scoped chat sessions, while still allowing synthetic cron,
 hook, heartbeat, ACP, and sub-agent entries to age out.
 
+If you previously used direct-message isolation and later returned
+`session.dmScope` to `main`, preview stale peer-keyed DM rows with
+`openclaw sessions cleanup --dry-run --fix-dm-scope`. Applying the same flag
+retires those old direct-DM rows and keeps their transcripts as deleted
+archives.
+
 Preview with `openclaw sessions cleanup --dry-run`.
 
 ## Inspecting sessions

@@ -38,6 +38,11 @@ default agent or model `fastMode` params.
 
 The file format is one JSON object per line.
 
+Talk, realtime voice, and managed-room code paths use the shared file logger for
+bounded lifecycle records. These records are intended for operational debugging
+and OTLP log export; transcript text, audio payloads, turn ids, call ids, and
+provider item ids are not copied into the log record.
+
 The Control UI Logs tab tails this file via the gateway (`logs.tail`).
 CLI can do the same:
 

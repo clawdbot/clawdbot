@@ -23,6 +23,12 @@ If you want a full harness runtime with ACP session controls, background tasks,
 thread/conversation binding, and persistent external coding sessions, use
 [ACP Agents](/tools/acp-agents) instead. CLI backends are not ACP.
 
+<Tip>
+  Building a new backend plugin? Use
+  [CLI backend plugins](/plugins/cli-backend-plugins). This page is for users
+  configuring and operating an already registered backend.
+</Tip>
+
 ## Beginner-friendly quick start
 
 You can use Codex CLI **without any config** (the bundled OpenAI plugin

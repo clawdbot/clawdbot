@@ -16,6 +16,30 @@ type PayloadCapture = {
   payload?: Record<string, unknown>;
 };
 
+const emptyUsage = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+const readToolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
+const readToolResult = {
+  role: "toolResult",
+  toolCallId: "call_1",
+  toolName: "read",
+  content: [{ type: "text", text: "ok" }],
+  isError: false,
+  timestamp: 3,
+};
+const readTool = {
+  name: "read",
+  description: "Read data",
+  parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+};
+
 function deepSeekV4Model(id: "deepseek-v4-flash" | "deepseek-v4-pro"): OpenAICompletionsModel {
   return {
     provider: "deepseek",
@@ -34,6 +58,49 @@ function deepSeekV4Model(id: "deepseek-v4-flash" | "deepseek-v4-pro"): OpenAICom
       maxTokensField: "max_tokens",
     },
   } as OpenAICompletionsModel;
+}
+
+function replayAssistantMessage(params: {
+  provider: string;
+  model: string;
+  content: Array<Record<string, unknown>>;
+  stopReason: "stop" | "toolUse";
+}) {
+  return {
+    role: "assistant",
+    api: "openai-completions",
+    provider: params.provider,
+    model: params.model,
+    content: params.content,
+    usage: emptyUsage,
+    stopReason: params.stopReason,
+    timestamp: 2,
+  };
+}
+
+function readToolReplayContext(assistantMessage: ReturnType<typeof replayAssistantMessage>) {
+  return {
+    messages: [{ role: "user", content: "hi", timestamp: 1 }, assistantMessage, readToolResult],
+    tools: [readTool],
+  } as Context;
+}
+
+function deepSeekReasoningToolReplayContext() {
+  return readToolReplayContext(
+    replayAssistantMessage({
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      content: [
+        {
+          type: "thinking",
+          thinking: "call reasoning",
+          thinkingSignature: "reasoning_content",
+        },
+        readToolCall,
+      ],
+      stopReason: "toolUse",
+    }),
+  );
 }
 
 function createPayloadCapturingStream(capture: PayloadCapture) {
@@ -194,50 +261,7 @@ describe("deepseek provider plugin", () => {
   it("preserves replayed reasoning_content when DeepSeek V4 thinking is enabled", async () => {
     const capture: PayloadCapture = {};
     const model = deepSeekV4Model("deepseek-v4-flash");
-    const context = {
-      messages: [
-        { role: "user", content: "hi", timestamp: 1 },
-        {
-          role: "assistant",
-          api: "openai-completions",
-          provider: "deepseek",
-          model: "deepseek-v4-flash",
-          content: [
-            {
-              type: "thinking",
-              thinking: "call reasoning",
-              thinkingSignature: "reasoning_content",
-            },
-            { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-          ],
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "toolUse",
-          timestamp: 2,
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "read",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-          timestamp: 3,
-        },
-      ],
-      tools: [
-        {
-          name: "read",
-          description: "Read data",
-          parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
-        },
-      ],
-    } as Context;
+    const context = deepSeekReasoningToolReplayContext();
     const baseStreamFn = createPayloadCapturingStream(capture);
 
     const wrapThinkingHigh = createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "high");
@@ -267,43 +291,14 @@ describe("deepseek provider plugin", () => {
   it("adds blank reasoning_content for replayed tool calls from non-DeepSeek turns", async () => {
     const capture: PayloadCapture = {};
     const model = deepSeekV4Model("deepseek-v4-pro");
-    const context = {
-      messages: [
-        { role: "user", content: "hi", timestamp: 1 },
-        {
-          role: "assistant",
-          api: "openai-completions",
-          provider: "openai",
-          model: "gpt-5.4",
-          content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "toolUse",
-          timestamp: 2,
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "read",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-          timestamp: 3,
-        },
-      ],
-      tools: [
-        {
-          name: "read",
-          description: "Read data",
-          parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
-        },
-      ],
-    } as Context;
+    const context = readToolReplayContext(
+      replayAssistantMessage({
+        provider: "openai",
+        model: "gpt-5.4",
+        content: [readToolCall],
+        stopReason: "toolUse",
+      }),
+    );
     const baseStreamFn = createPayloadCapturingStream(capture);
 
     const wrapThinkingHigh = createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "high");
@@ -332,23 +327,12 @@ describe("deepseek provider plugin", () => {
     const context = {
       messages: [
         { role: "user", content: "hi", timestamp: 1 },
-        {
-          role: "assistant",
-          api: "openai-completions",
+        replayAssistantMessage({
           provider: "openai",
           model: "gpt-5.4",
           content: [{ type: "text", text: "Hello." }],
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
           stopReason: "stop",
-          timestamp: 2,
-        },
+        }),
         { role: "user", content: "next", timestamp: 3 },
       ],
     } as Context;
@@ -368,50 +352,7 @@ describe("deepseek provider plugin", () => {
   it("strips replayed reasoning_content when DeepSeek V4 thinking is disabled", async () => {
     const capture: PayloadCapture = {};
     const model = deepSeekV4Model("deepseek-v4-flash");
-    const context = {
-      messages: [
-        { role: "user", content: "hi", timestamp: 1 },
-        {
-          role: "assistant",
-          api: "openai-completions",
-          provider: "deepseek",
-          model: "deepseek-v4-flash",
-          content: [
-            {
-              type: "thinking",
-              thinking: "call reasoning",
-              thinkingSignature: "reasoning_content",
-            },
-            { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-          ],
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "toolUse",
-          timestamp: 2,
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "read",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-          timestamp: 3,
-        },
-      ],
-      tools: [
-        {
-          name: "read",
-          description: "Read data",
-          parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
-        },
-      ],
-    } as Context;
+    const context = deepSeekReasoningToolReplayContext();
     const baseStreamFn = createPayloadCapturingStream(capture);
 
     const wrapThinkingNone = createDeepSeekV4ThinkingWrapper(

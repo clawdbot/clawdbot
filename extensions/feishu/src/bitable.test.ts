@@ -1,5 +1,5 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
@@ -71,6 +71,11 @@ function createBitableClient(records: MockRecord[]) {
 }
 
 describe("feishu bitable create app cleanup", () => {
+  afterAll(() => {
+    vi.doUnmock("./client.js");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     createFeishuClientMock.mockReset();
   });

@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebhookTarget } from "./monitor-types.js";
 import type { GoogleChatEvent } from "./types.js";
 
@@ -100,6 +100,13 @@ describe("googlechat monitor webhook", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/webhook-request-guards");
+    vi.doUnmock("openclaw/plugin-sdk/webhook-targets");
+    vi.doUnmock("./auth.js");
+    vi.resetModules();
   });
 
   it("accepts add-on payloads that carry systemIdToken in the body", async () => {

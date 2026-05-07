@@ -202,11 +202,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         ", ",
       )} complete`,
     );
-    const timeoutMsRaw = nextConfig.gateway?.reload?.deferralTimeoutMs;
-    const timeoutMs =
-      typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
-        ? Math.max(CHANNEL_RELOAD_DEFERRAL_POLL_MS, Math.floor(timeoutMsRaw))
-        : undefined;
+    const timeoutMs = resolveGatewayRestartDeferralTimeoutMs(
+      nextConfig.gateway?.reload?.deferralTimeoutMs,
+    );
     const startedAt = Date.now();
     let nextStillPendingAt = startedAt + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
     while (true) {

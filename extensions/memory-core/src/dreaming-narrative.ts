@@ -304,7 +304,8 @@ export function extractNarrativeText(messages: unknown[]): string | null {
             part &&
             typeof part === "object" &&
             !Array.isArray(part) &&
-            (part as Record<string, unknown>).type === "text" &&
+            ((part as Record<string, unknown>).type === "text" ||
+              (part as Record<string, unknown>).type === "output_text") &&
             typeof (part as Record<string, unknown>).text === "string",
         )
         .map((part) => (part as { text: string }).text)
@@ -322,7 +323,7 @@ export function extractNarrativeText(messages: unknown[]): string | null {
 
 export function formatNarrativeDate(epochMs: number, timezone?: string): string {
   const opts: Intl.DateTimeFormatOptions = {
-    timeZone: timezone,
+    timeZone: timezone ?? process.env.TZ,
     year: "numeric",
     month: "long",
     day: "numeric",

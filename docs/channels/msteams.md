@@ -709,7 +709,7 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.managedIdentityClientId`: client ID for user-assigned managed identity.
 - `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](#sending-files-in-group-chats)).
 
-## Routing & Sessions
+## Routing and sessions
 
 - Session keys follow the standard agent format (see [/concepts/session](/concepts/session)):
   - Direct messages share the main session (`agent:<agentId>:<mainKey>`).
@@ -752,7 +752,28 @@ Teams recently introduced two channel UI styles over the same underlying data mo
 }
 ```
 
-## Attachments & Images
+### Resolution precedence
+
+When the bot sends a reply into a channel, `replyStyle` is resolved from the most specific override down to the default. The first non-`undefined` value wins:
+
+1. **Per-channel** — `channels.msteams.teams.<teamId>.channels.<conversationId>.replyStyle`
+2. **Per-team** — `channels.msteams.teams.<teamId>.replyStyle`
+3. **Global** — `channels.msteams.replyStyle`
+4. **Implicit default** — derived from `requireMention`:
+   - `requireMention: true` → `thread`
+   - `requireMention: false` → `top-level`
+
+If you set `requireMention: false` globally without an explicit `replyStyle`, mentions in Posts-style channels will surface as top-level posts even when the inbound was a thread reply. Pin `replyStyle: "thread"` at the global, team, or channel level to avoid surprises.
+
+### Thread context preservation
+
+When `replyStyle: "thread"` is in effect and the bot was @mentioned from inside a channel thread, OpenClaw re-attaches the original thread root to the outbound conversation reference (`19:…@thread.tacv2;messageid=<root>`) so the reply lands inside the same thread. This holds for both live (in-turn) sends and proactive sends made after the Bot Framework turn context has expired (e.g., long-running agents, queued tool-call replies via `mcp__openclaw__message`).
+
+The thread root is taken from the stored `threadId` on the conversation reference. Older stored references that predate `threadId` fall back to `activityId` (whatever inbound activity last seeded the conversation), so existing deployments keep working without a re-seed.
+
+When `replyStyle: "top-level"` is in effect, channel-thread inbounds are intentionally answered as new top-level posts — no thread suffix is attached. This is the correct behavior for Threads-style channels; if you see top-level posts where you expected threaded replies, your `replyStyle` is set incorrectly for that channel.
+
+## Attachments and images
 
 **Current limitations:**
 

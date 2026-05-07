@@ -1,5 +1,5 @@
 ---
-summary: "RPC adapters for external CLIs (signal-cli, legacy imsg) and gateway patterns"
+summary: "RPC adapters for external CLIs (signal-cli, imsg) and gateway patterns"
 read_when:
   - Adding or changing external CLI integrations
   - Debugging RPC adapters (signal-cli, imsg)

@@ -30,6 +30,26 @@ describe("discord live qa runtime", () => {
     });
   });
 
+  it("resolves optional Discord QA voice channel env var", () => {
+    expect(
+      __testing.resolveDiscordQaRuntimeEnv({
+        OPENCLAW_QA_DISCORD_GUILD_ID: "123456789012345678",
+        OPENCLAW_QA_DISCORD_CHANNEL_ID: "223456789012345678",
+        OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID: "523456789012345678",
+        OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN: "driver",
+        OPENCLAW_QA_DISCORD_SUT_BOT_TOKEN: "sut",
+        OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID: "323456789012345678",
+      }),
+    ).toEqual({
+      guildId: "123456789012345678",
+      channelId: "223456789012345678",
+      voiceChannelId: "523456789012345678",
+      driverBotToken: "driver",
+      sutBotToken: "sut",
+      sutApplicationId: "323456789012345678",
+    });
+  });
+
   it("fails when a required Discord QA env var is missing", () => {
     expect(() =>
       __testing.resolveDiscordQaRuntimeEnv({
@@ -58,6 +78,7 @@ describe("discord live qa runtime", () => {
       __testing.parseDiscordQaCredentialPayload({
         guildId: "123456789012345678",
         channelId: "223456789012345678",
+        voiceChannelId: "523456789012345678",
         driverBotToken: "driver",
         sutBotToken: "sut",
         sutApplicationId: "323456789012345678",
@@ -65,6 +86,7 @@ describe("discord live qa runtime", () => {
     ).toEqual({
       guildId: "123456789012345678",
       channelId: "223456789012345678",
+      voiceChannelId: "523456789012345678",
       driverBotToken: "driver",
       sutBotToken: "sut",
       sutApplicationId: "323456789012345678",
@@ -138,6 +160,35 @@ describe("discord live qa runtime", () => {
           },
         },
       },
+    });
+  });
+
+  it("injects Discord voice auto-join config for the voice smoke", () => {
+    const next = __testing.buildDiscordQaConfig(
+      {},
+      {
+        guildId: "123456789012345678",
+        channelId: "223456789012345678",
+        driverBotId: "423456789012345678",
+        sutAccountId: "sut",
+        sutBotToken: "sut-token",
+      },
+      {
+        voiceAutoJoin: {
+          guildId: "123456789012345678",
+          channelId: "523456789012345678",
+        },
+      },
+    );
+
+    expect(next.channels?.discord?.voice).toEqual({
+      enabled: true,
+      autoJoin: [
+        {
+          guildId: "123456789012345678",
+          channelId: "523456789012345678",
+        },
+      ],
     });
   });
 
@@ -250,6 +301,9 @@ describe("discord live qa runtime", () => {
     expect(
       __testing.findScenario(["discord-status-reactions-tool-only"]).map((scenario) => scenario.id),
     ).toEqual(["discord-status-reactions-tool-only"]);
+    expect(
+      __testing.findScenario(["discord-voice-autojoin"]).map((scenario) => scenario.id),
+    ).toEqual(["discord-voice-autojoin"]);
     expect(
       __testing
         .findScenario(["discord-thread-reply-filepath-attachment"])
@@ -462,6 +516,60 @@ describe("discord live qa runtime", () => {
       { id: "623456789012345678", name: "help" },
       { id: "623456789012345679", name: "commands" },
     ]);
+  });
+
+  it("discovers the first visible Discord voice channel for the voice smoke", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify([
+              { id: "123456789012345678", name: "general", position: 0, type: 0 },
+              { id: "523456789012345678", name: "qa-voice", position: 1, type: 2 },
+              { id: "623456789012345678", name: "stage", position: 2, type: 13 },
+            ]),
+            {
+              status: 200,
+              headers: {
+                "content-type": "application/json",
+              },
+            },
+          ),
+      ),
+    );
+
+    await expect(
+      __testing.resolveDiscordQaVoiceChannel({
+        token: "token",
+        guildId: "123456789012345678",
+      }),
+    ).resolves.toMatchObject({
+      id: "523456789012345678",
+      name: "qa-voice",
+    });
+  });
+
+  it("normalizes missing current Discord voice state to null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ message: "Unknown Voice State" }), {
+            status: 404,
+            headers: {
+              "content-type": "application/json",
+            },
+          }),
+      ),
+    );
+
+    await expect(
+      __testing.getCurrentDiscordVoiceState({
+        token: "token",
+        guildId: "123456789012345678",
+      }),
+    ).resolves.toBeNull();
   });
 
   it("waits for required Discord application commands to be registered", async () => {

@@ -14,6 +14,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/text-runtime";
+import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 
 const log = createSubsystemLogger("bedrock-discovery");
@@ -481,6 +482,9 @@ export async function discoverBedrockModels(params: {
     ? createInjectedClientDiscoverySdk()
     : await loadBedrockDiscoverySdk();
   const clientFactory = params.clientFactory ?? ((region: string) => sdk.createClient(region));
+  if (!params.clientFactory) {
+    await refreshAwsSharedConfigCacheForBedrock();
+  }
   const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {

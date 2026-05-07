@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ConversationRef,
   SessionBindingAdapter,
@@ -165,6 +165,21 @@ function createAdapter(channel: string, accountId: string): SessionBindingAdapte
 
 afterAll(() => {
   cleanupTrackedTempDirs(tempDirs);
+});
+
+beforeAll(async () => {
+  ({
+    __testing,
+    buildPluginBindingApprovalCustomId,
+    detachPluginConversationBinding,
+    getCurrentPluginConversationBinding,
+    parsePluginBindingApprovalCustomId,
+    requestPluginConversationBinding,
+    resolvePluginConversationBindingApproval,
+  } = await import("./conversation-binding.js"));
+  ({ registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
+    await import("../infra/outbound/session-binding-service.js"));
+  ({ setActivePluginRegistry } = await import("./runtime.js"));
 });
 
 function createDiscordCodexBindRequest(
@@ -389,44 +404,7 @@ async function expectResolutionDoesNotWait(params: {
 }
 
 describe("plugin conversation binding approvals", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doMock("../infra/home-dir.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("../infra/home-dir.js")>("../infra/home-dir.js");
-      return {
-        ...actual,
-        expandHomePrefix: (value: string) => {
-          if (value === "~/.openclaw/plugin-binding-approvals.json") {
-            return approvalsPath;
-          }
-          return actual.expandHomePrefix(value);
-        },
-      };
-    });
-    vi.doMock("./runtime.js", async () => {
-      const actual = await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
-      return {
-        ...actual,
-        getActivePluginRegistry: () => pluginRuntimeState.registry,
-        getActivePluginChannelRegistry: () => pluginRuntimeState.registry,
-        setActivePluginRegistry: (registry: PluginRegistry) => {
-          pluginRuntimeState.registry = registry;
-        },
-      };
-    });
-    ({
-      __testing,
-      buildPluginBindingApprovalCustomId,
-      detachPluginConversationBinding,
-      getCurrentPluginConversationBinding,
-      parsePluginBindingApprovalCustomId,
-      requestPluginConversationBinding,
-      resolvePluginConversationBindingApproval,
-    } = await import("./conversation-binding.js"));
-    ({ registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
-      await import("../infra/outbound/session-binding-service.js"));
-    ({ setActivePluginRegistry } = await import("./runtime.js"));
+  beforeEach(() => {
     sessionBindingState.reset();
     __testing.reset();
     setActivePluginRegistry(createEmptyPluginRegistry());

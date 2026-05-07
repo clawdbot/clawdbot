@@ -1564,4 +1564,94 @@ describe("runtime web tools resolution", () => {
     expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
   });
+
+  describe("when brave is installed as an external plugin and explicitly configured", () => {
+    const externalBraveImpl = ({
+      value,
+      origin,
+    }: {
+      value: string;
+      origin?: string;
+    }): string | undefined => {
+      if (origin === "bundled" && value === "brave") {
+        return undefined;
+      }
+      return (
+        {
+          brave: "brave",
+          firecrawl: "firecrawl",
+          gemini: "google",
+          grok: "xai",
+          kimi: "moonshot",
+          perplexity: "perplexity",
+        } as Record<string, string | undefined>
+      )[value];
+    };
+
+    const defaultImpl = ({ value }: { value: string }): string | undefined =>
+      (
+        ({
+          brave: "brave",
+          firecrawl: "firecrawl",
+          gemini: "google",
+          grok: "xai",
+          kimi: "moonshot",
+          perplexity: "perplexity",
+        }) as Record<string, string | undefined>
+      )[value];
+
+    beforeEach(() => {
+      loadInstalledPluginIndexInstallRecordsSyncMock.mockReturnValue({
+        brave: { source: "npm", spec: "@openclaw/brave-search" },
+      });
+      resolveManifestContractOwnerPluginIdMock.mockImplementation(externalBraveImpl);
+    });
+
+    afterEach(() => {
+      resolveManifestContractOwnerPluginIdMock.mockImplementation(defaultImpl);
+    });
+
+    it("selects the configured provider without re-invoking provider discovery when found in the first pass", async () => {
+      resolvePluginWebSearchProvidersMock
+        .mockReturnValueOnce(buildTestWebSearchProviders())
+        .mockReturnValueOnce([]);
+
+      const { metadata, context } = await runRuntimeWebTools({
+        config: asConfig({
+          tools: {
+            web: {
+              search: {
+                provider: "brave",
+              },
+            },
+          },
+          plugins: {
+            entries: {
+              brave: {
+                config: {
+                  webSearch: {
+                    apiKey: "brave-api-key", // pragma: allowlist secret
+                  },
+                },
+              },
+            },
+          },
+        }),
+      });
+
+      expect(metadata.search.selectedProvider).toBe("brave");
+      expect(metadata.search.providerSource).toBe("configured");
+      expect(metadata.search.selectedProviderKeySource).toBe("config");
+      expect(context.warnings).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT" }),
+        ]),
+      );
+      expect(resolvePluginWebSearchProvidersMock).toHaveBeenCalledTimes(1);
+      expect(
+        resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock,
+      ).not.toHaveBeenCalled();
+      expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    });
+  });
 });

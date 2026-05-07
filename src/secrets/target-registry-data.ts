@@ -1,3 +1,4 @@
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
@@ -445,11 +446,19 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
   env: NodeJS.ProcessEnv;
   preferPersisted?: boolean;
 }): SecretTargetRegistryEntry[] {
-  const plugins = loadPluginMetadataSnapshot({
-    config: {},
-    env: params.env,
-    ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
-  }).plugins;
+  const plugins =
+    (params.preferPersisted === false
+      ? undefined
+      : getCurrentPluginMetadataSnapshot({
+          config: {},
+          env: params.env,
+        })
+    )?.plugins ??
+    loadPluginMetadataSnapshot({
+      config: {},
+      env: params.env,
+      ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
+    }).plugins;
   const bundledPlugins = plugins.filter((record) => record.origin === "bundled");
   const channelPlugins = plugins.filter((record) => record.channels.length > 0);
   return [

@@ -59,7 +59,7 @@ export function createRealtimeVoiceAgentTalkbackQueue(
         }
         const currentQuestion = nextQuestion;
         pendingQuestion = undefined;
-        params.logger.info(`${params.logPrefix} consult: ${currentQuestion}`);
+        params.logger.info(`${params.logPrefix} consult: chars=${currentQuestion.length}`);
         activeAbortController = new AbortController();
         const result = await params.consult({
           question: currentQuestion,

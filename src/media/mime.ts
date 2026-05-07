@@ -74,6 +74,9 @@ export function normalizeMimeType(mime?: string | null): string | undefined {
     return undefined;
   }
   const cleaned = mime.split(";")[0]?.trim().toLowerCase();
+  if (cleaned === "image/apng") {
+    return "image/png";
+  }
   return cleaned || undefined;
 }
 
@@ -93,7 +96,7 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
     const { fileTypeFromBuffer } = await fileTypeModuleLoader.load();
     const type = await fileTypeFromBuffer(sliceMimeSniffBuffer(buffer));
     if (type?.mime) {
-      return type.mime;
+      return normalizeMimeType(type.mime);
     }
   } catch {
     // fall through to manual magic-byte sniffs

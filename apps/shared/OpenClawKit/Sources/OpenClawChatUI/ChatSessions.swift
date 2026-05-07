@@ -1,5 +1,15 @@
 import Foundation
 
+public struct OpenClawChatThinkingLevelOption: Codable, Identifiable, Sendable, Hashable {
+    public let id: String
+    public let label: String
+
+    public init(id: String, label: String) {
+        self.id = id
+        self.label = label
+    }
+}
+
 public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable {
     public var id: String {
         self.selectionID
@@ -34,13 +44,29 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
 }
 
 public struct OpenClawChatSessionsDefaults: Codable, Sendable {
+    public let modelProvider: String?
     public let model: String?
     public let contextTokens: Int?
+    public let thinkingLevels: [OpenClawChatThinkingLevelOption]?
+    public let thinkingOptions: [String]?
+    public let thinkingDefault: String?
     public let mainSessionKey: String?
 
-    public init(model: String?, contextTokens: Int?, mainSessionKey: String? = nil) {
+    public init(
+        modelProvider: String? = nil,
+        model: String?,
+        contextTokens: Int?,
+        thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
+        thinkingOptions: [String]? = nil,
+        thinkingDefault: String? = nil,
+        mainSessionKey: String? = nil)
+    {
+        self.modelProvider = modelProvider
         self.model = model
         self.contextTokens = contextTokens
+        self.thinkingLevels = thinkingLevels
+        self.thinkingOptions = thinkingOptions
+        self.thinkingDefault = thinkingDefault
         self.mainSessionKey = mainSessionKey
     }
 }
@@ -72,6 +98,57 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public let modelProvider: String?
     public let model: String?
     public let contextTokens: Int?
+    public let thinkingLevels: [OpenClawChatThinkingLevelOption]?
+    public let thinkingOptions: [String]?
+    public let thinkingDefault: String?
+
+    public init(
+        key: String,
+        kind: String?,
+        displayName: String?,
+        surface: String?,
+        subject: String?,
+        room: String?,
+        space: String?,
+        updatedAt: Double?,
+        sessionId: String?,
+        systemSent: Bool?,
+        abortedLastRun: Bool?,
+        thinkingLevel: String?,
+        verboseLevel: String?,
+        inputTokens: Int?,
+        outputTokens: Int?,
+        totalTokens: Int?,
+        modelProvider: String?,
+        model: String?,
+        contextTokens: Int?,
+        thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
+        thinkingOptions: [String]? = nil,
+        thinkingDefault: String? = nil)
+    {
+        self.key = key
+        self.kind = kind
+        self.displayName = displayName
+        self.surface = surface
+        self.subject = subject
+        self.room = room
+        self.space = space
+        self.updatedAt = updatedAt
+        self.sessionId = sessionId
+        self.systemSent = systemSent
+        self.abortedLastRun = abortedLastRun
+        self.thinkingLevel = thinkingLevel
+        self.verboseLevel = verboseLevel
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.totalTokens = totalTokens
+        self.modelProvider = modelProvider
+        self.model = model
+        self.contextTokens = contextTokens
+        self.thinkingLevels = thinkingLevels
+        self.thinkingOptions = thinkingOptions
+        self.thinkingDefault = thinkingDefault
+    }
 }
 
 public struct OpenClawChatSessionsListResponse: Codable, Sendable {

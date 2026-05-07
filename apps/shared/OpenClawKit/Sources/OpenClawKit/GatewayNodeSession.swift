@@ -11,19 +11,6 @@ private struct NodeInvokeRequestPayload: Codable {
     var idempotencyKey: String?
 }
 
-private func replaceCanvasCapabilityInScopedHostUrl(scopedUrl: String, capability: String) -> String? {
-    let marker = "/__openclaw__/cap/"
-    guard let markerRange = scopedUrl.range(of: marker) else { return nil }
-    let capabilityStart = markerRange.upperBound
-    let suffix = scopedUrl[capabilityStart...]
-    let nextSlash = suffix.firstIndex(of: "/")
-    let nextQuery = suffix.firstIndex(of: "?")
-    let nextFragment = suffix.firstIndex(of: "#")
-    let capabilityEnd = [nextSlash, nextQuery, nextFragment].compactMap(\.self).min() ?? scopedUrl.endIndex
-    guard capabilityStart < capabilityEnd else { return nil }
-    return String(scopedUrl[..<capabilityStart]) + capability + String(scopedUrl[capabilityEnd...])
-}
-
 func canonicalizeCanvasHostUrl(raw: String?, activeURL: URL?) -> String? {
     let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     guard !trimmed.isEmpty else { return nil }
@@ -152,7 +139,11 @@ public actor GatewayNodeSession {
     }
 
     private var serverEventSubscribers: [UUID: AsyncStream<EventFrame>.Continuation] = [:]
-    private var canvasHostUrl: String?
+    private var pluginSurfaceUrls: [String: String] = [:]
+
+    private struct PluginSurfaceRefreshResponse: Decodable {
+        let pluginSurfaceUrls: [String: AnyCodable]?
+    }
 
     public init() {}
 
@@ -270,47 +261,26 @@ public actor GatewayNodeSession {
     }
 
     public func currentCanvasHostUrl() -> String? {
-        self.canvasHostUrl
+        self.pluginSurfaceUrls["canvas"]
     }
 
-    public func refreshNodeCanvasCapability(timeoutMs: Int = 8000) async -> Bool {
-        guard let channel = self.channel else { return false }
-        do {
-            let data = try await channel.request(
-                method: "node.canvas.capability.refresh",
-                params: [:],
-                timeoutMs: Double(max(timeoutMs, 1)))
-            guard
-                let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                let rawCapability = payload["canvasCapability"] as? String
-            else {
-                self.logger.warning("node.canvas.capability.refresh missing canvasCapability")
-                return false
-            }
-            let capability = rawCapability.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !capability.isEmpty else {
-                self.logger.warning("node.canvas.capability.refresh returned empty capability")
-                return false
-            }
-            let scopedUrl = self.canvasHostUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !scopedUrl.isEmpty else {
-                self.logger.warning("node.canvas.capability.refresh missing local canvasHostUrl")
-                return false
-            }
-            guard let refreshed = replaceCanvasCapabilityInScopedHostUrl(
-                scopedUrl: scopedUrl,
-                capability: capability)
-            else {
-                self.logger.warning("node.canvas.capability.refresh could not rewrite scoped canvas URL")
-                return false
-            }
-            self.canvasHostUrl = refreshed
-            return true
-        } catch {
-            self.logger.warning(
-                "node.canvas.capability.refresh failed: \(error.localizedDescription, privacy: .public)")
-            return false
-        }
+    @discardableResult
+    public func refreshPluginSurfaceUrl(surface: String, timeoutSeconds: Int = 8) async -> String? {
+        guard let channel = self.channel else { return nil }
+        let trimmedSurface = surface.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSurface.isEmpty else { return nil }
+
+        return await self.requestPluginSurfaceRefresh(
+            channel: channel,
+            method: "node.pluginSurface.refresh",
+            params: ["surface": AnyCodable(trimmedSurface)],
+            surface: trimmedSurface,
+            timeoutSeconds: timeoutSeconds)
+    }
+
+    @discardableResult
+    public func refreshCanvasHostUrl(timeoutSeconds: Int = 8) async -> String? {
+        await self.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: timeoutSeconds)
     }
 
     public func currentRemoteAddress() -> String? {
@@ -364,8 +334,7 @@ public actor GatewayNodeSession {
     private func handlePush(_ push: GatewayPush) async {
         switch push {
         case let .snapshot(ok):
-            let raw = ok.canvashosturl?.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.canvasHostUrl = self.normalizeCanvasHostUrl(raw)
+            self.pluginSurfaceUrls = self.normalizePluginSurfaceUrls(ok.pluginsurfaceurls)
             if self.hasEverConnected {
                 self.broadcastServerEvent(
                     EventFrame(type: "event", event: "seqGap", payload: nil, seq: nil, stateversion: nil))
@@ -434,6 +403,39 @@ public actor GatewayNodeSession {
 
     private func normalizeCanvasHostUrl(_ raw: String?) -> String? {
         canonicalizeCanvasHostUrl(raw: raw, activeURL: self.activeURL)
+    }
+
+    private func normalizePluginSurfaceUrls(_ raw: [String: AnyCodable]?) -> [String: String] {
+        var normalized: [String: String] = [:]
+        if let raw {
+            normalized = raw.compactMapValues { value in
+                self.normalizeCanvasHostUrl(value.value as? String)
+            }
+        }
+        return normalized
+    }
+
+    private func requestPluginSurfaceRefresh(
+        channel: GatewayChannelActor,
+        method: String,
+        params: [String: AnyCodable]?,
+        surface: String,
+        timeoutSeconds: Int) async -> String?
+    {
+        do {
+            let data = try await channel.request(
+                method: method,
+                params: params,
+                timeoutMs: Double(timeoutSeconds * 1000))
+            let decoded = try self.decoder.decode(PluginSurfaceRefreshResponse.self, from: data)
+            let urls = self.normalizePluginSurfaceUrls(decoded.pluginSurfaceUrls)
+            guard let refreshed = urls[surface] else { return nil }
+            self.pluginSurfaceUrls[surface] = refreshed
+            return refreshed
+        } catch {
+            self.logger.debug("\(method, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     private func handleEvent(_ evt: EventFrame) async {

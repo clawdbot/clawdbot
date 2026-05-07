@@ -465,7 +465,7 @@ function buildMissingApiKeyFailureText(message: string): string | null {
     return null;
   }
   if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
-    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.5`, or set `OPENAI_API_KEY`, then try again.";
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` through the Codex runtime, or set `OPENAI_API_KEY`, then try again.";
   }
   if (SAFE_MISSING_API_KEY_PROVIDERS.has(provider)) {
     return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
@@ -909,8 +909,9 @@ function resolveRestartLifecycleError(
   const pending = [err];
   const seen = new Set<unknown>();
 
-  while (pending.length > 0) {
-    const candidate = pending.shift();
+  let pendingIndex = 0;
+  while (pendingIndex < pending.length) {
+    const candidate = pending[pendingIndex++];
     if (!candidate || seen.has(candidate)) {
       continue;
     }

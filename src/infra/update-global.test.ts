@@ -29,6 +29,7 @@ import {
   resolveGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromPrefix,
+  resolvePnpmGlobalDirFromGlobalRoot,
   type CommandRunner,
 } from "./update-global.js";
 
@@ -416,6 +417,151 @@ describe("update global helpers", () => {
     }
   });
 
+  it("detects custom pnpm global layouts from the running package root", async () => {
+    await withTempDir({ prefix: "openclaw-update-pnpm-custom-root-" }, async (base) => {
+      const customGlobalDir = path.join(base, "custom-pnpm");
+      const customGlobalRoot = path.join(customGlobalDir, "5", "node_modules");
+      const pkgRoot = path.join(customGlobalRoot, "openclaw");
+      const defaultPnpmRoot = path.join(base, "default-pnpm", "5", "node_modules");
+      await fs.mkdir(pkgRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(customGlobalDir, "5", "pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\n",
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(customGlobalRoot, ".modules.yaml"),
+        "layoutVersion: 5\n",
+        "utf8",
+      );
+
+      const runCommand: CommandRunner = async (argv) => {
+        if (argv[0] === "npm") {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        if (argv[0] === "pnpm") {
+          return { stdout: `${defaultPnpmRoot}\n`, stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      };
+
+      await expect(detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000)).resolves.toBe(
+        "pnpm",
+      );
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "pnpm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot,
+        }),
+      ).resolves.toEqual({
+        manager: "pnpm",
+        command: "pnpm",
+        globalRoot: customGlobalRoot,
+        packageRoot: pkgRoot,
+      });
+      expect(resolvePnpmGlobalDirFromGlobalRoot(customGlobalRoot)).toBe(customGlobalDir);
+    });
+  });
+
+  it("detects custom pnpm global layouts from virtual-store package roots", async () => {
+    await withTempDir({ prefix: "openclaw-update-pnpm-virtual-root-" }, async (base) => {
+      const customGlobalDir = path.join(base, "custom-pnpm");
+      const customGlobalRoot = path.join(customGlobalDir, "5", "node_modules");
+      const pkgRoot = path.join(
+        customGlobalDir,
+        "5",
+        ".pnpm",
+        "openclaw@file+..+pack+openclaw-2026.5.6.tgz",
+        "node_modules",
+        "openclaw",
+      );
+      const defaultPnpmRoot = path.join(base, "default-pnpm", "5", "node_modules");
+      await fs.mkdir(customGlobalRoot, { recursive: true });
+      await fs.mkdir(pkgRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(customGlobalDir, "5", "pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\n",
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(customGlobalRoot, ".modules.yaml"),
+        "layoutVersion: 5\n",
+        "utf8",
+      );
+
+      const runCommand: CommandRunner = async (argv) => {
+        if (argv[0] === "npm") {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        if (argv[0] === "pnpm") {
+          return { stdout: `${defaultPnpmRoot}\n`, stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      };
+
+      await expect(detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000)).resolves.toBe(
+        "pnpm",
+      );
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "pnpm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot,
+        }),
+      ).resolves.toEqual({
+        manager: "pnpm",
+        command: "pnpm",
+        globalRoot: customGlobalRoot,
+        packageRoot: path.join(customGlobalRoot, "openclaw"),
+      });
+    });
+  });
+
+  it("does not infer pnpm ownership without pnpm node_modules metadata", async () => {
+    await withTempDir({ prefix: "openclaw-update-pnpm-shape-only-" }, async (base) => {
+      const customGlobalDir = path.join(base, "custom-pnpm");
+      const customGlobalRoot = path.join(customGlobalDir, "5", "node_modules");
+      const pkgRoot = path.join(customGlobalRoot, "openclaw");
+      const defaultPnpmRoot = path.join(base, "default-pnpm", "5", "node_modules");
+      await fs.mkdir(pkgRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(customGlobalDir, "5", "pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\n",
+        "utf8",
+      );
+
+      const runCommand: CommandRunner = async (argv) => {
+        if (argv[0] === "npm") {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        if (argv[0] === "pnpm") {
+          return { stdout: `${defaultPnpmRoot}\n`, stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      };
+
+      await expect(
+        detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000),
+      ).resolves.toBeNull();
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "pnpm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot,
+        }),
+      ).resolves.toEqual({
+        manager: "pnpm",
+        command: "pnpm",
+        globalRoot: defaultPnpmRoot,
+        packageRoot: path.join(defaultPnpmRoot, "openclaw"),
+      });
+    });
+  });
+
   it("builds install argv and npm fallback argv", () => {
     expect(resolveGlobalInstallCommand("npm")).toEqual({
       manager: "npm",
@@ -457,6 +603,14 @@ describe("update global helpers", () => {
     expect(
       globalInstallArgs({ manager: "pnpm", command: "/opt/homebrew/bin/pnpm" }, "openclaw@latest"),
     ).toEqual(["/opt/homebrew/bin/pnpm", "add", "-g", "openclaw@latest"]);
+    expect(globalInstallArgs("pnpm", "openclaw@latest", null, "/opt/pnpm-global")).toEqual([
+      "pnpm",
+      "add",
+      "-g",
+      "--global-dir",
+      "/opt/pnpm-global",
+      "openclaw@latest",
+    ]);
   });
 
   it("builds npm staged install argv with an explicit prefix", () => {

@@ -22,7 +22,7 @@ describe("diagnostic stability recorder", () => {
     resetDiagnosticEventsForTest();
   });
 
-  it("records a bounded payload-free projection of diagnostic events", () => {
+  it("records a bounded payload-free projection of diagnostic events", async () => {
     startDiagnosticStabilityRecorder();
 
     emitDiagnosticEvent({
@@ -41,13 +41,29 @@ describe("diagnostic stability recorder", () => {
       count: 3,
       message: "message that should not be stored",
     });
+    emitDiagnosticEvent({
+      type: "talk.event",
+      sessionId: "talk-session-secret",
+      turnId: "talk-turn-secret",
+      captureId: "talk-capture-secret",
+      talkEventType: "latency.metrics",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "openai",
+      final: true,
+      durationMs: 12,
+      byteLength: 345,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
-    expect(snapshot.count).toBe(2);
+    expect(snapshot.count).toBe(3);
     expect(snapshot.summary.byType).toMatchObject({
       "webhook.error": 1,
       "tool.loop": 1,
+      "talk.event": 1,
     });
     expect(snapshot.events[0]).toMatchObject({
       type: "webhook.error",
@@ -66,6 +82,20 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[1]).not.toHaveProperty("message");
     expect(snapshot.events[1]).not.toHaveProperty("sessionId");
     expect(snapshot.events[1]).not.toHaveProperty("sessionKey");
+    expect(snapshot.events[2]).toMatchObject({
+      type: "talk.event",
+      talkEventType: "latency.metrics",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "openai",
+      final: true,
+      durationMs: 12,
+      bytes: 345,
+    });
+    expect(snapshot.events[2]).not.toHaveProperty("sessionId");
+    expect(snapshot.events[2]).not.toHaveProperty("turnId");
+    expect(snapshot.events[2]).not.toHaveProperty("captureId");
   });
 
   it("keeps stable reason codes but drops free-form reason text", () => {

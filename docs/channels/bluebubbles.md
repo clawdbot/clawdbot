@@ -1,5 +1,5 @@
 ---
-summary: "iMessage via BlueBubbles macOS server (REST send/receive, typing, reactions, pairing, advanced actions)."
+summary: "Legacy iMessage support via the BlueBubbles macOS server (REST send/receive, typing, reactions, pairing, advanced actions)."
 read_when:
   - Setting up BlueBubbles channel
   - Troubleshooting webhook pairing
@@ -8,7 +8,13 @@ title: "BlueBubbles"
 sidebarTitle: "BlueBubbles"
 ---
 
-Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **Recommended for iMessage integration** due to its richer API and easier setup compared to the legacy imsg channel.
+Status: bundled legacy plugin that talks to the BlueBubbles macOS server over HTTP. Existing BlueBubbles setups continue to work, but new OpenClaw iMessage deployments should prefer the native [iMessage](/channels/imessage) plugin when its requirements fit your host.
+
+<Warning>
+BlueBubbles is deprecated for new OpenClaw setups.
+
+The upstream BlueBubbles ecosystem is still active, but OpenClaw depends on the BlueBubbles macOS server API. As of May 6, 2026, the official [`bluebubbles-server`](https://github.com/BlueBubblesApp/bluebubbles-server) development branch last changed on [January 22, 2026](https://github.com/BlueBubblesApp/bluebubbles-server/commit/88a4921bbd5a8111f1e9582b83715cf877171037), and the latest server release ([`v1.9.9`](https://github.com/BlueBubblesApp/bluebubbles-server/releases/tag/v1.9.9)) was published on May 16, 2025. The client app and helper repositories have newer activity, so this is not an abandonment claim; the deprecation is about reducing OpenClaw's dependency on an external HTTP server, webhooks, and private-API compatibility surface when the native `imsg` path keeps the integration on a local stdio contract.
+</Warning>
 
 <Note>
 Current OpenClaw releases bundle BlueBubbles, so normal packaged builds do not need a separate `openclaw plugins install` step.
@@ -17,6 +23,7 @@ Current OpenClaw releases bundle BlueBubbles, so normal packaged builds do not n
 ## Overview
 
 - Runs on macOS via the BlueBubbles helper app ([bluebubbles.app](https://bluebubbles.app)).
+- Legacy fallback for installations that already rely on BlueBubbles channel IDs, webhook state, group targets, cron delivery, or workspace routing.
 - Recommended/tested: macOS Sequoia (15). macOS Tahoe (26) works; edit is currently broken on Tahoe, and group icon updates may report success but not sync.
 - OpenClaw talks to it through its REST API (`GET /api/v1/ping`, `POST /message/text`, `POST /chat/:id/*`).
 - Incoming messages arrive via webhooks; outgoing replies, typing indicators, read receipts, and tapbacks are REST calls.

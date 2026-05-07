@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
@@ -69,6 +69,15 @@ vi.mock("./reactions.js", async () => {
 vi.mock("./history.js", () => ({
   fetchBlueBubblesHistory: vi.fn().mockResolvedValue({ entries: [], resolved: true }),
 }));
+
+afterAll(() => {
+  vi.doUnmock("./send.js");
+  vi.doUnmock("./chat.js");
+  vi.doUnmock("./attachments.js");
+  vi.doUnmock("./reactions.js");
+  vi.doUnmock("./history.js");
+  vi.resetModules();
+});
 
 // Mock runtime
 const mockEnqueueSystemEvent = vi.fn();

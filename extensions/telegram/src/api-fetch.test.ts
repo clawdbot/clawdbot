@@ -48,6 +48,7 @@ function getOwnSymbolValue(
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
 

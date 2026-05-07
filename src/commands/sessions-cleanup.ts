@@ -25,7 +25,7 @@ import {
   toSessionDisplayRows,
 } from "./sessions-table.js";
 
-const ACTION_PAD = 12;
+const ACTION_PAD = 16;
 
 type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] & {
   action: ReturnType<typeof resolveSessionCleanupAction>;
@@ -48,6 +48,9 @@ function formatCleanupActionCell(
   if (action === "prune-stale") {
     return theme.warn(label);
   }
+  if (action === "retire-dm-scope") {
+    return theme.warn(label);
+  }
   if (action === "cap-overflow") {
     return theme.accentBright(label);
   }
@@ -60,6 +63,7 @@ function buildActionRows(params: {
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
+  dmScopeRetiredKeys: Set<string>;
 }): SessionCleanupActionRow[] {
   return toSessionDisplayRows(params.beforeStore).map((row) =>
     Object.assign({}, row, {
@@ -69,6 +73,7 @@ function buildActionRows(params: {
         staleKeys: params.staleKeys,
         cappedKeys: params.cappedKeys,
         budgetEvictedKeys: params.budgetEvictedKeys,
+        dmScopeRetiredKeys: params.dmScopeRetiredKeys,
       }),
     }),
   );
@@ -91,6 +96,7 @@ function renderStoreDryRunPlan(params: {
     `Entries: ${params.summary.beforeCount} -> ${params.summary.afterCount} (remove ${params.summary.beforeCount - params.summary.afterCount})`,
   );
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
+  params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
   if (params.summary.unreferencedArtifacts?.scannedFiles) {
@@ -169,6 +175,7 @@ async function maybeRunGatewayCleanup(
         enforce: opts.enforce,
         activeKey: opts.activeKey,
         fixMissing: opts.fixMissing,
+        fixDmScope: opts.fixDmScope,
       },
       mode: GATEWAY_CLIENT_MODES.CLI,
       clientName: GATEWAY_CLIENT_NAMES.CLI,

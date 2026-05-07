@@ -776,6 +776,9 @@ async function refreshPageRelatedBlocks(params: {
       continue;
     }
     const original = await root.readText(page.relativePath);
+    if (original.trim().length === 0) {
+      continue;
+    }
     const updated = withTrailingNewline(
       replaceManagedMarkdownBlock({
         original,

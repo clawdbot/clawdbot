@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFeishuSendTargetMock = vi.hoisted(() => vi.fn());
 const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "preserve"));
@@ -39,6 +39,12 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
 
   beforeAll(async () => {
     ({ sendCardFeishu, sendMessageFeishu } = await import("./send.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./send-target.js");
+    vi.doUnmock("./runtime.js");
+    vi.resetModules();
   });
 
   beforeEach(() => {

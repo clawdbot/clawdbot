@@ -193,35 +193,37 @@ describe("nextcloud talk core", () => {
       };
     });
 
-    const { generateNextcloudTalkSignature, verifyNextcloudTalkSignature } =
-      await import("./signature.js");
-    const body = JSON.stringify({ hello: "world" });
-    const generated = generateNextcloudTalkSignature({
-      body,
-      secret: "secret-123",
-    });
-    const shortSignature = generated.signature.slice(0, 12);
-
-    expect(
-      verifyNextcloudTalkSignature({
-        signature: shortSignature,
-        random: generated.random,
+    try {
+      const { generateNextcloudTalkSignature, verifyNextcloudTalkSignature } =
+        await import("./signature.js");
+      const body = JSON.stringify({ hello: "world" });
+      const generated = generateNextcloudTalkSignature({
         body,
         secret: "secret-123",
-      }),
-    ).toBe(false);
+      });
+      const shortSignature = generated.signature.slice(0, 12);
 
-    expect(timingSafeEqualMock).toHaveBeenCalledOnce();
-    const [leftBuffer, rightBuffer] = timingSafeEqualMock.mock.calls[0] ?? [];
-    expect(Buffer.isBuffer(leftBuffer)).toBe(true);
-    expect(Buffer.isBuffer(rightBuffer)).toBe(true);
-    if (!Buffer.isBuffer(leftBuffer) || !Buffer.isBuffer(rightBuffer)) {
-      throw new TypeError("Expected timingSafeEqual to receive Buffer arguments");
+      expect(
+        verifyNextcloudTalkSignature({
+          signature: shortSignature,
+          random: generated.random,
+          body,
+          secret: "secret-123",
+        }),
+      ).toBe(false);
+
+      expect(timingSafeEqualMock).toHaveBeenCalledOnce();
+      const [leftBuffer, rightBuffer] = timingSafeEqualMock.mock.calls[0] ?? [];
+      expect(Buffer.isBuffer(leftBuffer)).toBe(true);
+      expect(Buffer.isBuffer(rightBuffer)).toBe(true);
+      if (!Buffer.isBuffer(leftBuffer) || !Buffer.isBuffer(rightBuffer)) {
+        throw new TypeError("Expected timingSafeEqual to receive Buffer arguments");
+      }
+      expect(leftBuffer).toHaveLength(rightBuffer.length);
+    } finally {
+      vi.doUnmock("node:crypto");
+      vi.resetModules();
     }
-    expect(leftBuffer).toHaveLength(rightBuffer.length);
-
-    vi.doUnmock("node:crypto");
-    vi.resetModules();
   });
 
   it("persists replay decisions across guard instances and scopes account namespaces", async () => {

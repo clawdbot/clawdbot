@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { botNames, botOpenIds, stopFeishuMonitorState, wsClients } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -41,6 +41,11 @@ afterEach(() => {
   vi.useRealTimers();
   stopFeishuMonitorState();
   vi.clearAllMocks();
+});
+
+afterAll(() => {
+  vi.doUnmock("./client.js");
+  vi.resetModules();
 });
 
 describe("feishu websocket cleanup", () => {

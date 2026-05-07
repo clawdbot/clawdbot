@@ -157,9 +157,7 @@ export function createBlockReplyDeliveryHandler(params: {
         trackingPayload: blockPayload,
         payload: blockPayload,
       });
-    } else if (blockHasMedia && !blockPayload.text) {
-      // Media-only block replies (for example orphaned tool attachments) are not reconstructible
-      // from the assistant's final text, so they still need a direct fallback when streaming is off.
+    } else if (blockHasMedia) {
       await sendDirectBlockReply({
         onBlockReply: params.onBlockReply,
         directlySentBlockKeys: params.directlySentBlockKeys,

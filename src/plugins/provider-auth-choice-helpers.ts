@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { modelSelectionRequiresCodexRuntime } from "../agents/openai-codex-routing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -134,18 +135,24 @@ export function applyDefaultModel(
       : existingModel && typeof existingModel === "object"
         ? (existingModel as { primary?: string }).primary
         : undefined;
+  const primary = opts?.preserveExistingPrimary === true ? (existingPrimary ?? model) : model;
+  const shouldUseCodexRuntime = modelSelectionRequiresCodexRuntime({
+    model: primary,
+    config: cfg,
+  });
   return {
     ...cfg,
     agents: {
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
+        ...(shouldUseCodexRuntime ? { agentRuntime: { id: "codex" } } : {}),
         models,
         model: {
           ...(existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
             ? { fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks }
             : undefined),
-          primary: opts?.preserveExistingPrimary === true ? (existingPrimary ?? model) : model,
+          primary,
         },
       },
     },

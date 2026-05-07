@@ -115,6 +115,40 @@ describe("fetchWithBearerAuthScopeFallback", () => {
     expect(tokenProvider.getAccessToken).toHaveBeenNthCalledWith(1, "https://first.example");
     expect(tokenProvider.getAccessToken).toHaveBeenNthCalledWith(2, "https://second.example");
   });
+
+  it("normalizes symbol-bearing request headers across unauthenticated and retry attempts", async () => {
+    const headers = { Accept: "application/json" } as Record<string, string> & {
+      [key: symbol]: unknown;
+    };
+    Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
+      value: new Set(["accept"]),
+      enumerable: false,
+    });
+    const fetchFn = vi.fn(async (_url: string, init?: RequestInit) => {
+      const normalizedHeaders = new Headers(init?.headers);
+      expect(normalizedHeaders.get("accept")).toBe("application/json");
+      return fetchFn.mock.calls.length === 1
+        ? new Response("unauthorized", { status: 401 })
+        : new Response("ok", { status: 200 });
+    });
+    const tokenProvider = { getAccessToken: vi.fn(async () => "token-1") };
+
+    const response = await fetchWithBearerAuthScopeFallback({
+      url: "https://graph.microsoft.com/v1.0/me",
+      scopes: ["https://graph.microsoft.com"],
+      fetchFn: asFetch(fetchFn),
+      tokenProvider,
+      requestInit: { headers },
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(Object.getOwnPropertySymbols(fetchFn.mock.calls[0]?.[1]?.headers as object)).toEqual([]);
+    expect(new Headers(fetchFn.mock.calls[1]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer token-1",
+    );
+    expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
+  });
 });
 
 describe("resolveRequestUrl", () => {

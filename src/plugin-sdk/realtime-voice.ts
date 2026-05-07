@@ -35,10 +35,14 @@ export {
   type TalkMode,
   type TalkTransport,
 } from "../talk/talk-events.js";
+export { createTalkDiagnosticEvent, recordTalkDiagnosticEvent } from "../talk/diagnostics.js";
+export { createTalkLogRecord, recordTalkLogEvent } from "../talk/logging.js";
+export { recordTalkObservabilityEvent } from "../talk/observability.js";
 export {
   createTalkSessionController,
   normalizeTalkTransport,
   type TalkEnsureTurnResult,
+  type TalkSessionControllerOptions,
   type TalkSessionController,
   type TalkSessionControllerParams,
   type TalkTurnFailure,

@@ -3,6 +3,7 @@ import {
   createAgentToAgentPolicy,
   createSessionVisibilityChecker,
   createSessionVisibilityGuard,
+  createSessionVisibilityRowChecker,
   listSpawnedSessionKeys,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxSessionToolsVisibility,
@@ -15,6 +16,7 @@ export {
   createAgentToAgentPolicy,
   createSessionVisibilityChecker,
   createSessionVisibilityGuard,
+  createSessionVisibilityRowChecker,
   listSpawnedSessionKeys,
   resolveEffectiveSessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";

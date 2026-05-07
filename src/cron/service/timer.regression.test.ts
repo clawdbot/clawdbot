@@ -1487,7 +1487,7 @@ describe("cron service timer regressions", () => {
     expect(job.state.nextRunAtMs).toBe(expectedNextMs);
   });
 
-  it("persists last cron run diagnostics on job state", () => {
+  it("persists and warns with last cron run diagnostics", () => {
     const startedAt = Date.parse("2026-04-14T12:00:00.000Z");
     const endedAt = startedAt + 500;
     const job = createIsolatedRegressionJob({
@@ -1498,10 +1498,11 @@ describe("cron service timer regressions", () => {
       payload: { kind: "agentTurn", message: "diagnose" },
       state: { runningAtMs: startedAt },
     });
+    const log = { ...noopLogger, warn: vi.fn() };
     const state = createCronServiceState({
       cronEnabled: true,
       storePath: "/tmp/cron-diagnostics-job.json",
-      log: noopLogger,
+      log,
       nowMs: () => endedAt,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
@@ -1532,5 +1533,14 @@ describe("cron service timer regressions", () => {
       entries: [{ source: "exec", severity: "error", message: "exec stderr tail", exitCode: 1 }],
     });
     expect(job.state.lastDiagnosticSummary).toBe("exec stderr tail");
+    expect(log.warn).toHaveBeenCalledWith(
+      {
+        jobId: "diagnostics-job",
+        jobName: "diagnostics-job",
+        error: "failed",
+        diagnosticsSummary: "exec stderr tail",
+      },
+      "cron: job run returned error status",
+    );
   });
 });

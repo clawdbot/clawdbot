@@ -45,6 +45,41 @@ afterEach(() => {
 });
 
 describe("fetchWithRuntimeDispatcher", () => {
+  it("drops symbol metadata from plain header dictionaries before runtime fetch", async () => {
+    const runtimeFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
+      return new Response("ok", { status: 200 });
+    });
+
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: MockAgent,
+      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
+      FormData: RuntimeFormData,
+      ProxyAgent: MockProxyAgent,
+      fetch: runtimeFetch,
+    };
+
+    const headers = { "Content-Type": "application/json" } as Record<string, string> & {
+      [key: symbol]: unknown;
+    };
+    Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
+      value: new Set(["content-type"]),
+      enumerable: false,
+    });
+
+    const response = await fetchWithRuntimeDispatcher("https://example.com/json", {
+      method: "POST",
+      headers,
+      body: "{}",
+    });
+
+    expect(response.status).toBe(200);
+    const sentHeaders = runtimeFetch.mock.calls[0]?.[1]?.headers;
+    expect(sentHeaders).not.toBe(headers);
+    expect(Object.getOwnPropertySymbols(sentHeaders as object)).toEqual([]);
+    expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
+  });
+
   it("normalizes global FormData bodies into the runtime FormData implementation", async () => {
     const runtimeFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       // init.body was rebuilt as RuntimeFormData by normalizeRuntimeFormData;

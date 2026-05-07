@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
   readManagedNpmRootInstalledDependency,
+  readOpenClawManagedNpmRootOverrides,
   resolveManagedNpmRootDependencySpec,
   upsertManagedNpmRootDependency,
 } from "./npm-managed-root.js";
@@ -68,6 +70,127 @@ describe("managed npm root", () => {
       devDependencies: {
         fixture: "1.0.0",
       },
+    });
+  });
+
+  it("syncs OpenClaw-owned overrides without dropping unrelated local overrides", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "@openclaw/discord": "2026.5.2",
+          },
+          overrides: {
+            axios: "1.13.6",
+            "left-pad": "1.3.0",
+            qs: "6.14.0",
+          },
+          openclaw: {
+            managedOverrides: ["axios", "qs"],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await upsertManagedNpmRootDependency({
+      npmRoot,
+      packageName: "@openclaw/feishu",
+      dependencySpec: "2026.5.4",
+      managedOverrides: {
+        axios: "1.16.0",
+        "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+      },
+    });
+
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual({
+      private: true,
+      dependencies: {
+        "@openclaw/discord": "2026.5.2",
+        "@openclaw/feishu": "2026.5.4",
+      },
+      overrides: {
+        "left-pad": "1.3.0",
+        axios: "1.16.0",
+        "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+      },
+      openclaw: {
+        managedOverrides: ["axios", "node-domexception"],
+      },
+    });
+  });
+
+  it("reads package-level npm overrides for managed plugin installs", async () => {
+    await expect(readOpenClawManagedNpmRootOverrides()).resolves.toMatchObject({
+      axios: "1.16.0",
+    });
+  });
+
+  it("resolves package-level npm overrides from packaged dist chunks", async () => {
+    const packageRoot = await makeTempRoot();
+    await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "openclaw",
+          overrides: {
+            axios: "1.16.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await expect(
+      readOpenClawManagedNpmRootOverrides({
+        moduleUrl: pathToFileURL(path.join(packageRoot, "dist", "install-AbCdEf.js")).toString(),
+        cwd: path.join(packageRoot, "dist"),
+      }),
+    ).resolves.toEqual({
+      axios: "1.16.0",
+    });
+  });
+
+  it("resolves npm override dependency references from the host package manifest", async () => {
+    const packageRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "openclaw",
+          dependencies: {
+            "@aws-sdk/client-bedrock-runtime": "3.1024.0",
+          },
+          optionalDependencies: {
+            "optional-runtime": "2.0.0",
+          },
+          overrides: {
+            "@aws-sdk/client-bedrock-runtime": "$@aws-sdk/client-bedrock-runtime",
+            nested: {
+              "optional-runtime": "$optional-runtime",
+            },
+            axios: "1.16.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await expect(readOpenClawManagedNpmRootOverrides({ packageRoot })).resolves.toEqual({
+      "@aws-sdk/client-bedrock-runtime": "3.1024.0",
+      nested: {
+        "optional-runtime": "2.0.0",
+      },
+      axios: "1.16.0",
     });
   });
 

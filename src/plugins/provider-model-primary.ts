@@ -1,3 +1,4 @@
+import { modelSelectionRequiresCodexRuntime } from "../agents/openai-codex-routing.js";
 import type { AgentModelListConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -48,6 +49,7 @@ export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawC
   const defaults = cfg.agents?.defaults;
   const existingModel = defaults?.model;
   const existingModels = defaults?.models;
+  const shouldUseCodexRuntime = modelSelectionRequiresCodexRuntime({ model, config: cfg });
   const fallbacks =
     typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
       ? (existingModel as { fallbacks?: string[] }).fallbacks
@@ -62,6 +64,7 @@ export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawC
           ...(fallbacks ? { fallbacks } : undefined),
           primary: model,
         },
+        ...(shouldUseCodexRuntime ? { agentRuntime: { id: "codex" } } : undefined),
         models: {
           ...existingModels,
           [model]: existingModels?.[model] ?? {},

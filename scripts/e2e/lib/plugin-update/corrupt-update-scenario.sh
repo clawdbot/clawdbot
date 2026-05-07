@@ -86,4 +86,10 @@ if [ "$update_status" -ne 0 ]; then
   exit 0
 fi
 
-node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-update /tmp/openclaw-update-corrupt-plugin.json demo-corrupt-plugin
+if ! node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-update /tmp/openclaw-update-corrupt-plugin.json demo-corrupt-plugin; then
+  echo "corrupt update JSON payload:" >&2
+  cat /tmp/openclaw-update-corrupt-plugin.json >&2 || true
+  echo "corrupt update stderr:" >&2
+  cat /tmp/openclaw-update-corrupt-plugin.err >&2 || true
+  exit 1
+fi

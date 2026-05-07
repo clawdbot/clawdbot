@@ -41,19 +41,19 @@ There are two runtime families:
 
 Most confusion comes from several different surfaces sharing the Codex name:
 
-| Surface                                              | OpenClaw name/config                       | What it does                                                                                               |
-| ---------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| Native Codex app-server runtime                      | `openai/*` plus `agentRuntime.id: "codex"` | Runs the embedded agent turn through Codex app-server. This is the usual ChatGPT/Codex subscription setup. |
-| Codex OAuth provider route                           | `openai-codex/*` model refs                | Uses ChatGPT/Codex subscription OAuth through the normal OpenClaw PI runner.                               |
-| Codex ACP adapter                                    | `runtime: "acp"`, `agentId: "codex"`       | Runs Codex through the external ACP/acpx control plane. Use only when ACP/acpx is explicitly asked.        |
-| Native Codex chat-control command set                | `/codex ...`                               | Binds, resumes, steers, stops, and inspects Codex app-server threads from chat.                            |
-| OpenAI Platform API route for GPT/Codex-style models | `openai/*` model refs                      | Uses OpenAI API-key auth unless a runtime override, such as `agentRuntime.id: "codex"`, runs the turn.     |
+| Surface                                          | OpenClaw name/config                 | What it does                                                                                                   |
+| ------------------------------------------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| Native Codex app-server runtime                  | `openai/*` model refs                | Runs OpenAI embedded agent turns through Codex app-server. This is the usual ChatGPT/Codex subscription setup. |
+| Codex OAuth auth profiles                        | `openai-codex` auth provider         | Stores ChatGPT/Codex subscription auth that the Codex app-server harness consumes.                             |
+| Codex ACP adapter                                | `runtime: "acp"`, `agentId: "codex"` | Runs Codex through the external ACP/acpx control plane. Use only when ACP/acpx is explicitly asked.            |
+| Native Codex chat-control command set            | `/codex ...`                         | Binds, resumes, steers, stops, and inspects Codex app-server threads from chat.                                |
+| OpenAI Platform API route for non-agent surfaces | `openai/*` plus API-key auth         | Used for direct OpenAI APIs such as images, embeddings, speech, and realtime.                                  |
 
 Those surfaces are intentionally independent. Enabling the `codex` plugin makes
-the native app-server features available; it does not rewrite
-`openai-codex/*` into `openai/*`, does not change existing sessions, and does
-not make ACP the Codex default. Selecting `openai-codex/*` means "use the Codex
-OAuth provider route" unless you separately force a runtime.
+the native app-server features available; `openclaw doctor --fix` owns legacy
+`openai-codex/*` route repair and stale session pin cleanup. Selecting
+`openai/*` for an agent model now means "run this through Codex" unless a
+non-agent OpenAI API surface is being used.
 
 The common ChatGPT/Codex subscription setup uses Codex OAuth for auth, but keeps
 the model ref as `openai/*` and selects the `codex` runtime:
@@ -63,9 +63,6 @@ the model ref as `openai/*` and selects the `codex` runtime:
   agents: {
     defaults: {
       model: "openai/gpt-5.5",
-      agentRuntime: {
-        id: "codex",
-      },
     },
   },
 }
@@ -88,10 +85,9 @@ This is the agent-facing decision tree:
 1. If the user asks for **Codex bind/control/thread/resume/steer/stop**, use the
    native `/codex` command surface when the bundled `codex` plugin is enabled.
 2. If the user asks for **Codex as the embedded runtime** or wants the normal
-   subscription-backed Codex agent experience, use
-   `openai/<model>` with `agentRuntime.id: "codex"`.
-3. If the user asks for **Codex OAuth/subscription auth on the normal OpenClaw
-   runner**, use `openai-codex/<model>` and leave the runtime as PI.
+   subscription-backed Codex agent experience, use `openai/<model>`.
+3. If legacy config still contains **`openai-codex/*` model refs**, repair it to
+   `openai/<model>` with `openclaw doctor --fix`.
 4. If the user explicitly says **ACP**, **acpx**, or **Codex ACP adapter**, use
    ACP with `runtime: "acp"` and `agentId: "codex"`.
 5. If the request is for **Claude Code, Gemini CLI, OpenCode, Cursor, Droid, or
@@ -100,8 +96,8 @@ This is the agent-facing decision tree:
 | You mean...                             | Use...                                       |
 | --------------------------------------- | -------------------------------------------- |
 | Codex app-server chat/thread control    | `/codex ...` from the bundled `codex` plugin |
-| Codex app-server embedded agent runtime | `agentRuntime.id: "codex"`                   |
-| OpenAI Codex OAuth on the PI runner     | `openai-codex/*` model refs                  |
+| Codex app-server embedded agent runtime | `openai/*` agent model refs                  |
+| OpenAI Codex OAuth                      | `openai-codex` auth profiles                 |
 | Claude Code or other external harness   | ACP/acpx                                     |
 
 For the OpenAI-family prefix split, see [OpenAI](/providers/openai) and
@@ -166,17 +162,14 @@ Legacy refs such as `claude-cli/claude-opus-4-7` remain supported for
 compatibility, but new config should keep the provider/model canonical and put
 the execution backend in `agentRuntime.id`.
 
-`auto` mode is intentionally conservative. Plugin runtimes can claim
-provider/model pairs they understand, but the Codex plugin does not claim the
-`openai-codex` provider in `auto` mode. That keeps
-`openai-codex/*` as the explicit PI Codex OAuth route and avoids silently
-moving subscription-auth configs onto the native app-server harness.
+`auto` mode is intentionally conservative for most providers. OpenAI agent
+models are the exception: unset runtime and `auto` both resolve to the Codex
+harness, while explicit PI runtime config is rejected for `openai/*` agent
+turns.
 
 If `openclaw doctor` warns that the `codex` plugin is enabled while
-`openai-codex/*` still routes through PI, treat that as a diagnosis, not a
-migration. Keep the config unchanged when PI Codex OAuth is what you want.
-Switch to `openai/<model>` plus `agentRuntime.id: "codex"` only when you want native
-Codex app-server execution.
+`openai-codex/*` remains in config, treat that as legacy route state. Run
+`openclaw doctor --fix` to rewrite it to `openai/*` with the Codex runtime.
 
 ## Compatibility contract
 

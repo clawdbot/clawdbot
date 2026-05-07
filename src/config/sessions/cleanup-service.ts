@@ -3,7 +3,7 @@ import path from "node:path";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
 import { getLogger } from "../../logging/logger.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   enforceSessionDiskBudget,
@@ -24,6 +24,7 @@ import {
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import {
+  archiveRemovedSessionTranscripts,
   loadSessionStore,
   updateSessionStore,
   type SessionMaintenanceApplyReport,
@@ -41,6 +42,7 @@ export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
   activeKey?: string;
   json?: boolean;
   fixMissing?: boolean;
+  fixDmScope?: boolean;
 };
 
 export type SessionCleanupAction =
@@ -48,7 +50,8 @@ export type SessionCleanupAction =
   | "prune-missing"
   | "prune-stale"
   | "cap-overflow"
-  | "evict-budget";
+  | "evict-budget"
+  | "retire-dm-scope";
 
 export type SessionCleanupSummary = {
   agentId: string;
@@ -58,6 +61,7 @@ export type SessionCleanupSummary = {
   beforeCount: number;
   afterCount: number;
   missing: number;
+  dmScopeRetired: number;
   pruned: number;
   capped: number;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
@@ -85,6 +89,7 @@ export type SessionsCleanupRunResult = {
     staleKeys: Set<string>;
     cappedKeys: Set<string>;
     budgetEvictedKeys: Set<string>;
+    dmScopeRetiredKeys: Set<string>;
   }>;
   appliedSummaries: SessionCleanupSummary[];
 };
@@ -95,7 +100,11 @@ export function resolveSessionCleanupAction(params: {
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
+  dmScopeRetiredKeys: Set<string>;
 }): SessionCleanupAction {
+  if (params.dmScopeRetiredKeys.has(params.key)) {
+    return "retire-dm-scope";
+  }
   if (params.missingKeys.has(params.key)) {
     return "prune-missing";
   }
@@ -109,6 +118,64 @@ export function resolveSessionCleanupAction(params: {
     return "evict-budget";
   }
   return "keep";
+}
+
+function isMainScopeStaleDirectSessionKey(params: {
+  cfg: OpenClawConfig;
+  targetAgentId: string;
+  key: string;
+  activeKey?: string;
+}): boolean {
+  if ((params.cfg.session?.dmScope ?? "main") !== "main") {
+    return false;
+  }
+  if (params.activeKey && params.key === params.activeKey) {
+    return false;
+  }
+  const parsed = parseAgentSessionKey(params.key);
+  if (!parsed || normalizeAgentId(parsed.agentId) !== normalizeAgentId(params.targetAgentId)) {
+    return false;
+  }
+  const parts = parsed.rest.split(":").filter(Boolean);
+  return (
+    (parts.length === 2 && parts[0] === "direct") ||
+    (parts.length === 3 && parts[1] === "direct") ||
+    (parts.length === 4 && parts[2] === "direct")
+  );
+}
+
+function rememberRemovedSessionFile(
+  removedSessionFiles: Map<string, string | undefined>,
+  entry: SessionEntry | undefined,
+): void {
+  if (entry?.sessionId) {
+    removedSessionFiles.set(entry.sessionId, entry.sessionFile);
+  }
+}
+
+function retireMainScopeDirectSessionEntries(params: {
+  cfg: OpenClawConfig;
+  store: Record<string, SessionEntry>;
+  targetAgentId: string;
+  activeKey?: string;
+  onRetired?: (key: string, entry: SessionEntry) => void;
+}): number {
+  let retired = 0;
+  for (const [key, entry] of Object.entries(params.store)) {
+    if (
+      isMainScopeStaleDirectSessionKey({
+        cfg: params.cfg,
+        targetAgentId: params.targetAgentId,
+        key,
+        activeKey: params.activeKey,
+      })
+    ) {
+      params.onRetired?.(key, entry);
+      delete params.store[key];
+      retired += 1;
+    }
+  }
+  return retired;
 }
 
 export function serializeSessionCleanupResult(params: {
@@ -172,18 +239,21 @@ function addEntryArtifactPathsToSet(params: {
 }
 
 async function previewStoreCleanup(params: {
+  cfg: OpenClawConfig;
   target: SessionStoreTarget;
   maintenance: ResolvedSessionMaintenanceConfig;
   mode: ResolvedSessionMaintenanceConfig["mode"];
   dryRun: boolean;
   activeKey?: string;
   fixMissing?: boolean;
+  fixDmScope?: boolean;
 }) {
   const beforeStore = loadSessionStore(params.target.storePath, { skipCache: true });
   const previewStore = cloneSessionStoreRecord(beforeStore);
   const staleKeys = new Set<string>();
   const cappedKeys = new Set<string>();
   const missingKeys = new Set<string>();
+  const dmScopeRetiredKeys = new Set<string>();
   const missing =
     params.fixMissing === true
       ? pruneMissingTranscriptEntries({
@@ -191,6 +261,18 @@ async function previewStoreCleanup(params: {
           storePath: params.target.storePath,
           onPruned: (key) => {
             missingKeys.add(key);
+          },
+        })
+      : 0;
+  const dmScopeRetired =
+    params.fixDmScope === true
+      ? retireMainScopeDirectSessionEntries({
+          cfg: params.cfg,
+          store: previewStore,
+          targetAgentId: params.target.agentId,
+          activeKey: params.activeKey,
+          onRetired: (key) => {
+            dmScopeRetiredKeys.add(key);
           },
         })
       : 0;
@@ -218,6 +300,12 @@ async function previewStoreCleanup(params: {
     store: beforeStore,
     storePath: params.target.storePath,
     keys: cappedKeys,
+  });
+  addEntryArtifactPathsToSet({
+    paths: entryCleanupArtifactPaths,
+    store: beforeStore,
+    storePath: params.target.storePath,
+    keys: dmScopeRetiredKeys,
   });
   const beforeBudgetStore = cloneSessionStoreRecord(previewStore);
   const budgetRemovedFilePaths = new Set<string>();
@@ -249,6 +337,7 @@ async function previewStoreCleanup(params: {
   const afterPreviewCount = Object.keys(previewStore).length;
   const wouldMutate =
     missing > 0 ||
+    dmScopeRetired > 0 ||
     pruned > 0 ||
     capped > 0 ||
     unreferencedArtifacts.removedFiles > 0 ||
@@ -263,6 +352,7 @@ async function previewStoreCleanup(params: {
     beforeCount,
     afterCount: afterPreviewCount,
     missing,
+    dmScopeRetired,
     pruned,
     capped,
     unreferencedArtifacts,
@@ -277,6 +367,7 @@ async function previewStoreCleanup(params: {
     staleKeys,
     cappedKeys,
     budgetEvictedKeys,
+    dmScopeRetiredKeys,
   };
 }
 
@@ -299,12 +390,14 @@ export async function runSessionsCleanup(params: {
   const previewResults: SessionsCleanupRunResult["previewResults"] = [];
   for (const target of targets) {
     const result = await previewStoreCleanup({
+      cfg,
       target,
       maintenance,
       mode,
       dryRun: Boolean(opts.dryRun),
       activeKey: opts.activeKey,
       fixMissing: Boolean(opts.fixMissing),
+      fixDmScope: Boolean(opts.fixDmScope),
     });
     previewResults.push(result);
   }
@@ -315,16 +408,33 @@ export async function runSessionsCleanup(params: {
       const appliedReportRef: { current: SessionMaintenanceApplyReport | null } = {
         current: null,
       };
-      const missingApplied = await updateSessionStore(
+      const dmScopeRemovedSessionFiles = new Map<string, string | undefined>();
+      let missingApplied = 0;
+      let dmScopeRetiredApplied = 0;
+      await updateSessionStore(
         target.storePath,
         async (store) => {
-          if (!opts.fixMissing) {
-            return 0;
+          let removed = 0;
+          if (opts.fixMissing) {
+            missingApplied = pruneMissingTranscriptEntries({
+              store,
+              storePath: target.storePath,
+            });
+            removed += missingApplied;
           }
-          return pruneMissingTranscriptEntries({
-            store,
-            storePath: target.storePath,
-          });
+          if (opts.fixDmScope) {
+            dmScopeRetiredApplied = retireMainScopeDirectSessionEntries({
+              cfg,
+              store,
+              targetAgentId: target.agentId,
+              activeKey: opts.activeKey,
+              onRetired: (_key, entry) => {
+                rememberRemovedSessionFile(dmScopeRemovedSessionFiles, entry);
+              },
+            });
+            removed += dmScopeRetiredApplied;
+          }
+          return removed;
         },
         {
           activeSessionKey: opts.activeKey,
@@ -336,6 +446,20 @@ export async function runSessionsCleanup(params: {
           },
         },
       );
+      if (dmScopeRemovedSessionFiles.size > 0) {
+        const storeAfterDmScopeRetire = loadSessionStore(target.storePath, { skipCache: true });
+        await archiveRemovedSessionTranscripts({
+          removedSessionFiles: dmScopeRemovedSessionFiles,
+          referencedSessionIds: new Set(
+            Object.values(storeAfterDmScopeRetire)
+              .map((entry) => entry?.sessionId)
+              .filter((id): id is string => Boolean(id)),
+          ),
+          storePath: target.storePath,
+          reason: "deleted",
+          restrictToStoreDir: true,
+        });
+      }
       const afterStore = loadSessionStore(target.storePath, { skipCache: true });
       const unreferencedArtifacts =
         mode === "warn"
@@ -366,6 +490,7 @@ export async function runSessionsCleanup(params: {
                 beforeCount: 0,
                 afterCount: 0,
                 missing: 0,
+                dmScopeRetired: 0,
                 pruned: 0,
                 capped: 0,
                 unreferencedArtifacts,
@@ -387,12 +512,14 @@ export async function runSessionsCleanup(params: {
               beforeCount: appliedReport.beforeCount,
               afterCount: appliedReport.afterCount,
               missing: missingApplied,
+              dmScopeRetired: dmScopeRetiredApplied,
               pruned: appliedReport.pruned,
               capped: appliedReport.capped,
               unreferencedArtifacts,
               diskBudget: appliedReport.diskBudget,
               wouldMutate:
                 missingApplied > 0 ||
+                dmScopeRetiredApplied > 0 ||
                 appliedReport.pruned > 0 ||
                 appliedReport.capped > 0 ||
                 unreferencedArtifacts.removedFiles > 0 ||

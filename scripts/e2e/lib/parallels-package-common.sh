@@ -48,7 +48,7 @@ parallels_package_write_dist_inventory() {
 
 parallels_package_assert_no_generated_drift() {
   local drift
-  drift="$(git status --porcelain -- src/canvas-host/a2ui/.bundle.hash 2>/dev/null || true)"
+  drift="$(git status --porcelain -- ':(glob)extensions/*/src/host/**/.bundle.hash' 2>/dev/null || true)"
   if [[ -z "$drift" ]]; then
     return 0
   fi

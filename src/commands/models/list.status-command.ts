@@ -671,7 +671,7 @@ export async function modelsStatusCommand(
       bits.push(
         formatKeyValue(
           "profiles",
-          `${entry.profiles.count} (oauth=${entry.profiles.oauth}, token=${entry.profiles.token}, api_key=${entry.profiles.apiKey})`,
+          `${entry.profiles.count} (oauth=${entry.profiles.oauth}, token=${entry.profiles.token}, api_key=${entry.profiles.apiKey}, aws-sdk=${entry.profiles.awsSdk})`,
         ),
       );
       if (entry.profiles.labels.length > 0) {

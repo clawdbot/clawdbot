@@ -360,6 +360,109 @@ describe("installPluginFromNpmSpec e2e", () => {
     ).resolves.toBe(true);
   });
 
+  it("omits peers when installing beside an existing host-peer plugin", async () => {
+    const rootDir = await makeTempDir("npm-plugin-sibling-peer-e2e");
+    const npmRoot = path.join(rootDir, "managed-npm");
+    const codexName = `codex-peer-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const opikName = `opik-peer-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const registry = await startStaticRegistry([
+      {
+        packageName: codexName,
+        latest: "1.0.0",
+        versions: [
+          await packPlugin({
+            packageName: codexName,
+            peerDependencies: { openclaw: ">=2026.5.5-beta.2" },
+            peerDependenciesMeta: { openclaw: { optional: true } },
+            pluginId: codexName,
+            version: "1.0.0",
+            rootDir,
+          }),
+        ],
+      },
+      {
+        packageName: opikName,
+        latest: "1.0.0",
+        versions: [
+          await packPlugin({
+            packageName: opikName,
+            peerDependencies: { openclaw: ">=2026.3.2" },
+            peerDependenciesMeta: {},
+            pluginId: opikName,
+            version: "1.0.0",
+            rootDir,
+          }),
+        ],
+      },
+      {
+        packageName: "openclaw",
+        latest: "2026.5.4",
+        versions: [
+          await packPlugin({
+            packageName: "openclaw",
+            pluginId: "registry-openclaw-copy",
+            version: "2026.5.4",
+            rootDir,
+          }),
+        ],
+      },
+    ]);
+    process.env.NPM_CONFIG_REGISTRY = registry;
+    process.env.npm_config_registry = registry;
+
+    await fs.mkdir(npmRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify({ private: true, dependencies: { [codexName]: "1.0.0" } }, null, 2)}\n`,
+      "utf8",
+    );
+    await execFileAsync(
+      "npm",
+      ["install", "--omit=peer", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"],
+      {
+        cwd: npmRoot,
+        env: {
+          ...process.env,
+          NPM_CONFIG_REGISTRY: registry,
+          NPM_CONFIG_LEGACY_PEER_DEPS: "false",
+          NPM_CONFIG_STRICT_PEER_DEPS: "false",
+          npm_config_registry: registry,
+          npm_config_legacy_peer_deps: "false",
+          npm_config_strict_peer_deps: "false",
+        },
+        timeout: 120_000,
+      },
+    );
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${opikName}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+      timeoutMs: 120_000,
+    });
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+
+    const lock = JSON.parse(await fs.readFile(path.join(npmRoot, "package-lock.json"), "utf8")) as {
+      packages?: Record<string, unknown>;
+    };
+    expect(lock.packages?.["node_modules/openclaw"]).toBeUndefined();
+    await expect(fs.lstat(path.join(npmRoot, "node_modules", "openclaw"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      fs
+        .lstat(path.join(npmRoot, "node_modules", codexName, "node_modules", "openclaw"))
+        .then((stat) => stat.isSymbolicLink()),
+    ).resolves.toBe(true);
+    await expect(
+      fs
+        .lstat(path.join(npmRoot, "node_modules", opikName, "node_modules", "openclaw"))
+        .then((stat) => stat.isSymbolicLink()),
+    ).resolves.toBe(true);
+  });
+
   it("relinks managed npm sibling openclaw peers after later plugin installs", async () => {
     const rootDir = await makeTempDir("npm-plugin-peer-e2e");
     const npmRoot = path.join(rootDir, "managed-npm");

@@ -639,6 +639,17 @@ export async function executeCrestodianOperation(
         Object.assign(cfg, next);
       },
     });
+    if (setupModel.model) {
+      const { repairCodexRuntimePluginInstallForModelSelection } =
+        await import("../commands/codex-runtime-plugin-install.js");
+      const repaired = await repairCodexRuntimePluginInstallForModelSelection({
+        cfg: result.nextConfig,
+        model: setupModel.model,
+      });
+      for (const warning of repaired.warnings) {
+        runtime.error?.(warning);
+      }
+    }
     const after = await readConfigFileSnapshot();
     await appendCrestodianAuditEntry({
       operation: "crestodian.setup",
@@ -1001,6 +1012,15 @@ export async function executeCrestodianOperation(
         Object.assign(cfg, next);
       },
     });
+    const { repairCodexRuntimePluginInstallForModelSelection } =
+      await import("../commands/codex-runtime-plugin-install.js");
+    const repaired = await repairCodexRuntimePluginInstallForModelSelection({
+      cfg: result.nextConfig,
+      model: operation.model,
+    });
+    for (const warning of repaired.warnings) {
+      runtime.error?.(warning);
+    }
     const after = await readConfigFileSnapshot();
     const { resolveAgentModelPrimaryValue } = await import("../config/model-input.js");
     const effectiveModel = resolveAgentModelPrimaryValue(result.nextConfig.agents?.defaults?.model);

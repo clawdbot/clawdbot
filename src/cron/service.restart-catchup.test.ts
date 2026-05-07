@@ -59,6 +59,21 @@ describe("CronService restart catch-up", () => {
     };
   }
 
+  function createOverdueCronJob(id: string, nextRunAtMs: number) {
+    return {
+      id,
+      name: `job-${id}`,
+      enabled: true,
+      createdAtMs: nextRunAtMs - 60_000,
+      updatedAtMs: nextRunAtMs - 60_000,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: `tick-${id}` },
+      state: { nextRunAtMs },
+    };
+  }
+
   async function withRestartedCron(
     jobs: unknown[],
     run: (params: {
@@ -447,6 +462,45 @@ describe("CronService restart catch-up", () => {
     expect(
       (staggeredJobs[1]?.state.nextRunAtMs ?? 0) - (staggeredJobs[0]?.state.nextRunAtMs ?? 0),
     ).toBe(5_000);
+
+    await store.cleanup();
+  });
+
+  it("keeps startup overflow cron deferrals before the next natural cron slot", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T17:00:00.000Z");
+    let now = startNow;
+
+    await writeStoreJobs(store.storePath, [
+      createOverdueCronJob("cron-stagger-0", Date.parse("2025-12-13T16:00:00.000Z")),
+      createOverdueCronJob("cron-stagger-1", Date.parse("2025-12-13T16:05:00.000Z")),
+      createOverdueCronJob("cron-stagger-2", Date.parse("2025-12-13T16:10:00.000Z")),
+    ]);
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        now += 6_000;
+        return { status: "ok" as const, summary: "ok" };
+      }),
+      maxMissedJobsPerRestart: 1,
+      missedJobStaggerMs: 5_000,
+    });
+
+    await runMissedJobs(state);
+
+    const deferredJobs = (state.store?.jobs ?? [])
+      .filter((job) => job.id.startsWith("cron-stagger-") && job.id !== "cron-stagger-0")
+      .toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+
+    expect(deferredJobs).toHaveLength(2);
+    expect(deferredJobs[0]?.state.nextRunAtMs).toBe(startNow + 5_000);
+    expect(deferredJobs[1]?.state.nextRunAtMs).toBe(startNow + 10_000);
 
     await store.cleanup();
   });

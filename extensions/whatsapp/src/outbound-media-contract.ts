@@ -1,6 +1,7 @@
 import path from "node:path";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
+import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { formatError } from "./session-errors.js";
 import {
@@ -189,29 +190,34 @@ async function transcodeToWhatsAppVoiceOpus(params: {
       const ext = path.extname(params.fileName).toLowerCase();
       const inputExt = ext && ext.length <= 12 ? ext : ".audio";
       const inputPath = await workspace.write(`input${inputExt}`, params.buffer);
-      const outputPath = workspace.path(WHATSAPP_VOICE_FILE_NAME);
-      await runFfmpeg([
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        inputPath,
-        "-vn",
-        "-sn",
-        "-dn",
-        "-t",
-        String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-        "-ar",
-        String(WHATSAPP_VOICE_SAMPLE_RATE_HZ),
-        "-ac",
-        "1",
-        "-c:a",
-        "libopus",
-        "-b:a",
-        WHATSAPP_VOICE_BITRATE,
-        outputPath,
-      ]);
+      await writeExternalFileWithinRoot({
+        rootDir: workspace.dir,
+        path: WHATSAPP_VOICE_FILE_NAME,
+        write: async (outputPath) => {
+          await runFfmpeg([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            inputPath,
+            "-vn",
+            "-sn",
+            "-dn",
+            "-t",
+            String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
+            "-ar",
+            String(WHATSAPP_VOICE_SAMPLE_RATE_HZ),
+            "-ac",
+            "1",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            WHATSAPP_VOICE_BITRATE,
+            outputPath,
+          ]);
+        },
+      });
       return await workspace.read(WHATSAPP_VOICE_FILE_NAME);
     },
   );

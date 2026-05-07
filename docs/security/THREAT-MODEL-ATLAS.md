@@ -6,9 +6,7 @@ read_when:
   - Working on security features or audit responses
 ---
 
-# OpenClaw Threat Model v1.0
-
-## MITRE ATLAS Framework
+## MITRE ATLAS framework
 
 **Version:** 1.0-draft
 **Last Updated:** 2026-02-04

@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const createChannelPairingController = vi.hoisted(() => vi.fn());
 const evaluateGroupRouteAccessForPolicy = vi.hoisted(() => vi.fn());
@@ -116,6 +116,13 @@ async function applyInboundAccessPolicy(
 describe("googlechat inbound access policy", () => {
   beforeAll(async () => {
     ({ applyGoogleChatInboundAccessPolicy } = await import("./monitor-access.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/channel-inbound");
+    vi.doUnmock("../runtime-api.js");
+    vi.doUnmock("./api.js");
+    vi.resetModules();
   });
 
   it("issues a pairing challenge for unauthorized DMs in pairing mode", async () => {

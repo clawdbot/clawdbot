@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterAll, describe, it, expect, vi, beforeEach } from "vitest";
 import { resolveGroupName, clearGroupNameCache } from "./bot.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -39,6 +39,12 @@ function makeAccount(id = "test-account"): ResolvedFeishuAccount {
 describe("resolveGroupName", () => {
   const account = makeAccount();
   const log = vi.fn();
+
+  afterAll(() => {
+    vi.doUnmock("./chat.js");
+    vi.doUnmock("./client.js");
+    vi.resetModules();
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();

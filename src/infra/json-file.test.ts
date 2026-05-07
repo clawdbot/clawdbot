@@ -175,10 +175,9 @@ describe("json-file helpers", () => {
     },
   );
 
-  it("falls back to copy when rename-based overwrite fails", async () => {
+  it("preserves payload when rename-based overwrite reports EPERM", async () => {
     await withJsonPath(({ root, pathname }) => {
       writeExistingJson(pathname);
-      const copySpy = vi.spyOn(fs, "copyFileSync");
       const renameSpy = vi.spyOn(fs, "renameSync").mockImplementationOnce(() => {
         const err = new Error("EPERM") as NodeJS.ErrnoException;
         err.code = "EPERM";
@@ -187,8 +186,7 @@ describe("json-file helpers", () => {
 
       saveJsonFile(pathname, SAVED_PAYLOAD);
 
-      expect(renameSpy).toHaveBeenCalledOnce();
-      expect(copySpy).toHaveBeenCalledOnce();
+      expect(renameSpy).toHaveBeenCalled();
       expect(loadJsonFile(pathname)).toEqual(SAVED_PAYLOAD);
       expect(fs.readdirSync(root)).toEqual(["config.json"]);
     });

@@ -74,8 +74,6 @@ function createGatewayCloseTestDeps(
   return {
     bonjourStop: null,
     tailscaleCleanup: null,
-    canvasHost: null,
-    canvasHostServer: null,
     stopChannel: vi.fn(async () => undefined),
     pluginServices: null,
     cron: { stop: vi.fn() },
@@ -226,11 +224,6 @@ describe("createGatewayCloseHandler", () => {
         bonjourStop: vi.fn(async () => {
           throw new Error("mdns unavailable");
         }),
-        canvasHost: {
-          close: vi.fn(async () => {
-            throw new Error("canvas error");
-          }),
-        } as never,
         lifecycleUnsub,
         stopChannel,
       }),
@@ -238,9 +231,7 @@ describe("createGatewayCloseHandler", () => {
 
     const result = await close({ reason: "test shutdown" });
 
-    expect(result.warnings).toEqual(
-      expect.arrayContaining(["bonjour", "canvas-host", "channel/telegram"]),
-    );
+    expect(result.warnings).toEqual(expect.arrayContaining(["bonjour", "channel/telegram"]));
     expect(result.warnings).not.toContain("channel/discord");
     expect(lifecycleUnsub).toHaveBeenCalledTimes(1);
     expect(stopChannel).toHaveBeenCalledTimes(2);

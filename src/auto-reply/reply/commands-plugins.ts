@@ -13,10 +13,12 @@ import {
   replaceConfigFile,
   validateConfigObjectWithPlugins,
 } from "../../config/config.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveArchiveKind } from "../../infra/archive.js";
 import { parseClawHubPluginSpec } from "../../infra/clawhub.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { installPluginFromClawHub } from "../../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../../plugins/git-install.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../../plugins/install.js";
@@ -135,6 +137,25 @@ function formatPluginsList(report: PluginStatusReport): string {
     }),
   ];
   return lines.join("\n");
+}
+
+function isPluginsWriteAction(action: string): boolean {
+  return action === "install" || action === "enable" || action === "disable";
+}
+
+function rejectNixModePluginWrite(): {
+  shouldContinue: false;
+  reply: { text: string };
+} | null {
+  try {
+    assertConfigWriteAllowedInCurrentMode();
+    return null;
+  } catch (error) {
+    return {
+      shouldContinue: false,
+      reply: { text: `⚠️ ${formatErrorMessage(error)}` },
+    };
+  }
 }
 
 function findPlugin(report: PluginStatusReport, rawName: string): PluginRecord | undefined {
@@ -411,6 +432,12 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
   });
   if (missingAdminScope) {
     return missingAdminScope;
+  }
+  if (isPluginsWriteAction(pluginsCommand.action)) {
+    const nixModeWrite = rejectNixModePluginWrite();
+    if (nixModeWrite) {
+      return nixModeWrite;
+    }
   }
 
   if (pluginsCommand.action === "install") {

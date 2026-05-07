@@ -644,6 +644,39 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("handles symbol-bearing header dictionaries while rewriting cross-origin redirects", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://cdn.example.com/asset"))
+      .mockResolvedValueOnce(okResponse());
+    const headers = {
+      Authorization: "Bearer secret",
+      Accept: "application/json",
+    } as Record<string, string> & { [key: symbol]: unknown };
+    Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
+      value: new Set(["authorization"]),
+      enumerable: false,
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/start",
+      fetchImpl,
+      lookupFn,
+      init: { headers },
+    });
+
+    expect(result.response.status).toBe(200);
+    const firstHeaders = fetchImpl.mock.calls[0]?.[1]?.headers;
+    expect(firstHeaders).not.toBe(headers);
+    expect(Object.getOwnPropertySymbols(firstHeaders as object)).toEqual([]);
+    const secondHeaders = getSecondRequestHeaders(fetchImpl);
+    expect(secondHeaders.get("authorization")).toBeNull();
+    expect(secondHeaders.get("accept")).toBe("application/json");
+    expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
+    await result.release();
+  });
+
   it("rewrites POST redirects to GET and clears the body for cross-origin 302 responses", async () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi
@@ -1136,6 +1169,43 @@ describe("fetchWithSsrFGuard hardening", () => {
       headersTimeout: 123_456,
     });
     await result.release();
+  });
+
+  it("rejects timed-out fetches even when dispatcher close stalls", async () => {
+    agentCtor.mockImplementationOnce(function MockAgent(this: { close: () => Promise<void> }) {
+      this.close = () => new Promise(() => {});
+    });
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(init.signal?.reason ?? new Error("aborted"));
+          });
+        }),
+    );
+
+    const fetchPromise = fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn: createPublicLookup(),
+      timeoutMs: 1,
+    });
+
+    const outcome = await Promise.race([
+      fetchPromise.then(
+        () => "resolved",
+        (error: unknown) => (error instanceof Error ? error.name : "rejected"),
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve("hung"), 250)),
+    ]);
+
+    expect(outcome).toBe("TimeoutError");
   });
 
   it("inherits the configured global stream timeout for guarded direct dispatchers", async () => {

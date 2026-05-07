@@ -20,6 +20,7 @@ import {
   resolveAttemptFsWorkspaceOnly,
   resolveEmbeddedAgentStreamFn,
   resolveUnknownToolGuardThreshold,
+  shouldRunLlmOutputHooksForAttempt,
   resolveAttemptToolPolicyMessageProvider,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -149,6 +150,43 @@ describe("normalizeMessagesForLlmBoundary", () => {
       expect.arrayContaining([expect.objectContaining({ customType: "other-extension-context" })]),
     );
   });
+
+  it("keeps only safe blocked metadata at the LLM boundary", () => {
+    const input = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+          },
+        ],
+        timestamp: 1,
+        __openclaw: {
+          beforeAgentRunBlocked: {
+            blockedBy: "policy-plugin",
+            blockedAt: 1,
+          },
+        },
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as Array<Record<string, unknown>>;
+
+    expect(output[0]?.content).toEqual([
+      {
+        type: "text",
+        text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+      },
+    ]);
+    expect(output[0]).toHaveProperty("__openclaw.beforeAgentRunBlocked");
+    expect(output[0]).not.toHaveProperty("__openclaw.beforeAgentRunBlocked.reason");
+    expect(JSON.stringify(output)).not.toContain("secret prompt");
+    expect(JSON.stringify(output)).not.toContain("matched secret prompt");
+    expect(input[0]).toHaveProperty("__openclaw");
+  });
 });
 
 describe("resolveAttemptToolPolicyMessageProvider", () => {
@@ -163,6 +201,16 @@ describe("resolveAttemptToolPolicyMessageProvider", () => {
 
   it("falls back to message channel when provider is omitted", () => {
     expect(resolveAttemptToolPolicyMessageProvider({ messageChannel: "discord" })).toBe("discord");
+  });
+});
+
+describe("shouldRunLlmOutputHooksForAttempt", () => {
+  it("skips llm_output after before_agent_run blocks before model submission", () => {
+    expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: "hook:before_agent_run" })).toBe(
+      false,
+    );
+    expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: "prompt" })).toBe(true);
+    expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: null })).toBe(true);
   });
 });
 

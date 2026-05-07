@@ -68,6 +68,8 @@ apps/ios/*.xcfilelist
 vendor/a2ui/renderers/lit/dist/
 src/canvas-host/a2ui/*.bundle.js
 src/canvas-host/a2ui/*.map
+extensions/canvas/src/host/a2ui/*.bundle.js
+extensions/canvas/src/host/a2ui/*.map
 .bundle.hash
 
 # fastlane (iOS)
@@ -220,3 +222,4 @@ extensions/**/.openclaw-runtime-deps-stamp.json
 # Output dir for scripts/run-opengrep.sh (local opengrep scans)
 /.opengrep-out/
 /.crabbox-artifacts
+.comux*

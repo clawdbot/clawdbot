@@ -287,6 +287,11 @@ The bundled `google` speech provider uses the Gemini API TTS path with
 - Output: WAV for regular TTS attachments, Opus for voice-note targets, PCM for Talk/telephony
 - Voice-note output: Google PCM is wrapped as WAV and transcoded to 48 kHz Opus with `ffmpeg`
 
+Google's batch Gemini TTS path returns generated audio in the completed
+`generateContent` response. For lowest-latency spoken conversations, use the
+Google realtime voice provider backed by the Gemini Live API instead of batch
+TTS.
+
 To use Google as the default TTS provider:
 
 ```json5

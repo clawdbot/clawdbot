@@ -268,7 +268,8 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(result).toMatchObject({
+    expect(result).toBeUndefined();
+    expect(onBlockReply).toHaveBeenCalledWith({
       text: "here is the chart",
       mediaUrl: "/tmp/outbound-media/1-chart.png",
       mediaUrls: ["/tmp/outbound-media/1-chart.png"],
@@ -277,7 +278,6 @@ describe("runReplyAgent media path normalization", () => {
       audioAsVoice: false,
     });
     expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("does not create a second media context inside runAgentTurnWithFallback when onBlockReply is provided", async () => {

@@ -10,6 +10,7 @@ describe("QA Convex credential payload validation", () => {
       normalizeCredentialPayloadForKind("discord", {
         guildId: " 1496962067029299350 ",
         channelId: "1496962068027281447",
+        voiceChannelId: "1496962069025263624",
         driverBotToken: " driver-token ",
         sutBotToken: "sut-token",
         sutApplicationId: "1496963665587601428",
@@ -18,6 +19,7 @@ describe("QA Convex credential payload validation", () => {
     ).toEqual({
       guildId: "1496962067029299350",
       channelId: "1496962068027281447",
+      voiceChannelId: "1496962069025263624",
       driverBotToken: "driver-token",
       sutBotToken: "sut-token",
       sutApplicationId: "1496963665587601428",
@@ -46,6 +48,19 @@ describe("QA Convex credential payload validation", () => {
         sutApplicationId: "1496963665587601428",
       }),
     ).toThrow(/driverBotToken/u);
+  });
+
+  it("rejects malformed optional Discord voice channel ids", () => {
+    expect(() =>
+      normalizeCredentialPayloadForKind("discord", {
+        guildId: "1496962067029299350",
+        channelId: "1496962068027281447",
+        voiceChannelId: "voice-channel",
+        driverBotToken: "driver-token",
+        sutBotToken: "sut-token",
+        sutApplicationId: "1496963665587601428",
+      }),
+    ).toThrow(/voiceChannelId/u);
   });
 
   it("keeps unknown credential kinds pass-through-compatible", () => {

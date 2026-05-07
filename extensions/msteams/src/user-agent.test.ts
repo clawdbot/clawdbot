@@ -20,6 +20,7 @@ describe("buildUserAgent", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 

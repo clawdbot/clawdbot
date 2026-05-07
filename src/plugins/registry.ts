@@ -106,6 +106,7 @@ import type {
   PluginCommandRegistration,
   PluginControlUiDescriptorRegistryRegistration,
   PluginConversationBindingResolvedHandlerRegistration,
+  PluginHostedMediaResolverRegistration,
   PluginHookRegistration,
   PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
   PluginAgentHarnessRegistration,
@@ -151,6 +152,7 @@ import type {
   PluginConversationBindingResolvedEvent,
   OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawGatewayDiscoveryService,
+  OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
   OpenClawPluginNodeHostCommand,
@@ -200,6 +202,7 @@ export type {
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
   PluginControlUiDescriptorRegistryRegistration,
+  PluginHostedMediaResolverRegistration,
   PluginRuntimeLifecycleRegistryRegistration,
   PluginRecord,
   PluginRegistry,
@@ -783,11 +786,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         path: normalizedPath,
         handler: params.handler,
+        ...(params.handleUpgrade ? { handleUpgrade: params.handleUpgrade } : {}),
         auth: params.auth,
         match,
         ...(params.gatewayRuntimeScopeSurface
           ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
           : {}),
+        ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
         source: record.source,
       };
       return;
@@ -797,12 +802,36 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       path: normalizedPath,
       handler: params.handler,
+      ...(params.handleUpgrade ? { handleUpgrade: params.handleUpgrade } : {}),
       auth: params.auth,
       match,
       ...(params.gatewayRuntimeScopeSurface
         ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
         : {}),
+      ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
       source: record.source,
+    });
+  };
+
+  const registerHostedMediaResolver = (
+    record: PluginRecord,
+    resolver: OpenClawPluginHostedMediaResolver,
+  ) => {
+    if (typeof resolver !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "hosted media resolver registration missing resolver",
+      });
+      return;
+    }
+    (registry.hostedMediaResolvers ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      resolver,
+      source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -1207,7 +1236,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerCli = (
     record: PluginRecord,
     registrar: OpenClawPluginCliRegistrar,
-    opts?: { commands?: string[]; descriptors?: OpenClawPluginCliCommandDescriptor[] },
+    opts?: {
+      parentPath?: string[];
+      commands?: string[];
+      descriptors?: OpenClawPluginCliCommandDescriptor[];
+    },
   ) => {
     const normalizeCommandRoot = (raw: string, source: "command" | "descriptor") => {
       const normalized = normalizeCommandDescriptorName(raw);
@@ -1221,6 +1254,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       }
       return normalized;
     };
+    const parentPath = (opts?.parentPath ?? []).map((segment) =>
+      normalizeCommandRoot(segment, "command"),
+    );
+    if (parentPath.some((segment) => segment === null)) {
+      return;
+    }
+    const normalizedParentPath = parentPath as string[];
     const descriptors = (opts?.descriptors ?? [])
       .map((descriptor) => {
         const name = normalizeCommandRoot(descriptor.name, "descriptor");
@@ -1251,11 +1291,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const serializeCommandPath = (command: string) => [...normalizedParentPath, command].join(" ");
+    const commandPaths = commands.map(serializeCommandPath);
+    const commandPathSet = new Set(commandPaths);
     const existing = registry.cliRegistrars.find((entry) =>
-      entry.commands.some((command) => commands.includes(command)),
+      entry.commands
+        .map((command) => [...(entry.parentPath ?? []), command].join(" "))
+        .some((commandPath) => commandPathSet.has(commandPath)),
     );
     if (existing) {
-      const overlap = commands.find((command) => existing.commands.includes(command));
+      const existingCommandPaths = new Set(
+        existing.commands.map((command) => [...(existing.parentPath ?? []), command].join(" ")),
+      );
+      const overlap = commandPaths.find((commandPath) => existingCommandPaths.has(commandPath));
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -1264,11 +1312,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    record.cliCommands.push(...commands);
+    record.cliCommands.push(...commandPaths);
     registry.cliRegistrars.push({
       pluginId: record.id,
       pluginName: record.name,
       register: registrar,
+      parentPath: normalizedParentPath,
       commands,
       descriptors,
       source: record.source,
@@ -2260,6 +2309,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerHook: (events, handler, opts) =>
                 registerHook(record, events, handler, opts, params.config, params.pluginConfig),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
+              registerHostedMediaResolver: (resolver) =>
+                registerHostedMediaResolver(record, resolver),
               registerProvider: (provider) => registerProvider(record, provider),
               registerAgentHarness: (harness) => registerAgentHarness(record, harness),
               registerDetachedTaskRuntime: (runtime) => {
@@ -2666,6 +2717,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     pushDiagnostic,
     registerTool,
     registerChannel,
+    registerHostedMediaResolver,
     registerProvider,
     registerAgentHarness,
     registerCliBackend,

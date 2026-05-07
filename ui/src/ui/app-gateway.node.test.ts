@@ -74,7 +74,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
           this.opts.onHello?.(
             hello ?? {
               type: "hello-ok",
-              protocol: 3,
+              protocol: 4,
               snapshot: {},
               auth: { role: "operator", scopes: [] },
             },
@@ -179,6 +179,7 @@ function createHost(): TestGatewayHost {
     execApprovalQueue: [],
     execApprovalError: null,
     updateAvailable: null,
+    updateComplete: new Promise(() => undefined),
   } as unknown as TestGatewayHost;
 }
 
@@ -214,8 +215,14 @@ describe("connectGateway", () => {
     gatewayClientInstances.length = 0;
     loadChatHistoryMock.mockClear();
     loadControlUiBootstrapConfigMock.mockClear();
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+      setTimeout(() => callback(Date.now()), 0),
+    );
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
     vi.stubGlobal("window", {
       setTimeout: globalThis.setTimeout,
+      requestAnimationFrame: globalThis.requestAnimationFrame,
+      cancelAnimationFrame: globalThis.cancelAnimationFrame,
     });
   });
 
@@ -314,7 +321,7 @@ describe("connectGateway", () => {
 
     client.emitHello({
       type: "hello-ok",
-      protocol: 3,
+      protocol: 4,
       server: { version: "2.0.0" },
       auth: { role: "operator", scopes: [] },
       snapshot: {},
@@ -350,7 +357,7 @@ describe("connectGateway", () => {
 
     client.emitHello({
       type: "hello-ok",
-      protocol: 3,
+      protocol: 4,
       server: { version: "1.0.0" },
       auth: { role: "operator", scopes: [] },
       snapshot: {},
@@ -389,7 +396,7 @@ describe("connectGateway", () => {
 
     client.emitHello({
       type: "hello-ok",
-      protocol: 3,
+      protocol: 4,
       server: { version: "1.0.0" },
       auth: { role: "operator", scopes: [] },
       snapshot: {},
@@ -655,6 +662,58 @@ describe("connectGateway", () => {
 
     expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledTimes(1);
     expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host, { applyIdentity: false });
+  });
+
+  it("falls back from restored unconfigured agent sessions before refreshing chat", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    host.sessionKey = "agent:local:main";
+    host.settings = {
+      ...host.settings,
+      sessionKey: "agent:local:main",
+      lastActiveSessionKey: "agent:local:main",
+    };
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "agents.list") {
+        return {
+          defaultId: "main",
+          mainKey: "agent:main:main",
+          scope: "all",
+          agents: [{ id: "main", name: "Main" }],
+        };
+      }
+      if (method === "update.status") {
+        return { sentinel: null };
+      }
+      if (method === "models.authStatus") {
+        return { ts: 0, providers: [] };
+      }
+      return {};
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 3,
+      auth: { role: "operator", scopes: [] },
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "main",
+          mainKey: "main",
+          mainSessionKey: "agent:main:main",
+        },
+      },
+    } as GatewayHelloOk);
+
+    await vi.waitFor(() => {
+      expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+    });
+    expect(host.sessionKey).toBe("agent:main:main");
+    expect(host.settings.sessionKey).toBe("agent:main:main");
+    expect(host.settings.lastActiveSessionKey).toBe("agent:main:main");
   });
 
   it("sends queued chat aborts after reconnect before clearing pending state", async () => {

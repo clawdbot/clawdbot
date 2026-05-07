@@ -5,7 +5,7 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
 import { mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
-import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { readRegularFile, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
   withTempWorkspace,
@@ -757,29 +757,34 @@ async function transcodeToFeishuVoiceOpus(params: {
       const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
       const inputExt = ext && ext.length <= 12 ? ext : ".audio";
       const inputPath = await workspace.write(`input${inputExt}`, params.buffer);
-      const outputPath = workspace.path(FEISHU_VOICE_FILE_NAME);
-      await runFfmpeg([
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        inputPath,
-        "-vn",
-        "-sn",
-        "-dn",
-        "-t",
-        String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-        "-ar",
-        String(FEISHU_VOICE_SAMPLE_RATE_HZ),
-        "-ac",
-        "1",
-        "-c:a",
-        "libopus",
-        "-b:a",
-        FEISHU_VOICE_BITRATE,
-        outputPath,
-      ]);
+      await writeExternalFileWithinRoot({
+        rootDir: workspace.dir,
+        path: FEISHU_VOICE_FILE_NAME,
+        write: async (outputPath) => {
+          await runFfmpeg([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            inputPath,
+            "-vn",
+            "-sn",
+            "-dn",
+            "-t",
+            String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
+            "-ar",
+            String(FEISHU_VOICE_SAMPLE_RATE_HZ),
+            "-ac",
+            "1",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            FEISHU_VOICE_BITRATE,
+            outputPath,
+          ]);
+        },
+      });
       return {
         buffer: await workspace.read(FEISHU_VOICE_FILE_NAME),
         fileName: FEISHU_VOICE_FILE_NAME,

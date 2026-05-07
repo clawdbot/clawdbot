@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Component, SelectItem, TUI } from "@mariozechner/pi-tui";
+import { modelKey } from "../agents/model-ref-shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -124,11 +125,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         tui.requestRender();
         return;
       }
-      const items = models.map((model) => ({
-        value: `${model.provider}/${model.id}`,
-        label: `${model.provider}/${model.id}`,
-        description: model.name && model.name !== model.id ? model.name : "",
-      }));
+      const items = models.map((model) => {
+        const ref = modelKey(model.provider, model.id);
+        return {
+          value: ref,
+          label: ref,
+          description: model.name && model.name !== model.id ? model.name : "",
+        };
+      });
       const selector = createSearchableSelectList(items, 9);
       openSelector(selector, async (value) => {
         try {

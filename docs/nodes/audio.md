@@ -5,8 +5,6 @@ read_when:
 title: "Audio and voice notes"
 ---
 
-# Audio / Voice Notes (2026-01-17)
-
 ## What works
 
 - **Media understanding (audio)**: If audio understanding is enabled (or auto-detected), OpenClaw:

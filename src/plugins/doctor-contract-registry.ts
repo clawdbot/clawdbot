@@ -9,6 +9,7 @@ import type { PluginManifestRegistry } from "./manifest-registry.js";
 import {
   createPluginModuleLoaderCache,
   getCachedPluginModuleLoader,
+  type PluginModuleLoaderFactory,
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
@@ -44,12 +45,14 @@ type PluginDoctorContractEntry = {
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
 
 const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+let moduleLoaderFactoryForTest: PluginModuleLoaderFactory | undefined;
 
 function loadPluginDoctorContractModule(modulePath: string): PluginDoctorContractModule {
   return getCachedPluginModuleLoader({
     cache: moduleLoaders,
     modulePath,
     importerUrl: import.meta.url,
+    ...(moduleLoaderFactoryForTest ? { createLoader: moduleLoaderFactoryForTest } : {}),
   })(modulePath) as PluginDoctorContractModule;
 }
 
@@ -255,6 +258,7 @@ function loadPluginDoctorContractEntry(
 }
 
 function resolvePluginDoctorContracts(params?: {
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
@@ -265,6 +269,7 @@ function resolvePluginDoctorContracts(params?: {
   }
 
   const manifestRegistry = loadPluginManifestRegistryForPluginRegistry({
+    config: params?.config,
     workspaceDir: params?.workspaceDir,
     env,
     includeDisabled: true,
@@ -294,7 +299,15 @@ export function clearPluginDoctorContractRegistryCache(): void {
   moduleLoaders.clear();
 }
 
+export function setPluginDoctorContractRegistryModuleLoaderFactoryForTest(
+  factory: PluginModuleLoaderFactory | undefined,
+): void {
+  moduleLoaderFactoryForTest = factory;
+  moduleLoaders.clear();
+}
+
 export function listPluginDoctorLegacyConfigRules(params?: {
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
@@ -303,6 +316,7 @@ export function listPluginDoctorLegacyConfigRules(params?: {
 }
 
 export function listPluginDoctorSessionRouteStateOwners(params?: {
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
@@ -321,6 +335,7 @@ export function listPluginDoctorSessionRouteStateOwners(params?: {
 export function applyPluginDoctorCompatibilityMigrations(
   cfg: OpenClawConfig,
   params?: {
+    config?: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
     pluginIds?: readonly string[];

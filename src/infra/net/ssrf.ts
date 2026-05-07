@@ -27,6 +27,7 @@ type LookupCallback = (
 ) => void;
 
 type LookupResult = LookupAddress | LookupAddress[];
+const DISPATCHER_CLOSE_TIMEOUT_MS = 100;
 
 export class SsrFBlockedError extends Error {
   constructor(message: string) {
@@ -551,19 +552,55 @@ export function createPinnedDispatcher(
   );
 }
 
+type ClosableDispatcher = {
+  close?: () => Promise<void> | void;
+  destroy?: () => void;
+};
+
+function destroyDispatcher(candidate: ClosableDispatcher): void {
+  try {
+    candidate.destroy?.();
+  } catch {
+    // ignore dispatcher cleanup errors
+  }
+}
+
+async function waitForDispatcherClose(candidate: ClosableDispatcher): Promise<void> {
+  const close = candidate.close;
+  if (typeof close !== "function") {
+    destroyDispatcher(candidate);
+    return;
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve(close.call(candidate)),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(() => {
+          timeout = undefined;
+          destroyDispatcher(candidate);
+          resolve();
+        }, DISPATCHER_CLOSE_TIMEOUT_MS);
+        timeout.unref?.();
+      }),
+    ]);
+  } catch (err) {
+    destroyDispatcher(candidate);
+    throw err;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<void> {
   if (!dispatcher) {
     return;
   }
-  const candidate = dispatcher as { close?: () => Promise<void> | void; destroy?: () => void };
+  const candidate = dispatcher as ClosableDispatcher;
   try {
-    if (typeof candidate.close === "function") {
-      await candidate.close();
-      return;
-    }
-    if (typeof candidate.destroy === "function") {
-      candidate.destroy();
-    }
+    await waitForDispatcherClose(candidate);
   } catch {
     // ignore dispatcher cleanup errors
   }

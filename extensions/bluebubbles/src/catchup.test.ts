@@ -11,6 +11,8 @@ import {
 import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import type { WebhookTarget } from "./monitor-shared.js";
 
+const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+
 function makeStateDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catchup-test-"));
   process.env.OPENCLAW_STATE_DIR = dir;
@@ -18,7 +20,11 @@ function makeStateDir(): string {
 }
 
 function clearStateDir(dir: string): void {
-  delete process.env.OPENCLAW_STATE_DIR;
+  if (originalStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
+  }
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

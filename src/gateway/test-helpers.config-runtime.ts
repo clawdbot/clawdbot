@@ -113,17 +113,6 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     }
     const gateway = Object.keys(fileGateway).length > 0 ? fileGateway : undefined;
 
-    const fileCanvasHost =
-      baseConfig.canvasHost &&
-      typeof baseConfig.canvasHost === "object" &&
-      !Array.isArray(baseConfig.canvasHost)
-        ? ({ ...(baseConfig.canvasHost as Record<string, unknown>) } as Record<string, unknown>)
-        : {};
-    if (typeof testState.canvasHostPort === "number") {
-      fileCanvasHost.port = testState.canvasHostPort;
-    }
-    const canvasHost = Object.keys(fileCanvasHost).length > 0 ? fileCanvasHost : undefined;
-
     const hooks = testState.hooksConfig ?? baseConfig.hooks;
 
     const fileCron =
@@ -145,7 +134,6 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
       channels,
       session,
       gateway,
-      canvasHost,
       hooks,
       cron,
     } as OpenClawConfig;

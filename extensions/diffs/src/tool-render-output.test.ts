@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import type { DiffScreenshotter } from "./browser.js";
 import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
@@ -14,6 +14,11 @@ const { renderDiffDocumentMock } = vi.hoisted(() => ({
 vi.mock("./render.js", () => ({
   renderDiffDocument: renderDiffDocumentMock,
 }));
+
+afterAll(() => {
+  vi.doUnmock("./render.js");
+  vi.resetModules();
+});
 
 describe("diffs tool rendered output guards", () => {
   let createDiffsTool: typeof import("./tool.js").createDiffsTool;

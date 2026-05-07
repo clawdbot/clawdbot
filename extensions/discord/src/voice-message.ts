@@ -22,6 +22,7 @@ import {
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
+import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
@@ -32,6 +33,21 @@ const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 const WAVEFORM_SAMPLES = 256;
 const DISCORD_OPUS_SAMPLE_RATE_HZ = 48_000;
+
+async function runFfmpegToOutput(params: {
+  outputPath: string;
+  buildArgs: (tempPath: string) => string[];
+}): Promise<void> {
+  const rootDir = path.dirname(params.outputPath);
+  await fs.mkdir(rootDir, { recursive: true });
+  await writeExternalFileWithinRoot({
+    rootDir,
+    path: path.basename(params.outputPath),
+    write: async (tempPath) => {
+      await runFfmpeg(params.buildArgs(tempPath));
+    },
+  });
+}
 
 function createRateLimitError(
   response: Response,
@@ -104,25 +120,28 @@ async function generateWaveformFromPcm(filePath: string): Promise<string> {
 
   try {
     // Convert to raw 16-bit signed PCM, mono, 8kHz
-    await runFfmpeg([
-      "-y",
-      "-i",
-      filePath,
-      "-vn",
-      "-sn",
-      "-dn",
-      "-t",
-      String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-      "-f",
-      "s16le",
-      "-acodec",
-      "pcm_s16le",
-      "-ac",
-      "1",
-      "-ar",
-      "8000",
-      tempPcm,
-    ]);
+    await runFfmpegToOutput({
+      outputPath: tempPcm,
+      buildArgs: (outputPath) => [
+        "-y",
+        "-i",
+        filePath,
+        "-vn",
+        "-sn",
+        "-dn",
+        "-t",
+        String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
+        "-f",
+        "s16le",
+        "-acodec",
+        "pcm_s16le",
+        "-ac",
+        "1",
+        "-ar",
+        "8000",
+        outputPath,
+      ],
+    });
 
     const pcmData = await fs.readFile(tempPcm);
     const samples = new Int16Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength / 2);
@@ -214,23 +233,26 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
   const tempDir = resolvePreferredOpenClawTmpDir();
   const outputPath = path.join(tempDir, `voice-${crypto.randomUUID()}.ogg`);
 
-  await runFfmpeg([
-    "-y",
-    "-i",
-    filePath,
-    "-vn",
-    "-sn",
-    "-dn",
-    "-t",
-    String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-    "-ar",
-    String(DISCORD_OPUS_SAMPLE_RATE_HZ),
-    "-c:a",
-    "libopus",
-    "-b:a",
-    "64k",
+  await runFfmpegToOutput({
     outputPath,
-  ]);
+    buildArgs: (tempPath) => [
+      "-y",
+      "-i",
+      filePath,
+      "-vn",
+      "-sn",
+      "-dn",
+      "-t",
+      String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
+      "-ar",
+      String(DISCORD_OPUS_SAMPLE_RATE_HZ),
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "64k",
+      tempPath,
+    ],
+  });
 
   return { path: outputPath, cleanup: true };
 }

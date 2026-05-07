@@ -1086,8 +1086,13 @@ export async function deliverOutboundPayloads(
 ): Promise<OutboundDeliveryResult[]> {
   const { channel, to, payloads } = params;
   const queuePolicy = params.queuePolicy ?? "best_effort";
+  const queuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);
+  const queuePayloadsChanged = queuePayloads.some((payload, index) => payload !== payloads[index]);
   const renderedBatchPlan =
     params.renderedBatchPlan ?? createRenderedMessageBatchPlan(params.payloads);
+  const queueRenderedBatchPlan = queuePayloadsChanged
+    ? createRenderedMessageBatchPlan(queuePayloads)
+    : renderedBatchPlan;
 
   // Write-ahead delivery queue: persist before sending, remove after success.
   const queueId = params.skipQueue
@@ -1096,8 +1101,8 @@ export async function deliverOutboundPayloads(
         channel,
         to,
         accountId: params.accountId,
-        payloads,
-        renderedBatchPlan,
+        payloads: queuePayloads,
+        renderedBatchPlan: queueRenderedBatchPlan,
         threadId: params.threadId,
         replyToId: params.replyToId,
         replyToMode: params.replyToMode,

@@ -30,7 +30,9 @@ import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
 export { isBuildRelevantRunNodePath, isRestartRelevantRunNodePath, runNodeWatchedPaths };
 
 const buildScript = "scripts/tsdown-build.mjs";
+const bundledPluginAssetsScript = "scripts/bundled-plugin-assets.mjs";
 const compilerArgs = [buildScript, "--no-clean"];
+const bundledPluginAssetBuildArgs = [bundledPluginAssetsScript, "--phase", "build"];
 
 const runtimePostBuildWatchedPaths = [
   "scripts/copy-bundled-plugin-metadata.mjs",
@@ -1022,7 +1024,23 @@ export async function runNodeMain(params = {}) {
         `Building TypeScript (dist is stale: ${lockedBuildRequirement.reason} - ${formatBuildReason(lockedBuildRequirement.reason)}).`,
         deps,
       );
+      logRunner("Building bundled plugin assets.", deps);
       const buildCmd = deps.execPath;
+      const assetBuild = deps.spawn(buildCmd, bundledPluginAssetBuildArgs, {
+        cwd: deps.cwd,
+        env: deps.env,
+        stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
+      });
+      pipeSpawnedOutput(assetBuild, deps);
+      const assetBuildRes = await waitForSpawnedProcess(assetBuild, deps);
+      const assetBuildInterruptedExitCode = getInterruptedSpawnExitCode(assetBuildRes);
+      if (assetBuildInterruptedExitCode !== null) {
+        return assetBuildInterruptedExitCode;
+      }
+      if (assetBuildRes.exitCode !== 0 && assetBuildRes.exitCode !== null) {
+        return assetBuildRes.exitCode;
+      }
+
       const buildArgs = compilerArgs;
       const build = deps.spawn(buildCmd, buildArgs, {
         cwd: deps.cwd,

@@ -15,7 +15,7 @@ overrides:
   fast-xml-parser: 5.7.0
   request: npm:@cypress/request@3.0.10
   request-promise: npm:@cypress/request-promise@5.0.0
-  basic-ftp: 5.3.0
+  basic-ftp: 6.0.1
   file-type: 22.0.1
   form-data: 2.5.4
   ip-address: 10.2.0
@@ -105,8 +105,8 @@ importers:
         specifier: ^0.6.0
         version: 0.6.0
       '@openclaw/fs-safe':
-        specifier: github:openclaw/fs-safe#3c508734af0b
-        version: https://codeload.github.com/openclaw/fs-safe/tar.gz/3c508734af0baaad4f61cf70619bea98c783043b
+        specifier: github:openclaw/fs-safe#ce4137f028ca4b09f26a93ffa3e0d32fbfbd516c
+        version: https://codeload.github.com/openclaw/fs-safe/tar.gz/ce4137f028ca4b09f26a93ffa3e0d32fbfbd516c
       '@slack/bolt':
         specifier: ^4.7.2
         version: 4.7.2(@types/express@5.0.6)
@@ -225,6 +225,9 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
+      '@a2ui/lit':
+        specifier: 0.9.3
+        version: 0.9.3(signal-polyfill@0.2.2)
       '@copilotkit/aimock':
         specifier: 1.17.0
         version: 1.17.0(vitest@4.1.5)
@@ -329,6 +332,9 @@ importers:
       '@aws-sdk/credential-provider-node':
         specifier: 3.972.39
         version: 3.972.39
+      '@smithy/shared-ini-file-loader':
+        specifier: 4.4.9
+        version: 4.4.9
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -442,6 +448,16 @@ importers:
         version: 8.2.0
 
   extensions/byteplus:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/canvas:
+    dependencies:
+      typebox:
+        specifier: 1.1.37
+        version: 1.1.37
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1681,6 +1697,17 @@ importers:
 
 packages:
 
+  '@a2ui/lit@0.9.3':
+    resolution: {integrity: sha512-9Z6LAPQ0w8Se+Atul1fKo/obJPLinSsP16h86xTjr8qRBQDmK6GFnT2fIkUJVALzVoADObidfIdmtbgosFDenA==}
+    peerDependencies:
+      '@a2ui/markdown-it': ^0.0.3
+    peerDependenciesMeta:
+      '@a2ui/markdown-it':
+        optional: true
+
+  '@a2ui/web_core@0.9.2':
+    resolution: {integrity: sha512-EOfhLOF7tnpPmNq4y116k3gxWdrXQW8h3dhKF0pC++21zLZnCSLSHl6zgQFG+kPeVAZb64t+sQiRXlnyS8+RBg==}
+
   '@agentclientprotocol/claude-agent-acp@0.32.0':
     resolution: {integrity: sha512-3WIaD1bTmIciqHdeU97oeNajOG9H+ctloXnQ+R/T563C2CM8u1K7QsNqqgqR2F+Cn8NVBkXdHRvAMtUHglLzAw==}
     hasBin: true
@@ -2820,6 +2847,9 @@ packages:
     resolution: {integrity: sha512-3NZJjeFm2BikwVRgA8osIVbgKhuL0CzphQOdrB8okXIC40qMRE4RRfHFN3G8/qTb/34RtB95mD4J/KW5MD+b8g==}
     engines: {node: '>=20'}
 
+  '@lit-labs/signals@0.1.3':
+    resolution: {integrity: sha512-P0yWgH5blwVyEwBg+WFspLzeu1i0ypJP1QB0l1Omr9qZLIPsUu0p4Fy2jshOg7oQyha5n163K3GJGeUhQQ682Q==}
+
   '@lit-labs/signals@0.2.0':
     resolution: {integrity: sha512-68plyIbciumbwKaiilhLNyhz4Vg6/+nJwDufG2xxWA9r/fUw58jxLHCAlKs+q1CE5Lmh3cZ3ShyYKnOCebEpVA==}
 
@@ -3234,8 +3264,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/3c508734af0baaad4f61cf70619bea98c783043b':
-    resolution: {tarball: https://codeload.github.com/openclaw/fs-safe/tar.gz/3c508734af0baaad4f61cf70619bea98c783043b}
+  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/ce4137f028ca4b09f26a93ffa3e0d32fbfbd516c':
+    resolution: {tarball: https://codeload.github.com/openclaw/fs-safe/tar.gz/ce4137f028ca4b09f26a93ffa3e0d32fbfbd516c}
     version: 0.1.2
     engines: {node: '>=20.11'}
 
@@ -3703,6 +3733,9 @@ packages:
 
   '@polka/url@1.0.0-next.29':
     resolution: {integrity: sha512-wwQAWhWSuHaag8c4q/KN/vCoeOJYshAIvMQwD4GpSb3OiZklFfvAgmj0VCBBImRpuF/aFgIRzllXlVX93Jevww==}
+
+  '@preact/signals-core@1.14.1':
+    resolution: {integrity: sha512-vxPpfXqrwUe9lpjqfYNjAF/0RF/eFGeLgdJzdmIIZjpOnTmGmAB4BjWone562mJGMRP4frU6iZ6ei3PDsu52Ng==}
 
   '@protobufjs/aspromise@1.1.2':
     resolution: {integrity: sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==}
@@ -4448,6 +4481,7 @@ packages:
 
   '@ungap/structured-clone@1.3.0':
     resolution: {integrity: sha512-WmoN8qaIAo7WTYWbAZuG8PYEhn5fkz7dZrqTBZ7dtt//lL2Gwms1IcnQ5yHqjDfX8Ft5j4YzDM23f87zBfDe9g==}
+    deprecated: Potential CWE-502 - Update to 1.3.1 or higher
 
   '@urbit/aura@3.0.0':
     resolution: {integrity: sha512-N8/FHc/lmlMDCumMuTXyRHCxlov5KZY6unmJ9QR2GOw+OpROZMBsXYGwE+ZMtvN21ql9+Xb8KhGNBj08IrG3Wg==}
@@ -4805,8 +4839,8 @@ packages:
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
 
-  basic-ftp@5.3.0:
-    resolution: {integrity: sha512-5K9eNNn7ywHPsYnFwjKgYH8Hf8B5emh7JKcPaVjjrMJFQQwGpwowEnZNEtHs7DfR7hCZsmaK3VA4HUK0YarT+w==}
+  basic-ftp@6.0.1:
+    resolution: {integrity: sha512-3ilxa3n4276wGQp/ImRAuz4ALdsj/2Wd3FqoZBZlajDYnByCZ0JMb4+26Rde0wGXIbM0G2HWSfr/Fi8b21KX8g==}
     engines: {node: '>=10.0.0'}
 
   bidi-js@1.0.3:
@@ -5080,6 +5114,9 @@ packages:
   data-urls@7.0.0:
     resolution: {integrity: sha512-23XHcCF+coGYevirZceTVD7NdJOqVn+49IHyxgszm+JIiHLoB2TkmPtsYkNWT1pvRSGkc35L6NHs0yHkN2SumA==}
     engines: {node: ^20.19.0 || ^22.12.0 || >=24.0.0}
+
+  date-fns@4.1.0:
+    resolution: {integrity: sha512-Ukq0owbQXxa/U3EGtsdVBkR1w7KOQ5gIBqdH2hkvknzZPYvBxb/aa6E8L7tmjFtkwZBu3UXBbjIgPo/Ez4xaNg==}
 
   debug@4.4.3:
     resolution: {integrity: sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==}
@@ -7875,6 +7912,24 @@ packages:
 
 snapshots:
 
+  '@a2ui/lit@0.9.3(signal-polyfill@0.2.2)':
+    dependencies:
+      '@a2ui/web_core': 0.9.2
+      '@lit-labs/signals': 0.1.3
+      '@lit/context': 1.1.6
+      lit: 3.3.2
+      signal-utils: 0.21.1(signal-polyfill@0.2.2)
+      zod: 3.25.76
+    transitivePeerDependencies:
+      - signal-polyfill
+
+  '@a2ui/web_core@0.9.2':
+    dependencies:
+      '@preact/signals-core': 1.14.1
+      date-fns: 4.1.0
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.2(zod@3.25.76)
+
   '@agentclientprotocol/claude-agent-acp@0.32.0(patch_hash=1fe782f9679d7a725cbe59e51d61419fbb25d4c463d186c43c95644770cb2b98)':
     dependencies:
       '@agentclientprotocol/sdk': 0.21.0(zod@4.4.3)
@@ -9566,6 +9621,11 @@ snapshots:
     dependencies:
       '@types/node': 24.12.2
 
+  '@lit-labs/signals@0.1.3':
+    dependencies:
+      lit: 3.3.2
+      signal-polyfill: 0.2.2
+
   '@lit-labs/signals@0.2.0':
     dependencies:
       lit: 3.3.2
@@ -10003,7 +10063,7 @@ snapshots:
   '@openai/codex@0.128.0-win32-x64':
     optional: true
 
-  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/3c508734af0baaad4f61cf70619bea98c783043b':
+  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/ce4137f028ca4b09f26a93ffa3e0d32fbfbd516c':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.13
@@ -10398,6 +10458,8 @@ snapshots:
   '@pinojs/redact@0.4.0': {}
 
   '@polka/url@1.0.0-next.29': {}
+
+  '@preact/signals-core@1.14.1': {}
 
   '@protobufjs/aspromise@1.1.2': {}
 
@@ -11645,7 +11707,7 @@ snapshots:
 
   base64-js@1.5.1: {}
 
-  basic-ftp@5.3.0: {}
+  basic-ftp@6.0.1: {}
 
   bidi-js@1.0.3:
     dependencies:
@@ -11913,6 +11975,8 @@ snapshots:
       whatwg-url: 16.0.1(@noble/hashes@2.0.1)
     transitivePeerDependencies:
       - '@noble/hashes'
+
+  date-fns@4.1.0: {}
 
   debug@4.4.3:
     dependencies:
@@ -12446,7 +12510,7 @@ snapshots:
 
   get-uri@6.0.5:
     dependencies:
-      basic-ftp: 5.3.0
+      basic-ftp: 6.0.1
       data-uri-to-buffer: 6.0.2
       debug: 4.4.3
     transitivePeerDependencies:
@@ -12454,7 +12518,7 @@ snapshots:
 
   get-uri@8.0.0:
     dependencies:
-      basic-ftp: 5.3.0
+      basic-ftp: 6.0.1
       data-uri-to-buffer: 8.0.0
       debug: 4.4.3
     transitivePeerDependencies:
@@ -15201,6 +15265,10 @@ snapshots:
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
+
+  zod-to-json-schema@3.25.2(zod@3.25.76):
+    dependencies:
+      zod: 3.25.76
 
   zod-to-json-schema@3.25.2(zod@4.4.3):
     dependencies:

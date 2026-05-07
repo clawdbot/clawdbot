@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { replaceConfigFile } from "../config/mutate.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -83,23 +82,6 @@ function resolveGatewayAuthFromConfig(params: {
   });
 }
 
-function shouldPersistGeneratedToken(params: {
-  persistRequested: boolean;
-  resolvedAuth: ResolvedGatewayAuth;
-}): boolean {
-  if (!params.persistRequested) {
-    return false;
-  }
-
-  // Keep CLI/runtime mode overrides ephemeral: startup should not silently
-  // mutate durable auth policy when mode was chosen by an override flag.
-  if (params.resolvedAuth.modeSource === "override") {
-    return false;
-  }
-
-  return true;
-}
-
 function hasGatewayTokenCandidate(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -142,6 +124,10 @@ export async function ensureGatewayStartupAuth(params: {
   env?: NodeJS.ProcessEnv;
   authOverride?: GatewayAuthConfig;
   tailscaleOverride?: GatewayTailscaleConfig;
+  /**
+   * Legacy startup option retained for external callers. Startup-generated auth
+   * is runtime-only; durable auth changes must go through explicit config tools.
+   */
   persist?: boolean;
   baseHash?: string;
 }): Promise<{
@@ -152,7 +138,6 @@ export async function ensureGatewayStartupAuth(params: {
 }> {
   assertExplicitGatewayAuthModeWhenBothConfigured(params.cfg);
   const env = params.env ?? process.env;
-  const persistRequested = params.persist === true;
   const explicitMode = params.authOverride?.mode ?? params.cfg.gateway?.auth?.mode;
   const [resolvedTokenRefValue, resolvedPasswordRefValue] = await Promise.all([
     resolveGatewayTokenSecretRefValue({
@@ -213,17 +198,6 @@ export async function ensureGatewayStartupAuth(params: {
       },
     },
   };
-  const persist = shouldPersistGeneratedToken({
-    persistRequested,
-    resolvedAuth: resolved,
-  });
-  if (persist) {
-    await replaceConfigFile({
-      nextConfig: nextCfg,
-      baseHash: params.baseHash,
-    });
-  }
-
   const nextAuth = resolveGatewayAuthFromConfig({
     cfg: nextCfg,
     env,
@@ -240,7 +214,7 @@ export async function ensureGatewayStartupAuth(params: {
     cfg: nextCfg,
     auth: nextAuth,
     generatedToken,
-    persistedGeneratedToken: persist,
+    persistedGeneratedToken: false,
   };
 }
 

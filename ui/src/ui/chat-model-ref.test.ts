@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildChatModelOption,
+  buildQualifiedChatModelValue,
   createChatModelOverride,
   formatCatalogChatModelDisplay,
   formatChatModelDisplay,
@@ -154,6 +155,10 @@ describe("chat-model-ref helpers", () => {
   it("formats qualified model refs consistently for default labels", () => {
     expect(formatChatModelDisplay("openai/gpt-5-mini")).toBe("gpt-5-mini · openai");
     expect(formatChatModelDisplay("alias-only")).toBe("alias-only");
+  });
+
+  it("does not double-prefix provider-native catalog ids", () => {
+    expect(buildQualifiedChatModelValue("openrouter/auto", "openrouter")).toBe("openrouter/auto");
   });
 
   it("resolves server session data to qualified option values", () => {

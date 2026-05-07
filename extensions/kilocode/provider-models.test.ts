@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -77,11 +77,9 @@ function makeAutoModel(overrides: Record<string, unknown> = {}) {
 }
 
 async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: () => Promise<void>) {
-  const origNodeEnv = process.env.NODE_ENV;
-  const origVitest = process.env.VITEST;
   const release = vi.fn(async () => {});
-  delete process.env.NODE_ENV;
-  delete process.env.VITEST;
+  vi.stubEnv("NODE_ENV", "");
+  vi.stubEnv("VITEST", "");
 
   fetchWithSsrFGuardMock.mockReset();
   const callMockFetch = mockFetch as unknown as (
@@ -98,19 +96,15 @@ async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: ()
   try {
     await runAssertions();
   } finally {
-    if (origNodeEnv === undefined) {
-      delete process.env.NODE_ENV;
-    } else {
-      process.env.NODE_ENV = origNodeEnv;
-    }
-    if (origVitest === undefined) {
-      delete process.env.VITEST;
-    } else {
-      process.env.VITEST = origVitest;
-    }
+    vi.unstubAllEnvs();
     fetchWithSsrFGuardMock.mockReset();
   }
 }
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
 
 describe("discoverKilocodeModels", () => {
   it("returns static catalog in test environment", async () => {

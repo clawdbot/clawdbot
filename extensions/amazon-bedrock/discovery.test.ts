@@ -1,5 +1,5 @@
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   discoverBedrockModels,
   mergeImplicitBedrockProvider,
@@ -33,6 +33,10 @@ function mockSingleActiveSummary(overrides: Partial<typeof baseActiveAnthropicSu
 describe("bedrock discovery", () => {
   beforeEach(() => {
     sendMock.mockClear();
+    resetBedrockDiscoveryCacheForTest();
+  });
+
+  afterEach(() => {
     resetBedrockDiscoveryCacheForTest();
   });
 

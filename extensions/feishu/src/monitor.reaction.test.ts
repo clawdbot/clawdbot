@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 import * as dedup from "./dedup.js";
@@ -44,6 +44,14 @@ vi.mock("./monitor.transport.js", () => ({
 vi.mock("./thread-bindings.js", () => ({
   createFeishuThreadBindingManager: createFeishuThreadBindingManagerMock,
 }));
+
+afterAll(() => {
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./bot.js");
+  vi.doUnmock("./monitor.transport.js");
+  vi.doUnmock("./thread-bindings.js");
+  vi.resetModules();
+});
 
 const cfg = {} as ClawdbotConfig;
 

@@ -410,8 +410,9 @@ function collectErrorCodes(err: unknown): Set<string> {
   const queue: unknown[] = [err];
   const seen = new Set<unknown>();
 
-  while (queue.length > 0) {
-    const current = queue.shift();
+  let queueIndex = 0;
+  while (queueIndex < queue.length) {
+    const current = queue[queueIndex++];
     if (!current || seen.has(current)) {
       continue;
     }

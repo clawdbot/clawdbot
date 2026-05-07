@@ -1,5 +1,5 @@
 import { verifyEvent, getPublicKey } from "nostr-tools";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NostrProfile } from "./config-schema.js";
 import {
   createProfileEvent,
@@ -119,6 +119,10 @@ describe("createProfileEvent", () => {
     vi.setSystemTime(new Date("2024-01-15T12:00:00Z"));
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("creates a valid kind:0 event", () => {
     const profile: NostrProfile = {
       name: "testbot",
@@ -183,8 +187,6 @@ describe("createProfileEvent", () => {
     const expectedTimestamp = Math.floor(Date.now() / 1000);
     expect(event.created_at).toBe(expectedTimestamp);
   });
-
-  vi.useRealTimers();
 });
 
 // ============================================================================

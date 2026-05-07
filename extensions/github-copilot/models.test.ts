@@ -1,5 +1,5 @@
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./models-defaults.js";
 import { fetchCopilotUsage } from "./usage.js";
 
@@ -39,6 +39,14 @@ vi.mock("openclaw/plugin-sdk/state-paths", () => ({
 
 import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/core";
 import { resolveCopilotForwardCompatModel } from "./models.js";
+
+afterAll(() => {
+  vi.doUnmock("@mariozechner/pi-ai/oauth");
+  vi.doUnmock("openclaw/plugin-sdk/provider-model-shared");
+  vi.doUnmock("openclaw/plugin-sdk/json-store");
+  vi.doUnmock("openclaw/plugin-sdk/state-paths");
+  vi.resetModules();
+});
 
 let deriveCopilotApiBaseUrlFromToken: typeof import("./token.js").deriveCopilotApiBaseUrlFromToken;
 let resolveCopilotApiToken: typeof import("./token.js").resolveCopilotApiToken;

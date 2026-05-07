@@ -631,7 +631,10 @@ export function buildAllowedModelSetWithFallbacks(params: {
         })
       : null;
   const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
-  const catalogKeys = new Set(catalog.map((entry) => modelKey(entry.provider, entry.id)));
+  const catalogKeys = new Set<string>();
+  for (const entry of catalog) {
+    catalogKeys.add(modelKey(entry.provider, entry.id));
+  }
 
   if (allowAny) {
     if (defaultKey) {

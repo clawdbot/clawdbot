@@ -23,7 +23,9 @@ import { FailoverError } from "../failover-error.js";
 import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { isCliRuntimeAlias, resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
+import { normalizeEmbeddedAgentRuntime } from "../pi-embedded-runner/runtime.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
+import { normalizeProviderId } from "../provider-id.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import {
   acquireSessionWriteLock,
@@ -416,6 +418,8 @@ export function runAgentAttempt(params: {
         sessionHasHistory: params.sessionHasHistory,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey ?? params.sessionId,
+        provider: params.providerOverride,
+        modelId: params.modelOverride,
       });
   const agentRuntimeOverride = isRawModelRun
     ? undefined
@@ -650,11 +654,21 @@ function resolveSessionPinnedAgentHarnessId(params: {
   sessionHasHistory?: boolean;
   sessionId: string;
   sessionKey: string;
+  provider: string;
+  modelId?: string;
 }): string | undefined {
   if (params.sessionEntry?.sessionId !== params.sessionId) {
     return resolveConfiguredAgentHarnessId(params);
   }
   if (params.sessionEntry.agentHarnessId) {
+    if (
+      normalizeProviderId(params.provider) === "openai-codex" &&
+      normalizeEmbeddedAgentRuntime(params.sessionEntry.agentHarnessId) === "pi"
+    ) {
+      throw new Error(
+        "OpenAI Codex agent model runs require the Codex harness. The existing session is pinned to PI; run `openclaw doctor --fix` to repair stale Codex runtime pins.",
+      );
+    }
     return params.sessionEntry.agentHarnessId;
   }
   const configuredAgentHarnessId = resolveConfiguredAgentHarnessId(params);
@@ -671,11 +685,15 @@ function resolveConfiguredAgentHarnessId(params: {
   cfg: OpenClawConfig;
   sessionAgentId: string;
   sessionKey: string;
+  provider: string;
+  modelId?: string;
 }): string | undefined {
   const policy = resolveAgentHarnessPolicy({
     config: params.cfg,
     agentId: params.sessionAgentId,
     sessionKey: params.sessionKey,
+    provider: params.provider,
+    modelId: params.modelId,
   });
   if (policy.runtime === "auto" || isCliRuntimeAlias(policy.runtime)) {
     return undefined;

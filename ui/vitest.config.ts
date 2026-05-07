@@ -6,9 +6,13 @@ import {
 } from "../test/vitest/vitest.shared.config.ts";
 
 const sharedUiTestConfig = {
-  isolate: true,
+  isolate: false,
   pool: resolveDefaultVitestPool(),
 } as const;
+const nodeDrivenBrowserLayoutTests = [
+  "src/ui/chat/chat-responsive.browser.test.ts",
+  "src/ui/views/sessions.browser.test.ts",
+] as const;
 
 export default defineConfig({
   test: {
@@ -30,7 +34,7 @@ export default defineConfig({
           ...sharedUiTestConfig,
           deps: jsdomOptimizedDeps,
           name: "unit-node",
-          include: ["src/**/*.node.test.ts"],
+          include: ["src/**/*.node.test.ts", ...nodeDrivenBrowserLayoutTests],
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
@@ -40,6 +44,7 @@ export default defineConfig({
           ...sharedUiTestConfig,
           name: "browser",
           include: ["src/**/*.browser.test.ts"],
+          exclude: [...nodeDrivenBrowserLayoutTests],
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
           browser: {
             enabled: true,

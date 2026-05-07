@@ -8,7 +8,7 @@ metadata: { "openclaw": { "emoji": "🫧", "requires": { "config": ["channels.bl
 
 ## Overview
 
-BlueBubbles is OpenClaw’s recommended iMessage integration. Use the `message` tool with `channel: "bluebubbles"` to send messages and manage iMessage conversations: send texts and attachments, react (tapbacks), edit/unsend, reply in threads, and manage group participants/names/icons.
+BlueBubbles is OpenClaw's legacy iMessage bridge. Use the `message` tool with `channel: "bluebubbles"` for existing BlueBubbles-backed conversations that need attachments, tapbacks, edit/unsend, replies, or group management.
 
 ## Inputs to collect
 

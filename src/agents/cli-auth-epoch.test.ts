@@ -184,6 +184,85 @@ describe("resolveCliAuthEpoch", () => {
     expect(second).toBe(first);
   });
 
+  it("keeps oauth auth-profile epochs stable across profile id aliases for the same account", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:work": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access-a",
+          refresh: "refresh-a",
+          expires: 1,
+          email: "user@example.com",
+        },
+        "anthropic:work-alias": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access-b",
+          refresh: "refresh-b",
+          expires: 2,
+          email: "user@example.com",
+        },
+      },
+    };
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => null,
+      loadAuthProfileStoreForRuntime: () => store,
+    });
+
+    const first = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:work",
+    });
+    const second = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:work-alias",
+    });
+
+    expect(first).toBeDefined();
+    expect(second).toBe(first);
+  });
+
+  it("keeps identity-less oauth auth-profile epochs scoped to the profile id", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:work": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access-a",
+          refresh: "refresh-a",
+          expires: 1,
+        },
+        "anthropic:personal": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access-b",
+          refresh: "refresh-b",
+          expires: 2,
+        },
+      },
+    };
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => null,
+      loadAuthProfileStoreForRuntime: () => store,
+    });
+
+    const first = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:work",
+    });
+    const second = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:personal",
+    });
+
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(second).not.toBe(first);
+  });
+
   it("changes oauth auth-profile epochs when the account identity changes", async () => {
     let store: AuthProfileStore = {
       version: 1,

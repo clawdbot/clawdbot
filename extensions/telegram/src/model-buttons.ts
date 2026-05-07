@@ -63,7 +63,7 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
   }
 
   // mdl_list_{provider}_{page}
-  const listMatch = trimmed.match(/^mdl_list_([a-z0-9_-]+)_(\d+)$/i);
+  const listMatch = trimmed.match(/^mdl_list_([a-z0-9_.-]+)_(\d+)$/i);
   if (listMatch) {
     const [, provider, pageStr] = listMatch;
     const page = Number.parseInt(pageStr ?? "1", 10);

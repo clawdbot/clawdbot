@@ -3,7 +3,7 @@ import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   googlechatDirectoryAdapter,
@@ -171,6 +171,12 @@ afterEach(() => {
   resolveGoogleChatAccountMock.mockImplementation(resolveGoogleChatAccountImpl);
   mockGoogleChatOutboundSpaceResolution();
   mockGoogleChatMediaLoaders();
+});
+
+afterAll(() => {
+  vi.doUnmock("./channel.runtime.js");
+  vi.doUnmock("./channel.deps.runtime.js");
+  vi.resetModules();
 });
 
 function createGoogleChatCfg(): OpenClawConfig {

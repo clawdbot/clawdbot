@@ -8,6 +8,7 @@ import {
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type RunAuthFlow = NonNullable<Parameters<typeof createCommandHandlers>[0]["runAuthFlow"]>;
 type SelectableOverlay = {
+  items?: Array<{ value: string; label?: string; description?: string }>;
   onSelect?: (item: { value: string; label?: string; description?: string }) => void;
 };
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
@@ -21,6 +22,7 @@ function createHarness(params?: {
   sendChat?: ReturnType<typeof vi.fn>;
   getGatewayStatus?: ReturnType<typeof vi.fn>;
   listSessions?: ReturnType<typeof vi.fn>;
+  listModels?: ReturnType<typeof vi.fn>;
   patchSession?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
   runAuthFlow?: RunAuthFlow;
@@ -38,6 +40,7 @@ function createHarness(params?: {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const getGatewayStatus = params?.getGatewayStatus ?? vi.fn().mockResolvedValue({});
   const listSessions = params?.listSessions ?? vi.fn().mockResolvedValue({ sessions: [] });
+  const listModels = params?.listModels ?? vi.fn().mockResolvedValue([]);
   const patchSession = params?.patchSession ?? vi.fn().mockResolvedValue({});
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
   const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
@@ -71,7 +74,14 @@ function createHarness(params?: {
   };
 
   const { handleCommand, openSessionSelector } = createCommandHandlers({
-    client: { sendChat, getGatewayStatus, listSessions, patchSession, resetSession } as never,
+    client: {
+      sendChat,
+      getGatewayStatus,
+      listSessions,
+      listModels,
+      patchSession,
+      resetSession,
+    } as never,
     chatLog: { addUser, addSystem } as never,
     tui: { requestRender } as never,
     opts: params?.opts ?? {},
@@ -99,6 +109,7 @@ function createHarness(params?: {
     handleCommand,
     getGatewayStatus,
     listSessions,
+    listModels,
     sendChat,
     openSessionSelector,
     openOverlay,
@@ -525,5 +536,43 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("activation set to always");
     expect(applySessionInfoFromPatch).toHaveBeenCalledWith({ groupActivation: "always" });
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses canonical model refs in the model selector", async () => {
+    const listModels = vi.fn().mockResolvedValue([
+      {
+        provider: "openrouter",
+        id: "openrouter/auto",
+        name: "OpenRouter Auto",
+      },
+    ]);
+    const patchSession = vi.fn().mockResolvedValue({ model: "openrouter/auto" });
+    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
+    const applySessionInfoFromPatch = vi.fn();
+    const { handleCommand, openOverlay, closeOverlay } = createHarness({
+      listModels,
+      patchSession,
+      refreshSessionInfo,
+      applySessionInfoFromPatch,
+    });
+
+    await handleCommand("/model");
+
+    const selector = openOverlay.mock.calls[0]?.[0] as SelectableOverlay | undefined;
+    expect(selector?.items?.[0]).toMatchObject({
+      value: "openrouter/auto",
+      label: "openrouter/auto",
+    });
+
+    selector?.onSelect?.({ value: "openrouter/auto", label: "openrouter/auto" });
+    await flushAsyncSelect();
+
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      model: "openrouter/auto",
+    });
+    expect(applySessionInfoFromPatch).toHaveBeenCalledWith({ model: "openrouter/auto" });
+    expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
+    expect(closeOverlay).toHaveBeenCalledTimes(1);
   });
 });

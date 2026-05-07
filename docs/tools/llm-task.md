@@ -85,6 +85,23 @@ Returns `details.json` containing the parsed JSON (and validates against
 
 ## Example: Lobster workflow step
 
+### Important limitation
+
+The example below assumes the **standalone Lobster CLI** is running in an environment where `openclaw.invoke` already has the correct gateway URL/auth context.
+
+For the bundled **embedded** Lobster runner inside OpenClaw, this nested CLI pattern is **not currently reliable**:
+
+```lobster
+openclaw.invoke --tool llm-task --action json --args-json '{ ... }'
+```
+
+Until embedded Lobster has a supported bridge for this flow, prefer either:
+
+- direct `llm-task` tool calls outside Lobster, or
+- Lobster steps that do not rely on nested `openclaw.invoke` calls.
+
+Standalone Lobster CLI example:
+
 ```lobster
 openclaw.invoke --tool llm-task --action json --args-json '{
   "prompt": "Given the input email, return intent and draft.",

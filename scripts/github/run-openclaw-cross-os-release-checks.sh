@@ -17,9 +17,15 @@ fi
 
 node_cmd="node"
 npm_cmd="npm"
+npm_cli_js=""
 if command -v cygpath >/dev/null 2>&1; then
   if command -v node.exe >/dev/null 2>&1; then
     node_cmd="node.exe"
+    node_path="$(command -v node.exe)"
+    node_dir="$(dirname "$(cygpath -u "${node_path}")")"
+    if [[ -f "${node_dir}/node_modules/npm/bin/npm-cli.js" ]]; then
+      npm_cli_js="${node_dir}/node_modules/npm/bin/npm-cli.js"
+    fi
   fi
   if command -v npm.cmd >/dev/null 2>&1; then
     npm_cmd="npm.cmd"
@@ -51,10 +57,21 @@ command -v "${npm_cmd}" >/dev/null 2>&1 || {
 
 if [[ ! -f "${loader_path}" ]]; then
   mkdir -p "${tool_dir}"
-  if ! "${npm_cmd}" install --prefix "${npm_tool_dir}" --no-save --no-package-lock "tsx@${tsx_version}" >/dev/null; then
+  if [[ -n "${npm_cli_js}" ]]; then
+    if ! "${node_cmd}" "${npm_cli_js}" install --prefix "${tool_dir}" --no-save --no-package-lock "tsx@${tsx_version}" >/dev/null; then
+      echo "failed to install cross-OS release-check loader with ${node_cmd} ${npm_cli_js}." >&2
+      exit 127
+    fi
+  elif ! "${npm_cmd}" install --prefix "${npm_tool_dir}" --no-save --no-package-lock "tsx@${tsx_version}" >/dev/null; then
     echo "failed to install cross-OS release-check loader with ${npm_cmd}." >&2
     exit 127
   fi
+fi
+
+if [[ ! -f "${loader_path}" ]]; then
+  echo "tsx loader missing after install: ${loader_path}" >&2
+  find "${tool_dir}" -maxdepth 5 -type f 2>/dev/null | sort | sed 's/^/  /' >&2 || true
+  exit 127
 fi
 
 loader_url="$(

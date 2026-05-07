@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { modelSelectionShouldEnsureCodexPlugin } from "../../../agents/openai-codex-routing.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
 } from "../../../channels/config-presence.js";
 import { listChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
+import { collectConfiguredModelRefs } from "../../../config/model-refs.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
@@ -149,6 +151,13 @@ function collectConfiguredPluginIds(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv
     ids.add("acpx");
   }
   addConfiguredAgentRuntimePluginIds(ids, cfg, env);
+  if (
+    collectConfiguredModelRefs(cfg).some(({ value }) =>
+      modelSelectionShouldEnsureCodexPlugin({ config: cfg, model: value }),
+    )
+  ) {
+    ids.add("codex");
+  }
   return ids;
 }
 

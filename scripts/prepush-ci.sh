@@ -17,7 +17,6 @@ run_step() {
 run_protocol_ci_mirror() {
   local targets=(
     "dist/protocol.schema.json"
-    "apps/macos/Sources/OpenClawProtocol/GatewayModels.swift"
     "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift"
   )
   local before after
@@ -55,7 +54,7 @@ run_linux_ci_mirror() {
   run_step pnpm build:strict-smoke
   run_step pnpm lint:ui:no-raw-window-open
   run_protocol_ci_mirror
-  run_step pnpm canvas:a2ui:bundle
+  run_step pnpm plugins:assets:build
   run_step node scripts/run-vitest.mjs run --config test/vitest/vitest.extensions.config.ts --maxWorkers=1
   run_step env CI=true node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --maxWorkers=1
 

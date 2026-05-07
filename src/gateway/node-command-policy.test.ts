@@ -1,12 +1,37 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
+  isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
 
 describe("gateway/node-command-policy", () => {
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
+  function installCanvasPluginDefaults() {
+    const registry = createEmptyPluginRegistry();
+    (registry.nodeInvokePolicies ??= []).push({
+      pluginId: "canvas",
+      pluginName: "Canvas",
+      source: "/extensions/canvas/index.ts",
+      rootDir: "/extensions/canvas",
+      pluginConfig: {},
+      policy: {
+        commands: ["canvas.snapshot", "canvas.present"],
+        defaultPlatforms: ["ios", "android", "macos", "windows", "unknown"],
+        foregroundRestrictedOnIos: true,
+        handle: (ctx) => ctx.invokeNode(),
+      },
+    });
+    setActivePluginRegistry(registry);
+  }
+
   it("normalizes declared node commands against the allowlist", () => {
     const allowlist = new Set(["canvas.snapshot", "system.run"]);
     expect(
@@ -54,5 +79,35 @@ describe("gateway/node-command-policy", () => {
     });
 
     expect(allowlist.has("talk.ptt.start")).toBe(true);
+  });
+
+  it("keeps canvas commands out of core defaults when the canvas plugin is not active", () => {
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "windows",
+      deviceFamily: "Windows",
+    });
+
+    expect(allowlist.has("canvas.snapshot")).toBe(false);
+  });
+
+  it("adds canvas commands from the active canvas plugin node policy", () => {
+    installCanvasPluginDefaults();
+
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "windows",
+      deviceFamily: "Windows",
+    });
+
+    expect(allowlist.has("canvas.snapshot")).toBe(true);
+    expect(allowlist.has("canvas.present")).toBe(true);
+  });
+
+  it("reads foreground restriction metadata from plugin node policies", () => {
+    expect(isForegroundRestrictedPluginNodeCommand("canvas.snapshot")).toBe(false);
+
+    installCanvasPluginDefaults();
+
+    expect(isForegroundRestrictedPluginNodeCommand("canvas.snapshot")).toBe(true);
+    expect(isForegroundRestrictedPluginNodeCommand("system.run")).toBe(false);
   });
 });

@@ -135,6 +135,7 @@ type CapabilityProvider = {
   id: string;
   aliases?: string[];
   defaultModel?: string;
+  models?: readonly string[];
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
 
@@ -155,6 +156,35 @@ function findCapabilityProviderById<T extends CapabilityProvider>(params: {
       normalizeProviderId(provider.id) === selectedProvider ||
       (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === selectedProvider),
   );
+}
+
+function parseCapabilityModelRefForProviders(params: {
+  providers: CapabilityProvider[];
+  raw?: string;
+  parseModelRef: ParseGenerationModelRef;
+}): GenerationModelRef | null {
+  const raw = normalizeOptionalString(params.raw);
+  if (!raw) {
+    return null;
+  }
+  const parsed = params.parseModelRef(raw);
+  if (
+    parsed &&
+    findCapabilityProviderById({
+      providers: params.providers,
+      providerId: parsed.provider,
+    })
+  ) {
+    return parsed;
+  }
+  const provider = params.providers.find((candidate) => {
+    const models = [candidate.defaultModel, ...(candidate.models ?? [])];
+    return models.some((model) => normalizeOptionalString(model) === raw);
+  });
+  if (provider) {
+    return { provider: provider.id, model: raw };
+  }
+  return parsed;
 }
 
 export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
@@ -200,7 +230,16 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   parseModelRef: ParseGenerationModelRef;
 }): T | undefined {
   const selectedRef =
-    params.parseModelRef(params.modelOverride) ?? params.parseModelRef(params.modelConfig.primary);
+    parseCapabilityModelRefForProviders({
+      providers: params.providers,
+      raw: params.modelOverride,
+      parseModelRef: params.parseModelRef,
+    }) ??
+    parseCapabilityModelRefForProviders({
+      providers: params.providers,
+      raw: params.modelConfig.primary,
+      parseModelRef: params.parseModelRef,
+    });
   if (!selectedRef) {
     return undefined;
   }

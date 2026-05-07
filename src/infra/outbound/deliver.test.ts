@@ -2345,6 +2345,62 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("strips internal runtime scaffolding before queue persistence", async () => {
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValue({ messageId: "m-internal", roomId: "!room:example" });
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [
+        {
+          text: [
+            "visible",
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "OpenClaw runtime context (internal):",
+            "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>",
+            "raw child output",
+            "<<<END_UNTRUSTED_CHILD_RESULT>>>",
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "after",
+          ].join("\n"),
+          channelData: {
+            internal: [
+              "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+              "internal metadata",
+              "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+            ].join("\n"),
+          },
+        },
+      ],
+      deps: { matrix: sendMatrix },
+    });
+
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          {
+            text: "visible\nafter",
+            channelData: {
+              internal: "",
+            },
+          },
+        ],
+        renderedBatchPlan: expect.objectContaining({
+          payloadCount: 1,
+          textCount: 1,
+          items: [
+            expect.objectContaining({
+              text: "visible\nafter",
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
   it("persists rendered batch plans with queued deliveries", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-plan", roomId: "!room:example" });
     const renderedBatchPlan = {

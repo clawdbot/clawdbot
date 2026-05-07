@@ -32,51 +32,7 @@ describe("telegram stickers", () => {
     describeStickerImageSpy.mockReturnValue(undefined);
   });
 
-  // Skipped pending #50185: deterministic static sticker fetch injection.
-  it.skip(
-    "downloads static sticker (WEBP) and includes sticker metadata",
-    async () => {
-      const { handler, proxyFetch, replySpy, runtimeError } = await createStaticStickerHarness();
-
-      await handler({
-        message: {
-          message_id: 100,
-          chat: { id: 1234, type: "private" },
-          from: { id: 777, is_bot: false, first_name: "Ada" },
-          sticker: {
-            file_id: "sticker_file_id_123",
-            file_unique_id: "sticker_unique_123",
-            type: "regular",
-            width: 512,
-            height: 512,
-            is_animated: false,
-            is_video: false,
-            emoji: "🎉",
-            set_name: "TestStickerPack",
-          },
-          date: 1736380800,
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({ file_path: "stickers/sticker.webp" }),
-      });
-
-      expect(runtimeError).not.toHaveBeenCalled();
-      expect(proxyFetch).toHaveBeenCalledWith(
-        "https://api.telegram.org/file/bottok/stickers/sticker.webp",
-        expect.objectContaining({ redirect: "manual" }),
-      );
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replySpy.mock.calls[0][0];
-      expect(payload.Body).toContain("<media:sticker>");
-      expect(payload.Sticker?.emoji).toBe("🎉");
-      expect(payload.Sticker?.setName).toBe("TestStickerPack");
-      expect(payload.Sticker?.fileId).toBe("sticker_file_id_123");
-    },
-    STICKER_TEST_TIMEOUT_MS,
-  );
-
-  // Skipped pending #50185: deterministic cache-refresh assertions in CI.
-  it.skip(
+  it(
     "refreshes cached sticker metadata on cache hit",
     async () => {
       const { handler, proxyFetch, replySpy, runtimeError } = await createStaticStickerHarness();

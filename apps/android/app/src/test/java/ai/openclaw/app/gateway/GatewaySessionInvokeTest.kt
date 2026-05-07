@@ -477,56 +477,6 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
-  fun refreshNodeCanvasCapability_sendsObjectParamsAndUpdatesScopedUrl() =
-    runBlocking {
-      val json = testJson()
-      val connected = CompletableDeferred<Unit>()
-      val refreshRequestParams = CompletableDeferred<String?>()
-      val lastDisconnect = AtomicReference("")
-
-      val server =
-        startGatewayServer(json) { webSocket, id, method, frame ->
-          when (method) {
-            "connect" -> {
-              webSocket.send(connectResponseFrame(id, canvasHostUrl = "http://127.0.0.1/__openclaw__/cap/old-cap"))
-            }
-            "node.canvas.capability.refresh" -> {
-              if (!refreshRequestParams.isCompleted) {
-                refreshRequestParams.complete(frame["params"]?.toString())
-              }
-              webSocket.send(
-                """{"type":"res","id":"$id","ok":true,"payload":{"canvasCapability":"new-cap"}}""",
-              )
-              webSocket.close(1000, "done")
-            }
-          }
-        }
-
-      val harness =
-        createNodeHarness(
-          connected = connected,
-          lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
-
-      try {
-        connectNodeSession(harness.session, server.port)
-        awaitConnectedOrThrow(connected, lastDisconnect, server)
-
-        val refreshed = harness.session.refreshNodeCanvasCapability(timeoutMs = TEST_TIMEOUT_MS)
-        val refreshParamsJson = withTimeout(TEST_TIMEOUT_MS) { refreshRequestParams.await() }
-
-        assertEquals(true, refreshed)
-        assertEquals("{}", refreshParamsJson)
-        assertEquals(
-          "http://127.0.0.1:${server.port}/__openclaw__/cap/new-cap",
-          harness.session.currentCanvasHostUrl(),
-        )
-      } finally {
-        shutdownHarness(harness, server)
-      }
-    }
-
-  @Test
   fun sendNodeEventDetailed_sendsPresenceAlivePayloadAndReturnsStructuredResponse() =
     runBlocking {
       val json = testJson()
@@ -778,12 +728,17 @@ class GatewaySessionInvokeTest {
 
   private fun connectResponseFrame(
     id: String,
-    canvasHostUrl: String? = null,
+    pluginSurfaceUrls: Map<String, String> = emptyMap(),
     authJson: String? = null,
   ): String {
-    val canvas = canvasHostUrl?.let { "\"canvasHostUrl\":\"$it\"," } ?: ""
+    val surfaces =
+      pluginSurfaceUrls.entries
+        .joinToString(",") { (key, value) -> """"$key":"$value"""" }
+        .takeIf { it.isNotEmpty() }
+        ?.let { """"pluginSurfaceUrls":{$it},""" }
+        ?: ""
     val auth = authJson?.let { "\"auth\":$it," } ?: ""
-    return """{"type":"res","id":"$id","ok":true,"payload":{$canvas$auth"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}"""
+    return """{"type":"res","id":"$id","ok":true,"payload":{$surfaces$auth"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}"""
   }
 
   private fun startGatewayServer(

@@ -4,6 +4,7 @@ import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
@@ -11,7 +12,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { googlechatMessageActions } from "./actions.js";
+import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { googleChatApprovalAuth } from "./approval-auth.js";
 import {
   formatAllowFromEntry,
@@ -97,9 +98,27 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<
 });
 
 const googlechatActions: ChannelMessageActionAdapter = {
-  describeMessageTool: (ctx) => googlechatMessageActions.describeMessageTool?.(ctx) ?? null,
-  extractToolSend: (ctx) => googlechatMessageActions.extractToolSend?.(ctx) ?? null,
+  describeMessageTool: ({ cfg, accountId }) => {
+    const accounts = accountId
+      ? [resolveGoogleChatAccount({ cfg, accountId })].filter(
+          (account) => account.enabled && account.credentialSource !== "none",
+        )
+      : listGoogleChatAccountIds(cfg)
+          .map((id) => resolveGoogleChatAccount({ cfg, accountId: id }))
+          .filter((account) => account.enabled && account.credentialSource !== "none");
+    if (accounts.length === 0) {
+      return null;
+    }
+    const actions = new Set<ChannelMessageActionName>(["send", "upload-file"]);
+    if (accounts.some((account) => account.config.actions?.reactions !== false)) {
+      actions.add("react");
+      actions.add("reactions");
+    }
+    return { actions: Array.from(actions) };
+  },
+  extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async (ctx) => {
+    const { googlechatMessageActions } = await import("./actions.js");
     if (!googlechatMessageActions.handleAction) {
       throw new Error("Google Chat actions are not available.");
     }

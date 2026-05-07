@@ -37,10 +37,6 @@ vi.mock("./tools/agents-list-tool.js", () => ({
   createAgentsListTool: () => mocks.stubTool("agents_list"),
 }));
 
-vi.mock("./tools/canvas-tool.js", () => ({
-  createCanvasTool: () => mocks.stubTool("canvas"),
-}));
-
 vi.mock("./tools/cron-tool.js", () => ({
   createCronTool: (options: unknown) => {
     mocks.createCronToolOptions(options);

@@ -7,7 +7,7 @@ read_when:
 title: "Pairing"
 ---
 
-“Pairing” is OpenClaw’s explicit access approval step.
+"Pairing" is OpenClaw's explicit access approval step.
 It is used in two places:
 
 1. **DM pairing** (who is allowed to talk to the bot)
@@ -208,7 +208,7 @@ Stored under `~/.openclaw/devices/`:
   - Telegram: [Telegram](/channels/telegram)
   - WhatsApp: [WhatsApp](/channels/whatsapp)
   - Signal: [Signal](/channels/signal)
-  - BlueBubbles (iMessage): [BlueBubbles](/channels/bluebubbles)
-  - iMessage (legacy): [iMessage](/channels/imessage)
+  - iMessage: [iMessage](/channels/imessage)
+  - BlueBubbles (legacy iMessage bridge): [BlueBubbles](/channels/bluebubbles)
   - Discord: [Discord](/channels/discord)
   - Slack: [Slack](/channels/slack)

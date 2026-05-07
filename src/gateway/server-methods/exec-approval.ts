@@ -263,6 +263,7 @@ export function createExecApprovalHandlers(
       record.requestedByConnId = client?.connId ?? null;
       record.requestedByDeviceId = client?.connect?.device?.id ?? null;
       record.requestedByClientId = client?.connect?.client?.id ?? null;
+      record.requestedByDeviceTokenAuth = client?.isDeviceTokenAuth === true;
       // Use register() to synchronously add to pending map before sending any response.
       // This ensures the approval ID is valid immediately after the "accepted" response.
       let decisionPromise: Promise<

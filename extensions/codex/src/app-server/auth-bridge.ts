@@ -14,9 +14,11 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
-import type { ChatgptAuthTokensRefreshResponse } from "./protocol-generated/typescript/v2/ChatgptAuthTokensRefreshResponse.js";
-import type { GetAccountResponse } from "./protocol-generated/typescript/v2/GetAccountResponse.js";
-import type { LoginAccountParams } from "./protocol-generated/typescript/v2/LoginAccountParams.js";
+import type {
+  CodexChatgptAuthTokensRefreshResponse,
+  CodexGetAccountResponse,
+  CodexLoginAccountParams,
+} from "./protocol.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const CODEX_APP_SERVER_AUTH_PROVIDER = "openai-codex";
@@ -170,7 +172,7 @@ function resolveCodexAppServerAuthProfileLoginParams(params: {
   agentDir: string;
   authProfileId?: string;
   config?: AuthProfileOrderConfig;
-}): Promise<LoginAccountParams | undefined> {
+}): Promise<CodexLoginAccountParams | undefined> {
   return resolveCodexAppServerAuthProfileLoginParamsInternal(params);
 }
 
@@ -178,7 +180,7 @@ export async function refreshCodexAppServerAuthTokens(params: {
   agentDir: string;
   authProfileId?: string;
   config?: AuthProfileOrderConfig;
-}): Promise<ChatgptAuthTokensRefreshResponse> {
+}): Promise<CodexChatgptAuthTokensRefreshResponse> {
   const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal({
     ...params,
     forceOAuthRefresh: true,
@@ -198,7 +200,7 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   authProfileId?: string;
   forceOAuthRefresh?: boolean;
   config?: AuthProfileOrderConfig;
-}): Promise<LoginAccountParams | undefined> {
+}): Promise<CodexLoginAccountParams | undefined> {
   const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
   const profileId = resolveCodexAppServerAuthProfileId({
     authProfileId: params.authProfileId,
@@ -233,12 +235,12 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
 async function resolveCodexAppServerEnvApiKeyLoginParams(params: {
   client: CodexAppServerClient;
   env: NodeJS.ProcessEnv;
-}): Promise<LoginAccountParams | undefined> {
+}): Promise<CodexLoginAccountParams | undefined> {
   const apiKey = readFirstNonEmptyEnv(params.env, CODEX_APP_SERVER_API_KEY_ENV_VARS);
   if (!apiKey) {
     return undefined;
   }
-  const response = await params.client.request<GetAccountResponse>("account/read", {
+  const response = await params.client.request<CodexGetAccountResponse>("account/read", {
     refreshToken: false,
   });
   if (response.account || !response.requiresOpenaiAuth) {
@@ -251,7 +253,7 @@ async function resolveLoginParamsForCredential(
   profileId: string,
   credential: AuthProfileCredential,
   params: { agentDir: string; forceOAuthRefresh: boolean; config?: AuthProfileOrderConfig },
-): Promise<LoginAccountParams | undefined> {
+): Promise<CodexLoginAccountParams | undefined> {
   if (credential.type === "api_key") {
     const resolved = await resolveApiKeyForProfile({
       store: ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false }),
@@ -271,6 +273,9 @@ async function resolveLoginParamsForCredential(
     return accessToken
       ? buildChatgptAuthTokensParams(profileId, credential, accessToken)
       : undefined;
+  }
+  if (credential.type !== "oauth") {
+    return undefined;
   }
   const resolvedCredential = await resolveOAuthCredentialForCodexAppServer(profileId, credential, {
     agentDir: params.agentDir,
@@ -375,7 +380,7 @@ function buildChatgptAuthTokensParams(
   profileId: string,
   credential: AuthProfileCredential,
   accessToken: string,
-): LoginAccountParams {
+): CodexLoginAccountParams {
   return {
     type: "chatgptAuthTokens",
     accessToken,

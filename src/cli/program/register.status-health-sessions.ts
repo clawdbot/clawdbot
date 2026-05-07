@@ -182,6 +182,11 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       "Remove store entries whose transcript files are missing (bypasses age/count retention)",
       false,
     )
+    .option(
+      "--fix-dm-scope",
+      "Retire stale direct-DM session rows that no longer match session.dmScope=main",
+      false,
+    )
     .option("--active-key <key>", "Protect this session key from budget-eviction")
     .option("--json", "Output JSON", false)
     .addHelpText(
@@ -192,6 +197,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           [
             "openclaw sessions cleanup --dry-run --fix-missing",
             "Also preview pruning entries with missing transcript files.",
+          ],
+          [
+            "openclaw sessions cleanup --dry-run --fix-dm-scope",
+            "Preview stale direct-DM rows after returning dmScope to main.",
           ],
           ["openclaw sessions cleanup --enforce", "Apply maintenance now."],
           ["openclaw sessions cleanup --agent work --dry-run", "Preview one agent store."],
@@ -220,6 +229,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             dryRun: Boolean(opts.dryRun),
             enforce: Boolean(opts.enforce),
             fixMissing: Boolean(opts.fixMissing),
+            fixDmScope: Boolean(opts.fixDmScope),
             activeKey: opts.activeKey as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
           },

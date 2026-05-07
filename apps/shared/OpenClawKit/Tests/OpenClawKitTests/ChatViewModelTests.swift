@@ -46,6 +46,10 @@ private func sessionEntry(key: String, updatedAt: Double) -> OpenClawChatSession
         contextTokens: nil)
 }
 
+private func thinkingOption(_ id: String, label: String? = nil) -> OpenClawChatThinkingLevelOption {
+    OpenClawChatThinkingLevelOption(id: id, label: label ?? id)
+}
+
 private func sessionEntry(
     key: String,
     updatedAt: Double,
@@ -1630,6 +1634,272 @@ extension TestChatTransportState {
         try await waitUntil("send uses preserved thinking level") {
             await transport.sentThinkingLevels() == ["xhigh"]
         }
+    }
+
+    @Test func decodesGatewayThinkingMetadataFromSessionList() throws {
+        let json = """
+        {
+          "defaults": {
+            "modelProvider": "anthropic",
+            "model": "claude-opus-4-7",
+            "thinkingLevels": [
+              { "id": "off", "label": "off" },
+              { "id": "adaptive", "label": "adaptive" },
+              { "id": "max", "label": "maximum" }
+            ],
+            "thinkingOptions": ["off", "adaptive", "maximum"],
+            "thinkingDefault": "adaptive"
+          },
+          "sessions": [
+            {
+              "key": "main",
+              "modelProvider": "openrouter",
+              "model": "deepseek/deepseek-v4",
+              "thinkingLevel": "max",
+              "thinkingLevels": [
+                { "id": "off", "label": "off" },
+                { "id": "xhigh", "label": "xhigh" },
+                { "id": "max", "label": "max" }
+              ],
+              "thinkingOptions": ["off", "xhigh", "max"],
+              "thinkingDefault": "max"
+            }
+          ]
+        }
+        """
+
+        let decoded = try JSONDecoder().decode(
+            OpenClawChatSessionsListResponse.self,
+            from: Data(json.utf8))
+
+        #expect(decoded.defaults?.modelProvider == "anthropic")
+        #expect(decoded.defaults?.thinkingLevels?.map(\.id) == ["off", "adaptive", "max"])
+        #expect(decoded.defaults?.thinkingLevels?.last?.label == "maximum")
+        #expect(decoded.defaults?.thinkingDefault == "adaptive")
+        #expect(decoded.sessions.first?.thinkingLevels?.map(\.id) == ["off", "xhigh", "max"])
+        #expect(decoded.sessions.first?.thinkingDefault == "max")
+    }
+
+    @Test func sessionThinkingLevelsDrivePickerOptions() async throws {
+        let history = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [],
+            thinkingLevel: "adaptive")
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: 1,
+            path: nil,
+            count: 1,
+            defaults: OpenClawChatSessionsDefaults(
+                modelProvider: "openai-codex",
+                model: "gpt-5.5",
+                contextTokens: nil,
+                thinkingLevels: [
+                    thinkingOption("off"),
+                    thinkingOption("low"),
+                    thinkingOption("xhigh"),
+                    thinkingOption("max", label: "maximum"),
+                ],
+                thinkingOptions: ["off", "low", "xhigh", "maximum"],
+                thinkingDefault: "xhigh"),
+            sessions: [
+                OpenClawChatSessionEntry(
+                    key: "main",
+                    kind: nil,
+                    displayName: nil,
+                    surface: nil,
+                    subject: nil,
+                    room: nil,
+                    space: nil,
+                    updatedAt: 1,
+                    sessionId: "sess-main",
+                    systemSent: nil,
+                    abortedLastRun: nil,
+                    thinkingLevel: "adaptive",
+                    verboseLevel: nil,
+                    inputTokens: nil,
+                    outputTokens: nil,
+                    totalTokens: nil,
+                    modelProvider: "anthropic",
+                    model: "claude-opus-4-7",
+                    contextTokens: nil,
+                    thinkingLevels: [
+                        thinkingOption("off"),
+                        thinkingOption("adaptive"),
+                        thinkingOption("max", label: "maximum"),
+                    ],
+                    thinkingOptions: ["off", "adaptive", "maximum"],
+                    thinkingDefault: "adaptive"),
+            ])
+
+        let (_, vm) = await makeViewModel(
+            historyResponses: [history],
+            sessionsResponses: [sessions])
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        #expect(await MainActor.run { vm.thinkingLevel } == "adaptive")
+        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id) } == ["off", "adaptive", "max"])
+        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.label) } == ["off", "adaptive", "maximum"])
+    }
+
+    @Test func thinkingOptionsFallbackAndCurrentUnsupportedLevelStayVisible() async throws {
+        let history = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [],
+            thinkingLevel: "xhigh")
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: 1,
+            path: nil,
+            count: 1,
+            defaults: nil,
+            sessions: [
+                OpenClawChatSessionEntry(
+                    key: "main",
+                    kind: nil,
+                    displayName: nil,
+                    surface: nil,
+                    subject: nil,
+                    room: nil,
+                    space: nil,
+                    updatedAt: 1,
+                    sessionId: "sess-main",
+                    systemSent: nil,
+                    abortedLastRun: nil,
+                    thinkingLevel: "xhigh",
+                    verboseLevel: nil,
+                    inputTokens: nil,
+                    outputTokens: nil,
+                    totalTokens: nil,
+                    modelProvider: "openrouter",
+                    model: "deepseek/deepseek-v4",
+                    contextTokens: nil,
+                    thinkingLevels: nil,
+                    thinkingOptions: ["off", "max"],
+                    thinkingDefault: "max"),
+            ])
+
+        let (_, vm) = await makeViewModel(
+            historyResponses: [history],
+            sessionsResponses: [sessions])
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        #expect(await MainActor.run { vm.thinkingLevel } == "xhigh")
+        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id) } == ["off", "max", "xhigh"])
+        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.label) } == ["off", "max", "xhigh"])
+    }
+
+    @Test func matchingDefaultThinkingLevelsBeatLegacyRowThinkingOptions() async throws {
+        let history = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [],
+            thinkingLevel: "adaptive")
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: 1,
+            path: nil,
+            count: 1,
+            defaults: OpenClawChatSessionsDefaults(
+                modelProvider: "anthropic",
+                model: "claude-opus-4-7",
+                contextTokens: nil,
+                thinkingLevels: [
+                    thinkingOption("off"),
+                    thinkingOption("adaptive"),
+                    thinkingOption("max"),
+                ],
+                thinkingOptions: ["off", "adaptive", "max"],
+                thinkingDefault: "adaptive"),
+            sessions: [
+                OpenClawChatSessionEntry(
+                    key: "main",
+                    kind: nil,
+                    displayName: nil,
+                    surface: nil,
+                    subject: nil,
+                    room: nil,
+                    space: nil,
+                    updatedAt: 1,
+                    sessionId: "sess-main",
+                    systemSent: nil,
+                    abortedLastRun: nil,
+                    thinkingLevel: "adaptive",
+                    verboseLevel: nil,
+                    inputTokens: nil,
+                    outputTokens: nil,
+                    totalTokens: nil,
+                    modelProvider: "anthropic",
+                    model: "claude-opus-4-7",
+                    contextTokens: nil,
+                    thinkingLevels: nil,
+                    thinkingOptions: ["off"],
+                    thinkingDefault: "off"),
+            ])
+
+        let (_, vm) = await makeViewModel(
+            historyResponses: [history],
+            sessionsResponses: [sessions])
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id) } == ["off", "adaptive", "max"])
+    }
+
+    @Test func defaultThinkingLevelsDoNotLeakToDifferentSessionModel() async throws {
+        let history = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [],
+            thinkingLevel: "max")
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: 1,
+            path: nil,
+            count: 1,
+            defaults: OpenClawChatSessionsDefaults(
+                modelProvider: "anthropic",
+                model: "claude-opus-4-7",
+                contextTokens: nil,
+                thinkingLevels: [
+                    thinkingOption("off"),
+                    thinkingOption("adaptive"),
+                    thinkingOption("max"),
+                ],
+                thinkingOptions: ["off", "adaptive", "max"],
+                thinkingDefault: "adaptive"),
+            sessions: [
+                OpenClawChatSessionEntry(
+                    key: "main",
+                    kind: nil,
+                    displayName: nil,
+                    surface: nil,
+                    subject: nil,
+                    room: nil,
+                    space: nil,
+                    updatedAt: 1,
+                    sessionId: "sess-main",
+                    systemSent: nil,
+                    abortedLastRun: nil,
+                    thinkingLevel: "max",
+                    verboseLevel: nil,
+                    inputTokens: nil,
+                    outputTokens: nil,
+                    totalTokens: nil,
+                    modelProvider: "openai",
+                    model: "gpt-5.4",
+                    contextTokens: nil),
+            ])
+
+        let (_, vm) = await makeViewModel(
+            historyResponses: [history],
+            sessionsResponses: [sessions])
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        #expect(await MainActor.run { vm.thinkingLevel } == "max")
+        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id) } ==
+            ["off", "minimal", "low", "medium", "high", "max"])
     }
 
     @Test func staleThinkingPatchCompletionReappliesLatestSelection() async throws {

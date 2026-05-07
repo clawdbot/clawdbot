@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -92,8 +92,10 @@ describe("edgeTTS empty audio validation", () => {
   it("succeeds when the output file has content", async () => {
     tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
     const outputPath = path.join(tempDir, "voice.mp3");
+    let stagedPath = "";
 
     const deps = createEdgeTTSDeps(async (_text: string, filePath: string) => {
+      stagedPath = filePath;
       writeFileSync(filePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
     });
 
@@ -108,6 +110,10 @@ describe("edgeTTS empty audio validation", () => {
         deps,
       ),
     ).resolves.toBeUndefined();
+    expect(stagedPath).not.toBe(outputPath);
+    expect(path.basename(stagedPath)).toBe(path.basename(outputPath));
+    expect(readFileSync(outputPath)).toEqual(Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    expect(existsSync(stagedPath)).toBe(false);
   });
 
   it("retries once when the first output file is empty", async () => {

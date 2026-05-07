@@ -33,6 +33,11 @@ describe("openrouter provider hooks", () => {
     );
   });
 
+  it("uses the canonical prefixed OpenRouter auto model id", () => {
+    expect(buildOpenrouterProvider().models?.map((model) => model.id)).toContain("openrouter/auto");
+    expect(buildOpenrouterProvider().models?.map((model) => model.id)).not.toContain("auto");
+  });
+
   it("does not include retired stealth models in the bundled catalog", () => {
     expect(buildOpenrouterProvider().models?.map((model) => model.id)).not.toEqual(
       expect.arrayContaining(["openrouter/hunter-alpha", "openrouter/healer-alpha"]),

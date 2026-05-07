@@ -230,7 +230,7 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     state.hello = {
       type: "hello-ok",
-      protocol: 3,
+      protocol: 4,
       auth: { role: "operator", scopes: [] },
       features: { methods: ["wiki.importInsights"] },
     };
@@ -366,7 +366,7 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     state.hello = {
       type: "hello-ok",
-      protocol: 3,
+      protocol: 4,
       auth: { role: "operator", scopes: [] },
       features: { methods: ["doctor.memory.status"] },
     };
@@ -402,7 +402,7 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     state.hello = {
       type: "hello-ok",
-      protocol: 3,
+      protocol: 4,
       auth: { role: "operator", scopes: [] },
       features: { methods: ["wiki.palace"] },
     };
@@ -538,7 +538,7 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     state.hello = {
       type: "hello-ok",
-      protocol: 3,
+      protocol: 4,
       auth: { role: "operator", scopes: [] },
       features: { methods: ["doctor.memory.status"] },
     };

@@ -13,24 +13,23 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
     return { text: "", hasNonTextContent: content != null };
   }
   let hasNonTextContent = false;
-  const text = content
-    .filter((block): block is { type: "text"; text: string } => {
-      if (typeof block !== "object" || block === null || !("type" in block)) {
-        hasNonTextContent = true;
-        return false;
-      }
-      if (block.type !== "text") {
-        hasNonTextContent = true;
-        return false;
-      }
-      if (typeof (block as { text?: unknown }).text !== "string") {
-        hasNonTextContent = true;
-        return false;
-      }
-      return true;
-    })
-    .map((block) => block.text)
-    .join("");
+  let text = "";
+  for (const block of content) {
+    if (typeof block !== "object" || block === null || !("type" in block)) {
+      hasNonTextContent = true;
+      continue;
+    }
+    if (block.type !== "text") {
+      hasNonTextContent = true;
+      continue;
+    }
+    const blockText = (block as { text?: unknown }).text;
+    if (typeof blockText !== "string") {
+      hasNonTextContent = true;
+      continue;
+    }
+    text += blockText;
+  }
   return { text, hasNonTextContent };
 }
 

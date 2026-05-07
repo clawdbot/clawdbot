@@ -547,11 +547,13 @@ jobs:
           path: dist-runtime-build.tar.zst
           retention-days: 1
 
-      - name: Upload A2UI bundle artifact
+      - name: Upload bundled plugin asset artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: canvas-a2ui-bundle
-          path: src/canvas-host/a2ui/
+          name: bundled-plugin-assets
+          path: |
+            extensions/*/src/host/**/.bundle.hash
+            extensions/*/src/host/**/*.bundle.js
           include-hidden-files: true
           retention-days: 1
 
@@ -852,7 +854,7 @@ jobs:
     name: ${{ matrix.checkName }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false

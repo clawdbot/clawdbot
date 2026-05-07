@@ -24,6 +24,7 @@ describe("openai default models", () => {
   it("sets the default model when it is unset", () => {
     const next = applyOpenAIConfig({});
     expect(next.agents?.defaults?.model).toEqual({ primary: OPENAI_DEFAULT_MODEL });
+    expect(next.agents?.defaults?.agentRuntime).toEqual({ id: "pi" });
   });
 
   it("overrides model.primary while preserving fallbacks", () => {

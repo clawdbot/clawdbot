@@ -1,14 +1,23 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   loadEvidenceManifest,
   renderEvidenceComment,
 } from "../../scripts/mantis/publish-pr-evidence.mjs";
 
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function writeFixtureManifest() {
   const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
+  tempDirs.push(dir);
   mkdirSync(path.join(dir, "baseline"), { recursive: true });
   mkdirSync(path.join(dir, "candidate"), { recursive: true });
   writeFileSync(path.join(dir, "baseline", "timeline.png"), "baseline timeline");
@@ -95,6 +104,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
 
   it("allows failure manifests to omit optional visual artifacts", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
+    tempDirs.push(dir);
     writeFileSync(path.join(dir, "summary.json"), JSON.stringify({ status: "fail" }));
     writeFileSync(path.join(dir, "report.md"), "bootstrap failed before screenshot");
     const manifestPath = path.join(dir, "mantis-evidence.json");
@@ -168,6 +178,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
 
   it("rejects artifact paths that escape the manifest directory", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
+    tempDirs.push(dir);
     const manifestPath = path.join(dir, "mantis-evidence.json");
     writeFileSync(
       manifestPath,

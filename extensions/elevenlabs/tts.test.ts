@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
-import { elevenLabsTTS } from "./tts.js";
+import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
 
 describe("elevenlabs tts diagnostics", () => {
   const originalFetch = globalThis.fetch;
@@ -27,6 +27,15 @@ describe("elevenlabs tts diagnostics", () => {
   function getHeadersFromFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): Headers {
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
     return new Headers(init?.headers);
+  }
+
+  function getInitFromFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): RequestInit {
+    return (fetchMock.mock.calls[0] as unknown[])[1] as RequestInit;
+  }
+
+  function getUrlFromFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): URL {
+    const url = fetchMock.mock.calls[0]?.[0] as string | URL;
+    return new URL(url.toString());
   }
 
   async function expectDefaultTtsRequestToThrow(message: string | RegExp) {
@@ -105,5 +114,58 @@ describe("elevenlabs tts diagnostics", () => {
     });
 
     expect(getHeadersFromFirstFetchCall(fetchMock).has("accept")).toBe(false);
+  });
+
+  it("sends latency optimization as an ElevenLabs query parameter", async () => {
+    const fetchMock = vi.fn(async () => new Response(Buffer.from("mp3")));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await elevenLabsTTS({
+      ...createDefaultTtsRequest(),
+      latencyTier: 3,
+    });
+
+    const url = getUrlFromFirstFetchCall(fetchMock);
+    expect(url.searchParams.get("optimize_streaming_latency")).toBe("3");
+    const body = JSON.parse(getInitFromFirstFetchCall(fetchMock).body as string) as {
+      latency_optimization_level?: number;
+    };
+    expect(body.latency_optimization_level).toBeUndefined();
+  });
+
+  it("omits latency optimization for eleven_v3 because the API rejects it", async () => {
+    const fetchMock = vi.fn(async () => new Response(Buffer.from("mp3")));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await elevenLabsTTS({
+      ...createDefaultTtsRequest(),
+      modelId: "eleven_v3",
+      latencyTier: 3,
+    });
+
+    const url = getUrlFromFirstFetchCall(fetchMock);
+    expect(url.searchParams.has("optimize_streaming_latency")).toBe(false);
+  });
+
+  it("uses the streaming endpoint without buffering the audio body", async () => {
+    const audioStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn(async () => new Response(audioStream));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await elevenLabsTTSStream({
+      ...createDefaultTtsRequest(),
+      latencyTier: 2,
+    });
+
+    const url = getUrlFromFirstFetchCall(fetchMock);
+    expect(url.pathname).toBe("/v1/text-to-speech/pMsXgVXv3BLzUgSXRplE/stream");
+    expect(url.searchParams.get("optimize_streaming_latency")).toBe("2");
+    expect(result.audioStream).toBeInstanceOf(ReadableStream);
+    await result.release();
   });
 });

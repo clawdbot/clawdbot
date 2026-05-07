@@ -114,9 +114,10 @@ export class TranscriptFileState {
     const branch: SessionEntry[] = [];
     let current = (fromId ?? this.leafId) ? this.byId.get((fromId ?? this.leafId)!) : undefined;
     while (current) {
-      branch.unshift(current);
+      branch.push(current);
       current = current.parentId ? this.byId.get(current.parentId) : undefined;
     }
+    branch.reverse();
     return branch;
   }
 

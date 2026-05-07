@@ -9,6 +9,7 @@ import {
   createRealtimeVoiceAgentTalkbackQueue,
   createTalkSessionController,
   createRealtimeVoiceBridgeSession,
+  recordTalkObservabilityEvent,
   type RealtimeVoiceAgentTalkbackQueue,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceProviderPlugin,
@@ -40,6 +41,7 @@ import {
   convertGoogleMeetTtsAudioForBridge,
   formatGoogleMeetAgentAudioModelLog,
   formatGoogleMeetAgentTtsResultLog,
+  formatGoogleMeetTranscriptSummaryLog,
   formatGoogleMeetRealtimeVoiceModelLog,
   type GoogleMeetRealtimeEventEntry,
   type GoogleMeetRealtimeTranscriptEntry,
@@ -180,7 +182,9 @@ export async function startNodeAgentAudioBridge(params: {
           return;
         }
         recordGoogleMeetRealtimeTranscript(transcript, "assistant", normalized);
-        params.logger.info(`[google-meet] node agent assistant: ${normalized}`);
+        params.logger.info(
+          formatGoogleMeetTranscriptSummaryLog("node agent assistant", normalized),
+        );
         const result = await params.runtime.tts.textToSpeechTelephony({
           text: normalized,
           cfg: params.fullConfig,
@@ -232,10 +236,13 @@ export async function startNodeAgentAudioBridge(params: {
         return;
       }
       recordGoogleMeetRealtimeTranscript(transcript, "user", trimmed);
-      params.logger.info(`[google-meet] node agent user: ${trimmed}`);
+      params.logger.info(formatGoogleMeetTranscriptSummaryLog("node agent user", trimmed));
       if (isGoogleMeetLikelyAssistantEchoTranscript({ transcript, text: trimmed })) {
         params.logger.info(
-          `[google-meet] node agent ignored assistant echo transcript: ${trimmed}`,
+          formatGoogleMeetTranscriptSummaryLog(
+            "node agent ignored assistant echo transcript",
+            trimmed,
+          ),
         );
         return;
       }
@@ -359,13 +366,16 @@ export async function startNodeRealtimeAudioBridge(params: {
   const transcript: GoogleMeetRealtimeTranscriptEntry[] = [];
   const realtimeEvents: GoogleMeetRealtimeEventEntry[] = [];
   const strategy = params.config.realtime.strategy;
-  const talk: TalkSessionController = createTalkSessionController({
-    sessionId: `google-meet:${params.meetingSessionId}:${params.bridgeId}:node-realtime`,
-    mode: "realtime",
-    transport: "gateway-relay",
-    brain: strategy === "bidi" ? "direct-tools" : "agent-consult",
-    provider: resolved.provider.id,
-  });
+  const talk: TalkSessionController = createTalkSessionController(
+    {
+      sessionId: `google-meet:${params.meetingSessionId}:${params.bridgeId}:node-realtime`,
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: strategy === "bidi" ? "direct-tools" : "agent-consult",
+      provider: resolved.provider.id,
+    },
+    { onEvent: recordTalkObservabilityEvent },
+  );
   const recentTalkEvents: TalkEvent[] = [];
   const rememberTalkEvent = (event: TalkEvent | undefined): void => {
     if (event) {
@@ -573,11 +583,14 @@ export async function startNodeRealtimeAudioBridge(params: {
       }
       if (isFinal) {
         recordGoogleMeetRealtimeTranscript(transcript, role, text);
-        params.logger.info(`[google-meet] node realtime ${role}: ${text}`);
+        params.logger.info(formatGoogleMeetTranscriptSummaryLog(`node realtime ${role}`, text));
         if (role === "user" && strategy === "agent") {
           if (isGoogleMeetLikelyAssistantEchoTranscript({ transcript, text })) {
             params.logger.info(
-              `[google-meet] node realtime ignored assistant echo transcript: ${text}`,
+              formatGoogleMeetTranscriptSummaryLog(
+                "node realtime ignored assistant echo transcript",
+                text,
+              ),
             );
             return;
           }

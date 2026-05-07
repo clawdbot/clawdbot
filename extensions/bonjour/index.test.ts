@@ -1,5 +1,5 @@
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   advertiserModuleLoaded: vi.fn(),
@@ -25,6 +25,12 @@ vi.mock("openclaw/plugin-sdk/runtime", () => {
 });
 
 const { default: bonjourPlugin } = await import("./index.js");
+
+afterAll(() => {
+  vi.doUnmock("./src/advertiser.js");
+  vi.doUnmock("openclaw/plugin-sdk/runtime");
+  vi.resetModules();
+});
 
 describe("bonjour plugin entry", () => {
   it("lazy-loads advertiser runtime when gateway discovery advertises", async () => {

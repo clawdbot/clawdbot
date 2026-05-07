@@ -1,5 +1,5 @@
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterAll, afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import {
   FeishuRetryableCardActionError,
@@ -47,6 +47,18 @@ import { handleFeishuMessage } from "./bot.js";
 describe("Feishu Card Action Handler", () => {
   const cfg: ClawdbotConfig = {};
   const runtime: RuntimeEnv = createRuntimeEnv();
+
+  afterAll(() => {
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./bot.js");
+    vi.doUnmock("./client.js");
+    vi.doUnmock("./send.js");
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   function createCardActionEvent(params: {
     token: string;

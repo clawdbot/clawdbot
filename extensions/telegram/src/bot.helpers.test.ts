@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
-import { resolveTelegramStreamMode } from "./bot/helpers.js";
+import { resolveTelegramGroupAllowFromContext, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 
 describe("resolveTelegramStreamMode", () => {
@@ -22,6 +22,35 @@ describe("resolveTelegramStreamMode", () => {
 
   it("preserves unified progress mode on Telegram", () => {
     expect(resolveTelegramStreamMode({ streaming: "progress" })).toBe("progress");
+  });
+});
+
+describe("resolveTelegramGroupAllowFromContext", () => {
+  it("expands Telegram access groups before normalizing allowFrom entries", async () => {
+    const cfg: OpenClawConfig = {
+      accessGroups: {
+        maintainers: {
+          type: "message.senders",
+          members: {
+            telegram: ["12345"],
+          },
+        },
+      },
+    };
+
+    const context = await resolveTelegramGroupAllowFromContext({
+      cfg,
+      chatId: -100123,
+      accountId: "default",
+      senderId: "12345",
+      isGroup: true,
+      groupAllowFrom: ["accessGroup:maintainers"],
+      readChannelAllowFromStore: async () => [],
+      resolveTelegramGroupConfig: () => ({}),
+    });
+
+    expect(context.effectiveGroupAllow.entries).toEqual(["12345"]);
+    expect(context.effectiveGroupAllow.invalidEntries).toEqual([]);
   });
 });
 

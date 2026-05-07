@@ -10,6 +10,7 @@ import type { OpenClawPluginCliCommandDescriptor, PluginLogger } from "./types.j
 
 export type PluginCliCommandGroupEntry = CommandGroupEntry & {
   pluginId: string;
+  parentPath?: readonly string[];
 };
 
 export type PluginCliCommandGroupMode = "eager" | "lazy";
@@ -26,6 +27,24 @@ function canRegisterPluginCliLazily(entry: PluginCliCommandGroupEntry): boolean 
   return getCommandGroupNames(entry).every((command) => descriptorNames.has(command));
 }
 
+function findCommandByPath(program: Command, path: readonly string[]): Command | null {
+  let current = program;
+  for (const segment of path) {
+    const next = current.commands.find(
+      (command) => command.name() === segment || command.aliases().includes(segment),
+    );
+    if (!next) {
+      return null;
+    }
+    current = next;
+  }
+  return current;
+}
+
+function commandNamesFor(program: Command): Set<string> {
+  return new Set(program.commands.flatMap((command) => [command.name(), ...command.aliases()]));
+}
+
 export async function registerPluginCliCommandGroups(
   program: Command,
   entries: readonly PluginCliCommandGroupEntry[],
@@ -37,22 +56,35 @@ export async function registerPluginCliCommandGroups(
   },
 ) {
   for (const entry of entries) {
+    const parentPath = entry.parentPath ?? [];
+    const targetProgram = findCommandByPath(program, parentPath);
+    if (!targetProgram) {
+      params.logger.debug?.(
+        `plugin CLI register skipped (${entry.pluginId}): parent command missing (${parentPath.join(
+          " ",
+        )})`,
+      );
+      continue;
+    }
+    const existingCommands =
+      parentPath.length === 0 ? params.existingCommands : commandNamesFor(targetProgram);
     const registerEntry = async () => {
-      await entry.register(program);
+      await entry.register(targetProgram);
       for (const command of getCommandGroupNames(entry)) {
-        params.existingCommands.add(command);
+        existingCommands.add(command);
       }
     };
 
-    if (params.primary && findCommandGroupEntry([entry], params.primary)) {
-      removeCommandGroupNames(program, entry);
+    if (
+      params.primary &&
+      (parentPath[0] === params.primary || findCommandGroupEntry([entry], params.primary))
+    ) {
+      removeCommandGroupNames(targetProgram, entry);
       await registerEntry();
       continue;
     }
 
-    const overlaps = getCommandGroupNames(entry).filter((command) =>
-      params.existingCommands.has(command),
-    );
+    const overlaps = getCommandGroupNames(entry).filter((command) => existingCommands.has(command));
     if (overlaps.length > 0) {
       params.logger.debug?.(
         `plugin CLI register skipped (${entry.pluginId}): command already registered (${overlaps.join(
@@ -65,7 +97,7 @@ export async function registerPluginCliCommandGroups(
     try {
       if (params.mode === "lazy" && canRegisterPluginCliLazily(entry)) {
         for (const placeholder of entry.placeholders) {
-          registerLazyCommandGroup(program, entry, placeholder);
+          registerLazyCommandGroup(targetProgram, entry, placeholder);
         }
         continue;
       }

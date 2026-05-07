@@ -269,4 +269,33 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     expect(job.state.runningAtMs).toBeUndefined();
     expect(job.state.nextRunAtMs).toBe(pastDue);
   });
+
+  it("advances overdue already-executed jobs when stale running marker is cleared", () => {
+    const now = Date.now();
+    const pastDue = now - 60_000;
+    const staleRunningAt = now - 3 * 60 * 60_000;
+
+    const job: CronJob = {
+      id: "stale-running-already-executed",
+      name: "stale running already executed",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
+      payload: { kind: "systemEvent", text: "test" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      createdAtMs: now - 86400_000,
+      updatedAtMs: now - 86400_000,
+      state: {
+        nextRunAtMs: pastDue,
+        runningAtMs: staleRunningAt,
+        lastRunAtMs: pastDue + 1000,
+      },
+    };
+
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true, nowMs: now });
+
+    expect(job.state.runningAtMs).toBeUndefined();
+    expect((job.state.nextRunAtMs ?? 0) > now).toBe(true);
+  });
 });

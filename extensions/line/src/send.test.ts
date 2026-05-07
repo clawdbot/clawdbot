@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   pushMessageMock,
@@ -95,6 +95,17 @@ const LINE_TEST_CFG = {
 describe("LINE send helpers", () => {
   beforeAll(async () => {
     sendModule = await import("./send.js");
+  });
+
+  afterAll(() => {
+    vi.doUnmock("@line/bot-sdk");
+    vi.doUnmock("openclaw/plugin-sdk/plugin-config-runtime");
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./channel-access-token.js");
+    vi.doUnmock("openclaw/plugin-sdk/channel-activity-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+    vi.resetModules();
   });
 
   beforeEach(() => {

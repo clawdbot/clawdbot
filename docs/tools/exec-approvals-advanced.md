@@ -233,6 +233,8 @@ The config shape is identical to `approvals.exec`: `enabled`, `mode`, `agentFilt
 Channels that support shared interactive replies render the same approval buttons for both exec and
 plugin approvals. Channels without shared interactive UI fall back to plain text with `/approve`
 instructions.
+Plugin approval requests may restrict the available decisions. Approval surfaces use the request's
+declared decision set, and the Gateway rejects attempts to submit a decision that was not offered.
 
 ### Same-chat approvals on any channel
 

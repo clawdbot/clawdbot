@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildBlacksmithRunArgs,
   resolveTestboxSyncTimeoutMs,
@@ -11,6 +11,14 @@ import {
 } from "../../scripts/blacksmith-testbox-runner.mjs";
 
 describe("blacksmith testbox runner", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("splits runner args from the remote command", () => {
     expect(
       splitRunnerArgs(["--id", "tbx_abc123", "--", "OPENCLAW_TESTBOX=1", "pnpm", "check:changed"]),
@@ -48,6 +56,7 @@ describe("blacksmith testbox runner", () => {
 
   it("refuses to run a keyed id that was not claimed by this checkout", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-testbox-runner-"));
+    tempDirs.push(stateDir);
     const testboxDir = path.join(stateDir, "tbx_01kqap50t9fqggzw1akg5dtmmq");
     fs.mkdirSync(testboxDir, { recursive: true });
     fs.writeFileSync(path.join(testboxDir, "id_ed25519"), "test-key\n");
@@ -71,6 +80,7 @@ describe("blacksmith testbox runner", () => {
 
   it("claims a keyed id without spawning when no remote command is supplied", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-testbox-runner-"));
+    tempDirs.push(stateDir);
     const testboxDir = path.join(stateDir, "tbx_01kqap50t9fqggzw1akg5dtmmq");
     const claimPath = path.join(testboxDir, "openclaw-runner.json");
     fs.mkdirSync(testboxDir, { recursive: true });
@@ -102,6 +112,7 @@ describe("blacksmith testbox runner", () => {
 
   it("terminates a Testbox run that stalls in sync", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-testbox-runner-"));
+    tempDirs.push(stateDir);
     const testboxId = "tbx_01kqap50t9fqggzw1akg5dtmmq";
     const testboxDir = path.join(stateDir, testboxId);
     fs.mkdirSync(testboxDir, { recursive: true });

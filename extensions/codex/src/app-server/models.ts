@@ -1,8 +1,8 @@
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-bridge.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
-import type { v2 } from "./protocol-generated/typescript/index.js";
 import { readCodexModelListResponse } from "./protocol-validators.js";
+import type { CodexModel, CodexReasoningEffortOption } from "./protocol.js";
 
 export type CodexAppServerModel = {
   id: string;
@@ -127,7 +127,7 @@ export function readModelListResult(value: unknown): CodexAppServerModelListResu
   return { models, ...(nextCursor ? { nextCursor } : {}) };
 }
 
-function readCodexModel(value: v2.Model): CodexAppServerModel | undefined {
+function readCodexModel(value: CodexModel): CodexAppServerModel | undefined {
   const id = readNonEmptyString(value.id);
   const model = readNonEmptyString(value.model) ?? id;
   if (!id || !model) {
@@ -152,7 +152,7 @@ function readCodexModel(value: v2.Model): CodexAppServerModel | undefined {
   };
 }
 
-function readReasoningEfforts(value: v2.ReasoningEffortOption[]): string[] {
+function readReasoningEfforts(value: CodexReasoningEffortOption[]): string[] {
   const efforts = value
     .map((entry) => readNonEmptyString(entry.reasoningEffort))
     .filter((entry): entry is string => entry !== undefined);

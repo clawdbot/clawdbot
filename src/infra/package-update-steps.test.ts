@@ -179,7 +179,8 @@ describe("runGlobalPackageUpdateSteps", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
       await withTempDir({ prefix: "openclaw-package-update-win32-pnpm-" }, async (base) => {
-        const globalRoot = path.join(base, "pnpm", "global", "5", "node_modules");
+        const globalDir = path.join(base, "pnpm", "global");
+        const globalRoot = path.join(globalDir, "5", "node_modules");
         const packageRoot = path.join(globalRoot, "openclaw");
         await writePackageRoot(packageRoot, "1.0.0");
 
@@ -187,7 +188,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           if (name !== "global update") {
             throw new Error(`unexpected step ${name}`);
           }
-          expect(argv).toEqual(["pnpm", "add", "-g", "openclaw@2.0.0"]);
+          expect(argv).toEqual(["pnpm", "add", "-g", "--global-dir", globalDir, "openclaw@2.0.0"]);
           await writePackageRoot(packageRoot, "2.0.0");
           return {
             name,

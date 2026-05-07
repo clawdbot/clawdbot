@@ -1259,7 +1259,7 @@ a session ended.
 }
 ```
 
-## Agent And Bidi Modes
+## Agent and bidi modes
 
 Chrome `agent` mode is optimized for "my agent is in the meeting" behavior. The
 realtime transcription provider hears the meeting audio, final participant

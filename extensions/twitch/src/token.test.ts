@@ -13,6 +13,8 @@ import type { OpenClawConfig } from "../api.js";
 import { resolveTwitchToken, type TwitchTokenSource } from "./token.js";
 
 describe("token", () => {
+  const originalAccessToken = process.env.OPENCLAW_TWITCH_ACCESS_TOKEN;
+
   // Multi-account config for testing non-default accounts
   const mockMultiAccountConfig = {
     channels: {
@@ -47,7 +49,11 @@ describe("token", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    delete process.env.OPENCLAW_TWITCH_ACCESS_TOKEN;
+    if (originalAccessToken === undefined) {
+      delete process.env.OPENCLAW_TWITCH_ACCESS_TOKEN;
+    } else {
+      process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = originalAccessToken;
+    }
   });
 
   describe("resolveTwitchToken", () => {

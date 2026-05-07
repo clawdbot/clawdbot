@@ -143,7 +143,7 @@ Current runtime behavior:
 - If Readability is disabled, `web_fetch` skips straight to the selected
   provider fallback. If no provider is available, it fails closed.
 
-## Trusted Env Proxy
+## Trusted env proxy
 
 If your deployment requires `web_fetch` to go through a trusted outbound
 HTTP(S) proxy, set `tools.web.fetch.useTrustedEnvProxy: true`.

@@ -251,7 +251,7 @@ describe("GatewayBrowserClient", () => {
       ok: true,
       payload: {
         type: "hello-ok",
-        protocol: 3,
+        protocol: 4,
         auth: { role: "operator", scopes: [] },
       },
     });
@@ -294,7 +294,7 @@ describe("GatewayBrowserClient", () => {
       ok: true,
       payload: {
         type: "hello-ok",
-        protocol: 3,
+        protocol: 4,
         auth: { role: "operator", scopes: [] },
       },
     });

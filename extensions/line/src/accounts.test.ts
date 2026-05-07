@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveLineAccount,
   resolveDefaultLineAccountId,
@@ -11,7 +11,6 @@ import {
 } from "./accounts.js";
 
 describe("LINE accounts", () => {
-  const originalEnv = { ...process.env };
   const tempDirs: string[] = [];
 
   const createSecretFile = (fileName: string, contents: string) => {
@@ -23,13 +22,12 @@ describe("LINE accounts", () => {
   };
 
   beforeEach(() => {
-    process.env = { ...originalEnv };
-    delete process.env.LINE_CHANNEL_ACCESS_TOKEN;
-    delete process.env.LINE_CHANNEL_SECRET;
+    vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "");
+    vi.stubEnv("LINE_CHANNEL_SECRET", "");
   });
 
   afterEach(() => {
-    process.env = originalEnv;
+    vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -59,8 +57,8 @@ describe("LINE accounts", () => {
     });
 
     it("resolves account from environment variables", () => {
-      process.env.LINE_CHANNEL_ACCESS_TOKEN = "env-token";
-      process.env.LINE_CHANNEL_SECRET = "env-secret";
+      vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "env-token");
+      vi.stubEnv("LINE_CHANNEL_SECRET", "env-secret");
 
       const cfg: OpenClawConfig = {
         channels: {

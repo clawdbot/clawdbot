@@ -45,6 +45,11 @@ export {
   type WalkDirectoryResult,
 } from "@openclaw/fs-safe/walk";
 export { withTimeout } from "@openclaw/fs-safe/advanced";
+export {
+  writeExternalFileWithinRoot,
+  type ExternalFileWriteOptions,
+  type ExternalFileWriteResult,
+} from "@openclaw/fs-safe/output";
 
 /** @deprecated Use root(rootDir).read(relativePath, options). */
 export async function readFileWithinRoot(params: {

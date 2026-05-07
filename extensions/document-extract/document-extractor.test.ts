@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { canvasSizes, getDocumentMock, pdfDocument } = vi.hoisted(() => ({
   canvasSizes: [] as Array<{ width: number; height: number }>,
@@ -37,6 +37,12 @@ import { createPdfDocumentExtractor } from "./document-extractor.js";
 const require = createRequire(import.meta.url);
 
 describe("PDF document extractor", () => {
+  afterAll(() => {
+    vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+    vi.doUnmock("@napi-rs/canvas");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     canvasSizes.length = 0;
     getDocumentMock.mockReset();

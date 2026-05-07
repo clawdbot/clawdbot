@@ -5,6 +5,7 @@ import {
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 
 // ---------------------------------------------------------------------------
 // Types & constants
@@ -263,7 +264,6 @@ export async function createBedrockEmbeddingProvider(
 ): Promise<{ provider: MemoryEmbeddingProvider; client: BedrockEmbeddingClient }> {
   const client = resolveBedrockEmbeddingClient(options);
   const { BedrockRuntimeClient, InvokeModelCommand } = await loadSdk();
-  const sdk = new BedrockRuntimeClient({ region: client.region });
   const spec = resolveSpec(client.model);
   const family = spec?.family ?? inferFamily(client.model);
 
@@ -275,15 +275,21 @@ export async function createBedrockEmbeddingProvider(
   });
 
   const invoke = async (body: string): Promise<string> => {
-    const res = await sdk.send(
-      new InvokeModelCommand({
-        modelId: client.model,
-        body,
-        contentType: "application/json",
-        accept: "application/json",
-      }),
-    );
-    return new TextDecoder().decode(res.body);
+    await refreshAwsSharedConfigCacheForBedrock();
+    const sdk = new BedrockRuntimeClient({ region: client.region });
+    try {
+      const res = await sdk.send(
+        new InvokeModelCommand({
+          modelId: client.model,
+          body,
+          contentType: "application/json",
+          accept: "application/json",
+        }),
+      );
+      return new TextDecoder().decode(res.body);
+    } finally {
+      sdk.destroy();
+    }
   };
 
   const isCohere = family === "cohere-v3" || family === "cohere-v4";

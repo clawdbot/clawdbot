@@ -240,7 +240,7 @@ describe("archive utils", () => {
       } catch (error) {
         rejected = true;
         expect(error).toMatchObject({
-          code: "destination-symlink-traversal",
+          code: expect.stringMatching(/destination-symlink-traversal|not-file/),
         } satisfies Partial<ArchiveSecurityError>);
       }
 

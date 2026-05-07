@@ -440,6 +440,10 @@ function hasActiveCliRun(task: TaskRecord): boolean {
   return false;
 }
 
+function hasCliRunIdentity(task: TaskRecord): boolean {
+  return [task.sourceId, task.runId].some((candidate) => Boolean(candidate?.trim()));
+}
+
 function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupContext): boolean {
   if (task.runtime === "cron") {
     if (!taskRegistryMaintenanceRuntime.isCronRuntimeAuthoritative()) {
@@ -451,6 +455,9 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 
   if (task.runtime === "cli" && hasActiveCliRun(task)) {
     return true;
+  }
+  if (task.runtime === "cli" && hasCliRunIdentity(task)) {
+    return false;
   }
 
   const childSessionKey = task.childSessionKey?.trim();

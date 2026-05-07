@@ -11,6 +11,7 @@ import {
   evaluateSystemRunApprovalMatch,
   toSystemRunApprovalMismatchError,
 } from "./node-invoke-system-run-approval-match.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 type SystemRunParamsLike = {
   command?: unknown;
@@ -35,11 +36,20 @@ type ApprovalLookup = {
 
 type ApprovalClient = {
   connId?: string | null;
+  isDeviceTokenAuth?: boolean;
   connect?: {
     scopes?: unknown;
+    client?: { id?: string | null; mode?: string | null } | null;
     device?: { id?: string | null } | null;
   } | null;
 };
+
+const BACKEND_BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS = new Set<string>([
+  GATEWAY_CLIENT_NAMES.CONTROL_UI,
+  GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
+  GATEWAY_CLIENT_NAMES.WEBCHAT,
+  GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+]);
 
 function normalizeApprovalDecision(value: unknown): "allow-once" | "allow-always" | null {
   const s = normalizeNullableString(value);
@@ -49,6 +59,29 @@ function normalizeApprovalDecision(value: unknown): "allow-once" | "allow-always
 function clientHasApprovals(client: ApprovalClient | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client?.connect?.scopes : [];
   return scopes.includes("operator.admin") || scopes.includes("operator.approvals");
+}
+
+function isTrustedBackendApprovalClient(client: ApprovalClient | null): boolean {
+  return (
+    clientHasApprovals(client) &&
+    client?.connect?.client?.id === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
+    client.connect.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+    client.isDeviceTokenAuth !== true
+  );
+}
+
+function canBridgeNoDeviceApprovalFromBackend(params: {
+  snapshot: ExecApprovalRecord;
+  client: ApprovalClient | null;
+}): boolean {
+  const requestedByClientId = normalizeNullableString(params.snapshot.requestedByClientId);
+  return (
+    params.snapshot.requestedByDeviceId == null &&
+    params.snapshot.requestedByDeviceTokenAuth !== true &&
+    requestedByClientId !== null &&
+    BACKEND_BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS.has(requestedByClientId) &&
+    isTrustedBackendApprovalClient(params.client)
+  );
 }
 
 function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unknown> {
@@ -190,7 +223,8 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     }
   } else if (
     snapshot.requestedByConnId &&
-    snapshot.requestedByConnId !== (opts.client?.connId ?? null)
+    snapshot.requestedByConnId !== (opts.client?.connId ?? null) &&
+    !canBridgeNoDeviceApprovalFromBackend({ snapshot, client: opts.client })
   ) {
     return systemRunApprovalGuardError({
       code: "APPROVAL_CLIENT_MISMATCH",

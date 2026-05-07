@@ -55,12 +55,14 @@ function createCliRegistry(params?: {
     description: string;
     hasSubcommands: boolean;
   }>;
+  memoryParentPath?: string[];
 }) {
   return {
     cliRegistrars: [
       {
         pluginId: "memory-core",
         register: mocks.memoryRegister,
+        parentPath: params?.memoryParentPath ?? [],
         commands: params?.memoryCommands ?? ["memory"],
         descriptors: params?.memoryDescriptors ?? [
           {
@@ -74,6 +76,7 @@ function createCliRegistry(params?: {
       {
         pluginId: "other",
         register: mocks.otherRegister,
+        parentPath: [],
         commands: ["other"],
         descriptors: [],
         source: "bundled",
@@ -407,6 +410,43 @@ describe("registerPluginCliCommands", () => {
     expect(mocks.memoryListAction).toHaveBeenCalledTimes(1);
   });
 
+  it("registers nested plugin commands against their parent command", async () => {
+    const program = createProgram("nodes");
+    program.exitOverride();
+    mocks.resolveManifestActivationPluginIds.mockReturnValue(["memory-core"]);
+    mocks.loadOpenClawPlugins.mockReturnValue(
+      createCliRegistry({
+        memoryParentPath: ["nodes"],
+        memoryCommands: ["canvas"],
+        memoryDescriptors: [
+          {
+            name: "canvas",
+            description: "Canvas commands",
+            hasSubcommands: true,
+          },
+        ],
+      }),
+    );
+    mocks.memoryRegister.mockImplementation(({ program }: { program: Command }) => {
+      const canvas = program.command("canvas").description("Canvas commands");
+      canvas.command("snapshot").action(mocks.memoryListAction);
+    });
+
+    await registerPluginCliCommands(program, {} as OpenClawConfig, undefined, undefined, {
+      mode: "lazy",
+      primary: "nodes",
+    });
+
+    const nodes = program.commands.find((command) => command.name() === "nodes");
+    expect(nodes?.commands.map((command) => command.name())).toEqual(["canvas"]);
+
+    await program.parseAsync(["nodes", "canvas", "snapshot"], { from: "user" });
+
+    expect(mocks.memoryRegister).toHaveBeenCalledTimes(1);
+    expect(mocks.memoryRegister.mock.calls[0]?.[0].program).toBe(nodes);
+    expect(mocks.memoryListAction).toHaveBeenCalledTimes(1);
+  });
+
   it("scopes full CLI loading through CLI metadata when manifest planning finds no plugin match", async () => {
     const program = createProgram();
     program.exitOverride();
@@ -417,6 +457,35 @@ describe("registerPluginCliCommands", () => {
     });
 
     expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalled();
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["memory-core"],
+      }),
+    );
+  });
+
+  it("scopes nested CLI loading through CLI metadata parent paths", async () => {
+    const nestedRegistry = createCliRegistry({
+      memoryParentPath: ["nodes"],
+      memoryCommands: ["canvas"],
+      memoryDescriptors: [
+        {
+          name: "canvas",
+          description: "Canvas commands",
+          hasSubcommands: true,
+        },
+      ],
+    });
+    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue(nestedRegistry);
+    mocks.loadOpenClawPlugins.mockReturnValue(nestedRegistry);
+    const program = createProgram("nodes");
+    program.exitOverride();
+
+    await registerPluginCliCommands(program, {} as OpenClawConfig, undefined, undefined, {
+      mode: "lazy",
+      primary: "nodes",
+    });
+
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["memory-core"],

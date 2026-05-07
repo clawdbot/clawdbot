@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import pluginEntry from "./index.js";
 
 function rejectRuntimeImport(moduleName: string) {
@@ -15,6 +15,18 @@ vi.mock("./src/tools/file-fetch-tool.js", rejectRuntimeImport("tools/file-fetch-
 vi.mock("./src/tools/dir-list-tool.js", rejectRuntimeImport("tools/dir-list-tool"));
 vi.mock("./src/tools/dir-fetch-tool.js", rejectRuntimeImport("tools/dir-fetch-tool"));
 vi.mock("./src/tools/file-write-tool.js", rejectRuntimeImport("tools/file-write-tool"));
+
+afterAll(() => {
+  vi.doUnmock("./src/node-host/file-fetch.js");
+  vi.doUnmock("./src/node-host/dir-list.js");
+  vi.doUnmock("./src/node-host/dir-fetch.js");
+  vi.doUnmock("./src/node-host/file-write.js");
+  vi.doUnmock("./src/tools/file-fetch-tool.js");
+  vi.doUnmock("./src/tools/dir-list-tool.js");
+  vi.doUnmock("./src/tools/dir-fetch-tool.js");
+  vi.doUnmock("./src/tools/file-write-tool.js");
+  vi.resetModules();
+});
 
 describe("file-transfer plugin entry", () => {
   it("registers static command and tool descriptors without importing runtime handlers", () => {

@@ -144,6 +144,7 @@ permissions:
 jobs:
   quality-shards:
     name: Select Critical Quality shards
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:

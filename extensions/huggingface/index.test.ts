@@ -1,5 +1,5 @@
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 const buildHuggingfaceProviderMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -44,6 +44,12 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
 }
 
 describe("huggingface plugin", () => {
+  afterAll(() => {
+    vi.doUnmock("./provider-catalog.js");
+    vi.doUnmock("./onboard.js");
+    vi.resetModules();
+  });
+
   it("skips catalog discovery when plugin discovery is disabled", async () => {
     const provider = registerProvider();
 

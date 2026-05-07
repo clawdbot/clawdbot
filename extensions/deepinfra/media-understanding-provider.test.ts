@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   deepinfraMediaUnderstandingProvider,
   transcribeDeepInfraAudio,
@@ -16,6 +16,11 @@ vi.mock("openclaw/plugin-sdk/media-understanding", async () => {
     ...actual,
     transcribeOpenAiCompatibleAudio: transcribeOpenAiCompatibleAudioMock,
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/media-understanding");
+  vi.resetModules();
 });
 
 describe("deepinfra media understanding provider", () => {

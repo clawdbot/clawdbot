@@ -150,10 +150,17 @@ export function resolveCliSessionReuse(params: {
   const currentMcpConfigHash = normalizeOptionalString(params.mcpConfigHash);
   const currentMcpResumeHash = normalizeOptionalString(params.mcpResumeHash);
   const storedAuthProfileId = normalizeOptionalString(binding?.authProfileId);
-  if (storedAuthProfileId !== currentAuthProfileId) {
-    return { invalidatedReason: "auth-profile" };
-  }
   const storedAuthEpoch = normalizeOptionalString(binding?.authEpoch);
+  const hasMatchingVersionedAuthEpoch =
+    binding?.authEpochVersion === params.authEpochVersion &&
+    storedAuthEpoch !== undefined &&
+    currentAuthEpoch !== undefined &&
+    storedAuthEpoch === currentAuthEpoch;
+  if (storedAuthProfileId !== currentAuthProfileId) {
+    if (!hasMatchingVersionedAuthEpoch) {
+      return { invalidatedReason: "auth-profile" };
+    }
+  }
   if (
     binding?.authEpochVersion === params.authEpochVersion &&
     storedAuthEpoch !== currentAuthEpoch

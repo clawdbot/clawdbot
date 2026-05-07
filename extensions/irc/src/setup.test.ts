@@ -11,7 +11,7 @@ import {
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   listIrcAccountIds,
   resolveDefaultIrcAccountId,
@@ -41,6 +41,11 @@ vi.mock("./channel-runtime.js", () => {
     monitorIrcProvider: hoisted.monitorIrcProvider,
     sendMessageIrc: hoisted.sendMessageIrc,
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("./channel-runtime.js");
+  vi.resetModules();
 });
 
 const ircSetupPlugin = {

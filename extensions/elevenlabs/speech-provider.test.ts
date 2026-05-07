@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { buildElevenLabsSpeechProvider, isValidVoiceId } from "./speech-provider.js";
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
@@ -28,6 +28,11 @@ function parseRequestBody(init: RequestInit | undefined): Record<string, unknown
 
 describe("elevenlabs speech provider", () => {
   const originalFetch = globalThis.fetch;
+
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+    vi.resetModules();
+  });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;

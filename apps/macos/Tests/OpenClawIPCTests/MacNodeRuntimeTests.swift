@@ -5,11 +5,35 @@ import Testing
 @testable import OpenClaw
 
 struct MacNodeRuntimeTests {
+    actor CanvasRefreshProbe {
+        private(set) var calls = 0
+
+        func refresh() -> String? {
+            self.calls += 1
+            return "http://127.0.0.1:18789/refreshed"
+        }
+    }
+
     @Test func `handle invoke rejects unknown command`() async {
         let runtime = MacNodeRuntime()
         let response = await runtime.handleInvoke(
             BridgeInvokeRequest(id: "req-1", command: "unknown.command"))
         #expect(response.ok == false)
+    }
+
+    @Test func `A2UI host capability refresh uses injected node session refresher`() async {
+        let probe = CanvasRefreshProbe()
+        let runtime = MacNodeRuntime(
+            canvasSurfaceUrl: { "http://127.0.0.1:18789/current" },
+            refreshCanvasSurfaceUrl: { await probe.refresh() })
+
+        let current = await runtime.resolveA2UIHostUrlWithCapabilityRefresh()
+        #expect(current == "http://127.0.0.1:18789/current/__openclaw__/a2ui/?platform=macos")
+        #expect(await probe.calls == 0)
+
+        let refreshed = await runtime.resolveA2UIHostUrlWithCapabilityRefresh(forceRefresh: true)
+        #expect(refreshed == "http://127.0.0.1:18789/refreshed/__openclaw__/a2ui/?platform=macos")
+        #expect(await probe.calls == 1)
     }
 
     @Test func `handle invoke rejects empty system run`() async throws {

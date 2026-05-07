@@ -16,6 +16,7 @@ export type OpenAiEmbeddingClient = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  outputDimensionality?: number;
 };
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -59,6 +60,9 @@ export async function createOpenAiEmbeddingProvider(
       body: {
         model: client.model,
         input,
+        ...(typeof client.outputDimensionality === "number"
+          ? { dimensions: client.outputDimensionality }
+          : {}),
         ...(inputType ? { input_type: inputType } : {}),
       },
       errorPrefix: "openai embeddings failed",
@@ -96,5 +100,6 @@ async function resolveOpenAiEmbeddingClient(
     inputType: options.inputType,
     queryInputType: options.queryInputType,
     documentInputType: options.documentInputType,
+    outputDimensionality: options.outputDimensionality,
   };
 }

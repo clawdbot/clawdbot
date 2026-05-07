@@ -1,5 +1,5 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageIMessageMock = vi.hoisted(() =>
   vi.fn().mockImplementation(async (_to: string, message: string) => ({
@@ -39,6 +39,12 @@ describe("deliverReplies", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     chunkTextWithModeMock.mockImplementation((text: string) => [text]);
+  });
+
+  afterAll(() => {
+    vi.doUnmock("../send.js");
+    vi.doUnmock("./deliver.runtime.js");
+    vi.resetModules();
   });
 
   it("propagates payload replyToId through all text chunks", async () => {

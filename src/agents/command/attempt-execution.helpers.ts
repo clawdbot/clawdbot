@@ -200,9 +200,10 @@ function formatFallbackTurns(
     if (consumed + line.length + 1 > remainingBudget) {
       break;
     }
-    lines.unshift(line);
+    lines.push(line);
     consumed += line.length + 1;
   }
+  lines.reverse();
   return { text: lines.join("\n"), consumed };
 }
 

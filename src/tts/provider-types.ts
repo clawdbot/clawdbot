@@ -57,6 +57,16 @@ export type SpeechSynthesisResult = {
   voiceCompatible: boolean;
 };
 
+export type SpeechSynthesisStreamRequest = SpeechSynthesisRequest;
+
+export type SpeechSynthesisStreamResult = {
+  audioStream: ReadableStream<Uint8Array>;
+  outputFormat: string;
+  fileExtension: string;
+  voiceCompatible: boolean;
+  release?: () => Promise<void>;
+};
+
 export type SpeechTelephonySynthesisRequest = {
   text: string;
   cfg: OpenClawConfig;

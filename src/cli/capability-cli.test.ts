@@ -130,6 +130,7 @@ const mocks = vi.hoisted(() => ({
   ]),
   registerBuiltInMemoryEmbeddingProviders: vi.fn(),
   buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
+  convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
   isWebSearchProviderConfigured: vi.fn(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
   modelsStatusCommand: vi.fn(
@@ -220,6 +221,15 @@ vi.mock("../media-understanding/provider-registry.js", () => ({
   buildMediaUnderstandingRegistry:
     mocks.buildMediaUnderstandingRegistry as typeof import("../media-understanding/provider-registry.js").buildMediaUnderstandingRegistry,
 }));
+
+vi.mock("../media/image-ops.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/image-ops.js")>();
+  return {
+    ...actual,
+    convertHeicToJpeg:
+      mocks.convertHeicToJpeg as typeof import("../media/image-ops.js").convertHeicToJpeg,
+  };
+});
 
 vi.mock("../plugins/memory-embedding-providers.js", () => ({
   listMemoryEmbeddingProviders:
@@ -333,6 +343,7 @@ describe("capability cli", () => {
     mocks.setTtsProvider.mockClear();
     mocks.resolveExplicitTtsOverrides.mockClear();
     mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
+    mocks.convertHeicToJpeg.mockClear();
     mocks.createEmbeddingProvider.mockClear();
     mocks.registerMemoryEmbeddingProvider.mockClear();
     mocks.registerBuiltInMemoryEmbeddingProviders.mockClear();
@@ -557,6 +568,56 @@ describe("capability cli", () => {
           modelRun: true,
           promptMode: "none",
         }),
+      }),
+    );
+  });
+
+  it("normalizes HEIC files to JPEG before local model probes", async () => {
+    const tempInput = path.join(os.tmpdir(), `openclaw-model-run-image-${Date.now()}.heic`);
+    await fs.writeFile(tempInput, Buffer.from("heic-like"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--prompt",
+        "describe this",
+        "--file",
+        tempInput,
+        "--json",
+      ],
+    });
+
+    expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(Buffer.from("heic-like"));
+    expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              role: "user",
+              content: [
+                { type: "text", text: "describe this" },
+                {
+                  type: "image",
+                  data: Buffer.from("jpeg-normalized").toString("base64"),
+                  mimeType: "image/jpeg",
+                },
+              ],
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputs: [
+          expect.objectContaining({
+            path: tempInput,
+            mimeType: "image/jpeg",
+          }),
+        ],
       }),
     );
   });

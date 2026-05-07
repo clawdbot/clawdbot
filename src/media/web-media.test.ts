@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
+import { CANVAS_HOST_PATH } from "../../extensions/canvas/runtime-api.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
 let optimizeImageToJpeg: typeof import("./web-media.js").optimizeImageToJpeg;
@@ -18,6 +20,21 @@ let stateDir = "";
 let canvasPngFile = "";
 let workspaceDir = "";
 let workspacePngFile = "";
+
+function installCanvasMediaResolver() {
+  const registry = createEmptyPluginRegistry();
+  registry.hostedMediaResolvers = [
+    {
+      pluginId: "canvas",
+      resolver: (mediaUrl) =>
+        mediaUrl === `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`
+          ? canvasPngFile
+          : null,
+      source: "test",
+    },
+  ];
+  setActivePluginRegistry(registry);
+}
 
 beforeAll(async () => {
   ({ loadWebMedia, optimizeImageToJpeg } = await import("./web-media.js"));
@@ -39,9 +56,11 @@ beforeAll(async () => {
   );
   await fs.mkdir(path.dirname(canvasPngFile), { recursive: true });
   await fs.writeFile(canvasPngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
+  installCanvasMediaResolver();
 });
 
 afterAll(async () => {
+  resetPluginRuntimeStateForTest();
   if (fixtureRoot) {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
@@ -149,10 +168,41 @@ describe("loadWebMedia", () => {
   });
 
   it("loads browser-style canvas media paths as managed local files", async () => {
+    installCanvasMediaResolver();
     const result = await loadWebMedia(
       `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`,
       { maxBytes: 1024 * 1024 },
     );
+    expect(result.kind).toBe("image");
+    expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("keeps trying hosted media resolvers after one throws", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.hostedMediaResolvers = [
+      {
+        pluginId: "broken",
+        resolver: () => {
+          throw new Error("resolver failed");
+        },
+        source: "test",
+      },
+      {
+        pluginId: "canvas",
+        resolver: (mediaUrl) =>
+          mediaUrl === `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`
+            ? canvasPngFile
+            : null,
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    const result = await loadWebMedia(
+      `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`,
+      { maxBytes: 1024 * 1024 },
+    );
+
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
   });

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { createGoogleGenAIMock, generateContentMock } = vi.hoisted(() => {
   const generateContentMock = vi.fn();
@@ -25,6 +25,11 @@ describe("google music generation provider", () => {
     vi.restoreAllMocks();
     generateContentMock.mockReset();
     createGoogleGenAIMock.mockClear();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./google-genai-runtime.js");
+    vi.resetModules();
   });
 
   it("declares explicit mode capabilities", () => {

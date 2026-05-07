@@ -7,7 +7,7 @@ import {
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
-function withAuthProfileMode(mode: "api_key" | "oauth" | "token"): OpenClawConfig {
+function withAuthProfileMode(mode: "api_key" | "aws-sdk" | "oauth" | "token"): OpenClawConfig {
   return {
     auth: {
       profiles: {

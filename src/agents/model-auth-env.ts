@@ -102,14 +102,14 @@ export function resolveEnvApiKey(
   options: EnvApiKeyLookupOptions = {},
 ): EnvApiKeyResult | null {
   const normalizedProvider = normalizeProviderIdForAuth(provider);
-  const normalized = options.aliasMap
-    ? (options.aliasMap[normalizedProvider] ?? normalizedProvider)
-    : resolveProviderIdForAuth(provider, { env });
   const lookupParams = {
     config: options.config,
     workspaceDir: options.workspaceDir,
     env,
   };
+  const normalized = options.aliasMap
+    ? (options.aliasMap[normalizedProvider] ?? normalizedProvider)
+    : resolveProviderIdForAuth(provider, lookupParams);
   const candidateMap = options.candidateMap ?? resolveProviderEnvApiKeyCandidates(lookupParams);
   const authEvidenceMap = options.authEvidenceMap ?? resolveProviderEnvAuthEvidence(lookupParams);
   const applied = new Set(getShellEnvAppliedKeys());
