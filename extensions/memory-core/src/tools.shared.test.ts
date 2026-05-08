@@ -158,14 +158,12 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
     registerMemoryCorpusSupplement(
       "string-throw",
       buildSupplement(async () => {
-        // eslint-disable-next-line @typescript-eslint/only-throw-error
         throw "raw string failure";
       }),
     );
     registerMemoryCorpusSupplement(
       "object-throw",
       buildSupplement(async () => {
-        // eslint-disable-next-line @typescript-eslint/only-throw-error
         throw { code: "ESUPP", detail: "structured failure" };
       }),
     );
@@ -174,7 +172,9 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
     expect(out).toHaveLength(1);
     expect(out[0]?.path).toBe("wiki/a.md");
 
-    const messages: string[] = warnSpy.mock.calls.map((c: unknown[]) => String(c[0] ?? ""));
+    const messages = warnSpy.mock.calls.map(([message]: unknown[]) =>
+      typeof message === "string" ? message : (JSON.stringify(message) ?? ""),
+    );
     expect(
       messages.some((m) => m.includes('"string-throw"') && m.includes("raw string failure")),
     ).toBe(true);
