@@ -172,7 +172,7 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
     expect(out).toHaveLength(1);
     expect(out[0]?.path).toBe("wiki/a.md");
 
-    const messages = warnSpy.mock.calls.map(([message]: unknown[]) =>
+    const messages: string[] = warnSpy.mock.calls.map(([message]: unknown[]): string =>
       typeof message === "string" ? message : (JSON.stringify(message) ?? ""),
     );
     expect(
