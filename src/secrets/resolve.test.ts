@@ -28,11 +28,7 @@ async function writeSecureFile(filePath: string, content: string, mode = 0o600):
 describe("secret ref resolver", () => {
   const isWindows = process.platform === "win32";
   function itPosix(name: string, fn: () => Promise<void> | void) {
-    if (isWindows) {
-      it.skip(name, fn);
-      return;
-    }
-    it(name, fn);
+    it.skipIf(isWindows)(name, fn);
   }
   let fixtureRoot = "";
   let caseId = 0;

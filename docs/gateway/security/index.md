@@ -220,6 +220,7 @@ Advisory triage guidance:
 
 - **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?
 - **Tool blast radius** (elevated tools + open rooms): could prompt injection turn into shell/file/network actions?
+- **Exec filesystem drift**: are mutating filesystem tools denied while `exec`/`process` remain available without sandbox filesystem constraints?
 - **Exec approval drift** (`security=full`, `autoAllowSkills`, interpreter allowlists without `strictInlineEval`): are host-exec guardrails still doing what you think they are?
   - `security="full"` is a broad posture warning, not proof of a bug. It is the chosen default for trusted personal-assistant setups; tighten it only when your threat model needs approval or allowlist guardrails.
 - **Network exposure** (Gateway bind/auth, Tailscale Serve/Funnel, weak/short auth tokens).

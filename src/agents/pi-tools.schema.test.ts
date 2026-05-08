@@ -86,7 +86,12 @@ describe("normalizeToolParameterSchema", () => {
     };
 
     expect(cleaned.$defs).toBeUndefined();
-    expect(cleaned.properties).toBeDefined();
+    expect(cleaned.properties).toMatchObject({
+      foo: {
+        type: "string",
+        enum: ["a", "b"],
+      },
+    });
     expect(cleaned.properties?.foo).toMatchObject({
       type: "string",
       enum: ["a", "b"],

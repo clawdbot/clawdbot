@@ -383,8 +383,14 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-      expect(persisted?.acp).toBeDefined();
-      expect(staleInMemory[sessionKey]?.acp).toBeDefined();
+      expect(persisted?.acp).toMatchObject({
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime-1",
+        mode: "persistent",
+        state: "idle",
+      });
+      expect(staleInMemory[sessionKey]?.acp).toEqual(persisted?.acp);
     });
   });
 

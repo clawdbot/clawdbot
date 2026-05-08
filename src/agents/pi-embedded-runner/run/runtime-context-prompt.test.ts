@@ -80,6 +80,30 @@ describe("runtime context prompt submission", () => {
     expect(suffix).not.toContain("\n```\nASSISTANT");
   });
 
+  it("formats reply chains as current-turn untrusted prompt context", () => {
+    const suffix = buildCurrentTurnPromptContextSuffix({
+      replyChain: [
+        {
+          messageId: "34098",
+          sender: "obviyus",
+          body: "r u back from hermes",
+          replyToId: "34090",
+        },
+        {
+          messageId: "34090",
+          sender: "Kesava",
+          mediaType: "image/png",
+          mediaRef: "telegram:file/photo-1",
+        },
+      ],
+    });
+
+    expect(suffix).toContain("Reply chain of current user message");
+    expect(suffix).toContain('"message_id": "34098"');
+    expect(suffix).toContain('"reply_to_id": "34090"');
+    expect(suffix).toContain('"media_ref": "telegram:file/photo-1"');
+  });
+
   it("omits empty explicit reply context", () => {
     expect(buildCurrentTurnPromptContextSuffix(undefined)).toBe("");
     expect(buildCurrentTurnPromptContextSuffix({ reply: { body: "   " } })).toBe("");

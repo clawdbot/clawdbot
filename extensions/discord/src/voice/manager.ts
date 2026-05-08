@@ -134,21 +134,32 @@ export class DiscordVoiceManager {
     }
     this.autoJoinTask = (async () => {
       const entries = this.params.discordConfig.voice?.autoJoin ?? [];
-      logVoiceVerbose(`autoJoin: ${entries.length} entries`);
-      const seenGuilds = new Set<string>();
+      const entriesByGuild = new Map<string, { guildId: string; channelId: string }>();
+      const duplicateGuilds = new Set<string>();
       for (const entry of entries) {
         const guildId = entry.guildId.trim();
-        if (!guildId) {
+        const channelId = entry.channelId.trim();
+        if (!guildId || !channelId) {
           continue;
         }
-        if (seenGuilds.has(guildId)) {
+        if (entriesByGuild.has(guildId)) {
+          duplicateGuilds.add(guildId);
+        }
+        entriesByGuild.set(guildId, { guildId, channelId });
+      }
+
+      logVoiceVerbose(`autoJoin: ${entries.length} entries, ${entriesByGuild.size} guilds`);
+      for (const guildId of duplicateGuilds) {
+        const selected = entriesByGuild.get(guildId);
+        if (selected) {
           logger.warn(
-            `discord voice: autoJoin has multiple entries for guild ${guildId}; skipping`,
+            `discord voice: autoJoin has multiple entries for guild ${guildId}; using channel ${selected.channelId}`,
           );
-          continue;
         }
-        seenGuilds.add(guildId);
-        logVoiceVerbose(`autoJoin: joining guild ${guildId} channel ${entry.channelId}`);
+      }
+
+      for (const entry of entriesByGuild.values()) {
+        logVoiceVerbose(`autoJoin: joining guild ${entry.guildId} channel ${entry.channelId}`);
         await this.join({
           guildId: entry.guildId,
           channelId: entry.channelId,

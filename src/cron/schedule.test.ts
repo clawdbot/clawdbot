@@ -9,6 +9,13 @@ import {
   hasCronInCacheForTest,
 } from "./schedule.js";
 
+function requireTimestamp(value: number | undefined, label: string): number {
+  if (value === undefined) {
+    throw new Error(`expected ${label} timestamp`);
+  }
+  return value;
+}
+
 describe("cron schedule", () => {
   beforeEach(() => {
     clearCronScheduleCacheForTest();
@@ -111,8 +118,7 @@ describe("cron schedule", () => {
       { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
       nowMs,
     );
-    expect(next).toBeDefined();
-    expect(next!).toBeGreaterThan(nowMs);
+    expect(requireTimestamp(next, "next run")).toBeGreaterThan(nowMs);
   });
 
   it("never returns a previous run that is at-or-after now", () => {
@@ -130,19 +136,18 @@ describe("cron schedule", () => {
     const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
     expect(getCronScheduleCacheSizeForTest()).toBe(0);
 
-    const first = computeNextRunAtMs(
-      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
-      nowMs,
+    requireTimestamp(
+      computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" }, nowMs),
+      "first next run",
     );
-    const second = computeNextRunAtMs(
-      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
-      nowMs + 1_000,
+    requireTimestamp(
+      computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" }, nowMs + 1_000),
+      "second next run",
     );
-    const third = computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "UTC" }, nowMs);
-
-    expect(first).toBeDefined();
-    expect(second).toBeDefined();
-    expect(third).toBeDefined();
+    requireTimestamp(
+      computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "UTC" }, nowMs),
+      "third next run",
+    );
     expect(getCronScheduleCacheSizeForTest()).toBe(2);
   });
 

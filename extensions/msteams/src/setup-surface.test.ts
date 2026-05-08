@@ -69,7 +69,7 @@ describe("msteams setup surface", () => {
     });
   });
 
-  it("reports configured status from resolved credentials", async () => {
+  it("reports configured status from resolved credentials", () => {
     resolveMSTeamsCredentials.mockReturnValue({
       appId: "app",
     });

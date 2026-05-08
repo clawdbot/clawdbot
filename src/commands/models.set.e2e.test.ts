@@ -30,11 +30,13 @@ function makeRuntime() {
 }
 
 function getWrittenConfig() {
-  return mocks.writtenConfig as Record<string, unknown>;
+  if (!mocks.writtenConfig) {
+    throw new Error("expected config write");
+  }
+  return mocks.writtenConfig;
 }
 
 function expectWrittenPrimaryModel(model: string) {
-  expect(mocks.writtenConfig).toBeDefined();
   const written = getWrittenConfig();
   expect(written.agents).toEqual({
     defaults: {
@@ -65,7 +67,6 @@ describe("models set + fallbacks", () => {
 
     await modelsFallbacksAddCommand("z-ai/glm-4.7", runtime);
 
-    expect(mocks.writtenConfig).toBeDefined();
     const written = getWrittenConfig();
     expect(written.agents).toEqual({
       defaults: {
@@ -81,7 +82,6 @@ describe("models set + fallbacks", () => {
 
     await modelsFallbacksAddCommand("anthropic/claude-opus-4-6", runtime);
 
-    expect(mocks.writtenConfig).toBeDefined();
     const written = getWrittenConfig();
     expect(written.agents).toEqual({
       defaults: {
@@ -128,7 +128,6 @@ describe("models set + fallbacks", () => {
 
     await modelsSetCommand("openrouter/hunter-alpha", runtime);
 
-    expect(mocks.writtenConfig).toBeDefined();
     const written = getWrittenConfig();
     expect(written.agents).toEqual({
       defaults: {
@@ -148,7 +147,6 @@ describe("models set + fallbacks", () => {
 
     await modelsSetCommand("anthropic/claude-opus-4-6", runtime);
 
-    expect(mocks.writtenConfig).toBeDefined();
     const written = getWrittenConfig();
     expect(written.agents).toEqual({
       defaults: {

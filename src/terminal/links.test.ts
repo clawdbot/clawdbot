@@ -17,13 +17,13 @@ describe("formatDocsLink", () => {
     expect(out).toContain("https://docs.openclaw.ai");
   });
 
-  it("does not crash when path is undefined (regression: #67076, #67074)", () => {
-    expect(() => formatDocsLink(undefined as unknown as string, "label")).not.toThrow();
+  it("falls back to docs root when path is undefined (regression: #67076, #67074)", () => {
     const out = formatDocsLink(undefined as unknown as string, "label");
     expect(out).toContain("https://docs.openclaw.ai");
   });
 
-  it("does not crash when path is null", () => {
-    expect(() => formatDocsLink(null as unknown as string)).not.toThrow();
+  it("falls back to docs root when path is null", () => {
+    const out = formatDocsLink(null as unknown as string);
+    expect(out).toContain("https://docs.openclaw.ai");
   });
 });

@@ -16,7 +16,7 @@ beforeAll(async () => {
 });
 
 describe("collectProviderApiKeys", () => {
-  it("honors provider auth env vars with nonstandard names", async () => {
+  it("honors provider auth env vars with nonstandard names", () => {
     const env = { MODELSTUDIO_API_KEY: "modelstudio-live-key" };
 
     expect(
@@ -27,7 +27,7 @@ describe("collectProviderApiKeys", () => {
     ).toEqual(["modelstudio-live-key"]);
   });
 
-  it("dedupes manifest env vars against direct provider env naming", async () => {
+  it("dedupes manifest env vars against direct provider env naming", () => {
     const env = { XAI_API_KEY: "xai-live-key" };
 
     expect(

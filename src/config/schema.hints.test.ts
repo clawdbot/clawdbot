@@ -10,7 +10,6 @@ import { sensitive } from "./zod-schema.sensitive.js";
 
 const { collectMatchingSchemaPaths, mapSensitivePaths } = __test__;
 const BUNDLED_CHANNEL_HINT_PREFIXES = [
-  "channels.bluebubbles",
   "channels.discord",
   "channels.imessage",
   "channels.irc",

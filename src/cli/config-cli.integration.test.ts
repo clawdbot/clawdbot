@@ -293,8 +293,10 @@ describe("config cli integration", () => {
       expect(after).toBe(before);
       expect(runtime.errors).toEqual([]);
       const raw = runtime.logs.at(-1);
-      expect(raw).toBeTruthy();
-      const payload = JSON.parse(raw ?? "{}") as {
+      if (raw === undefined) {
+        throw new Error("expected config check JSON log");
+      }
+      const payload = JSON.parse(raw) as {
         ok?: boolean;
         checks?: { schema?: boolean; resolvability?: boolean };
         errors?: Array<{ kind?: string; ref?: string }>;

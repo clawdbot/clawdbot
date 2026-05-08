@@ -9,6 +9,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { FailoverReason } from "../pi-embedded-helpers/types.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -76,6 +77,7 @@ export const mockedContextEngine = {
 export const mockedContextEngineCompact = mockedContextEngine.compact;
 export const mockedCompactDirect = mockedContextEngine.compact;
 export const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
+export const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
 export const mockedBuildAgentRuntimePlan = vi.fn(() => ({}));
 export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 export const mockedEnsureRuntimePluginsLoaded = vi.fn<(params?: unknown) => void>();
@@ -234,6 +236,17 @@ export const overflowBaseRunParams = {
 } as const;
 
 export function resetRunOverflowCompactionHarnessMocks(): void {
+  clearAgentHarnesses();
+  registerAgentHarness({
+    id: "codex",
+    label: "Codex",
+    supports: (ctx) =>
+      ctx.provider === "codex" || ctx.provider === "openai-codex"
+        ? { supported: true, priority: 100 }
+        : { supported: false },
+    runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),
+  });
+
   mockedGlobalHookRunner.hasHooks.mockReset();
   mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
   mockedGlobalHookRunner.runBeforeAgentReply.mockReset();
@@ -408,6 +421,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../../plugins/hook-runner-global.js", () => ({
     getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
+    initializeGlobalHookRunner: vi.fn(),
   }));
 
   vi.doMock("../../context-engine/init.js", () => ({
@@ -415,10 +429,15 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
   vi.doMock("../../context-engine/registry.js", () => ({
     resolveContextEngine: mockedResolveContextEngine,
+    resolveContextEngineOwnerPluginId: mockedResolveContextEngineOwnerPluginId,
   }));
 
   vi.doMock("../runtime-plugins.js", () => ({
     ensureRuntimePluginsLoaded: mockedEnsureRuntimePluginsLoaded,
+  }));
+
+  vi.doMock("../harness/runtime-plugin.js", () => ({
+    ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),
   }));
 
   vi.doMock("../runtime-plan/build.js", () => ({

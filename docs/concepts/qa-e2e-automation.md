@@ -559,15 +559,17 @@ A green run completes in well under 30 seconds and `slack-qa-report.md` shows bo
 
 ### Convex credential pool
 
-Telegram, Discord, and Slack lanes can lease credentials from a shared Convex pool instead of reading the env vars above. Pass `--credential-source convex` (or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`); QA Lab acquires an exclusive lease, heartbeats it for the duration of the run, and releases it on shutdown. Pool kinds are `"telegram"`, `"discord"`, and `"slack"`.
+Telegram, Discord, Slack, and WhatsApp lanes can lease credentials from a shared Convex pool instead of reading the env vars above. Pass `--credential-source convex` (or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`); QA Lab acquires an exclusive lease, heartbeats it for the duration of the run, and releases it on shutdown. Pool kinds are `"telegram"`, `"discord"`, `"slack"`, and `"whatsapp"`.
 
 Payload shapes the broker validates on `admin/add`:
 
 - Telegram (`kind: "telegram"`): `{ groupId: string, driverToken: string, sutToken: string }` - `groupId` must be a numeric chat-id string.
 - Discord (`kind: "discord"`): `{ guildId: string, channelId: string, driverBotToken: string, sutBotToken: string, sutApplicationId: string }`.
-- Slack (`kind: "slack"`): `{ channelId: string, driverBotToken: string, sutBotToken: string, sutAppToken: string }` - `channelId` must match `^[A-Z][A-Z0-9]+$` (a Slack id like `Cxxxxxxxxxx`). See [Setting up the Slack workspace](#setting-up-the-slack-workspace) for app and scope provisioning.
+- WhatsApp (`kind: "whatsapp"`): `{ driverPhoneE164: string, sutPhoneE164: string, driverAuthArchiveBase64: string, sutAuthArchiveBase64: string, groupJid?: string }` - phone numbers must be distinct E.164 strings.
 
-Operational env vars and the Convex broker endpoint contract live in [Testing → Shared Telegram credentials via Convex](/help/testing#shared-telegram-credentials-via-convex-v1) (the section name predates Discord support; the broker semantics are identical for both kinds).
+Slack lanes can also use the pool. Slack payload shape checks currently live in the Slack QA runner rather than the broker; use `{ channelId: string, driverBotToken: string, sutBotToken: string, sutAppToken: string }`, with a Slack channel id like `Cxxxxxxxxxx`. See [Setting up the Slack workspace](#setting-up-the-slack-workspace) for app and scope provisioning.
+
+Operational env vars and the Convex broker endpoint contract live in [Testing → Shared Telegram credentials via Convex](/help/testing#shared-telegram-credentials-via-convex-v1) (the section name predates the multi-channel pool; the lease semantics are shared across kinds).
 
 ## Repo-backed seeds
 

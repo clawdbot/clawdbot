@@ -9,7 +9,7 @@ import {
 } from "./provider-model-shared.js";
 
 describe("buildProviderReplayFamilyHooks", () => {
-  it("covers the replay family matrix", async () => {
+  it("covers the replay family matrix", () => {
     const cases = [
       {
         family: "openai-compatible" as const,

@@ -108,9 +108,3 @@ export type ReplyPrefixOptions = ReplyPrefixOptionsCompat;
 export type SourceReplyDeliveryMode = SourceReplyDeliveryModeCompat;
 /** @deprecated Use `openclaw/plugin-sdk/channel-message`. */
 export type TypingCallbacks = TypingCallbacksCompat;
-
-export {
-  resolveBlueBubblesGroupRequireMention,
-  resolveBlueBubblesGroupToolPolicy,
-} from "./bluebubbles-policy.js";
-export { collectBlueBubblesStatusIssues } from "./bluebubbles.js";

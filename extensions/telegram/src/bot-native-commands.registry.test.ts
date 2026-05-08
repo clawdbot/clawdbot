@@ -110,6 +110,17 @@ async function registerPairMenu(params: {
   return await waitForRegisteredCommands(params.setMyCommands);
 }
 
+function requireCommandHandler(
+  commandHandlers: ReturnType<typeof createCommandBot>["commandHandlers"],
+  commandName: string,
+) {
+  const handler = commandHandlers.get(commandName);
+  if (!handler) {
+    throw new Error(`expected ${commandName} command handler`);
+  }
+  return handler;
+}
+
 describe("registerTelegramNativeCommands real plugin registry", () => {
   beforeAll(async () => {
     ({ setActivePluginRegistry } = await import("openclaw/plugin-sdk/plugin-test-runtime"));
@@ -143,10 +154,9 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
       expect.arrayContaining([{ command: "pair", description: "Pair device" }]),
     );
 
-    const handler = commandHandlers.get("pair");
-    expect(handler).toBeTruthy();
+    const handler = requireCommandHandler(commandHandlers, "pair");
 
-    await handler?.(createPrivateCommandContext({ match: "now" }));
+    await handler(createPrivateCommandContext({ match: "now" }));
 
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -168,10 +178,9 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
       },
     });
 
-    const handler = commandHandlers.get("pair");
-    expect(handler).toBeTruthy();
+    const handler = requireCommandHandler(commandHandlers, "pair");
 
-    await handler?.(createPrivateCommandContext({ match: "now" }));
+    await handler(createPrivateCommandContext({ match: "now" }));
 
     expect(sendMessage).toHaveBeenCalledWith(
       100,
@@ -202,10 +211,9 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
       expect.arrayContaining([{ command: "pair_device", description: "Pair device" }]),
     );
 
-    const handler = commandHandlers.get("pair_device");
-    expect(handler).toBeTruthy();
+    const handler = requireCommandHandler(commandHandlers, "pair_device");
 
-    await handler?.(createPrivateCommandContext({ match: "now", messageId: 2 }));
+    await handler(createPrivateCommandContext({ match: "now", messageId: 2 }));
 
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -246,10 +254,9 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
 
     expect(setMyCommands).not.toHaveBeenCalled();
 
-    const handler = commandHandlers.get("pair");
-    expect(handler).toBeTruthy();
+    const handler = requireCommandHandler(commandHandlers, "pair");
 
-    await handler?.(
+    await handler(
       createPrivateCommandContext({
         match: "now",
         messageId: 10,

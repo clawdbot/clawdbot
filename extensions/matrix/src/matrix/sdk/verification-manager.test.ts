@@ -161,7 +161,7 @@ describe("MatrixVerificationManager", () => {
 
     const summary = manager.trackVerificationRequest(request);
 
-    expect(summary.id).toBeTruthy();
+    expect(summary.id).toMatch(/^verification-\d+$/u);
     expect(summary.methods).toEqual([]);
     expect(summary.phaseName).toBe("requested");
   });

@@ -26,6 +26,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function requireNonEmptyString(value: string | null | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 function buildHookJsonHeaders(options?: {
   token?: string | null;
   headers?: Record<string, string>;
@@ -104,7 +111,7 @@ async function expectFirstHookDelivery(
 ) {
   const first = await postAgentHookWithIdempotency(port, idempotencyKey, headers);
   const firstBody = (await first.json()) as { runId?: string };
-  expect(firstBody.runId).toBeTruthy();
+  requireNonEmptyString(firstBody.runId, "first hook run id");
   await waitForSystemEvent(5_000);
   drainSystemEvents(resolveMainKey());
   return firstBody;
@@ -145,9 +152,11 @@ async function waitForSystemEventTexts(sessionKey: string, timeoutMs = 2_000) {
 }
 
 async function writeHookTransformModule(moduleName: string, source: string): Promise<void> {
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  expect(configPath).toBeTruthy();
-  const transformsDir = path.join(path.dirname(configPath!), "hooks", "transforms");
+  const configPath = requireNonEmptyString(
+    process.env.OPENCLAW_CONFIG_PATH,
+    "OPENCLAW_CONFIG_PATH",
+  );
+  const transformsDir = path.join(path.dirname(configPath), "hooks", "transforms");
   await fs.mkdir(transformsDir, { recursive: true });
   await fs.writeFile(path.join(transformsDir, moduleName), source, "utf-8");
 }
@@ -702,10 +711,12 @@ describe("gateway server hooks", () => {
 
   test("dedupes hook retries even when trusted-proxy client IP changes", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    expect(configPath).toBeTruthy();
+    const configPath = requireNonEmptyString(
+      process.env.OPENCLAW_CONFIG_PATH,
+      "OPENCLAW_CONFIG_PATH",
+    );
     await fs.writeFile(
-      configPath!,
+      configPath,
       JSON.stringify({ gateway: { trustedProxies: ["127.0.0.1"] } }, null, 2),
       "utf-8",
     );
@@ -750,7 +761,7 @@ describe("gateway server hooks", () => {
       firstNowSpy.mockRestore();
 
       const firstBody = (await first.json()) as { runId?: string };
-      expect(firstBody.runId).toBeTruthy();
+      requireNonEmptyString(firstBody.runId, "first hook run id");
       await waitForSystemEvent();
       drainSystemEvents(resolveMainKey());
 
@@ -779,7 +790,7 @@ describe("gateway server hooks", () => {
       thirdNowSpy.mockRestore();
       expect(third.status).toBe(200);
       const thirdBody = (await third.json()) as { runId?: string };
-      expect(thirdBody.runId).toBeTruthy();
+      requireNonEmptyString(thirdBody.runId, "third hook run id");
       expect(thirdBody.runId).not.toBe(firstBody.runId);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
     });
@@ -877,7 +888,9 @@ describe("gateway server hooks", () => {
         throttled = await postHook(port, "/hooks/wake", { text: "blocked" }, { token: "wrong" });
       }
       expect(throttled?.status).toBe(429);
-      expect(throttled?.headers.get("retry-after")).toBeTruthy();
+      expect(requireNonEmptyString(throttled?.headers.get("retry-after"), "retry-after")).toMatch(
+        /^\d+$/,
+      );
 
       const allowed = await postHook(port, "/hooks/wake", { text: "auth reset" });
       expect(allowed.status).toBe(200);

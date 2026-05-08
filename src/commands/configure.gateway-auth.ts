@@ -10,7 +10,6 @@ import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
   applyPrimaryModel,
-  ensureCodexRuntimePluginForModelSelection,
   promptDefaultModel,
   promptModelAllowlist,
 } from "./model-picker.js";
@@ -218,15 +217,6 @@ export async function promptAuthConfig(
       }
       if (modelSelection.model) {
         next = applyPrimaryModel(next, modelSelection.model);
-        next = (
-          await ensureCodexRuntimePluginForModelSelection({
-            cfg: next,
-            model: modelSelection.model,
-            prompter,
-            runtime,
-            workspaceDir: resolveDefaultAgentWorkspaceDir(),
-          })
-        ).cfg;
       }
       break;
     }

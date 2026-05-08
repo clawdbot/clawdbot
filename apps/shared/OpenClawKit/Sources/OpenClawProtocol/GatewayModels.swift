@@ -2243,6 +2243,9 @@ public struct SessionsUsageParams: Codable, Sendable {
     public let startdate: String?
     public let enddate: String?
     public let mode: AnyCodable?
+    public let range: AnyCodable?
+    public let groupby: AnyCodable?
+    public let includehistorical: Bool?
     public let utcoffset: String?
     public let limit: Int?
     public let includecontextweight: Bool?
@@ -2252,6 +2255,9 @@ public struct SessionsUsageParams: Codable, Sendable {
         startdate: String?,
         enddate: String?,
         mode: AnyCodable?,
+        range: AnyCodable?,
+        groupby: AnyCodable?,
+        includehistorical: Bool?,
         utcoffset: String?,
         limit: Int?,
         includecontextweight: Bool?)
@@ -2260,6 +2266,9 @@ public struct SessionsUsageParams: Codable, Sendable {
         self.startdate = startdate
         self.enddate = enddate
         self.mode = mode
+        self.range = range
+        self.groupby = groupby
+        self.includehistorical = includehistorical
         self.utcoffset = utcoffset
         self.limit = limit
         self.includecontextweight = includecontextweight
@@ -2270,6 +2279,9 @@ public struct SessionsUsageParams: Codable, Sendable {
         case startdate = "startDate"
         case enddate = "endDate"
         case mode
+        case range
+        case groupby = "groupBy"
+        case includehistorical = "includeHistorical"
         case utcoffset = "utcOffset"
         case limit
         case includecontextweight = "includeContextWeight"
@@ -5132,6 +5144,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let security: AnyCodable?
     public let ask: AnyCodable?
     public let warningtext: AnyCodable?
+    public let commandspans: [[String: AnyCodable]]?
     public let agentid: AnyCodable?
     public let resolvedpath: AnyCodable?
     public let sessionkey: AnyCodable?
@@ -5154,6 +5167,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         security: AnyCodable?,
         ask: AnyCodable?,
         warningtext: AnyCodable?,
+        commandspans: [[String: AnyCodable]]?,
         agentid: AnyCodable?,
         resolvedpath: AnyCodable?,
         sessionkey: AnyCodable?,
@@ -5175,6 +5189,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.security = security
         self.ask = ask
         self.warningtext = warningtext
+        self.commandspans = commandspans
         self.agentid = agentid
         self.resolvedpath = resolvedpath
         self.sessionkey = sessionkey
@@ -5198,6 +5213,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case security
         case ask
         case warningtext = "warningText"
+        case commandspans = "commandSpans"
         case agentid = "agentId"
         case resolvedpath = "resolvedPath"
         case sessionkey = "sessionKey"

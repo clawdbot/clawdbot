@@ -59,9 +59,14 @@ async function withFetchPathTest(
 describe("discoverDeepInfraModels", () => {
   it("returns static catalog in test environment", async () => {
     const models = await discoverDeepInfraModels();
+    const modelIds = models.map((m) => m.id);
+    const streamingUsageIncompatibleModelIds = models
+      .filter((m) => !m.compat?.supportsUsageInStreaming)
+      .map((m) => m.id);
+
     expect(DEEPINFRA_DEFAULT_MODEL_REF).toBe("deepinfra/deepseek-ai/DeepSeek-V3.2");
-    expect(models.some((m) => m.id === "deepseek-ai/DeepSeek-V3.2")).toBe(true);
-    expect(models.every((m) => m.compat?.supportsUsageInStreaming)).toBe(true);
+    expect(modelIds).toContain("deepseek-ai/DeepSeek-V3.2");
+    expect(streamingUsageIncompatibleModelIds).toEqual([]);
   });
 
   it("fetches DeepInfra's curated LLM catalog and parses model metadata", async () => {
@@ -144,7 +149,7 @@ describe("discoverDeepInfraModels", () => {
 
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverDeepInfraModels();
-      expect(models.some((m) => m.id === "deepseek-ai/DeepSeek-V3.2")).toBe(true);
+      expect(models.map((m) => m.id)).toContain("deepseek-ai/DeepSeek-V3.2");
     });
   });
 

@@ -115,9 +115,9 @@ export function createDefaultGatewayTestChannels() {
       plugin: createStubChannelPlugin({ id: "zalouser", label: "Zalo Personal" }),
     },
     {
-      pluginId: "bluebubbles",
+      pluginId: "imessage",
       source: "test" as const,
-      plugin: createStubChannelPlugin({ id: "bluebubbles", label: "BlueBubbles" }),
+      plugin: createStubChannelPlugin({ id: "imessage", label: "iMessage" }),
     },
   ];
 }

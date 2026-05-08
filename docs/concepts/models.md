@@ -23,7 +23,7 @@ sidebarTitle: "Models CLI"
   </Card>
 </CardGroup>
 
-Model refs choose a provider and model. They do not usually choose the low-level agent runtime. For example, `openai/gpt-5.5` can run through the normal OpenAI provider path or through the Codex app-server runtime, depending on `agents.defaults.agentRuntime.id`. In Codex runtime mode, the `openai/gpt-*` ref does not imply API-key billing; auth can come from a Codex account or `openai-codex` auth profile. See [Agent runtimes](/concepts/agent-runtimes).
+Model refs choose a provider and model. They do not usually choose the low-level agent runtime. OpenAI agent refs are the main exception: `openai/gpt-5.5` runs through the Codex app-server runtime by default on the official OpenAI provider. Explicit runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, the `openai/gpt-*` ref does not imply API-key billing; auth can come from a Codex account or `openai-codex` auth profile. See [Agent runtimes](/concepts/agent-runtimes).
 
 ## How model selection works
 

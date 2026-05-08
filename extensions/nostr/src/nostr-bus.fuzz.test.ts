@@ -25,7 +25,7 @@ function createCollectingMetrics() {
 // ============================================================================
 
 describe("validatePrivateKey fuzz", () => {
-  describe("type confusion", () => {
+  describe("validatePrivateKey type confusion", () => {
     it("rejects non-string input", () => {
       for (const value of [null, undefined, 123, true, {}, [], () => {}]) {
         expect(() => validatePrivateKey(value as unknown as string)).toThrow();
@@ -94,7 +94,7 @@ describe("validatePrivateKey fuzz", () => {
 // ============================================================================
 
 describe("isValidPubkey fuzz", () => {
-  describe("type confusion", () => {
+  describe("isValidPubkey type confusion", () => {
     it("handles non-string input gracefully", () => {
       for (const value of [null, undefined, 123, {}]) {
         expect(isValidPubkey(value as unknown as string)).toBe(false);
@@ -223,7 +223,7 @@ describe("SeenTracker fuzz", () => {
         }
       }
 
-      expect(() => tracker.size()).not.toThrow();
+      expect(tracker.size()).toBeGreaterThan(0);
       tracker.stop();
     });
   });
@@ -292,7 +292,7 @@ describe("Metrics fuzz", () => {
       }).not.toThrow();
 
       const snapshot = metrics.getSnapshot();
-      expect(snapshot.relays[longUrl]).toBeDefined();
+      expect(snapshot.relays[longUrl]).toEqual(expect.objectContaining({ connects: 1 }));
     });
   });
 

@@ -186,7 +186,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
 
     // Check usage in meta
     const usage = result.meta.agentMeta?.usage;
-    expect(usage).toBeDefined();
+    expect(usage).toMatchObject({ input: 250, output: 100, total: 200 });
 
     // Check if total matches the last turn's total (200)
     // If the bug exists, it will likely be 350

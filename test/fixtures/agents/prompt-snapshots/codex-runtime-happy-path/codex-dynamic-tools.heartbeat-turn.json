@@ -1,71 +1,6 @@
 [
   {
-    "description": "Control node canvases (present/hide/navigate/eval/snapshot/A2UI). Use snapshot to capture the rendered UI.",
-    "inputSchema": {
-      "properties": {
-        "action": {
-          "enum": ["present", "hide", "navigate", "eval", "snapshot", "a2ui_push", "a2ui_reset"],
-          "type": "string"
-        },
-        "delayMs": {
-          "type": "number"
-        },
-        "gatewayToken": {
-          "type": "string"
-        },
-        "gatewayUrl": {
-          "type": "string"
-        },
-        "height": {
-          "type": "number"
-        },
-        "javaScript": {
-          "type": "string"
-        },
-        "jsonl": {
-          "type": "string"
-        },
-        "jsonlPath": {
-          "type": "string"
-        },
-        "maxWidth": {
-          "type": "number"
-        },
-        "node": {
-          "type": "string"
-        },
-        "outputFormat": {
-          "enum": ["png", "jpg", "jpeg"],
-          "type": "string"
-        },
-        "quality": {
-          "type": "number"
-        },
-        "target": {
-          "type": "string"
-        },
-        "timeoutMs": {
-          "type": "number"
-        },
-        "url": {
-          "type": "string"
-        },
-        "width": {
-          "type": "number"
-        },
-        "x": {
-          "type": "number"
-        },
-        "y": {
-          "type": "number"
-        }
-      },
-      "required": ["action"],
-      "type": "object"
-    },
-    "name": "canvas"
-  },
-  {
+    "deferLoading": true,
     "description": "Discover and control paired nodes (status/describe/pairing/notify/camera/photos/screen/location/notifications/invoke). For file retrieval, use the dedicated file_fetch tool.",
     "inputSchema": {
       "properties": {
@@ -197,9 +132,11 @@
       "required": ["action"],
       "type": "object"
     },
-    "name": "nodes"
+    "name": "nodes",
+    "namespace": "openclaw"
   },
   {
+    "deferLoading": true,
     "description": "Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, \"check back later\" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.\n\nMain-session cron jobs enqueue system events for heartbeat handling. Isolated cron jobs create background task runs that appear in `openclaw tasks`.\n\nACTIONS:\n- status: Check cron scheduler status\n- list: List jobs (use includeDisabled:true to include disabled; agentId filters by agent, auto-filled from session)\n- add: Create job (requires job object, see schema below)\n- update: Modify job (requires jobId + patch object)\n- remove: Delete job (requires jobId)\n- run: Trigger job immediately (requires jobId)\n- runs: Get job run history (requires jobId)\n- wake: Send wake event (requires text, optional mode)\n\nJOB SCHEMA (for add action):\n{\n  \"name\": \"string (optional)\",\n  \"schedule\": { ... },      // Required: when to run\n  \"payload\": { ... },       // Required: what to execute\n  \"delivery\": { ... },      // Optional: announce summary (isolated/current/session:xxx only) or webhook POST\n  \"sessionTarget\": \"main\" | \"isolated\" | \"current\" | \"session:<custom-id>\",  // Optional, defaults based on context\n  \"enabled\": true | false   // Optional, default true\n}\n\nSESSION TARGET OPTIONS:\n- \"main\": Run in the main session (requires payload.kind=\"systemEvent\")\n- \"isolated\": Run in an ephemeral isolated session (requires payload.kind=\"agentTurn\")\n- \"current\": Bind to the current session where the cron is created (resolved at creation time)\n- \"session:<custom-id>\": Run in a persistent named session (e.g., \"session:project-alpha-daily\")\n\nDEFAULT BEHAVIOR (unchanged for backward compatibility):\n- payload.kind=\"systemEvent\" → defaults to \"main\"\n- payload.kind=\"agentTurn\" → defaults to \"isolated\"\nTo use current session binding, explicitly set sessionTarget=\"current\".\n\nSCHEDULE TYPES (schedule.kind):\n- \"at\": One-shot at absolute time\n  { \"kind\": \"at\", \"at\": \"<ISO-8601 timestamp>\" }\n- \"every\": Recurring interval\n  { \"kind\": \"every\", \"everyMs\": <interval-ms>, \"anchorMs\": <optional-start-ms> }\n- \"cron\": Cron expression evaluated in the supplied timezone, or the Gateway host local timezone when tz is omitted\n  { \"kind\": \"cron\", \"expr\": \"<cron-expression>\", \"tz\": \"<optional-IANA-timezone>\" }\n  Write expr in the selected timezone's local wall-clock time; do not convert the requested local time to UTC first.\n  If tz is omitted, do not assume UTC; the Gateway host local timezone is used.\n  Example: \"Remind me every day at 6pm Shanghai time\" -> { \"kind\": \"cron\", \"expr\": \"0 18 * * *\", \"tz\": \"Asia/Shanghai\" }\n\nFor schedule.kind=\"at\", ISO timestamps without an explicit timezone are treated as UTC.\n\nPAYLOAD TYPES (payload.kind):\n- \"systemEvent\": Injects text as system event into session\n  { \"kind\": \"systemEvent\", \"text\": \"<message>\" }\n- \"agentTurn\": Runs agent with message (isolated sessions only)\n  { \"kind\": \"agentTurn\", \"message\": \"<prompt>\", \"model\": \"<optional>\", \"thinking\": \"<optional>\", \"timeoutSeconds\": <optional, 0 means no timeout> }\n\nDELIVERY (top-level):\n  { \"mode\": \"none|announce|webhook\", \"channel\": \"<optional>\", \"to\": \"<optional>\", \"threadId\": \"<optional>\", \"bestEffort\": <optional-bool> }\n  - Default for isolated agentTurn jobs (when delivery omitted): \"announce\"\n  - announce: send to chat channel (optional channel/to target)\n  - threadId: chat thread/topic id for channels that support threaded delivery\n  - webhook: send finished-run event as HTTP POST to delivery.to (URL required)\n  - If the task needs to send to a specific chat/recipient, set announce delivery.channel/to; do not call messaging tools inside the run.\n\nCRITICAL CONSTRAINTS:\n- sessionTarget=\"main\" REQUIRES payload.kind=\"systemEvent\"\n- sessionTarget=\"isolated\" | \"current\" | \"session:xxx\" REQUIRES payload.kind=\"agentTurn\"\n- For webhook callbacks, use delivery.mode=\"webhook\" with delivery.to set to a URL.\nDefault: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.\n\nRESTRICTED CRON RUNS:\n- Some isolated cron runs receive a narrow cron grant for self-cleanup. In that mode, read-only status and list are for self-introspection only, and mutation actions remain limited to removing the current cron job.\n\nWAKE MODES (for wake action):\n- \"next-heartbeat\" (default): Wake on next heartbeat\n- \"now\": Wake immediately\n\nUse jobId as the canonical identifier; id is accepted for compatibility. Use contextMessages (0-10) to add previous messages as context to the job text.",
     "inputSchema": {
       "additionalProperties": true,
@@ -673,7 +610,8 @@
       "required": ["action"],
       "type": "object"
     },
-    "name": "cron"
+    "name": "cron",
+    "namespace": "openclaw"
   },
   {
     "description": "Send, delete, and manage messages via channel plugins. Supports actions: send.",
@@ -1065,6 +1003,7 @@
     "name": "message"
   },
   {
+    "deferLoading": true,
     "description": "Record the result of a heartbeat run. Use notify=false when nothing should be sent visibly. Use notify=true with notificationText when the user should receive a concise heartbeat alert.",
     "inputSchema": {
       "additionalProperties": false,
@@ -1096,9 +1035,11 @@
       "required": ["outcome", "notify", "summary"],
       "type": "object"
     },
-    "name": "heartbeat_respond"
+    "name": "heartbeat_respond",
+    "namespace": "openclaw"
   },
   {
+    "deferLoading": true,
     "description": "Use only for explicit audio intent (audio, voice, speech, TTS) or active TTS config. Never use for ordinary text replies. Audio is delivered automatically from the tool result. After a successful call, follow the current conversation's reply instructions and avoid sending a duplicate text/audio response.",
     "inputSchema": {
       "properties": {
@@ -1119,9 +1060,11 @@
       "required": ["text"],
       "type": "object"
     },
-    "name": "tts"
+    "name": "tts",
+    "namespace": "openclaw"
   },
   {
+    "deferLoading": true,
     "description": "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Config writes hot-reload when possible and restart when required. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart. If restarting during a user task and you still owe the user a reply, pass a specific one-shot `continuationMessage` for what to verify or report after boot; do not write restart sentinel files directly.",
     "inputSchema": {
       "properties": {
@@ -1176,17 +1119,21 @@
       "required": ["action"],
       "type": "object"
     },
-    "name": "gateway"
+    "name": "gateway",
+    "namespace": "openclaw"
   },
   {
+    "deferLoading": true,
     "description": "List OpenClaw agent ids you can target with `sessions_spawn` when `runtime=\"subagent\"` (based on subagent allowlists).",
     "inputSchema": {
       "properties": {},
       "type": "object"
     },
-    "name": "agents_list"
+    "name": "agents_list",
+    "namespace": "openclaw"
   },
   {
+    "deferLoading": true,
     "description": "List visible sessions with optional filters for kind, label, agentId, search, recent activity, derived titles, and last-message previews. Use this to discover a target session before calling sessions_history or sessions_send.",
     "inputSchema": {
       "properties": {
@@ -1230,9 +1177,11 @@
       },
       "type": "object"
     },
-    "name": "sessions_list"
+    "name": "sessions_list",
+    "namespace": "openclaw"
   },
   {
+    "deferLoading": true,
     "description": "Fetch sanitized message history for a visible session. Supports limits and optional tool messages; use this to inspect another session before replying, debugging, or resuming work.",
     "inputSchema": {
       "properties": {
@@ -1250,9 +1199,11 @@
       "required": ["sessionKey"],
       "type": "object"
     },
-    "name": "sessions_history"
+    "name": "sessions_history",
+    "namespace": "openclaw"
   },
   {
+    "deferLoading": true,
     "description": "Send a message into another visible session by sessionKey or label. Thread-scoped chat sessions are rejected; target the parent channel session for inter-agent coordination. Use this to delegate follow-up work to an existing session; waits for the target run and returns the updated assistant reply when available.",
     "inputSchema": {
       "properties": {
@@ -1280,9 +1231,11 @@
       "required": ["message"],
       "type": "object"
     },
-    "name": "sessions_send"
+    "name": "sessions_send",
+    "namespace": "openclaw"
   },
   {
+    "deferLoading": true,
     "description": "Spawn a clean isolated session by default with the native subagent runtime. `mode=\"run\"` is one-shot background work. Subagents inherit the parent workspace directory automatically. For native subagents only, set `context=\"fork\"` when the child needs the current transcript context; otherwise omit it or use `context=\"isolated\"`. Use this when the work should happen in a fresh child session instead of the current one.",
     "inputSchema": {
       "properties": {
@@ -1372,7 +1325,8 @@
       "required": ["task"],
       "type": "object"
     },
-    "name": "sessions_spawn"
+    "name": "sessions_spawn",
+    "namespace": "openclaw"
   },
   {
     "description": "End your current turn. Use after spawning subagents to receive their results as the next message.",
@@ -1387,6 +1341,7 @@
     "name": "sessions_yield"
   },
   {
+    "deferLoading": true,
     "description": "List, kill, or steer spawned sub-agents for this requester session. Use this for sub-agent orchestration.",
     "inputSchema": {
       "properties": {
@@ -1407,9 +1362,11 @@
       },
       "type": "object"
     },
-    "name": "subagents"
+    "name": "subagents",
+    "namespace": "openclaw"
   },
   {
+    "deferLoading": true,
     "description": "Show a /status-equivalent session status card for the current or another visible session, including usage, time, cost when available, and linked background task context. Use `sessionKey=\"current\"` for the current session; do not use UI/client labels such as `openclaw-tui` as session keys. Optional `model` sets a per-session model override; `model=default` resets overrides. Use this for questions like what model is active or how a session is configured.",
     "inputSchema": {
       "properties": {
@@ -1422,9 +1379,11 @@
       },
       "type": "object"
     },
-    "name": "session_status"
+    "name": "session_status",
+    "namespace": "openclaw"
   },
   {
+    "deferLoading": true,
     "description": "Search the web. Returns provider-normalized results for current information lookup.",
     "inputSchema": {
       "properties": {
@@ -1487,9 +1446,11 @@
       },
       "type": "object"
     },
-    "name": "web_search"
+    "name": "web_search",
+    "namespace": "openclaw"
   },
   {
+    "deferLoading": true,
     "description": "Fetch and extract readable content from a URL (HTML → markdown/text). Use for lightweight page access without browser automation.",
     "inputSchema": {
       "properties": {
@@ -1512,6 +1473,7 @@
       "required": ["url"],
       "type": "object"
     },
-    "name": "web_fetch"
+    "name": "web_fetch",
+    "namespace": "openclaw"
   }
 ]

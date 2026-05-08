@@ -122,7 +122,7 @@ Use targeted local checks while iterating:
 pnpm test extensions/canvas/src/host/server.test.ts extensions/canvas/src/host/server.state-dir.test.ts extensions/canvas/src/host/file-resolver.test.ts
 pnpm test src/gateway/server.plugin-node-capability-auth.test.ts src/gateway/server-import-boundary.test.ts
 pnpm test extensions/canvas/src/config-migration.test.ts src/commands/doctor-legacy-config.migrations.test.ts
-pnpm test test/scripts/changed-lanes.test.ts test/scripts/build-all.test.ts test/scripts/bundle-a2ui.test.ts test/scripts/bundled-plugin-assets.test.ts src/scripts/canvas-a2ui-copy.test.ts src/infra/run-node.test.ts
+pnpm test test/scripts/changed-lanes.test.ts test/scripts/build-all.test.ts extensions/canvas/scripts/bundle-a2ui.test.ts test/scripts/bundled-plugin-assets.test.ts extensions/canvas/scripts/copy-a2ui.test.ts src/infra/run-node.test.ts
 pnpm tsgo:extensions
 pnpm plugins:inventory:check
 pnpm plugin-sdk:api:check

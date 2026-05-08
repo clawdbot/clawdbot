@@ -17,11 +17,9 @@ OpenClaw integrates external CLIs via JSON-RPC. Two patterns are used today.
 
 See [Signal](/channels/signal) for setup and endpoints.
 
-## Pattern B: stdio child process (legacy: imsg)
+## Pattern B: stdio child process (imsg)
 
-> **Note:** For new iMessage setups, use [BlueBubbles](/channels/bluebubbles) instead.
-
-- OpenClaw spawns `imsg rpc` as a child process (legacy iMessage integration).
+- OpenClaw spawns `imsg rpc` as a child process for [iMessage](/channels/imessage).
 - JSON-RPC is line-delimited over stdin/stdout (one JSON object per line).
 - No TCP port, no daemon required.
 

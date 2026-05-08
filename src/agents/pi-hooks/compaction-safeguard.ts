@@ -573,6 +573,22 @@ function capCompactionSummaryPreservingSuffix(
   return `${cappedBody}${suffix}`;
 }
 
+function resolveSummaryReserveTokens(
+  requestedReserveTokens: number,
+  model: NonNullable<Parameters<typeof summarizeInStages>[0]["model"]>,
+): number {
+  const requested = Math.max(1, Math.floor(requestedReserveTokens));
+  const modelMaxTokens = model.maxTokens;
+  if (
+    typeof modelMaxTokens !== "number" ||
+    !Number.isFinite(modelMaxTokens) ||
+    modelMaxTokens <= 0
+  ) {
+    return requested;
+  }
+  return Math.max(1, Math.min(requested, Math.floor(modelMaxTokens)));
+}
+
 function extractMessageText(message: AgentMessage): string {
   const content = (message as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -1089,7 +1105,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   apiKey,
                   headers,
                   signal,
-                  reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
+                  reserveTokens: resolveSummaryReserveTokens(
+                    preparation.settings.reserveTokens,
+                    model,
+                  ),
                   maxChunkTokens: droppedMaxChunkTokens,
                   contextWindow: contextWindowTokens,
                   customInstructions: structuredInstructions,
@@ -1134,7 +1153,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         1,
         Math.floor(contextWindowTokens * adaptiveRatio) - SUMMARIZATION_OVERHEAD_TOKENS,
       );
-      const reserveTokens = Math.max(1, Math.floor(preparation.settings.reserveTokens));
+      const reserveTokens = resolveSummaryReserveTokens(preparation.settings.reserveTokens, model);
 
       // Feed dropped-messages summary as previousSummary so the main summarization
       // incorporates context from pruned messages instead of losing it entirely.

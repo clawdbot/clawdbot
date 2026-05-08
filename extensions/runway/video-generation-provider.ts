@@ -1,3 +1,4 @@
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -258,7 +259,7 @@ async function downloadRunwayVideos(params: {
     videos.push({
       buffer: Buffer.from(arrayBuffer),
       mimeType,
-      fileName: `video-${index + 1}.${mimeType.includes("webm") ? "webm" : "mp4"}`,
+      fileName: `video-${index + 1}.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
       metadata: { sourceUrl: url },
     });
   }

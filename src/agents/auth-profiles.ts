@@ -16,7 +16,11 @@ export {
   type ExternalCliAuthDiscovery,
 } from "./auth-profiles/external-cli-discovery.js";
 export { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
-export { resolveAuthProfileEligibility, resolveAuthProfileOrder } from "./auth-profiles/order.js";
+export {
+  isConfiguredAwsSdkAuthProfileForProvider,
+  resolveAuthProfileEligibility,
+  resolveAuthProfileOrder,
+} from "./auth-profiles/order.js";
 export {
   resolveAuthStatePathForDisplay,
   resolveAuthStorePathForDisplay,

@@ -253,7 +253,7 @@ describe("validateProviderConfig", () => {
   });
 });
 
-describe("resolveVoiceCallConfig", () => {
+describe("resolveVoiceCallConfig session routing", () => {
   it("enables the pre-answer stale call reaper by default", () => {
     const config = resolveVoiceCallConfig({ enabled: true, provider: "mock" });
 
@@ -451,7 +451,7 @@ describe("normalizeVoiceCallConfig", () => {
   });
 });
 
-describe("resolveVoiceCallConfig", () => {
+describe("resolveVoiceCallConfig realtime settings", () => {
   it("preserves configured realtime instructions without env indirection", () => {
     const resolved = resolveVoiceCallConfig({
       enabled: true,

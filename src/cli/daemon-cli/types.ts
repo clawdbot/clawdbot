@@ -29,4 +29,5 @@ export type DaemonLifecycleOptions = {
   force?: boolean;
   safe?: boolean;
   wait?: string;
+  disable?: boolean;
 };

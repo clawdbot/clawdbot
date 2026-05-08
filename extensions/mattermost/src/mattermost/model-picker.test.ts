@@ -104,7 +104,7 @@ describe("Mattermost model picker", () => {
     });
 
     const ids = modelsView.buttons.flat().map((button) => button.id);
-    expect(ids.every((id) => typeof id === "string" && /^[a-z0-9]+$/.test(id))).toBe(true);
+    expect(ids.filter((id) => typeof id !== "string" || !/^[a-z0-9]+$/.test(id))).toEqual([]);
     expect(new Set(ids).size).toBe(ids.length);
   });
 
@@ -128,7 +128,7 @@ describe("Mattermost model picker", () => {
     expect(parseMattermostModelPickerContext({ action: "select" })).toBeNull();
   });
 
-  it("falls back to the routed agent default model when no override is stored", async () => {
+  it("falls back to the routed agent default model when no override is stored", () => {
     const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "mm-model-picker-"));
     try {
       const cfg: OpenClawConfig = {

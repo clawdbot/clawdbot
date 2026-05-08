@@ -163,8 +163,7 @@ describe("channel registry pinning", () => {
   it("requireActivePluginChannelRegistry creates a registry when none exists", () => {
     resetPluginRuntimeStateForTest();
     const registry = requireActivePluginChannelRegistry();
-    expect(registry).toBeDefined();
-    expect(registry.channels).toEqual([]);
+    expect(registry).toMatchObject({ channels: [] });
   });
 
   it("resetPluginRuntimeStateForTest clears channel pin", () => {

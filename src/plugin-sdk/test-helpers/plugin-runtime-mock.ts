@@ -722,6 +722,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       getSession: vi.fn(),
       deleteSession: vi.fn(),
     },
+    llm: {
+      complete: vi.fn(),
+    },
     nodes: {
       list: vi.fn(async () => ({ nodes: [] })),
       invoke: vi.fn(),

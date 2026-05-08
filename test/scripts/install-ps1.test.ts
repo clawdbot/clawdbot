@@ -12,8 +12,10 @@ function extractFunctionBody(source: string, name: string): string {
   const match = source.match(
     new RegExp(`^function ${name} \\{\\r?\\n([\\s\\S]*?)^\\}\\r?\\n`, "m"),
   );
-  expect(match?.[1]).toBeDefined();
-  return match![1];
+  if (match?.[1] === undefined) {
+    throw new Error(`Missing PowerShell function body ${name}`);
+  }
+  return match[1];
 }
 
 function findPowerShell(): string | undefined {

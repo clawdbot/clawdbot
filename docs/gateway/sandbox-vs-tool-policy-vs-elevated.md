@@ -64,6 +64,7 @@ Rules of thumb:
 - `deny` always wins.
 - If `allow` is non-empty, everything else is treated as blocked.
 - Tool policy is the hard stop: `/exec` cannot override a denied `exec` tool.
+- Tool policy filters tool availability by name; it does not inspect side effects inside `exec`. If `exec` is allowed, denying `write`, `edit`, or `apply_patch` does not make shell commands read-only.
 - `/exec` only changes session defaults for authorized senders; it does not grant tool access.
   Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.4`).
 
@@ -88,6 +89,7 @@ Available groups:
 - `group:runtime`: `exec`, `process`, `code_execution` (`bash` is accepted as
   an alias for `exec`)
 - `group:fs`: `read`, `write`, `edit`, `apply_patch`
+  For read-only agents, deny `group:runtime` as well as mutating filesystem tools unless sandbox filesystem policy or a separate host boundary enforces the read-only constraint.
 - `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`
 - `group:memory`: `memory_search`, `memory_get`
 - `group:web`: `web_search`, `x_search`, `web_fetch`

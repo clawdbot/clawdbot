@@ -151,7 +151,7 @@ describe("memory manager mistral provider wiring", () => {
     expect(request.documentInputType).toBe("document");
   });
 
-  it("uses default lmstudio model when activating lmstudio fallback", async () => {
+  it("uses default lmstudio model when activating lmstudio fallback", () => {
     const request = resolveMemoryFallbackProviderRequest({
       cfg: {} as OpenClawConfig,
       settings: createSettings({ provider: "openai", fallback: "lmstudio" }),

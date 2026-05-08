@@ -819,7 +819,7 @@ describe("applyMediaUnderstanding", () => {
         "16000",
         "-c:a",
         "pcm_s16le",
-        expect.stringMatching(/telegram-voice\.wav$/),
+        expect.stringMatching(/telegram-voice\.wav.*\.part$/),
       ]),
     );
     expect(mockedRunExec).toHaveBeenCalledWith(

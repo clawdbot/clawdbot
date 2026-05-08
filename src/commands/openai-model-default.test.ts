@@ -59,7 +59,7 @@ describe("applyOpencodeZenModelDefault", () => {
     expect(applied.changed).toBe(true);
     expect(applied.next.agents?.defaults?.model).toEqual({
       primary: OPENCODE_ZEN_DEFAULT_MODEL,
-      fallbacks: ["google/gemini-3-pro"],
+      fallbacks: ["google/gemini-3.1-pro-preview"],
     });
   });
 

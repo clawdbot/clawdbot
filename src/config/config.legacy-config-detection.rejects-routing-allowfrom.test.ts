@@ -27,7 +27,7 @@ describe("legacy config detection", () => {
     },
   );
 
-  it("accepts per-agent tools.elevated overrides", async () => {
+  it("accepts per-agent tools.elevated overrides", () => {
     const res = validateConfigObject({
       tools: {
         elevated: {
@@ -57,7 +57,7 @@ describe("legacy config detection", () => {
       });
     }
   });
-  it("rejects telegram.requireMention", async () => {
+  it("rejects telegram.requireMention", () => {
     const res = validateConfigObject({
       telegram: { requireMention: true },
     });
@@ -67,7 +67,7 @@ describe("legacy config detection", () => {
       expect(res.issues[0]?.message).toContain('"telegram"');
     }
   });
-  it("rejects gateway.token", async () => {
+  it("rejects gateway.token", () => {
     const res = validateConfigObject({
       gateway: { token: "legacy-token" },
     });

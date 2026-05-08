@@ -171,8 +171,7 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     const custom = resolved.qmd?.collections.find((c) => c.name.startsWith("custom-notes"));
-    expect(custom).toBeDefined();
-    expect(custom?.path).toBe(path.resolve("/workspace/root", "notes"));
+    expect(custom).toMatchObject({ path: path.resolve("/workspace/root", "notes") });
   });
 
   it("scopes qmd collection names per agent", () => {

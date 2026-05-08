@@ -185,7 +185,7 @@ afterAll(() => {
 });
 
 describe("exportTrajectoryBundle", () => {
-  it("sanitizes session ids in default export directory names", async () => {
+  it("sanitizes session ids in default export directory names", () => {
     const outputDir = resolveDefaultTrajectoryExportDir({
       workspaceDir: "/tmp/workspace",
       sessionId: "../evil/session",

@@ -30,7 +30,11 @@ describe("subscribeEmbeddedPiSession lifecycle billing errors", () => {
     });
 
     const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
-    expect(lifecycleError).toBeDefined();
-    expect(lifecycleError?.data?.error).toContain("Anthropic (claude-3-5-sonnet)");
+    expect(lifecycleError).toMatchObject({
+      stream: "lifecycle",
+      data: {
+        error: expect.stringContaining("Anthropic (claude-3-5-sonnet)"),
+      },
+    });
   });
 });

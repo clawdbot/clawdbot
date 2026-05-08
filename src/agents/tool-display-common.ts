@@ -280,19 +280,76 @@ function resolveWebSearchDetail(args: unknown): string | undefined {
     return undefined;
   }
 
-  const query = normalizeOptionalString(record.query);
+  const queries = collectWebSearchQueries(record);
   const count =
     typeof record.count === "number" && Number.isFinite(record.count) && record.count > 0
       ? Math.floor(record.count)
-      : undefined;
+      : typeof record.max_results === "number" &&
+          Number.isFinite(record.max_results) &&
+          record.max_results > 0
+        ? Math.floor(record.max_results)
+        : typeof record.num_results === "number" &&
+            Number.isFinite(record.num_results) &&
+            record.num_results > 0
+          ? Math.floor(record.num_results)
+          : typeof record.limit === "number" && Number.isFinite(record.limit) && record.limit > 0
+            ? Math.floor(record.limit)
+            : typeof record.top_k === "number" && Number.isFinite(record.top_k) && record.top_k > 0
+              ? Math.floor(record.top_k)
+              : undefined;
 
-  if (!query) {
+  if (queries.length === 0) {
     return undefined;
   }
 
-  return count !== undefined ? `for "${query}" (top ${count})` : `for "${query}"`;
+  const displayedQueries = queries.slice(0, 3).map((query) => `"${query}"`);
+  const queryText =
+    queries.length > displayedQueries.length
+      ? `${displayedQueries.join(", ")}…`
+      : displayedQueries.join(", ");
+
+  return count !== undefined ? `for ${queryText} (top ${count})` : `for ${queryText}`;
 }
 
+function collectWebSearchQueries(record: Record<string, unknown>): string[] {
+  const queries: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: unknown) => {
+    const normalized = normalizeOptionalString(value);
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    queries.push(normalized);
+  };
+
+  add(record.query);
+  add(record.q);
+  add(record.search);
+  add(record.input);
+
+  for (const key of ["search_query", "image_query", "queries"]) {
+    const value = record[key];
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    for (const entry of value) {
+      if (typeof entry === "string") {
+        add(entry);
+        continue;
+      }
+      const entryRecord = asRecord(entry);
+      if (!entryRecord) {
+        continue;
+      }
+      add(entryRecord.query);
+      add(entryRecord.q);
+      add(entryRecord.search);
+    }
+  }
+
+  return queries;
+}
 function resolveWebFetchDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
@@ -416,7 +473,7 @@ function resolveToolVerbAndDetail(params: {
   const verb = normalizeVerb(actionSpec?.label ?? params.action ?? fallbackVerb);
 
   let detail: string | undefined;
-  if (params.toolKey === "exec") {
+  if (params.toolKey === "exec" || params.toolKey === "bash") {
     detail = resolveExecDetail(params.args, { detailMode: params.toolDetailMode });
   }
   if (!detail && params.toolKey === "read") {

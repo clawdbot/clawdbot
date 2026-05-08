@@ -49,6 +49,10 @@ function tryCreateHardlinkOrSkip(createLink: () => void): boolean {
   }
 }
 
+function hookNames(entries: ReturnType<typeof loadHookEntriesFromDir>): string[] {
+  return entries.map((entry) => entry.hook.name);
+}
+
 describe("hooks workspace", () => {
   it("ignores package.json hook paths that traverse outside package directory", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-"));
@@ -66,7 +70,7 @@ describe("hooks workspace", () => {
     writeHookPackageManifest(pkgDir, ["../outside"]);
 
     const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
-    expect(entries.some((e) => e.hook.name === "outside")).toBe(false);
+    expect(hookNames(entries)).not.toContain("outside");
   });
 
   it("accepts package.json hook paths within package directory", () => {
@@ -84,7 +88,7 @@ describe("hooks workspace", () => {
     writeHookPackageManifest(pkgDir, ["./nested"]);
 
     const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
-    expect(entries.some((e) => e.hook.name === "nested")).toBe(true);
+    expect(hookNames(entries)).toContain("nested");
   });
 
   it("ignores package.json hook paths that escape via symlink", () => {
@@ -108,7 +112,7 @@ describe("hooks workspace", () => {
     writeHookPackageManifest(pkgDir, ["./linked"]);
 
     const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
-    expect(entries.some((e) => e.hook.name === "outside")).toBe(false);
+    expect(hookNames(entries)).not.toContain("outside");
   });
 
   it("ignores hooks with hardlinked HOOK.md aliases", () => {
@@ -128,8 +132,7 @@ describe("hooks workspace", () => {
     }
 
     const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
-    expect(entries.some((e) => e.hook.name === "hardlink-hook")).toBe(false);
-    expect(entries.some((e) => e.hook.name === "outside")).toBe(false);
+    expect(hookNames(entries)).not.toEqual(expect.arrayContaining(["hardlink-hook", "outside"]));
   });
 
   it("ignores hooks with hardlinked handler aliases", () => {
@@ -147,7 +150,7 @@ describe("hooks workspace", () => {
     }
 
     const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
-    expect(entries.some((e) => e.hook.name === "hardlink-handler-hook")).toBe(false);
+    expect(hookNames(entries)).not.toContain("hardlink-handler-hook");
   });
 
   it("does not let workspace hooks override managed hooks with the same name", () => {

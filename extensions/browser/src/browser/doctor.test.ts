@@ -101,7 +101,9 @@ describe("buildBrowserDoctorReport", () => {
     });
 
     expect(report.ok).toBe(true);
-    expect(report.checks.some((check) => check.status === "warn")).toBe(true);
+    expect(
+      report.checks.filter((check) => check.status === "warn").map((check) => check.id),
+    ).toEqual(["managed-executable", "display", "linux-sandbox"]);
     expect(report.checks.find((check) => check.id === "display")).toMatchObject({
       summary: "No DISPLAY or WAYLAND_DISPLAY is set while headed mode is selected (config)",
     });

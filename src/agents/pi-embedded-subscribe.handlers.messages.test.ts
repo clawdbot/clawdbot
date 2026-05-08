@@ -261,7 +261,7 @@ describe("pending assistant reply directives", () => {
   });
 });
 
-describe("handleMessageUpdate", () => {
+describe("handleMessageUpdate text signatures", () => {
   it("treats phased textSignature item changes as assistant-message boundaries", () => {
     const flushBlockReplyBuffer = vi.fn();
     const resetAssistantMessageState = vi.fn();
@@ -476,7 +476,7 @@ describe("consumePendingToolMediaReply", () => {
   });
 });
 
-describe("handleMessageUpdate", () => {
+describe("handleMessageUpdate commentary phase", () => {
   it("suppresses commentary-phase partial delivery and text_end flush", async () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();

@@ -189,6 +189,10 @@ export async function handleAssistantFailover(params: {
     const status =
       resolveFailoverStatus(decision.reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
     params.logAssistantFailoverDecision("fallback_model", { status });
+    const shouldSuspend =
+      Boolean(params.sessionKey) &&
+      (decision.reason === "rate_limit" || decision.reason === "billing");
+
     return {
       action: "throw",
       overloadProfileRotations,
@@ -199,6 +203,7 @@ export async function handleAssistantFailover(params: {
         profileId: params.lastProfileId,
         status,
         rawError: params.lastAssistant?.errorMessage?.trim(),
+        suspend: shouldSuspend,
       }),
     };
   }
@@ -230,6 +235,9 @@ export async function handleAssistantFailover(params: {
       const reason = resolveSurfaceErrorReason(decision.reason, params);
       const status =
         resolveFailoverStatus(reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
+      const shouldSuspend =
+        Boolean(params.sessionKey) && (reason === "rate_limit" || reason === "billing");
+
       return {
         action: "throw",
         overloadProfileRotations,
@@ -240,6 +248,7 @@ export async function handleAssistantFailover(params: {
           profileId: params.lastProfileId,
           status,
           rawError: params.lastAssistant?.errorMessage?.trim(),
+          suspend: shouldSuspend,
         }),
       };
     }

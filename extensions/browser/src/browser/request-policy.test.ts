@@ -38,9 +38,32 @@ describe("browser url pattern matching", () => {
   });
 
   it("matches glob patterns", () => {
+    expect(matchBrowserUrlPattern("*", "https://example.com/app/dash")).toBe(true);
     expect(matchBrowserUrlPattern("**/dash", "https://example.com/app/dash")).toBe(true);
     expect(matchBrowserUrlPattern("https://example.com/*", "https://example.com/a")).toBe(true);
     expect(matchBrowserUrlPattern("https://example.com/*", "https://other.com/a")).toBe(false);
+    expect(matchBrowserUrlPattern("https://example.com/*", "https://example.com/app/dash")).toBe(
+      false,
+    );
+    expect(matchBrowserUrlPattern("https://example.com/**", "https://example.com/app/dash")).toBe(
+      true,
+    );
+  });
+
+  it("treats URL punctuation as literal in wildcard patterns", () => {
+    expect(
+      matchBrowserUrlPattern(
+        "https://example.com/download?file=*",
+        "https://example.com/download?file=report.pdf",
+      ),
+    ).toBe(true);
+    expect(
+      matchBrowserUrlPattern(
+        "https://example.com/download?file=*",
+        "https://example.com/downloadXfile=report.pdf",
+      ),
+    ).toBe(false);
+    expect(matchBrowserUrlPattern("http://[::1]:*/**", "http://[::1]:9222/json/list")).toBe(true);
   });
 
   it("rejects empty patterns", () => {

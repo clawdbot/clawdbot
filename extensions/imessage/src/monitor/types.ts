@@ -19,6 +19,11 @@ export type IMessagePayload = {
   reply_to_text?: string | null;
   reply_to_sender?: string | null;
   created_at?: string | null;
+  is_reaction?: boolean | null;
+  reaction_type?: string | null;
+  reaction_emoji?: string | null;
+  is_reaction_add?: boolean | null;
+  reacted_to_guid?: string | null;
   attachments?: IMessageAttachment[] | null;
   chat_identifier?: string | null;
   chat_guid?: string | null;

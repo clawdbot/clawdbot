@@ -202,13 +202,15 @@ function maybeLoadShellEnvForVideoProviders(providerIds: string[]): void {
 }
 
 function expectGeneratedVideo(video: GeneratedVideoAsset | undefined): LiveGeneratedVideo {
-  expect(video).toBeDefined();
-  expect(video?.mimeType.startsWith("video/")).toBe(true);
+  if (!video) {
+    throw new Error("expected generated video asset");
+  }
+  expect(video.mimeType.startsWith("video/")).toBe(true);
   if (video?.buffer) {
     expect(video.buffer.byteLength).toBeGreaterThan(1024);
     return video;
   }
-  if (!video?.url) {
+  if (!video.url) {
     throw new Error("expected generated video buffer or url");
   }
   expect(video.url).toMatch(/^https?:\/\//u);

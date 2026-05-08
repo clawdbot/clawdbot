@@ -41,6 +41,11 @@ function createAccumulatorWithUsage(...usages: UsageInput[]) {
   return acc;
 }
 
+const emptyAccumulatorCases = [
+  { name: "toNormalizedUsage", resolve: toNormalizedUsage },
+  { name: "toLastCallUsage", resolve: toLastCallUsage },
+];
+
 describe("usage-accumulator", () => {
   describe("mergeUsageIntoAccumulator", () => {
     it("accumulates usage across multiple API calls", () => {
@@ -79,11 +84,16 @@ describe("usage-accumulator", () => {
     });
   });
 
-  describe("toNormalizedUsage", () => {
-    it("returns undefined for an empty accumulator", () => {
-      expect(toNormalizedUsage(createUsageAccumulator())).toBeUndefined();
-    });
+  describe("empty accumulator", () => {
+    it.each(emptyAccumulatorCases)(
+      "$name returns undefined for an empty accumulator",
+      ({ resolve }) => {
+        expect(resolve(createUsageAccumulator())).toBeUndefined();
+      },
+    );
+  });
 
+  describe("toNormalizedUsage", () => {
     it("returns accumulated totals for billing", () => {
       const acc = createUsageAccumulator();
 
@@ -140,10 +150,6 @@ describe("usage-accumulator", () => {
         cacheWrite: undefined,
         total: 84_190,
       });
-    });
-
-    it("returns undefined for an empty accumulator", () => {
-      expect(toLastCallUsage(createUsageAccumulator())).toBeUndefined();
     });
   });
 

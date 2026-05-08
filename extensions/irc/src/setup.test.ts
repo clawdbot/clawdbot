@@ -420,10 +420,12 @@ describe("irc setup", () => {
       prompter,
       accountId: "work",
     });
-    expect(updated).toBeDefined();
+    if (!updated) {
+      throw new Error("expected IRC allowFrom setup to return updated config");
+    }
 
-    expect(updated?.channels?.irc?.allowFrom).toEqual(["alice", "bob!ident@example.org"]);
-    expect(updated?.channels?.irc?.accounts?.work?.allowFrom).toBeUndefined();
+    expect(updated.channels?.irc?.allowFrom).toEqual(["alice", "bob!ident@example.org"]);
+    expect(updated.channels?.irc?.accounts?.work?.allowFrom).toBeUndefined();
   });
 
   it("keeps startAccount pending until abort, then stops the monitor", async () => {

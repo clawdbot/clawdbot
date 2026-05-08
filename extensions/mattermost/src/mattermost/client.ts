@@ -1,3 +1,4 @@
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromPrivateNetworkOptIn,
@@ -486,10 +487,6 @@ function readErrorCode(error: unknown): string | undefined {
     return String(raw);
   }
   return undefined;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function createMattermostPost(

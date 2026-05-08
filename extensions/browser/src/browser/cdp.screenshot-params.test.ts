@@ -94,18 +94,25 @@ beforeEach(() => {
   mockState.naturalViewport = { w: 1920, h: 1080, dpr: 1 };
 });
 
+function requireSentMessage(method: string) {
+  const message = sentMessages.find((m) => m.method === method);
+  if (!message) {
+    throw new Error(`expected ${method} CDP message`);
+  }
+  return message;
+}
+
 describe("CDP screenshot params", () => {
   it("viewport screenshot omits fromSurface and captureBeyondViewport", async () => {
     await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", format: "png" });
 
-    const call = sentMessages.find((m) => m.method === "Page.captureScreenshot");
-    expect(call).toBeDefined();
-    expect(call!.params).toMatchObject({
+    const call = requireSentMessage("Page.captureScreenshot");
+    expect(call.params).toMatchObject({
       format: "png",
     });
-    expect(call!.params).not.toHaveProperty("fromSurface");
-    expect(call!.params).not.toHaveProperty("captureBeyondViewport");
-    expect(call!.params).not.toHaveProperty("clip");
+    expect(call.params).not.toHaveProperty("fromSurface");
+    expect(call.params).not.toHaveProperty("captureBeyondViewport");
+    expect(call.params).not.toHaveProperty("clip");
 
     const emulationCalls = sentMessages.filter(
       (m) => m.method === "Emulation.setDeviceMetricsOverride",
@@ -152,10 +159,9 @@ describe("CDP screenshot params", () => {
     });
 
     // Clear is called first in the finally block
-    const clearCall = sentMessages.find((m) => m.method === "Emulation.clearDeviceMetricsOverride");
-    expect(clearCall).toBeDefined();
-    const captureCall = sentMessages.find((m) => m.method === "Page.captureScreenshot");
-    expect(captureCall?.params).toMatchObject({ captureBeyondViewport: true });
+    requireSentMessage("Emulation.clearDeviceMetricsOverride");
+    const captureCall = requireSentMessage("Page.captureScreenshot");
+    expect(captureCall.params).toMatchObject({ captureBeyondViewport: true });
 
     // Viewport drifted after clear → re-apply saved dimensions
     expect(secondSetCall.params).toMatchObject({
@@ -183,17 +189,15 @@ describe("CDP screenshot params", () => {
     // Only the expand call — no re-apply after clear
     expect(setCalls).toHaveLength(1);
 
-    const clearCall = sentMessages.find((m) => m.method === "Emulation.clearDeviceMetricsOverride");
-    expect(clearCall).toBeDefined();
+    requireSentMessage("Emulation.clearDeviceMetricsOverride");
   });
 
   it("fullPage viewport dimensions never shrink below current innerWidth/Height", async () => {
     await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", fullPage: true });
 
-    const expandCall = sentMessages.find((m) => m.method === "Emulation.setDeviceMetricsOverride");
-    expect(expandCall).toBeDefined();
-    expect(Number(expandCall!.params!.width)).toBeGreaterThanOrEqual(800);
-    expect(Number(expandCall!.params!.height)).toBeGreaterThanOrEqual(600);
+    const expandCall = requireSentMessage("Emulation.setDeviceMetricsOverride");
+    expect(Number(expandCall.params?.width)).toBeGreaterThanOrEqual(800);
+    expect(Number(expandCall.params?.height)).toBeGreaterThanOrEqual(600);
   });
 });
 

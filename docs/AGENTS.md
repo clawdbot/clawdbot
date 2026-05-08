@@ -16,6 +16,14 @@ This directory owns docs authoring, Mintlify link rules, and docs i18n policy.
 - For docs, UI copy, and picker lists, order services/providers alphabetically unless the section is explicitly describing runtime order or auto-detection order.
 - Keep bundled plugin naming consistent with the repo-wide plugin terminology rules in the root `AGENTS.md`.
 
+## Internal Docs
+
+- Long-lived private operator docs belong in `~/Projects/manager/docs/`.
+- Repo-local internal scratch/mirror docs may live under ignored `docs/internal/`.
+- Never add `docs/internal/**` pages to `docs/docs.json` navigation or link them from public docs.
+- `scripts/docs-sync-publish.mjs` excludes and prunes `docs/internal/**` from the public `openclaw/docs` publish repo if a page is force-added later.
+- Internal docs may mention repo paths, private app names, 1Password item names, and runbooks, but never include secret values.
+
 ## Docs i18n
 
 - Foreign-language docs are not maintained in this repo. The generated publish output lives in the separate `openclaw/docs` repo (often cloned locally as `../openclaw-docs`).

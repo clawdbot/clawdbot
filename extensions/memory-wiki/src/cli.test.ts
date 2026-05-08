@@ -488,7 +488,7 @@ cli note
       exportPath: exportDir,
       json: true,
     });
-    expect(applied.runId).toBeTruthy();
+    expect(applied.runId).toMatch(/^chatgpt-[a-f0-9]{12}$/u);
     expect(applied.createdCount).toBe(1);
     const sourceFiles = (await fs.readdir(path.join(rootDir, "sources"))).filter(
       (entry) => entry !== "index.md",

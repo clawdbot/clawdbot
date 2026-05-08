@@ -815,7 +815,7 @@ describe("getHealthSnapshot", () => {
 
     expect(main?.heartbeat.everyMs).toBeNull();
     expect(main?.heartbeat.every).toBe("disabled");
-    expect(ops?.heartbeat.everyMs).toBeTruthy();
+    expect(ops?.heartbeat.everyMs).toBe(60 * 60 * 1000);
     expect(ops?.heartbeat.every).toBe("1h");
   });
 });

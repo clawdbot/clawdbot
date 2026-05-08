@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GoogleMeetConfig,
@@ -125,10 +126,6 @@ function resolveProbeTimeoutMs(input: number | undefined, fallback: number): num
     throw new Error("timeoutMs must be a positive number");
   }
   return Math.min(Math.trunc(input), 120_000);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isManagedChromeBrowserSession(session: GoogleMeetSession): boolean {

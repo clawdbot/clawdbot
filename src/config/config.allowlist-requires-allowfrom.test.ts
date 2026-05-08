@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  BlueBubblesConfigSchema,
   DiscordConfigSchema,
   IMessageConfigSchema,
   IrcConfigSchema,
@@ -116,11 +115,6 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
       name: "irc",
       schema: IrcConfigSchema,
       config: { allowFrom: ["nick"], accounts: { work: { dmPolicy: "allowlist" } } },
-    },
-    {
-      name: "bluebubbles",
-      schema: BlueBubblesConfigSchema,
-      config: { allowFrom: ["sender"], accounts: { work: { dmPolicy: "allowlist" } } },
     },
   ] as const)(
     "accepts $name account allowlist when parent allowFrom exists",

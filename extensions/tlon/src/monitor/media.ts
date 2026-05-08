@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
   fetchRemoteMedia,
   MAX_IMAGE_BYTES,
@@ -118,19 +119,7 @@ function getExtensionFromFileName(fileName?: string): string | null {
 }
 
 function getExtensionFromContentType(contentType: string): string | null {
-  const map: Record<string, string> = {
-    "image/jpeg": "jpg",
-    "image/jpg": "jpg",
-    "image/png": "png",
-    "image/gif": "gif",
-    "image/webp": "webp",
-    "image/svg+xml": "svg",
-    "video/mp4": "mp4",
-    "video/webm": "webm",
-    "audio/mpeg": "mp3",
-    "audio/ogg": "ogg",
-  };
-  return map[contentType.split(";")[0].trim()] ?? null;
+  return extensionForMime(contentType)?.replace(/^\./u, "") ?? null;
 }
 
 function getExtensionFromUrl(url: string): string | null {

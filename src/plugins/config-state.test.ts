@@ -145,6 +145,23 @@ describe("normalizePluginsConfig", () => {
     expect(normalizeVoiceCallEntry({ subagent })?.subagent).toEqual(expected);
   });
 
+  it("normalizes plugin llm override policy settings", () => {
+    expect(
+      normalizeVoiceCallEntry({
+        llm: {
+          allowModelOverride: true,
+          allowedModels: [" openai/gpt-5.4 ", "", "anthropic/claude-sonnet-4-6"],
+          allowAgentIdOverride: false,
+        },
+      })?.llm,
+    ).toEqual({
+      allowModelOverride: true,
+      hasAllowedModelsConfig: true,
+      allowedModels: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+      allowAgentIdOverride: false,
+    });
+  });
+
   it("normalizes legacy plugin ids to their merged bundled plugin id", () => {
     const result = normalizePluginsConfig({
       allow: ["openai-codex", "google-gemini-cli", "minimax-portal-auth"],

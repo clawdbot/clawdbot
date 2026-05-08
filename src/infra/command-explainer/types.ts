@@ -31,6 +31,7 @@ export type CommandStep = {
   argv: string[];
   text: string;
   span: SourceSpan;
+  executableSpan: SourceSpan;
 };
 
 export type CommandRisk =

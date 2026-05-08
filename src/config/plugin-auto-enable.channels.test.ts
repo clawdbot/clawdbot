@@ -7,7 +7,6 @@ import {
 } from "./plugin-auto-enable.js";
 import {
   makeApnChannelConfig,
-  makeBluebubblesAndImessageChannels,
   makeIsolatedEnv,
   makeRegistry,
   makeTempDir,
@@ -24,18 +23,6 @@ function applyWithApnChannelConfig(extra?: {
     },
     env: makeIsolatedEnv(),
     manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
-  });
-}
-
-function applyWithBluebubblesImessageConfig(extra?: {
-  plugins?: { entries?: Record<string, { enabled: boolean }>; deny?: string[] };
-}) {
-  return applyPluginAutoEnable({
-    config: {
-      channels: makeBluebubblesAndImessageChannels(),
-      ...(extra?.plugins ? { plugins: extra.plugins } : {}),
-    },
-    env: makeIsolatedEnv(),
   });
 }
 
@@ -415,45 +402,6 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.changes.join("\n")).not.toContain(
         "secondary configured, enabled automatically.",
       );
-    });
-
-    it("prefers bluebubbles: skips imessage auto-configure when both are configured", () => {
-      const result = applyWithBluebubblesImessageConfig();
-
-      expect(result.config.channels?.bluebubbles?.enabled).toBe(true);
-      expect(result.config.plugins?.entries?.imessage?.enabled).toBe(false);
-      expect(result.changes.join("\n")).toContain("BlueBubbles configured, enabled automatically.");
-      expect(result.changes.join("\n")).not.toContain(
-        "iMessage configured, enabled automatically.",
-      );
-    });
-
-    it("keeps imessage enabled if already explicitly enabled (non-destructive)", () => {
-      const result = applyWithBluebubblesImessageConfig({
-        plugins: { entries: { imessage: { enabled: true } } },
-      });
-
-      expect(result.config.channels?.bluebubbles?.enabled).toBe(true);
-      expect(result.config.plugins?.entries?.imessage?.enabled).toBe(true);
-    });
-
-    it("allows imessage auto-configure when bluebubbles is explicitly disabled", () => {
-      const result = applyWithBluebubblesImessageConfig({
-        plugins: { entries: { bluebubbles: { enabled: false } } },
-      });
-
-      expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(false);
-      expect(result.config.channels?.imessage?.enabled).toBe(true);
-      expect(result.changes.join("\n")).toContain("iMessage configured, enabled automatically.");
-    });
-
-    it("allows imessage auto-configure when bluebubbles is in deny list", () => {
-      const result = applyWithBluebubblesImessageConfig({
-        plugins: { deny: ["bluebubbles"] },
-      });
-
-      expect(result.config.plugins?.entries?.bluebubbles).toBeUndefined();
-      expect(result.config.channels?.imessage?.enabled).toBe(true);
     });
 
     it("auto-enables imessage when only imessage is configured", () => {

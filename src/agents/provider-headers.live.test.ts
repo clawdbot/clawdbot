@@ -49,7 +49,7 @@ describeLive("provider response headers (live)", () => {
       logLiveCache(
         `openai headers x-request-id=${requestId ?? "(missing)"} openai-processing-ms=${processingMs ?? "(missing)"} ${rateLimitHeaders.join(" ")}`.trim(),
       );
-      expect(requestId).toBeTruthy();
+      expect(requestId).toEqual(expect.stringMatching(/\S/));
     }, 120_000);
   });
 
@@ -87,7 +87,7 @@ describeLive("provider response headers (live)", () => {
 
       const requestId = response.headers.get("request-id");
       logLiveCache(`anthropic headers request-id=${requestId ?? "(missing)"}`);
-      expect(requestId).toBeTruthy();
+      expect(requestId).toEqual(expect.stringMatching(/\S/));
     }, 120_000);
   });
 });

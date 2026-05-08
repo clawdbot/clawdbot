@@ -155,8 +155,8 @@ describe("assertRequiredParams", () => {
     expect(err).toMatch(/Missing required parameter: content/);
   });
 
-  it("does not throw when all required params are present", () => {
-    expect(() =>
+  it("returns undefined when all required params are present", () => {
+    expect(
       assertRequiredParams(
         { path: "a.txt", content: "hello" },
         [
@@ -165,6 +165,6 @@ describe("assertRequiredParams", () => {
         ],
         "write",
       ),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 });

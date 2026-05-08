@@ -72,6 +72,10 @@ export const resolveMemorySearchConfigMock = vi.fn(() => ({
   },
 }));
 export const resolveSessionAgentIdMock = vi.fn(() => "main");
+export const resolveSessionAgentIdsMock = vi.fn(() => ({
+  defaultAgentId: "main",
+  sessionAgentId: "main",
+}));
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 function createDefaultSessionMessages(): unknown[] {
   return [
@@ -168,6 +172,8 @@ export function resetCompactSessionStateMocks(): void {
   });
   resolveSessionAgentIdMock.mockReset();
   resolveSessionAgentIdMock.mockReturnValue("main");
+  resolveSessionAgentIdsMock.mockReset();
+  resolveSessionAgentIdsMock.mockReturnValue({ defaultAgentId: "main", sessionAgentId: "main" });
   estimateTokensMock.mockReset();
   estimateTokensMock.mockReturnValue(10);
   sessionMessages.splice(0, sessionMessages.length, ...createDefaultSessionMessages());
@@ -384,6 +390,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../../context-engine/registry.js", () => ({
     resolveContextEngine: resolveContextEngineMock,
+    resolveContextEngineOwnerPluginId: vi.fn(() => "lossless-claw"),
   }));
 
   vi.doMock("../../process/command-queue.js", () => ({
@@ -551,7 +558,7 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveDefaultAgentId: vi.fn(() => "main"),
     resolveRunModelFallbacksOverride: vi.fn(() => undefined),
     resolveSessionAgentId: resolveSessionAgentIdMock,
-    resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
+    resolveSessionAgentIds: resolveSessionAgentIdsMock,
   }));
 
   vi.doMock("../auth-profiles/source-check.js", () => ({

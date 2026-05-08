@@ -141,10 +141,13 @@ export const dockerSandboxBackendManager: SandboxBackendManager = {
     };
   },
   async removeRuntime({ entry }) {
-    try {
-      await execDocker(["rm", "-f", entry.containerName], { allowFailure: true });
-    } catch {
-      // ignore removal failures
+    const result = await execDocker(["rm", "-f", entry.containerName], { allowFailure: true });
+    if (result.code !== 0) {
+      const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
+      if (/No such (container|object)/iu.test(detail)) {
+        return;
+      }
+      throw new Error(`Failed to remove Docker sandbox runtime ${entry.containerName}: ${detail}`);
     }
   },
 };

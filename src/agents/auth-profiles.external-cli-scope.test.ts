@@ -62,7 +62,9 @@ describe("external CLI auth scope", () => {
           {
             id: "worker",
             model: "opencode-go/kimi-k2.6",
-            agentRuntime: { id: "codex-app-server" },
+            models: {
+              "opencode-go/kimi-k2.6": { agentRuntime: { id: "codex-app-server" } },
+            },
             subagents: { model: { primary: "z.ai/glm-4.7" } },
           },
         ],
@@ -92,9 +94,11 @@ describe("external CLI auth scope", () => {
       agents: {
         defaults: {
           model: "openai/gpt-5.5",
-          agentRuntime: { id: "claude-cli" },
           cliBackends: {
             "claude-cli": { command: "claude" },
+          },
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "claude-cli" } },
           },
         },
       },

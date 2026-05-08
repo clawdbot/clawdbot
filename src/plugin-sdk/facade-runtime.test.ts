@@ -289,7 +289,7 @@ describe("plugin-sdk facade runtime", () => {
 
     expect(access.allowed).toBe(false);
     expect(access.pluginId).toBe("discord");
-    expect(access.reason).toBeTruthy();
+    expect(access.reason).toMatch(/disabled|not enabled|not active/i);
     expect(() =>
       throwForBundledPluginPublicSurfaceAccess({
         access,

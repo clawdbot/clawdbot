@@ -436,7 +436,7 @@ describe("update-startup", () => {
     );
   });
 
-  it("scheduleGatewayUpdateCheck returns a cleanup function", async () => {
+  it("scheduleGatewayUpdateCheck returns a cleanup function", () => {
     mockPackageUpdateStatus("latest", "2.0.0");
 
     const stop = scheduleGatewayUpdateCheck({
@@ -444,7 +444,6 @@ describe("update-startup", () => {
       log: { info: vi.fn() },
       isNixMode: false,
     });
-    expect(typeof stop).toBe("function");
     stop();
   });
 });

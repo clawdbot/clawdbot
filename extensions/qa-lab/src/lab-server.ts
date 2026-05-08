@@ -1,12 +1,19 @@
 import fs from "node:fs";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer } from "node:http";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   acquireDebugProxyCaptureStore,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
-import { closeQaHttpServer, handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
+import {
+  closeQaHttpServer,
+  handleQaBusRequest,
+  readQaJsonBody,
+  writeError,
+  writeJson,
+  writeQaRequestBodyLimitError,
+} from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
 import {
@@ -57,6 +64,13 @@ export type {
   QaLabServerStartParams,
 } from "./lab-server.types.js";
 
+export function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
+  if (writeQaRequestBodyLimitError(res, error)) {
+    return;
+  }
+  writeError(res, 500, error);
+}
+
 function countQaLabScenarioRun(scenarios: QaLabScenarioOutcome[]) {
   return {
     total: scenarios.length,
@@ -92,15 +106,6 @@ function injectKickoffMessage(params: {
     senderName: params.defaults.senderName,
     text: params.kickoffTask,
   });
-}
-
-async function readJson(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  const text = Buffer.concat(chunks).toString("utf8").trim();
-  return text ? (JSON.parse(text) as unknown) : {};
 }
 
 function createBootstrapDefaults(autoKickoffTarget?: string): QaLabBootstrapDefaults {
@@ -420,7 +425,7 @@ export async function startQaLabServer(
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/capture/delete-sessions") {
-        const body = (await readJson(req)) as { sessionIds?: unknown };
+        const body = (await readQaJsonBody(req)) as { sessionIds?: unknown };
         const sessionIds = Array.isArray(body.sessionIds)
           ? body.sessionIds.filter((value): value is string => typeof value === "string")
           : [];
@@ -455,7 +460,7 @@ export async function startQaLabServer(
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/inbound/message") {
-        const body = await readJson(req);
+        const body = await readQaJsonBody(req);
         writeJson(res, 200, {
           message: state.addInboundMessage(body as Parameters<QaBusState["addInboundMessage"]>[0]),
         });
@@ -485,7 +490,10 @@ export async function startQaLabServer(
           writeError(res, 409, "QA suite run already in progress");
           return;
         }
-        const selection = normalizeQaRunSelection(await readJson(req), scenarioCatalog.scenarios);
+        const selection = normalizeQaRunSelection(
+          await readQaJsonBody(req),
+          scenarioCatalog.scenarios,
+        );
         state.reset();
         latestReport = null;
         latestScenarioRun = null;
@@ -573,7 +581,7 @@ export async function startQaLabServer(
       }
       res.end(body);
     } catch (error) {
-      writeError(res, 500, error);
+      writeQaLabServerError(res, error);
     }
   });
 

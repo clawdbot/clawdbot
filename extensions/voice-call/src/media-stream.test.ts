@@ -203,7 +203,7 @@ describe("MediaStreamHandler security hardening", () => {
       );
       await flush();
       await vi.waitFor(() => {
-        expect(talkEvents.some((event) => event.type === "session.ready")).toBe(true);
+        expect(talkEvents.map((event) => event.type)).toContain("session.ready");
       });
 
       ws.send(
@@ -234,7 +234,7 @@ describe("MediaStreamHandler security hardening", () => {
       ws.close();
       await waitForClose(ws);
       await vi.waitFor(() => {
-        expect(talkEvents.some((event) => event.type === "session.closed")).toBe(true);
+        expect(talkEvents.map((event) => event.type)).toContain("session.closed");
       });
 
       expect(talkEvents.map((event) => event.type)).toEqual([

@@ -272,6 +272,13 @@ const updateCliShared = await import("./update-cli/shared.js");
 const { resolveGitInstallDir } = updateCliShared;
 const { spawnSync } = await import("node:child_process");
 
+function requireValue<T>(value: T | undefined, label: string): T {
+  if (value === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 type UpdateCliScenario = {
   name: string;
   run: () => Promise<void>;
@@ -469,7 +476,7 @@ describe("update-cli", () => {
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
       target: "latest",
       version: "9999.0.0",
-      nodeEngine: ">=22.14.0",
+      nodeEngine: ">=22.16.0",
     });
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({
       tag: "latest",
@@ -1445,8 +1452,10 @@ describe("update-cli", () => {
         await updateStatusCommand({ json: true });
       },
       assert: () => {
-        const last = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0];
-        expect(last).toBeDefined();
+        const last = requireValue(
+          vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0],
+          "update status JSON output",
+        );
         const parsed = last as Record<string, unknown>;
         const channel = parsed.channel as { value?: unknown };
         expect(channel.value).toBe(isBetaTag(VERSION) ? "beta" : "stable");
@@ -1778,7 +1787,7 @@ describe("update-cli", () => {
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
       target: "latest",
       version: "2026.3.23-2",
-      nodeEngine: ">=22.14.0",
+      nodeEngine: ">=22.16.0",
     });
     nodeVersionSatisfiesEngine.mockReturnValue(false);
 
@@ -2115,9 +2124,12 @@ describe("update-cli", () => {
       }),
     );
     const serviceStopCallOrder = serviceStop.mock.invocationCallOrder[0];
-    expect(serviceStopCallOrder).toBeDefined();
-    expect(npmInstallCallOrder).toBeDefined();
-    expect(serviceStopCallOrder).toBeLessThan(npmInstallCallOrder);
+    const requiredServiceStopCallOrder = requireValue(
+      serviceStopCallOrder,
+      "service stop call order",
+    );
+    const requiredNpmInstallCallOrder = requireValue(npmInstallCallOrder, "npm install call order");
+    expect(requiredServiceStopCallOrder).toBeLessThan(requiredNpmInstallCallOrder);
   });
 
   it("refreshes package installs even when the current version already matches the target", async () => {
@@ -2344,8 +2356,8 @@ describe("update-cli", () => {
           argv.includes("openclaw@latest"),
       );
 
-    expect(installCall).toBeDefined();
-    const installCommand = installCall?.[0][0] ?? "";
+    const requiredInstallCall = requireValue(installCall, "brew npm install call");
+    const installCommand = requiredInstallCall[0][0] ?? "";
     expect(installCommand).not.toBe("npm");
     expect(path.isAbsolute(installCommand)).toBe(true);
     expect(path.normalize(installCommand)).toContain(path.normalize(brewPrefix));
@@ -2357,7 +2369,7 @@ describe("update-cli", () => {
         "i",
       ),
     );
-    expect(installCall?.[1]).toEqual(
+    expect(requiredInstallCall[1]).toEqual(
       expect.objectContaining({
         timeoutMs: expect.any(Number),
       }),
@@ -2426,8 +2438,10 @@ describe("update-cli", () => {
         await updateCommand({ json: true });
       },
       assert: () => {
-        const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0];
-        expect(jsonOutput).toBeDefined();
+        requireValue(
+          vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0],
+          "update JSON output",
+        );
       },
     },
     {

@@ -60,6 +60,7 @@ describeLive("deepgram live", () => {
       outputFormat: "ulaw_8000",
       timeoutMs: 30_000,
     });
+    expect(speech.byteLength).toBeGreaterThan(0);
 
     await runRealtimeSttLiveTest({
       provider,

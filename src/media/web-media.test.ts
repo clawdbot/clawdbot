@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { CANVAS_HOST_PATH } from "../../extensions/canvas/runtime-api.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -13,6 +12,7 @@ let optimizeImageToJpeg: typeof import("./web-media.js").optimizeImageToJpeg;
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 
 let fixtureRoot = "";
 let tinyPngFile = "";

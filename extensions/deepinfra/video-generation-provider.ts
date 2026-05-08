@@ -1,3 +1,4 @@
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -65,7 +66,7 @@ function parseVideoDataUrl(url: string): GeneratedVideoAsset | undefined {
     return undefined;
   }
   const mimeType = match[1] ?? "video/mp4";
-  const ext = mimeType.includes("webm") ? "webm" : "mp4";
+  const ext = extensionForMime(mimeType)?.slice(1) ?? "mp4";
   return {
     buffer: Buffer.from(match[2] ?? "", "base64"),
     mimeType,

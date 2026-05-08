@@ -347,6 +347,89 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
   });
 
+  it("allows safe inherited passEnv names while blocking dangerous exec SecretRef env", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const warn = vi.fn();
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        BASH_ENV: "/tmp/openclaw-test-bashenv",
+        XDG_CONFIG_HOME: "/tmp/openclaw-test-xdg-home",
+        XDG_CONFIG_DIRS: "/etc/xdg:/opt/xdg",
+        GH_TOKEN: "gh-test-token",
+        AWS_ACCESS_KEY_ID: "aws-access-key",
+        DOCKER_HOST: "tcp://docker.example.test:2376",
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
+      }),
+      port: 3000,
+      runtime: "node",
+      warn,
+      config: {
+        secrets: {
+          providers: {
+            onepassword: {
+              source: "exec",
+              command: "/usr/bin/op",
+              args: ["read", "op://Private/Discord/password"],
+              passEnv: [
+                "HOME",
+                "BASH_ENV",
+                "XDG_CONFIG_HOME",
+                "XDG_CONFIG_DIRS",
+                "GH_TOKEN",
+                "AWS_ACCESS_KEY_ID",
+                "DOCKER_HOST",
+                "NODE_TLS_REJECT_UNAUTHORIZED",
+              ],
+              allowInsecurePath: true,
+            },
+          },
+        },
+        channels: {
+          discord: {
+            token: { source: "exec", provider: "onepassword", id: "value" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.HOME).toBe(isolatedHome);
+    expect(plan.environment.BASH_ENV).toBeUndefined();
+    expect(plan.environment.XDG_CONFIG_HOME).toBeUndefined();
+    expect(plan.environment.XDG_CONFIG_DIRS).toBeUndefined();
+    expect(plan.environment.GH_TOKEN).toBeUndefined();
+    expect(plan.environment.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(plan.environment.DOCKER_HOST).toBeUndefined();
+    expect(plan.environment.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+    expect(warn).not.toHaveBeenCalledWith(
+      'Exec SecretRef passEnv ref "HOME" blocked by host-env security policy',
+      "Config SecretRef",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("XDG_CONFIG_HOME"),
+      "Config SecretRef",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("XDG_CONFIG_DIRS"),
+      "Config SecretRef",
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("BASH_ENV"), "Config SecretRef");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("GH_TOKEN"), "Config SecretRef");
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("AWS_ACCESS_KEY_ID"),
+      "Config SecretRef",
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("DOCKER_HOST"), "Config SecretRef");
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("NODE_TLS_REJECT_UNAUTHORIZED"),
+      "Config SecretRef",
+    );
+  });
+
   it("does not include passEnv values for unused exec SecretRef providers", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {

@@ -17,7 +17,7 @@ export type AuthProfileHealthStatus = "ok" | "expiring" | "expired" | "missing" 
 type AuthProfileHealth = {
   profileId: string;
   provider: string;
-  type: "oauth" | "token" | "api_key" | "aws-sdk";
+  type: "oauth" | "token" | "api_key";
   status: AuthProfileHealthStatus;
   reasonCode?: AuthCredentialReasonCode;
   expiresAt?: number;
@@ -121,17 +121,6 @@ function buildProfileHealth(params: {
       profileId,
       provider,
       type: "api_key",
-      status: "static",
-      source,
-      label,
-    };
-  }
-
-  if (healthCredential.type === "aws-sdk") {
-    return {
-      profileId,
-      provider,
-      type: "aws-sdk",
       status: "static",
       source,
       label,

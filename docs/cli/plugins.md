@@ -129,7 +129,7 @@ is available, then fall back to `latest`.
 
     This CLI flag applies to plugin install/update flows. Gateway-backed skill dependency installs use the matching `dangerouslyForceUnsafeInstall` request override, while `openclaw skills install` remains a separate ClawHub skill download/install flow.
 
-    If a plugin you published on ClawHub is blocked by a registry scan, use the publisher steps in [ClawHub](/tools/clawhub).
+    If a plugin you published on ClawHub is blocked by a registry scan, use the publisher steps in [ClawHub](/clawhub/security).
 
   </Accordion>
   <Accordion title="Hook packs and npm specs">
@@ -417,4 +417,4 @@ Marketplace list accepts a local marketplace path, a `marketplace.json` path, a 
 
 - [Building plugins](/plugins/building-plugins)
 - [CLI reference](/cli)
-- [Community plugins](/plugins/community)
+- [ClawHub](/clawhub)

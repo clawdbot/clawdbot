@@ -46,20 +46,21 @@ export function buildSlackProgressDraftBlocks(params: {
   label?: string;
   lines: readonly ChannelProgressDraftLine[];
 }): (Block | KnownBlock)[] | undefined {
-  const blocks: (Block | KnownBlock)[] = [];
   const label = params.label?.trim();
-  if (label) {
-    blocks.push({
-      type: "section",
-      text: field(`*${escapeSlackMrkdwn(label)}*`),
-    });
-  }
-  const availableLineBlocks = Math.max(0, SLACK_MAX_BLOCKS - blocks.length);
-  for (const line of params.lines.slice(-availableLineBlocks)) {
-    blocks.push({
+  const renderedBlocks: (Block | KnownBlock)[] = [
+    ...(label
+      ? [
+          {
+            type: "section" as const,
+            text: field(`*${escapeSlackMrkdwn(label)}*`),
+          },
+        ]
+      : []),
+    ...params.lines.map((line) => ({
       type: "section",
       fields: [field(lineTitle(line)), field(lineDetail(line))],
-    });
-  }
+    })),
+  ].slice(-SLACK_MAX_BLOCKS);
+  const blocks: (Block | KnownBlock)[] = renderedBlocks;
   return blocks.length ? blocks : undefined;
 }

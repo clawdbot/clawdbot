@@ -94,7 +94,7 @@ describe("memory plugin state", () => {
     ]);
   });
 
-  it("adapts deprecated split registration to the unified memory capability", async () => {
+  it("adapts deprecated split registration to the unified memory capability", () => {
     const runtime = createMemoryRuntime();
 
     registerMemoryPromptSection(() => ["legacy prompt"]);

@@ -217,6 +217,6 @@ describe("resolveDiscordUserAllowlist", () => {
     });
 
     expect(results).toHaveLength(2);
-    expect(results.every((r) => !r.resolved)).toBe(true);
+    expect(results.map((result) => result.resolved)).toEqual([false, false]);
   });
 });

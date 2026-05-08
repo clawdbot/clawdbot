@@ -32,7 +32,7 @@ describe("subagent registry nested agent tracking", () => {
     subagentRegistry.resetSubagentRegistryForTests({ persist: false });
   });
 
-  it("listSubagentRunsForRequester returns children of the requesting session", async () => {
+  it("listSubagentRunsForRequester returns children of the requesting session", () => {
     const { registerSubagentRun, listSubagentRunsForRequester } = subagentRegistry;
 
     // Main agent spawns a depth-1 orchestrator
@@ -74,7 +74,7 @@ describe("subagent registry nested agent tracking", () => {
     expect(leafRuns).toHaveLength(0);
   });
 
-  it("announce uses requesterSessionKey to route to the correct parent", async () => {
+  it("announce uses requesterSessionKey to route to the correct parent", () => {
     const { registerSubagentRun } = subagentRegistry;
     // Register a sub-sub-agent whose parent is a sub-agent
     registerSubagentRun({
@@ -97,7 +97,7 @@ describe("subagent registry nested agent tracking", () => {
     expect(orchRuns[0].childSessionKey).toBe("agent:main:subagent:orch:subagent:child");
   });
 
-  it("countActiveRunsForSession only counts active children of the specific session", async () => {
+  it("countActiveRunsForSession only counts active children of the specific session", () => {
     const { registerSubagentRun, countActiveRunsForSession } = subagentRegistry;
 
     // Main spawns orchestrator (active)
@@ -136,7 +136,7 @@ describe("subagent registry nested agent tracking", () => {
     expect(countActiveRunsForSession("agent:main:subagent:orch1")).toBe(2);
   });
 
-  it("countActiveDescendantRuns traverses through ended parents", async () => {
+  it("countActiveDescendantRuns traverses through ended parents", () => {
     const { addSubagentRunForTests, countActiveDescendantRuns } = subagentRegistry;
 
     addSubagentRunForTests({
@@ -167,7 +167,7 @@ describe("subagent registry nested agent tracking", () => {
     expect(countActiveDescendantRuns("agent:main:subagent:orch-ended")).toBe(1);
   });
 
-  it("countPendingDescendantRuns includes ended descendants until cleanup completes", async () => {
+  it("countPendingDescendantRuns includes ended descendants until cleanup completes", () => {
     const { addSubagentRunForTests, countPendingDescendantRuns } = subagentRegistry;
 
     addSubagentRunForTests({
@@ -216,7 +216,7 @@ describe("subagent registry nested agent tracking", () => {
     expect(countPendingDescendantRuns("agent:main:subagent:orch-pending")).toBe(1);
   });
 
-  it("keeps parent pending for parallel children until both descendants complete cleanup", async () => {
+  it("keeps parent pending for parallel children until both descendants complete cleanup", () => {
     const { addSubagentRunForTests, countPendingDescendantRuns } = subagentRegistry;
     const parentSessionKey = "agent:main:subagent:orch-parallel";
 
@@ -292,7 +292,7 @@ describe("subagent registry nested agent tracking", () => {
     expect(countPendingDescendantRuns(parentSessionKey)).toBe(0);
   });
 
-  it("countPendingDescendantRunsExcludingRun ignores only the active announce run", async () => {
+  it("countPendingDescendantRunsExcludingRun ignores only the active announce run", () => {
     const { addSubagentRunForTests, countPendingDescendantRunsExcludingRun } = subagentRegistry;
 
     addSubagentRunForTests({

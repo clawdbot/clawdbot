@@ -55,6 +55,25 @@ const sessionState = vi.hoisted(() => ({
   sock: undefined as MockSock | undefined,
 }));
 
+const channelActivityMocks = vi.hoisted(() => ({
+  recordChannelActivity: vi.fn(),
+}));
+
+export function getRecordChannelActivityMock(): AnyMockFn {
+  return channelActivityMocks.recordChannelActivity;
+}
+
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/channel-activity-runtime")
+  >("openclaw/plugin-sdk/channel-activity-runtime");
+  return {
+    ...actual,
+    recordChannelActivity: (...args: unknown[]) =>
+      channelActivityMocks.recordChannelActivity(...args),
+  };
+});
+
 const inboundRuntimeMocks = vi.hoisted(() => {
   const wrapperKeys = [
     "ephemeralMessage",
@@ -277,6 +296,7 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
   beforeEach(async () => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    channelActivityMocks.recordChannelActivity.mockClear();
     sessionState.sock = createMockSock();
     resetPairingSecurityMocks(DEFAULT_WEB_INBOX_CONFIG);
     if (!monitorWebInbox || !resetWebInboundDedupe) {

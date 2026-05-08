@@ -21,11 +21,10 @@ Text is supported everywhere; media and reactions vary by channel.
 
 ## Supported channels
 
-- [BlueBubbles](/channels/bluebubbles) - Legacy iMessage bridge via the BlueBubbles macOS server REST API; deprecated for new OpenClaw setups but still supported for existing configs and richer private-API actions.
 - [Discord](/channels/discord) - Discord Bot API + Gateway; supports servers, channels, and DMs.
 - [Feishu](/channels/feishu) - Feishu/Lark bot via WebSocket (bundled plugin).
 - [Google Chat](/channels/googlechat) - Google Chat API app via HTTP webhook (downloadable plugin).
-- [iMessage](/channels/imessage) - Native macOS integration via the imsg CLI; preferred for new OpenClaw iMessage setups when host permissions and Messages access fit.
+- [iMessage](/channels/imessage) - Native macOS integration via the `imsg` bridge on a signed-in Mac (or SSH wrapper when the Gateway runs elsewhere), including private API actions for replies, tapbacks, effects, attachments, and group management. Preferred for new OpenClaw iMessage setups when host permissions and Messages access fit.
 - [IRC](/channels/irc) - Classic IRC servers; channels + DMs with pairing/allowlist controls.
 - [LINE](/channels/line) - LINE Messaging API bot (downloadable plugin).
 - [Matrix](/channels/matrix) - Matrix protocol (downloadable plugin).

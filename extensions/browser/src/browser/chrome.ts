@@ -59,6 +59,7 @@ import {
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
+import { ensureOutputDirectory } from "./output-directories.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
@@ -423,7 +424,7 @@ export async function launchOpenClawChrome(
 
   const userDataDir = resolveOpenClawUserDataDir(profile.name);
   fs.mkdirSync(userDataDir, { recursive: true });
-  fs.mkdirSync(DEFAULT_DOWNLOAD_DIR, { recursive: true });
+  await ensureOutputDirectory(DEFAULT_DOWNLOAD_DIR);
 
   const needsDecorate = !isProfileDecorated(
     userDataDir,

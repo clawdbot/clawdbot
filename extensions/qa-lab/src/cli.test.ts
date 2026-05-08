@@ -126,8 +126,10 @@ describe("qa cli registration", () => {
 
   it("registers discovered and built-in live transport subcommands", () => {
     const qa = program.commands.find((command) => command.name() === "qa");
-    expect(qa).toBeDefined();
-    expect(qa?.commands.map((command) => command.name())).toEqual(
+    if (!qa) {
+      throw new Error("expected qa command");
+    }
+    expect(qa.commands.map((command) => command.name())).toEqual(
       expect.arrayContaining([
         TEST_QA_RUNNER.commandName,
         "telegram",

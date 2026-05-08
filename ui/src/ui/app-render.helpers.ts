@@ -49,6 +49,25 @@ type ChatRefreshHost = AppViewState & {
   updateComplete?: Promise<unknown>;
 };
 
+export async function handleChatManualRefresh(state: ChatRefreshHost): Promise<void> {
+  state.chatManualRefreshInFlight = true;
+  state.chatNewMessagesBelow = false;
+  await state.updateComplete;
+  state.resetToolStream();
+  try {
+    await refreshChat(state as unknown as Parameters<typeof refreshChat>[0], {
+      awaitHistory: true,
+      scheduleScroll: false,
+    });
+    state.scrollToBottom({ smooth: true });
+  } finally {
+    requestAnimationFrame(() => {
+      state.chatManualRefreshInFlight = false;
+      state.chatNewMessagesBelow = false;
+    });
+  }
+}
+
 export function resolveAssistantAttachmentAuthToken(
   state: Pick<AppViewState, "hello" | "settings" | "password">,
 ) {
@@ -315,24 +334,7 @@ export function renderChatControls(state: AppViewState) {
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${refreshDisabled}
-        @click=${async () => {
-          const app = state as unknown as ChatRefreshHost;
-          app.chatManualRefreshInFlight = true;
-          app.chatNewMessagesBelow = false;
-          await app.updateComplete;
-          app.resetToolStream();
-          try {
-            await refreshChat(state as unknown as Parameters<typeof refreshChat>[0], {
-              scheduleScroll: false,
-            });
-            app.scrollToBottom({ smooth: true });
-          } finally {
-            requestAnimationFrame(() => {
-              app.chatManualRefreshInFlight = false;
-              app.chatNewMessagesBelow = false;
-            });
-          }
-        }}
+        @click=${() => handleChatManualRefresh(state as unknown as ChatRefreshHost)}
         title=${refreshLabel}
         aria-label=${refreshLabel}
         data-tooltip=${refreshLabel}

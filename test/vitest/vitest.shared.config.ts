@@ -206,8 +206,6 @@ export const sharedVitestConfig = {
       "test/vitest/vitest.e2e.config.ts",
       "test/vitest/vitest.extension-acpx-paths.mjs",
       "test/vitest/vitest.extension-acpx.config.ts",
-      "test/vitest/vitest.extension-bluebubbles-paths.mjs",
-      "test/vitest/vitest.extension-bluebubbles.config.ts",
       "test/vitest/vitest.extension-channel-single-config.ts",
       "test/vitest/vitest.extension-channel-split-paths.mjs",
       "test/vitest/vitest.extension-channels.config.ts",

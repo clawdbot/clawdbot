@@ -356,7 +356,7 @@ describe("plugin index install records store", () => {
     ).toEqual({});
   });
 
-  it("updates and removes records without mutating caller state", async () => {
+  it("updates and removes records without mutating caller state", () => {
     const records: Record<string, PluginInstallRecord> = {
       keep: {
         source: "npm" as const,

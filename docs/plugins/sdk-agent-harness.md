@@ -103,14 +103,11 @@ export default definePluginEntry({
 
 OpenClaw chooses a harness after provider/model resolution:
 
-1. An existing session's recorded harness id wins, so config/env changes do not
-   hot-switch that transcript to another runtime.
-2. `OPENCLAW_AGENT_RUNTIME=<id>` forces a registered harness with that id for
-   sessions that are not already pinned.
-3. `OPENCLAW_AGENT_RUNTIME=pi` forces the built-in PI harness.
-4. `OPENCLAW_AGENT_RUNTIME=auto` asks registered harnesses if they support the
-   resolved provider/model.
-5. If no registered harness matches, OpenClaw uses PI unless PI fallback is
+1. Model-scoped runtime policy wins.
+2. Provider-scoped runtime policy comes next.
+3. `auto` asks registered harnesses if they support the resolved
+   provider/model.
+4. If no registered harness matches, OpenClaw uses PI unless PI fallback is
    disabled.
 
 Plugin harness failures surface as run failures. In `auto` mode, PI fallback is
@@ -119,11 +116,10 @@ provider/model. Once a plugin harness has claimed a run, OpenClaw does not
 replay that same turn through PI because that can change auth/runtime semantics
 or duplicate side effects.
 
-The selected harness id is persisted with the session id after an embedded run.
-Legacy sessions created before harness pins are treated as PI-pinned once they
-have transcript history. Use a new/reset session when changing between PI and a
-native plugin harness. `/status` shows non-default harness ids such as `codex`
-next to `Fast`; PI stays hidden because it is the default compatibility path.
+Whole-session and whole-agent runtime pins are ignored by selection. That
+includes stale session `agentHarnessId` values, `agents.defaults.agentRuntime`,
+`agents.list[].agentRuntime`, and `OPENCLAW_AGENT_RUNTIME`. `/status` shows the
+effective runtime selected from the provider/model route.
 If the selected harness is surprising, enable `agents/harness` debug logging and
 inspect the gateway's structured `agent harness selected` record. It includes
 the selected harness id, selection reason, runtime/fallback policy, and, in
@@ -141,8 +137,7 @@ OpenClaw. The harness then claims that provider in `supports(...)`.
 
 The bundled Codex plugin follows this pattern:
 
-- preferred user model refs: `openai/gpt-5.5` plus
-  `agentRuntime.id: "codex"`
+- preferred user model refs: `openai/gpt-5.5`
 - compatibility refs: legacy `codex/gpt-*` refs remain accepted, but new
   configs should not use them as normal provider/model refs
 - harness id: `codex`
@@ -151,10 +146,9 @@ The bundled Codex plugin follows this pattern:
 - app-server request: OpenClaw sends the bare model id to Codex and lets the
   harness talk to the native app-server protocol
 
-The Codex plugin is additive. Plain `openai/gpt-*` refs continue to use the
-normal OpenClaw provider path unless you force the Codex harness with
-`agentRuntime.id: "codex"`. Older `codex/gpt-*` refs still select the
-Codex provider and harness for compatibility.
+The Codex plugin is additive. Plain `openai/gpt-*` agent refs on the official
+OpenAI provider select the Codex harness by default. Older `codex/gpt-*` refs
+still select the Codex provider and harness for compatibility.
 
 For operator setup, model prefix examples, and Codex-only configs, see
 [Codex Harness](/plugins/codex-harness).
@@ -202,74 +196,94 @@ aliases for the native harness.
 When this mode runs, Codex owns the native thread id, resume behavior,
 compaction, and app-server execution. OpenClaw still owns the chat channel,
 visible transcript mirror, tool policy, approvals, media delivery, and session
-selection. Use `agentRuntime.id: "codex"` when you need to prove that only the
-Codex app-server path can claim the run. Explicit plugin runtimes fail closed;
-Codex app-server selection failures and runtime failures are not retried through
-PI.
+selection. Use provider/model `agentRuntime.id: "codex"` when you need to prove
+that only the Codex app-server path can claim the run. Explicit plugin runtimes
+fail closed; Codex app-server selection failures and runtime failures are not
+retried through PI.
 
 ## Runtime strictness
 
-By default, OpenClaw runs embedded agents with OpenClaw Pi. In `auto` mode,
-registered plugin harnesses can claim a provider/model pair, and PI handles the
-turn when none match. Use an explicit plugin runtime such as
+By default, OpenClaw uses `auto` provider/model runtime policy: registered
+plugin harnesses can claim a provider/model pair, and PI handles the turn when
+none match. OpenAI agent refs on the official OpenAI provider default to Codex.
+Use an explicit provider/model plugin runtime such as
 `agentRuntime.id: "codex"` when missing harness selection should fail instead
 of routing through PI. Selected plugin harness failures always fail hard. This
-does not block an explicit `agentRuntime.id: "pi"` or
-`OPENCLAW_AGENT_RUNTIME=pi`.
+does not block an explicit provider/model `agentRuntime.id: "pi"`.
 
 For Codex-only embedded runs:
 
 ```json
 {
+  "models": {
+    "providers": {
+      "openai": {
+        "agentRuntime": {
+          "id": "codex"
+        }
+      }
+    }
+  },
   "agents": {
     "defaults": {
-      "model": "openai/gpt-5.5",
-      "agentRuntime": {
-        "id": "codex"
+      "model": "openai/gpt-5.5"
+    }
+  }
+}
+```
+
+If you want a CLI backend for one canonical model, put the runtime on that
+model entry:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-opus-4-7",
+      "models": {
+        "anthropic/claude-opus-4-7": {
+          "agentRuntime": {
+            "id": "claude-cli"
+          }
+        }
       }
     }
   }
 }
 ```
 
-If you want any registered plugin harness to claim matching models and otherwise
-use PI, set `id: "auto"`:
+Per-agent overrides use the same model-scoped shape:
 
 ```json
 {
   "agents": {
-    "defaults": {
-      "agentRuntime": {
-        "id": "auto"
-      }
-    }
-  }
-}
-```
-
-Per-agent overrides use the same shape:
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "agentRuntime": { "id": "auto" }
-    },
     "list": [
       {
         "id": "codex-only",
         "model": "openai/gpt-5.5",
-        "agentRuntime": { "id": "codex" }
+        "models": {
+          "openai/gpt-5.5": {
+            "agentRuntime": { "id": "codex" }
+          }
+        }
       }
     ]
   }
 }
 ```
 
-`OPENCLAW_AGENT_RUNTIME` still overrides the configured runtime.
+Legacy whole-agent runtime examples like this are ignored:
 
-```bash
-OPENCLAW_AGENT_RUNTIME=codex openclaw gateway run
+```json
+{
+  "agents": {
+    "defaults": {
+      "agentRuntime": {
+        "id": "codex"
+      }
+    }
+  }
+}
 ```
 
 With an explicit plugin runtime, a session fails early when the requested

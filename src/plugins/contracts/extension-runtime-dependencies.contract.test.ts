@@ -8,6 +8,11 @@ const EXTENSION_RUNTIME_FILE_EXTENSIONS = new Set([".cjs", ".js", ".jsx", ".mjs"
 const BUILTIN_MODULES = new Set(builtinModules.map((moduleId) => moduleId.replace(/^node:/, "")));
 const OPTIONAL_UNDECLARED_RUNTIME_IMPORTS = new Map<string, Set<string>>([
   [
+    "extensions/canvas",
+    // The A2UI bundle probes this optional markdown renderer and falls back when absent.
+    new Set(["@a2ui/markdown-it"]),
+  ],
+  [
     "extensions/discord",
     // Prefer the pure-JS opusscript decoder, but keep the optional native decoder
     // fallback for users who install it themselves.
@@ -223,7 +228,7 @@ describe("extension runtime dependency manifests", () => {
   it("keeps json5 in memory-core for packaged runtime config parsing", () => {
     const manifest = readPackageManifest("extensions/memory-core/package.json");
 
-    expect(manifest.dependencies?.json5).toBeDefined();
+    expect(manifest.dependencies?.json5).toEqual(expect.any(String));
   });
 
   for (const manifestPath of listPackageManifests(EXTENSION_ROOT)) {

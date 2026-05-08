@@ -26,7 +26,7 @@ describe("tlon monitor media", () => {
     vi.restoreAllMocks();
   });
 
-  it("caps extracted images at eight per message", async () => {
+  it("caps extracted images at eight per message", () => {
     const content = Array.from({ length: 10 }, (_, index) => ({
       block: { image: { src: `https://example.com/${index}.png`, alt: `image-${index}` } },
     }));

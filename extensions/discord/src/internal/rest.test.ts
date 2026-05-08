@@ -544,7 +544,7 @@ describe("RequestClient", () => {
     );
   });
 
-  it("serializes message multipart uploads with payload_json", async () => {
+  it("serializes message multipart uploads with payload_json", () => {
     const headers = new Headers();
     const body = serializeRequestBody(
       {

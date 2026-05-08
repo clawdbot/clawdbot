@@ -216,6 +216,30 @@ describe("runServiceRestart token drift", () => {
     expect(service.stop).not.toHaveBeenCalled();
   });
 
+  it("runs a requested managed stop even when the service is not loaded", async () => {
+    const onNotLoaded = vi.fn(async () => ({
+      result: "stopped" as const,
+      message: "Gateway stop signal sent to unmanaged process on port 18789: 4200.",
+    }));
+    service.isLoaded.mockResolvedValue(false);
+
+    await runServiceStop({
+      serviceNoun: "Gateway",
+      service,
+      opts: { json: true, disable: true },
+      stopWhenNotLoaded: true,
+      onNotLoaded,
+    });
+
+    const payload = readJsonLog<{ result?: string; service?: { loaded?: boolean } }>();
+    expect(payload.result).toBe("stopped");
+    expect(payload.service?.loaded).toBe(false);
+    expect(service.stop).toHaveBeenCalledWith(
+      expect.objectContaining({ env: process.env, disable: true }),
+    );
+    expect(onNotLoaded).not.toHaveBeenCalled();
+  });
+
   it("emits started when a not-loaded start path repairs the service", async () => {
     service.isLoaded.mockResolvedValue(false);
 

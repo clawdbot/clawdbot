@@ -114,9 +114,13 @@ describe("config doc baseline integration", () => {
     expect(byPath.get("bindings.*")).toMatchObject({
       hasChildren: true,
     });
-    expect(byPath.get("bindings.*.type")).toBeDefined();
-    expect(byPath.get("bindings.*.match.channel")).toBeDefined();
-    expect(byPath.get("bindings.*.match.peer.id")).toBeDefined();
+    expect(byPath.get("bindings.*.type")).toMatchObject({ path: "bindings.*.type" });
+    expect(byPath.get("bindings.*.match.channel")).toMatchObject({
+      path: "bindings.*.match.channel",
+    });
+    expect(byPath.get("bindings.*.match.peer.id")).toMatchObject({
+      path: "bindings.*.match.peer.id",
+    });
   });
 
   it("supports check mode for stale hash files", async () => {

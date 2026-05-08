@@ -5,7 +5,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { backupCreateCommand } from "../backup.js";
 import { buildMigrationContext, buildMigrationReportDir } from "./context.js";
 import { assertApplySucceeded, assertConflictFreePlan, writeApplyResult } from "./output.js";
-import { applyMigrationSkillSelection } from "./selection.js";
+import { applyMigrationPluginSelection, applyMigrationSkillSelection } from "./selection.js";
 import type { MigrateApplyOptions } from "./types.js";
 
 function shouldTreatMissingBackupAsEmptyState(error: unknown): boolean {
@@ -59,7 +59,10 @@ export async function runMigrationApply(params: {
         json: params.opts.json,
       }),
     ));
-  const selectedPlan = applyMigrationSkillSelection(preflightPlan, params.opts.skills);
+  const selectedPlan = applyMigrationPluginSelection(
+    applyMigrationSkillSelection(preflightPlan, params.opts.skills),
+    params.opts.plugins,
+  );
   assertConflictFreePlan(selectedPlan, params.providerId);
   const stateDir = resolveStateDir();
   const reportDir = buildMigrationReportDir(params.providerId, stateDir);

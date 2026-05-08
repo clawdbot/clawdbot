@@ -29,7 +29,7 @@ Welcome to the lobster tank! 🦞
 - **Ayaan Zaidi** - Telegram subsystem, Android app
   - GitHub: [@obviyus](https://github.com/obviyus) · X: [@obviyus](https://x.com/obviyus)
 
-- **Tyler Yust** - Agents/subagents, cron, BlueBubbles, macOS app
+- **Tyler Yust** - Agents/subagents, cron, iMessage, macOS app
   - GitHub: [@tyler6204](https://github.com/tyler6204) · X: [@tyleryust](https://x.com/tyleryust)
 
 - **Mariano Belinky** - iOS app, Security
@@ -85,6 +85,9 @@ Welcome to the lobster tank! 🦞
 
 - **Mason Huang** - Stability, Security, Speed
   - GitHub: [@hxy91819](https://github.com/hxy91819) · X: [@chenjingtalk](https://x.com/chenjingtalk)
+
+- **Maurice Niu** - ClawHub, Security, Stability, Data integrity
+  - GitHub: [@momothemage](https://github.com/momothemage) · X: [@MomoPsicasso](https://x.com/MomoPsicasso)
 
 ## How to Contribute
 

@@ -22,11 +22,10 @@ describe("setup helper import safety", () => {
     );
 
     expect(state.discoveryLoaded).toBe(false);
-    expect(
-      helpers.createPatchedAccountSetupAdapter({
-        channelKey: "demo-setup",
-        buildPatch: () => ({}),
-      }),
-    ).toBeDefined();
+    const adapter = helpers.createPatchedAccountSetupAdapter({
+      channelKey: "demo-setup",
+      buildPatch: () => ({}),
+    });
+    expect(adapter.resolveAccountId?.({ cfg: {}, accountId: "demo" })).toBe("demo");
   });
 });

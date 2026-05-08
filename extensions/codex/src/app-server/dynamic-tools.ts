@@ -17,6 +17,7 @@ import {
   type MessagingToolSend,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { CodexDynamicToolsLoading } from "./config.js";
 import {
   type CodexDynamicToolCallOutputContentItem,
   type CodexDynamicToolCallParams,
@@ -53,10 +54,16 @@ export type CodexDynamicToolBridge = {
   };
 };
 
+export const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
+
+const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set(["sessions_yield"]);
+
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   signal: AbortSignal;
   hookContext?: CodexDynamicToolHookContext;
+  loading?: CodexDynamicToolsLoading;
+  directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
   const tools = params.tools.map((tool) =>
@@ -79,13 +86,19 @@ export function createCodexDynamicToolBridge(params: {
   });
   const legacyExtensionRunner =
     createCodexAppServerToolResultExtensionRunner(toolResultHookContext);
+  const directToolNames = new Set([
+    ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
+    ...(params.directToolNames ?? []),
+  ]);
 
   return {
-    specs: tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: toJsonValue(tool.parameters),
-    })),
+    specs: tools.map((tool) =>
+      createCodexDynamicToolSpec({
+        tool,
+        loading: params.loading ?? "searchable",
+        directToolNames,
+      }),
+    ),
     telemetry,
     handleToolCall: async (call, options) => {
       const tool = toolMap.get(call.tool);
@@ -173,6 +186,26 @@ export function createCodexDynamicToolBridge(params: {
         };
       }
     },
+  };
+}
+
+function createCodexDynamicToolSpec(params: {
+  tool: AnyAgentTool;
+  loading: CodexDynamicToolsLoading;
+  directToolNames: ReadonlySet<string>;
+}): CodexDynamicToolSpec {
+  const base = {
+    name: params.tool.name,
+    description: params.tool.description,
+    inputSchema: toJsonValue(params.tool.parameters),
+  };
+  if (params.loading === "direct" || params.directToolNames.has(params.tool.name)) {
+    return base;
+  }
+  return {
+    ...base,
+    namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+    deferLoading: true,
   };
 }
 

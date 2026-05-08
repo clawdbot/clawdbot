@@ -20,7 +20,7 @@ Codex has two OpenClaw routes:
 
 | Route                      | Config/command                                         | Setup page                              |
 | -------------------------- | ------------------------------------------------------ | --------------------------------------- |
-| Native Codex app-server    | `/codex ...`, `agentRuntime.id: "codex"`               | [Codex harness](/plugins/codex-harness) |
+| Native Codex app-server    | `/codex ...`, `openai/gpt-*` agent refs                | [Codex harness](/plugins/codex-harness) |
 | Explicit Codex ACP adapter | `/acp spawn codex`, `runtime: "acp", agentId: "codex"` | This page                               |
 
 Prefer the native route unless you explicitly need ACP/acpx behavior.

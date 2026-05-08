@@ -7,7 +7,7 @@ read_when:
   - "npm install -g fails with permissions or PATH issues"
 ---
 
-OpenClaw requires **Node 22.14 or newer**. **Node 24 is the default and recommended runtime** for installs, CI, and release workflows. Node 22 remains supported via the active LTS line. The [installer script](/install#alternative-install-methods) will detect and install Node automatically - this page is for when you want to set up Node yourself and make sure everything is wired up correctly (versions, PATH, global installs).
+OpenClaw requires **Node 22.16 or newer**. **Node 24 is the default and recommended runtime** for installs, CI, and release workflows. Node 22 remains supported via the active LTS line. The [installer script](/install#alternative-install-methods) will detect and install Node automatically - this page is for when you want to set up Node yourself and make sure everything is wired up correctly (versions, PATH, global installs).
 
 ## Check your version
 
@@ -15,7 +15,7 @@ OpenClaw requires **Node 22.14 or newer**. **Node 24 is the default and recommen
 node -v
 ```
 
-If this prints `v24.x.x` or higher, you're on the recommended default. If it prints `v22.14.x` or higher, you're on the supported Node 22 LTS path, but we still recommend upgrading to Node 24 when convenient. If Node isn't installed or the version is too old, pick an install method below.
+If this prints `v24.x.x` or higher, you're on the recommended default. If it prints `v22.16.x` or higher, you're on the supported Node 22 LTS path, but we still recommend upgrading to Node 24 when convenient. If Node isn't installed or the version is too old, pick an install method below.
 
 ## Install Node
 

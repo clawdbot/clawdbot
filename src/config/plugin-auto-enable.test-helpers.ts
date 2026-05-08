@@ -72,10 +72,3 @@ export function makeRegistry(
 export function makeApnChannelConfig() {
   return { channels: { apn: { someKey: "value" } } };
 }
-
-export function makeBluebubblesAndImessageChannels() {
-  return {
-    bluebubbles: { serverUrl: "http://localhost:1234", password: "x" },
-    imessage: { cliPath: "/usr/local/bin/imsg" },
-  };
-}

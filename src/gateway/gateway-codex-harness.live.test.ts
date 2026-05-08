@@ -792,6 +792,7 @@ describeLive("gateway live (Codex harness)", () => {
               expectedToken: firstToken,
               message: `Reply with exactly ${firstToken} and nothing else.`,
             });
+            expect(firstText).toContain(firstToken);
             logCodexLiveStep("first-turn", { firstText });
 
             const secondNonce = randomBytes(3).toString("hex").toUpperCase();
@@ -802,6 +803,7 @@ describeLive("gateway live (Codex harness)", () => {
               expectedToken: secondToken,
               message: `Reply with exactly ${secondToken} and nothing else. Do not repeat ${firstToken}.`,
             });
+            expect(secondText).toContain(secondToken);
             logCodexLiveStep("second-turn", { secondText });
           } finally {
             unsubscribeDebugEvents();

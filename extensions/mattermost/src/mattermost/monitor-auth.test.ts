@@ -89,7 +89,7 @@ describe("mattermost monitor auth", () => {
     });
   });
 
-  it("requires open direct messages to match the effective allowlist", async () => {
+  it("requires open direct messages to match the effective allowlist", () => {
     isDangerousNameMatchingEnabled.mockReturnValue(false);
     resolveEffectiveAllowFromLists.mockReturnValue({
       effectiveAllowFrom: [],

@@ -1160,7 +1160,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
   });
 
-  it("returns usage when no message is provided", async () => {
+  it("returns steer usage when no message is provided", async () => {
     const request = vi.fn();
 
     const result = await executeSlashCommand(
@@ -1174,7 +1174,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("returns error message on RPC failure", async () => {
+  it("returns steer error message on RPC failure", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return { sessions: [row("agent:main:main", { status: "running" })] };
@@ -1287,7 +1287,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     });
   });
 
-  it("returns usage when no message is provided", async () => {
+  it("returns redirect usage when no message is provided", async () => {
     const request = vi.fn();
 
     const result = await executeSlashCommand(
@@ -1301,7 +1301,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("returns error message on RPC failure", async () => {
+  it("returns redirect error message on RPC failure", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return { sessions: [row("agent:main:main")] };

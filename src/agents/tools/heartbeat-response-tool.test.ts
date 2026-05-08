@@ -5,7 +5,9 @@ import { createHeartbeatResponseTool } from "./heartbeat-response-tool.js";
 function readSchemaProperty(schema: unknown, key: string): Record<string, unknown> {
   const root = schema as { properties?: Record<string, unknown> };
   const property = root.properties?.[key];
-  expect(property).toBeTruthy();
+  if (property === undefined) {
+    throw new Error(`expected schema property ${key}`);
+  }
   return property as Record<string, unknown>;
 }
 

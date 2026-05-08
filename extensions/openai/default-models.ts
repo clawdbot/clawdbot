@@ -36,15 +36,5 @@ export function applyOpenAIProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applyOpenAIConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const next = applyAgentDefaultModelPrimary(applyOpenAIProviderConfig(cfg), OPENAI_DEFAULT_MODEL);
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: {
-        ...next.agents?.defaults,
-        agentRuntime: { id: "pi" },
-      },
-    },
-  };
+  return applyAgentDefaultModelPrimary(applyOpenAIProviderConfig(cfg), OPENAI_DEFAULT_MODEL);
 }

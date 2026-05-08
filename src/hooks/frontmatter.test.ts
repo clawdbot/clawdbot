@@ -4,6 +4,21 @@ import {
   resolveOpenClawMetadata,
   resolveHookInvocationPolicy,
 } from "./frontmatter.js";
+import type { OpenClawHookMetadata } from "./types.js";
+
+function requireString(value: string | undefined, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
+function requireOpenClawMetadata(metadata: OpenClawHookMetadata | undefined): OpenClawHookMetadata {
+  if (!metadata) {
+    throw new Error("expected openclaw metadata");
+  }
+  return metadata;
+}
 
 describe("parseFrontmatter", () => {
   it("parses single-line key-value pairs", () => {
@@ -53,11 +68,10 @@ metadata:
     const result = parseFrontmatter(content);
     expect(result.name).toBe("session-memory");
     expect(result.description).toBe("Save session context");
-    expect(result.metadata).toBeDefined();
-    expect(typeof result.metadata).toBe("string");
+    const metadata = requireString(result.metadata, "session-memory metadata");
 
     // Verify the metadata is valid JSON
-    const parsed = JSON.parse(result.metadata);
+    const parsed = JSON.parse(metadata);
     expect(parsed.openclaw.emoji).toBe("💾");
     expect(parsed.openclaw.events).toEqual(["command:new"]);
   });
@@ -80,9 +94,8 @@ metadata:
 `;
     const result = parseFrontmatter(content);
     expect(result.name).toBe("command-logger");
-    expect(result.metadata).toBeDefined();
 
-    const parsed = JSON.parse(result.metadata);
+    const parsed = JSON.parse(requireString(result.metadata, "command-logger metadata"));
     expect(parsed.openclaw.emoji).toBe("📝");
     expect(parsed.openclaw.events).toEqual(["command"]);
     expect(parsed.openclaw.requires.config).toEqual(["workspace.dir"]);
@@ -118,7 +131,7 @@ enabled: true
     expect(result.name).toBe("mixed-hook");
     expect(result.description).toBe("A hook with mixed values");
     expect(result.homepage).toBe("https://example.com");
-    expect(result.metadata).toBeDefined();
+    expect(requireString(result.metadata, "mixed-hook metadata")).toContain('"command:new"');
     expect(result.enabled).toBe("true");
   });
 
@@ -165,11 +178,11 @@ describe("resolveOpenClawMetadata", () => {
     };
 
     const result = resolveOpenClawMetadata(frontmatter);
-    expect(result).toBeDefined();
-    expect(result?.emoji).toBe("🔥");
-    expect(result?.events).toEqual(["command:new", "command:reset"]);
-    expect(result?.requires?.config).toEqual(["workspace.dir"]);
-    expect(result?.requires?.bins).toEqual(["git"]);
+    const openclaw = requireOpenClawMetadata(result);
+    expect(openclaw.emoji).toBe("🔥");
+    expect(openclaw.events).toEqual(["command:new", "command:reset"]);
+    expect(openclaw.requires?.config).toEqual(["workspace.dir"]);
+    expect(openclaw.requires?.bins).toEqual(["git"]);
   });
 
   it("returns undefined when metadata is missing", () => {
@@ -251,14 +264,15 @@ metadata:
 
     const frontmatter = parseFrontmatter(content);
     expect(frontmatter.name).toBe("session-memory");
-    expect(frontmatter.metadata).toBeDefined();
+    expect(requireString(frontmatter.metadata, "session-memory metadata")).toContain(
+      '"command:reset"',
+    );
 
-    const openclaw = resolveOpenClawMetadata(frontmatter);
-    expect(openclaw).toBeDefined();
-    expect(openclaw?.emoji).toBe("💾");
-    expect(openclaw?.events).toEqual(["command:new", "command:reset"]);
-    expect(openclaw?.requires?.config).toEqual(["workspace.dir"]);
-    expect(openclaw?.install?.[0].kind).toBe("bundled");
+    const openclaw = requireOpenClawMetadata(resolveOpenClawMetadata(frontmatter));
+    expect(openclaw.emoji).toBe("💾");
+    expect(openclaw.events).toEqual(["command:new", "command:reset"]);
+    expect(openclaw.requires?.config).toEqual(["workspace.dir"]);
+    expect(openclaw.install?.[0].kind).toBe("bundled");
   });
 
   it("parses YAML metadata map", () => {

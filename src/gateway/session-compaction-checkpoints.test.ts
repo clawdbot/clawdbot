@@ -17,6 +17,13 @@ import {
 
 const tempDirs: string[] = [];
 
+function requireNonEmptyString(value: string | null | undefined, message: string): string {
+  if (!value) {
+    throw new Error(message);
+  }
+  return value;
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -41,18 +48,16 @@ describe("session-compaction-checkpoints", () => {
       timestamp: Date.now(),
     } as AssistantMessage);
 
-    const sessionFile = session.getSessionFile();
-    const leafId = session.getLeafId();
-    expect(sessionFile).toBeTruthy();
-    expect(leafId).toBeTruthy();
+    const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
+    const leafId = requireNonEmptyString(session.getLeafId(), "session leaf id missing");
 
-    const originalBefore = await fs.readFile(sessionFile!, "utf-8");
+    const originalBefore = await fs.readFile(sessionFile, "utf-8");
     const copyFileSyncSpy = vi.spyOn(fsSync, "copyFileSync");
     const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
     try {
       const snapshot = await captureCompactionCheckpointSnapshotAsync({
         sessionManager: session,
-        sessionFile: sessionFile!,
+        sessionFile,
       });
 
       expect(copyFileSyncSpy).not.toHaveBeenCalled();
@@ -64,15 +69,15 @@ describe("session-compaction-checkpoints", () => {
       expect(fsSync.existsSync(snapshot!.sessionFile)).toBe(true);
       expect(await fs.readFile(snapshot!.sessionFile, "utf-8")).toBe(originalBefore);
 
-      session.appendCompaction("checkpoint summary", leafId!, 123, { ok: true });
+      session.appendCompaction("checkpoint summary", leafId, 123, { ok: true });
 
       expect(await fs.readFile(snapshot!.sessionFile, "utf-8")).toBe(originalBefore);
-      expect(await fs.readFile(sessionFile!, "utf-8")).not.toBe(originalBefore);
+      expect(await fs.readFile(sessionFile, "utf-8")).not.toBe(originalBefore);
 
       await cleanupCompactionCheckpointSnapshot(snapshot);
 
       expect(fsSync.existsSync(snapshot!.sessionFile)).toBe(false);
-      expect(fsSync.existsSync(sessionFile!)).toBe(true);
+      expect(fsSync.existsSync(sessionFile)).toBe(true);
     } finally {
       copyFileSyncSpy.mockRestore();
       sessionManagerOpenSpy.mockRestore();
@@ -98,21 +103,18 @@ describe("session-compaction-checkpoints", () => {
       timestamp: Date.now(),
     } as unknown as AssistantMessage);
 
-    const sessionFile = session.getSessionFile();
-    const sessionId = session.getSessionId();
-    const leafId = session.getLeafId();
-    expect(sessionFile).toBeTruthy();
-    expect(sessionId).toBeTruthy();
-    expect(leafId).toBeTruthy();
-    await fs.appendFile(sessionFile!, "\nnot-json\n", "utf-8");
+    const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
+    const sessionId = requireNonEmptyString(session.getSessionId(), "session id missing");
+    const leafId = requireNonEmptyString(session.getLeafId(), "session leaf id missing");
+    await fs.appendFile(sessionFile, "\nnot-json\n", "utf-8");
 
     const copyFileSyncSpy = vi.spyOn(fsSync, "copyFileSync");
     const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
     let snapshot: Awaited<ReturnType<typeof captureCompactionCheckpointSnapshotAsync>> = null;
     try {
-      expect(await readSessionLeafIdFromTranscriptAsync(sessionFile!)).toBe(leafId);
+      expect(await readSessionLeafIdFromTranscriptAsync(sessionFile)).toBe(leafId);
       snapshot = await captureCompactionCheckpointSnapshotAsync({
-        sessionFile: sessionFile!,
+        sessionFile,
       });
 
       expect(copyFileSyncSpy).not.toHaveBeenCalled();
@@ -139,15 +141,14 @@ describe("session-compaction-checkpoints", () => {
       content: "before compaction",
       timestamp: Date.now(),
     });
-    const sessionFile = session.getSessionFile();
-    expect(sessionFile).toBeTruthy();
-    await fs.appendFile(sessionFile!, "x".repeat(128), "utf-8");
+    const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
+    await fs.appendFile(sessionFile, "x".repeat(128), "utf-8");
 
     const copyFileSyncSpy = vi.spyOn(fsSync, "copyFileSync");
     try {
       const snapshot = await captureCompactionCheckpointSnapshotAsync({
         sessionManager: session,
-        sessionFile: sessionFile!,
+        sessionFile,
         maxBytes: 64,
       });
 
@@ -179,16 +180,15 @@ describe("session-compaction-checkpoints", () => {
       timestamp: Date.now(),
     } as unknown as AssistantMessage);
 
-    const sessionFile = session.getSessionFile();
-    expect(sessionFile).toBeTruthy();
-    await fs.appendFile(sessionFile!, "\nnot-json\n", "utf-8");
+    const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
+    await fs.appendFile(sessionFile, "\nnot-json\n", "utf-8");
 
     const openSpy = vi.spyOn(SessionManager, "open");
     const forkSpy = vi.spyOn(SessionManager, "forkFrom");
     let forked: Awaited<ReturnType<typeof forkCompactionCheckpointTranscriptAsync>> = null;
     try {
       forked = await forkCompactionCheckpointTranscriptAsync({
-        sourceFile: sessionFile!,
+        sourceFile: sessionFile,
         sessionDir: dir,
       });
 
@@ -196,7 +196,7 @@ describe("session-compaction-checkpoints", () => {
       expect(forkSpy).not.toHaveBeenCalled();
       expect(forked).not.toBeNull();
       expect(forked?.sessionFile).not.toBe(sessionFile);
-      expect(forked?.sessionId).toBeTruthy();
+      expect(forked?.sessionId).toEqual(expect.any(String));
     } finally {
       openSpy.mockRestore();
       forkSpy.mockRestore();
@@ -204,7 +204,7 @@ describe("session-compaction-checkpoints", () => {
 
     const forkedLines = (await fs.readFile(forked!.sessionFile, "utf-8")).trim().split(/\r?\n/);
     const forkedEntries = forkedLines.map((line) => JSON.parse(line) as Record<string, unknown>);
-    const sourceEntries = (await fs.readFile(sessionFile!, "utf-8"))
+    const sourceEntries = (await fs.readFile(sessionFile, "utf-8"))
       .trim()
       .split(/\r?\n/)
       .flatMap((line) => {

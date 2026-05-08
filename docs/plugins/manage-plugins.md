@@ -187,6 +187,6 @@ forces npm resolution.
 
 - [Plugins](/tools/plugin) - overview and troubleshooting
 - [`openclaw plugins`](/cli/plugins) - full CLI reference
-- [ClawHub](/tools/clawhub) - publish and registry operations
+- [ClawHub](/clawhub/cli) - publish and registry operations
 - [Building plugins](/plugins/building-plugins) - create a plugin package
 - [Plugin manifest](/plugins/manifest) - manifest and package metadata

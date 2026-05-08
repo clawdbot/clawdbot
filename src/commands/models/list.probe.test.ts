@@ -18,7 +18,7 @@ describe("mapFailoverReasonToProbeStatus", () => {
     }
   });
 
-  it("does not import the embedded runner on module load", async () => {
+  it("does not import the embedded runner on module load", () => {
     expect(probeModule.mapFailoverReasonToProbeStatus).toBeTypeOf("function");
   });
 

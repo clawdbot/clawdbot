@@ -572,7 +572,14 @@ export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
     return await sipsConvertToJpeg(buffer);
   }
   const ops = await loadMediaAttachmentImageOps();
-  return await ops.convertHeicToJpeg(buffer);
+  try {
+    return await ops.convertHeicToJpeg(buffer);
+  } catch (error) {
+    if (process.platform !== "darwin") {
+      throw error;
+    }
+    return await sipsConvertToJpeg(buffer);
+  }
 }
 
 /**

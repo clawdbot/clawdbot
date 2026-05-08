@@ -142,8 +142,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       fetchFn,
     });
 
-    expect(media).toBeDefined();
-    expect(media?.path).toBe(runtime.savePath);
+    expect(media).toMatchObject({ path: runtime.savePath });
     expect(runtime.saveCalls).toHaveLength(1);
     expect(runtime.saveCalls[0].buffer.toString("utf-8")).toBe("PDFBYTES");
   });
@@ -268,7 +267,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         fetchFn,
       });
 
-      expect(media).toBeDefined();
+      expect(media).toMatchObject({ path: runtime.savePath });
       // Both the attachment info call and the view call should be observed,
       // confirming the direct fetch path was taken (no dispatcher interception).
       expect(fetchCalls).toHaveLength(2);

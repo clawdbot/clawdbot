@@ -400,10 +400,11 @@ function convertResponsesTools(
       type: "function" as const,
       name: tool.name,
       description: tool.description,
-      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true) as Record<
-        string,
-        unknown
-      >,
+      parameters: normalizeOpenAIStrictToolParameters(
+        tool.parameters,
+        strict === true,
+        model.compat,
+      ) as Record<string, unknown>,
     };
     return strict === undefined ? (base as FunctionTool) : { ...base, strict };
   });
@@ -1493,12 +1494,21 @@ async function processOpenAICompletionsStream(
       continue;
     }
     if (choice.delta.content) {
-      if (currentBlock?.type === "toolCall") {
-        queuePostToolCallDelta({ kind: "text", text: choice.delta.content });
-      } else {
-        appendTextDelta(choice.delta.content);
+      // Structured content can contain visible text and thinking blocks in the
+      // same delta, so route each extracted block through the normal stream path.
+      const contentDeltas = getCompletionsContentDeltas(choice.delta.content);
+      for (const contentDelta of contentDeltas) {
+        if (currentBlock?.type === "toolCall") {
+          queuePostToolCallDelta(contentDelta);
+        } else if (contentDelta.kind === "text") {
+          appendTextDelta(contentDelta.text);
+        } else {
+          appendThinkingDelta(contentDelta);
+        }
       }
-      continue;
+      if (contentDeltas.length > 0) {
+        continue;
+      }
     }
     const reasoningDeltas = getCompletionsReasoningDeltas(
       choice.delta as Record<string, unknown>,
@@ -1597,6 +1607,49 @@ type CompletionsReasoningDelta =
       kind: "text";
       text: string;
     };
+
+function getCompletionsContentDeltas(content: unknown): CompletionsReasoningDelta[] {
+  if (typeof content === "string") {
+    return content ? [{ kind: "text", text: content }] : [];
+  }
+  if (Array.isArray(content)) {
+    return content.flatMap((item) => getCompletionsContentDeltas(item));
+  }
+  if (!content || typeof content !== "object") {
+    return [];
+  }
+  const record = content as Record<string, unknown>;
+  const type = typeof record.type === "string" ? record.type.toLowerCase() : "";
+  // Some OpenAI-compatible providers, notably Mistral thinking models, stream
+  // `delta.content` as typed objects. Never coerce those objects directly or
+  // they become persisted visible text like "[object Object]".
+  const extractText = (value: unknown): string => {
+    if (typeof value === "string") {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => extractText(item)).join("");
+    }
+    if (value && typeof value === "object") {
+      const nested = value as Record<string, unknown>;
+      return extractText(nested.text ?? nested.content ?? nested.thinking);
+    }
+    return "";
+  };
+  const text = extractText(record.text ?? record.content ?? record.thinking);
+  if (!text) {
+    return [];
+  }
+  // Preserve provider reasoning as OpenClaw thinking blocks so channel/UI
+  // surfaces can decide whether to show it instead of leaking it as answer text.
+  if (type.includes("thinking") || type.includes("reasoning")) {
+    return [{ kind: "thinking", signature: "content", text }];
+  }
+  if (type === "text" || type === "output_text" || type.endsWith(".output_text")) {
+    return [{ kind: "text", text }];
+  }
+  return [];
+}
 
 function getCompletionsReasoningDeltas(
   delta: Record<string, unknown>,
@@ -1768,7 +1821,11 @@ function convertTools(
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true),
+      parameters: normalizeOpenAIStrictToolParameters(
+        tool.parameters,
+        strict === true,
+        model.compat,
+      ),
       ...(strict === undefined ? {} : { strict }),
     },
   }));

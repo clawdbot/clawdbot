@@ -230,12 +230,13 @@ describe("barnacle-auto-response", () => {
     expect(managedLabelSpecs["r: support"].description).toContain("support requests");
     expect(managedLabelSpecs["r: false-positive"].description).toContain("false positive");
     expect(managedLabelSpecs["r: third-party-extension"].description).toContain("ClawHub");
+    expect(managedLabelSpecs["r: bluebubbles"].description).toContain("deprecated");
     expect(managedLabelSpecs["r: too-many-prs"].description).toContain("twenty active PRs");
     expect(managedLabelSpecs[PROOF_SUPPLIED_LABEL].color).toBe("C2E0C6");
     expect(managedLabelSpecs[PROOF_SUFFICIENT_LABEL].color).toBe("0E8A16");
 
     for (const label of Object.values(candidateLabels)) {
-      expect(managedLabelSpecs[label]).toBeDefined();
+      expect(managedLabelSpecs).toHaveProperty(label);
       expect(managedLabelSpecs[label].description).toMatch(/^Candidate:/);
     }
   });
@@ -812,6 +813,29 @@ describe("barnacle-auto-response", () => {
     expect(calls.createComment).toContainEqual(
       expect.objectContaining({
         body: expect.stringContaining("ClawHub"),
+      }),
+    );
+    expect(calls.update).toContainEqual(expect.objectContaining({ state: "closed" }));
+  });
+
+  it("closes manually labeled BlueBubbles requests with imsg migration guidance", async () => {
+    const { calls, github } = barnacleGithub([]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleIssueContext({}, ["r: bluebubbles"], {
+        action: "labeled",
+        label: { name: "r: bluebubbles" },
+        sender: { login: "maintainer", type: "User" },
+      }),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.createComment).toContainEqual(
+      expect.objectContaining({
+        body: expect.stringContaining("/channels/imessage"),
       }),
     );
     expect(calls.update).toContainEqual(expect.objectContaining({ state: "closed" }));

@@ -1,3 +1,4 @@
+import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
   fetchMattermostUserTeams,
@@ -21,10 +22,6 @@ import {
   type MattermostSlashCommandConfig,
 } from "./slash-commands.js";
 import { activateSlashCommands } from "./slash-state.js";
-
-function isLoopbackHost(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-}
 
 function buildSlashCommands(params: {
   cfg: OpenClawConfig;

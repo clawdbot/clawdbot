@@ -243,11 +243,12 @@ command -v openclaw
 openclaw --version
 EOF
 
-# Mount only test harness/plugin QA sources; the SUT itself is the installed package candidate.
+# Mount only QA harness source; the SUT itself, including bundled plugin runtime,
+# is the installed package candidate.
 run_logged docker_e2e_run_with_harness \
   "${docker_env[@]}" \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
-  -v "$ROOT_DIR/extensions:/app/extensions:ro" \
+  -v "$ROOT_DIR/extensions/qa-lab:/app/extensions/qa-lab:ro" \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
@@ -278,17 +279,12 @@ openclaw --version
 mkdir -p /app/node_modules
 openclaw_package_dir="/npm-global/lib/node_modules/openclaw"
 # The mounted QA harness imports openclaw/plugin-sdk and package dependencies;
-# point those imports at the installed package without copying source into the test image.
+# point those imports at the installed package without copying source plugins into the test image.
 rm -rf /app/node_modules/openclaw
 ln -sfnT "$openclaw_package_dir" /app/node_modules/openclaw
 rm -rf /app/dist
 ln -sfnT "$openclaw_package_dir/dist" /app/dist
 cp "$openclaw_package_dir/package.json" /app/package.json
-rm -rf "$openclaw_package_dir/extensions"
-ln -sfnT /app/extensions "$openclaw_package_dir/extensions"
-mkdir -p /app/node_modules/@openclaw
-rm -rf /app/node_modules/@openclaw/qa-channel
-ln -sfnT /app/extensions/qa-channel /app/node_modules/@openclaw/qa-channel
 node scripts/e2e/lib/npm-telegram-live/prepare-package.mjs \
   /app/package.json \
   /app/node_modules/openclaw/package.json

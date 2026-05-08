@@ -574,8 +574,7 @@ describe("resolveAgentConfig", () => {
     };
     // Should normalize to "main" (default)
     const result = resolveAgentConfig(cfg, "");
-    expect(result).toBeDefined();
-    expect(result?.workspace).toBe("~/openclaw");
+    expect(result).toMatchObject({ workspace: "~/openclaw" });
   });
 
   it("uses OPENCLAW_HOME for default agent workspace", () => {

@@ -235,7 +235,7 @@ describe("maybeRepairGatewayDaemon", () => {
     return runtime;
   }
 
-  async function runScheduledGatewayRepair(confirmMessage: string) {
+  async function runScheduledGatewayRepairAndExpectVerificationSkipped(confirmMessage: string) {
     setPlatform("linux");
     service.restart.mockResolvedValueOnce({ outcome: "scheduled" });
 
@@ -258,7 +258,7 @@ describe("maybeRepairGatewayDaemon", () => {
   }
 
   it("skips restart verification when a running service restart is only scheduled", async () => {
-    await runScheduledGatewayRepair("Restart gateway service now?");
+    await runScheduledGatewayRepairAndExpectVerificationSkipped("Restart gateway service now?");
   });
 
   it("reports recent restart handoffs during deep doctor", async () => {
@@ -321,7 +321,7 @@ describe("maybeRepairGatewayDaemon", () => {
 
   it("skips start verification when a stopped service start is only scheduled", async () => {
     service.readRuntime.mockResolvedValue({ status: "stopped" });
-    await runScheduledGatewayRepair("Start gateway service now?");
+    await runScheduledGatewayRepairAndExpectVerificationSkipped("Start gateway service now?");
   });
 
   it("skips gateway install during non-interactive update repairs", async () => {

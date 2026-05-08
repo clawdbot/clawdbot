@@ -4,6 +4,11 @@ import {
   mergeDmAllowFromSources,
   type AllowlistMatch,
 } from "openclaw/plugin-sdk/allow-from";
+import type {
+  DmPolicy,
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+} from "openclaw/plugin-sdk/config-types";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
@@ -66,6 +71,17 @@ export const normalizeDmAllowFromWithStore = (params: {
   storeAllowFrom?: string[];
   dmPolicy?: string;
 }): NormalizedAllowFrom => normalizeAllowFrom(mergeDmAllowFromSources(params));
+
+export function resolveTelegramEffectiveDmPolicy(params: {
+  isGroup: boolean;
+  groupConfig?: TelegramDirectConfig | TelegramGroupConfig;
+  dmPolicy?: DmPolicy;
+}): DmPolicy {
+  if (!params.isGroup && params.groupConfig && "dmPolicy" in params.groupConfig) {
+    return params.groupConfig.dmPolicy ?? params.dmPolicy ?? "pairing";
+  }
+  return params.dmPolicy ?? "pairing";
+}
 
 export const isSenderAllowed = (params: {
   allow: NormalizedAllowFrom;

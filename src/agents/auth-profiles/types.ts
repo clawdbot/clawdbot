@@ -29,17 +29,6 @@ export type ApiKeyCredential = {
   metadata?: Record<string, string>;
 };
 
-export type AwsSdkCredential = {
-  type: "aws-sdk";
-  provider: string;
-  /** Explicit opt-out for copying this profile when creating another agent. */
-  copyToAgents?: boolean;
-  email?: string;
-  displayName?: string;
-  /** Optional provider-specific metadata (e.g., account IDs, regions). */
-  metadata?: Record<string, string>;
-};
-
 export type TokenCredential = {
   /**
    * Static bearer-style token (often OAuth access token / PAT).
@@ -70,11 +59,7 @@ export type OAuthCredential = OAuthCredentials & {
   displayName?: string;
 };
 
-export type AuthProfileCredential =
-  | ApiKeyCredential
-  | AwsSdkCredential
-  | TokenCredential
-  | OAuthCredential;
+export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;
 
 export type AuthProfileFailureReason =
   | "auth"

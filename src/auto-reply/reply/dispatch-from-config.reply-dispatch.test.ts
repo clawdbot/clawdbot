@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import {
@@ -29,6 +30,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   });
 
   beforeEach(() => {
+    clearAgentHarnesses();
     setDiscordTestRegistry();
     resetInboundDedupe();
     mocks.routeReply.mockReset().mockResolvedValue({ ok: true, messageId: "mock" });

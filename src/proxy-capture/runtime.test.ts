@@ -73,9 +73,8 @@ describe("debug proxy runtime", () => {
     finalizeDebugProxyCapture(settings, deps);
 
     const sessionEvents = events.filter((event) => event.sessionId === "runtime-test-session");
-    expect(sessionEvents.some((event) => event.host === "api.minimax.io")).toBe(true);
-    expect(sessionEvents.some((event) => event.kind === "request")).toBe(true);
-    expect(sessionEvents.some((event) => event.kind === "response")).toBe(true);
+    expect(sessionEvents.map((event) => event.host)).toContain("api.minimax.io");
+    expect(sessionEvents.map((event) => event.kind)).toEqual(["request", "response"]);
   });
 
   it("normalizes symbol-bearing request headers before calling patched fetch targets", async () => {

@@ -5,7 +5,6 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
@@ -42,13 +41,6 @@ const resolvePluginProvidersRuntime = vi.hoisted(() =>
 );
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
-const ensureCodexRuntimePluginForModelSelection = vi.hoisted(() =>
-  vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
-    cfg,
-    required: false,
-    installed: false,
-  })),
-);
 const promptDefaultModel = vi.hoisted(() => vi.fn<PromptDefaultModel>(async () => ({})));
 const promptCustomApiConfig = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
 const configureGatewayForSetup = vi.hoisted(() =>
@@ -200,7 +192,6 @@ vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
 }));
 
 vi.mock("../commands/model-picker.js", () => ({
-  ensureCodexRuntimePluginForModelSelection,
   applyPrimaryModel,
   promptDefaultModel,
 }));
@@ -540,7 +531,7 @@ describe("runSetupWizard", () => {
     ).rejects.toThrow("auth choice is required");
   });
 
-  async function runTuiHatchTest(params: {
+  async function runTuiHatchTestAndExpectLaunch(params: {
     writeBootstrapFile: boolean;
     expectedMessage: string | undefined;
   }) {
@@ -588,11 +579,17 @@ describe("runSetupWizard", () => {
   }
 
   it("launches TUI without auto-delivery when hatching", async () => {
-    await runTuiHatchTest({ writeBootstrapFile: true, expectedMessage: "Wake up, my friend!" });
+    await runTuiHatchTestAndExpectLaunch({
+      writeBootstrapFile: true,
+      expectedMessage: "Wake up, my friend!",
+    });
   });
 
   it("offers TUI hatch even without BOOTSTRAP.md", async () => {
-    await runTuiHatchTest({ writeBootstrapFile: false, expectedMessage: undefined });
+    await runTuiHatchTestAndExpectLaunch({
+      writeBootstrapFile: false,
+      expectedMessage: undefined,
+    });
   });
 
   it("shows the web search hint at the end of setup", async () => {

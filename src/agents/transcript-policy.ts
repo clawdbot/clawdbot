@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
+import type { ProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import { shouldPreserveThinkingBlocks } from "../plugins/provider-replay-helpers.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
@@ -219,6 +220,7 @@ export function resolveTranscriptPolicy(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   model?: ProviderRuntimeModel;
+  runtimeHandle?: ProviderRuntimePluginHandle;
 }): TranscriptPolicy {
   const provider = normalizeProviderId(params.provider ?? "");
   const cacheConfig = canCacheTranscriptPolicy(params) ? params.config : undefined;
@@ -231,14 +233,16 @@ export function resolveTranscriptPolicy(params: {
       return cached;
     }
   }
-  const runtimePlugin = provider
-    ? resolveProviderRuntimePlugin({
-        provider,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      })
-    : undefined;
+  const runtimePlugin =
+    params.runtimeHandle?.plugin ??
+    (provider
+      ? resolveProviderRuntimePlugin({
+          provider,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+        })
+      : undefined);
   const context = {
     config: params.config,
     workspaceDir: params.workspaceDir,

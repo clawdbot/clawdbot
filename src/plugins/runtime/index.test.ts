@@ -98,9 +98,9 @@ function createGatewaySubagentRunFixture(params?: { allowGatewaySubagentBinding?
 }
 
 function expectFunctionKeys(value: Record<string, unknown>, keys: readonly string[]) {
-  keys.forEach((key) => {
-    expect(typeof value[key]).toBe("function");
-  });
+  expect(value).toEqual(
+    expect.objectContaining(Object.fromEntries(keys.map((key) => [key, expect.any(Function)]))),
+  );
 }
 
 function expectRunCommandOutcome(params: {
@@ -317,8 +317,12 @@ describe("plugin runtime command execution", () => {
     {
       name: "exposes runtime.modelAuth with raw and runtime-ready auth helpers",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expect(runtime.modelAuth).toBeDefined();
-        expectFunctionKeys(runtime.modelAuth as Record<string, unknown>, [
+        expect(runtime.modelAuth).toMatchObject({
+          getApiKeyForModel: expect.any(Function),
+          getRuntimeAuthForModel: expect.any(Function),
+          resolveApiKeyForProvider: expect.any(Function),
+        });
+        expectFunctionKeys(runtime.modelAuth, [
           "getApiKeyForModel",
           "getRuntimeAuthForModel",
           "resolveApiKeyForProvider",
@@ -390,7 +394,7 @@ describe("plugin runtime command execution", () => {
     });
   });
 
-  it("keeps subagent unavailable by default even after gateway initialization", async () => {
+  it("keeps subagent unavailable by default even after gateway initialization", () => {
     const { runtime } = createGatewaySubagentRunFixture();
 
     expectGatewaySubagentRunFailure(runtime, { sessionKey: "s-1", message: "hello" });

@@ -225,7 +225,9 @@ describe("generateVoiceResponse", () => {
     });
 
     expect(result.text).toBe("Fresh call context.");
-    expect(sessionStore["voice:call:call-123"]).toBeDefined();
+    expect(sessionStore["voice:call:call-123"]).toMatchObject({
+      sessionId: expect.stringMatching(/\S/),
+    });
     expect(sessionStore["voice:15550001111"]).toBeUndefined();
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({

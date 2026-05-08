@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import {
   privateFileStoreSync,
@@ -14,6 +15,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  sleep,
 } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeZaloReactionIcon } from "./reaction.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
@@ -137,10 +139,6 @@ function isReadableCredentialFile(filePath: string): boolean {
 
 function writeCredentialFileAtomic(filePath: string, payload: string): void {
   privateFileStoreSync(resolveCredentialsDir()).writeText(path.basename(filePath), payload);
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizeProfile(profile?: string | null): string {
@@ -477,27 +475,14 @@ function resolveMediaFileName(params: {
   }
 
   const ext =
-    params.contentType === "image/png"
-      ? "png"
-      : params.contentType === "image/webp"
-        ? "webp"
-        : params.contentType === "image/jpeg"
+    extensionForMime(params.contentType)?.replace(/^\./u, "") ??
+    (params.kind === "video"
+      ? "mp4"
+      : params.kind === "audio"
+        ? "mp3"
+        : params.kind === "image"
           ? "jpg"
-          : params.contentType === "video/mp4"
-            ? "mp4"
-            : params.contentType === "audio/mpeg"
-              ? "mp3"
-              : params.contentType === "audio/ogg"
-                ? "ogg"
-                : params.contentType === "audio/wav"
-                  ? "wav"
-                  : params.kind === "video"
-                    ? "mp4"
-                    : params.kind === "audio"
-                      ? "mp3"
-                      : params.kind === "image"
-                        ? "jpg"
-                        : "bin";
+          : "bin");
 
   return `upload.${ext}`;
 }
@@ -1624,7 +1609,7 @@ export async function startZaloQrLogin(params: {
         message: "Scan this QR with the Zalo app.",
       };
     }
-    await delay(150);
+    await sleep(150);
   }
 
   return {
@@ -1674,7 +1659,7 @@ export async function waitForZaloQrLogin(params: {
         message: "Login successful.",
       };
     }
-    await Promise.race([active.waitPromise, delay(400)]);
+    await Promise.race([active.waitPromise, sleep(400)]);
   }
 
   return {

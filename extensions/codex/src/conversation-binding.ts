@@ -224,6 +224,8 @@ async function attachExistingThread(params: {
     { timeoutMs: runtime.requestTimeoutMs },
   );
   const thread = response.thread;
+  const runtimeApprovalPolicy =
+    typeof runtime.approvalPolicy === "string" ? runtime.approvalPolicy : undefined;
   await writeCodexAppServerBinding(
     params.sessionFile,
     {
@@ -236,7 +238,7 @@ async function attachExistingThread(params: {
         authProfileId: params.authProfileId,
         modelProvider: response.modelProvider ?? params.modelProvider,
       }),
-      approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
+      approvalPolicy: params.approvalPolicy ?? runtimeApprovalPolicy,
       sandbox: params.sandbox ?? runtime.sandbox,
       serviceTier: params.serviceTier ?? runtime.serviceTier,
     },
@@ -290,6 +292,8 @@ async function createThread(params: {
     },
     { timeoutMs: runtime.requestTimeoutMs },
   );
+  const runtimeApprovalPolicy =
+    typeof runtime.approvalPolicy === "string" ? runtime.approvalPolicy : undefined;
   await writeCodexAppServerBinding(
     params.sessionFile,
     {
@@ -302,7 +306,7 @@ async function createThread(params: {
         authProfileId: params.authProfileId,
         modelProvider: response.modelProvider ?? params.modelProvider,
       }),
-      approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
+      approvalPolicy: params.approvalPolicy ?? runtimeApprovalPolicy,
       sandbox: params.sandbox ?? runtime.sandbox,
       serviceTier: params.serviceTier ?? runtime.serviceTier,
     },

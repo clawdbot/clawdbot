@@ -11,7 +11,7 @@ describe("mistralMediaUnderstandingProvider", () => {
   it("has expected provider metadata", () => {
     expect(mistralMediaUnderstandingProvider.id).toBe("mistral");
     expect(mistralMediaUnderstandingProvider.capabilities).toEqual(["audio"]);
-    expect(mistralMediaUnderstandingProvider.transcribeAudio).toBeDefined();
+    expect(mistralMediaUnderstandingProvider.transcribeAudio).toBeTypeOf("function");
   });
 
   it("uses Mistral base URL by default", async () => {

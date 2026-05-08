@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { tlonDoctor } from "./doctor.js";
 
+function getTlonCompatibilityNormalizer(): NonNullable<
+  typeof tlonDoctor.normalizeCompatibilityConfig
+> {
+  const normalize = tlonDoctor.normalizeCompatibilityConfig;
+  if (!normalize) {
+    throw new Error("Expected tlon doctor to expose normalizeCompatibilityConfig");
+  }
+  return normalize;
+}
+
 describe("tlon doctor", () => {
   it("normalizes legacy private-network aliases", () => {
-    const normalize = tlonDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getTlonCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {

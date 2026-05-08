@@ -179,7 +179,9 @@ function connectHost(tab: Tab) {
   const host = createHost(tab);
   connectGateway(host);
   const client = gatewayClients[0];
-  expect(client).toBeDefined();
+  if (!client) {
+    throw new Error("Expected gateway client instance");
+  }
   return { host, client };
 }
 
@@ -198,21 +200,21 @@ beforeEach(() => {
 });
 
 describe("connectGateway chat load startup work", () => {
-  it("lets the active chat refresh own avatar loading on initial chat hello", () => {
+  it("lets the active chat refresh own avatar loading on initial chat hello", async () => {
     const { host, client } = connectHost("chat");
 
     client.emitHello();
 
-    expect(refreshActiveTabMock).toHaveBeenCalledWith(host);
+    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
     expect(refreshChatAvatarMock).not.toHaveBeenCalled();
   });
 
-  it("still preloads the chat avatar when connecting outside the chat tab", () => {
+  it("still preloads the chat avatar when connecting outside the chat tab", async () => {
     const { host, client } = connectHost("overview");
 
     client.emitHello();
 
-    expect(refreshActiveTabMock).toHaveBeenCalledWith(host);
+    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
     expect(refreshChatAvatarMock).toHaveBeenCalledWith(host);
   });
 });

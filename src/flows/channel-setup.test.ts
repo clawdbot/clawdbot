@@ -672,7 +672,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       "declares an already-installed plugin whose runtime cannot be loaded",
     async () => {
       // Regression: users who uninstalled an externalized channel plugin
-      // (qqbot / bluebubbles / discord / ...) while a non-empty
+      // (qqbot / imessage / discord / ...) while a non-empty
       // `channels.<id>` entry remained in their config got dead-ended with
       // "<channel> plugin not available" because the installed-catalog
       // branch did not fall back to the catalog install flow.

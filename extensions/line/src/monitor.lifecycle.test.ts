@@ -31,6 +31,16 @@ let getLineRuntimeState: typeof import("./monitor.js").getLineRuntimeState;
 let clearLineRuntimeStateForTests: typeof import("./monitor.js").clearLineRuntimeStateForTests;
 let innerLineWebhookHandlerMock: ReturnType<typeof vi.fn<LineNodeWebhookHandler>>;
 
+function requireRegisteredRoute(): { handler: LineNodeWebhookHandler } {
+  const route = registerWebhookTargetWithPluginRouteMock.mock.calls[0]?.[0]?.route as
+    | { handler: LineNodeWebhookHandler }
+    | undefined;
+  if (!route) {
+    throw new Error("expected registered LINE webhook route");
+  }
+  return route;
+}
+
 vi.mock("./bot.js", () => ({
   createLineBot: createLineBotMock,
 }));
@@ -305,10 +315,7 @@ describe("monitorLineProvider lifecycle", () => {
       runtime: {} as RuntimeEnv,
     });
 
-    const route = registerWebhookTargetWithPluginRouteMock.mock.calls[0]?.[0]?.route as
-      | { handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }
-      | undefined;
-    expect(route).toBeDefined();
+    const route = requireRegisteredRoute();
 
     const payload = JSON.stringify({ events: [{ type: "message" }] });
     const signature = crypto.createHmac("SHA256", "second-secret").update(payload).digest("base64");
@@ -318,7 +325,7 @@ describe("monitorLineProvider lifecycle", () => {
     }) as unknown as IncomingMessage;
     const res = createRouteResponse();
 
-    await route!.handler(req, res);
+    await route.handler(req, res);
 
     const firstBot = createLineBotMock.mock.results[0]?.value as {
       handleWebhook: ReturnType<typeof vi.fn>;
@@ -350,10 +357,7 @@ describe("monitorLineProvider lifecycle", () => {
       runtime: {} as RuntimeEnv,
     });
 
-    const route = registerWebhookTargetWithPluginRouteMock.mock.calls[0]?.[0]?.route as
-      | { handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }
-      | undefined;
-    expect(route).toBeDefined();
+    const route = requireRegisteredRoute();
 
     const payload = JSON.stringify({ events: [{ type: "message" }] });
     const signature = crypto.createHmac("SHA256", "shared-secret").update(payload).digest("base64");
@@ -363,7 +367,7 @@ describe("monitorLineProvider lifecycle", () => {
     }) as unknown as IncomingMessage;
     const res = createRouteResponse();
 
-    await route!.handler(req, res);
+    await route.handler(req, res);
 
     const firstBot = createLineBotMock.mock.results[0]?.value as {
       handleWebhook: ReturnType<typeof vi.fn>;
@@ -391,10 +395,7 @@ describe("monitorLineProvider lifecycle", () => {
       runtime: {} as RuntimeEnv,
     });
 
-    const route = registerWebhookTargetWithPluginRouteMock.mock.calls[0]?.[0]?.route as
-      | { handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }
-      | undefined;
-    expect(route).toBeDefined();
+    const route = requireRegisteredRoute();
     const createHeldPostRequest = () => {
       const req = Object.assign(new EventEmitter(), {
         destroyed: false,
@@ -420,12 +421,12 @@ describe("monitorLineProvider lifecycle", () => {
     };
 
     const firstRequests = Array.from({ length: limit }, () =>
-      route!.handler(createHeldPostRequest(), createRouteResponse()),
+      route.handler(createHeldPostRequest(), createRouteResponse()),
     );
     await new Promise((resolve) => setImmediate(resolve));
 
     const overflowResponse = createRouteResponse();
-    await route!.handler(createSignedPostRequest(), overflowResponse);
+    await route.handler(createSignedPostRequest(), overflowResponse);
 
     const bot = createLineBotMock.mock.results[0]?.value as {
       handleWebhook: ReturnType<typeof vi.fn>;

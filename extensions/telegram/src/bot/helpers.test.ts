@@ -496,12 +496,12 @@ describe("describeReplyTarget", () => {
     expect(result).not.toBeNull();
     expect(result?.body).toBe("This is the forwarded content");
     expect(result?.id).toBe("2");
-    // The reply target's forwarded context should be included
-    expect(result?.forwardedFrom).toBeDefined();
-    expect(result?.forwardedFrom?.from).toBe("Bob Smith (@bobsmith)");
-    expect(result?.forwardedFrom?.fromType).toBe("user");
-    expect(result?.forwardedFrom?.fromId).toBe("999");
-    expect(result?.forwardedFrom?.date).toBe(500);
+    expect(result?.forwardedFrom).toMatchObject({
+      from: "Bob Smith (@bobsmith)",
+      fromType: "user",
+      fromId: "999",
+      date: 500,
+    });
   });
 
   it("extracts forwarded context from channel forward in reply_to_message", () => {
@@ -525,10 +525,11 @@ describe("describeReplyTarget", () => {
       },
     } as any);
     expect(result).not.toBeNull();
-    expect(result?.forwardedFrom).toBeDefined();
-    expect(result?.forwardedFrom?.from).toBe("Tech News (Editor)");
-    expect(result?.forwardedFrom?.fromType).toBe("channel");
-    expect(result?.forwardedFrom?.fromMessageId).toBe(456);
+    expect(result?.forwardedFrom).toMatchObject({
+      from: "Tech News (Editor)",
+      fromType: "channel",
+      fromMessageId: 456,
+    });
   });
 
   it("marks top-level quote metadata on external replies as external targets", () => {

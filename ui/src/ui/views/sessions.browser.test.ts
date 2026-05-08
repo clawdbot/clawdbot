@@ -1,7 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 
 const VIEWPORTS = [
   [375, 812],
@@ -15,22 +15,13 @@ const describeBrowserLayout = existsSync(chromium.executablePath()) ? describe :
 let browser: Browser;
 
 function readUiCss(): string {
-  const roots = [process.cwd(), resolve(process.cwd(), "ui")];
   const files = [
-    "src/styles/base.css",
-    "src/styles/layout.css",
-    "src/styles/layout.mobile.css",
-    "src/styles/components.css",
+    "ui/src/styles/base.css",
+    "ui/src/styles/layout.css",
+    "ui/src/styles/layout.mobile.css",
+    "ui/src/styles/components.css",
   ];
-  return files
-    .map((file) => {
-      const path = roots
-        .map((root) => resolve(root, file))
-        .find((candidate) => existsSync(candidate));
-      expect(path, `Missing CSS fixture ${file}`).toBeTruthy();
-      return readFileSync(path!, "utf8");
-    })
-    .join("\n");
+  return files.map((file) => readStyleSheet(file)).join("\n");
 }
 
 function sessionsTableHtml() {

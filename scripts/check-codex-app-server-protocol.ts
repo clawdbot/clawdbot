@@ -54,7 +54,7 @@ const checks: Array<{ file: string; snippets: string[] }> = [
     file: "v2/TurnStartParams.ts",
     snippets: [
       "permissions?: PermissionProfileSelectionParams | null",
-      "serviceTier?: ServiceTier | null",
+      "serviceTier?: string | null",
     ],
   },
   {

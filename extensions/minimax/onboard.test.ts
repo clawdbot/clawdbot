@@ -85,8 +85,8 @@ describe("minimax onboard", () => {
         },
       },
     });
-    expect(cfg.models?.providers?.anthropic).toBeDefined();
-    expect(cfg.models?.providers?.minimax).toBeDefined();
+    expect(cfg.models?.providers).toHaveProperty("anthropic");
+    expect(cfg.models?.providers).toHaveProperty("minimax");
   });
 
   it("preserves existing models mode", () => {

@@ -1,3 +1,7 @@
+import {
+  describeImageWithModel,
+  describeImagesWithModel,
+} from "openclaw/plugin-sdk/media-understanding";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
@@ -129,8 +133,10 @@ function captureWrappedOllamaPayload(
     streamFn: baseStreamFn,
   });
 
-  expect(typeof wrapped).toBe("function");
-  void wrapped?.(
+  if (!wrapped) {
+    throw new Error("expected Ollama thinking stream wrapper");
+  }
+  void wrapped(
     {
       api: "ollama",
       provider: "ollama",
@@ -705,8 +711,10 @@ describe("ollama plugin", () => {
       streamFn: baseStreamFn,
     });
 
-    expect(typeof wrapped).toBe("function");
-    void wrapped?.({} as never, {} as never, {});
+    if (!wrapped) {
+      throw new Error("expected Ollama OpenAI-compatible stream wrapper");
+    }
+    void wrapped({} as never, {} as never, {});
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
   });
@@ -944,8 +952,8 @@ describe("ollama plugin", () => {
     const [ollamaMedia] = mediaProviders;
     expect(ollamaMedia.id).toBe("ollama");
     expect(ollamaMedia.capabilities).toEqual(["image"]);
-    expect(typeof ollamaMedia.describeImage).toBe("function");
-    expect(typeof ollamaMedia.describeImages).toBe("function");
+    expect(ollamaMedia.describeImage).toBe(describeImageWithModel);
+    expect(ollamaMedia.describeImages).toBe(describeImagesWithModel);
     // Intentional: no defaultModels or autoPriority. Ollama vision models are
     // user-installed (llava, qwen2.5vl, …) with no universal default, and we
     // don't want Ollama to auto-steal image duty from configured providers.

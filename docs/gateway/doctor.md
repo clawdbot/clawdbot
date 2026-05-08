@@ -87,7 +87,7 @@ cat ~/.openclaw/openclaw.json
     - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
     - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
     - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
-    - Legacy agent runtime-policy migration to `agents.defaults.agentRuntime` and `agents.list[].agentRuntime`.
+    - Legacy whole-agent runtime-policy cleanup; provider/model runtime policy is the active route selector.
     - Stale plugin config cleanup when plugins are enabled; when `plugins.enabled=false`, stale plugin references are treated as inert containment config and are preserved.
 
   </Accordion>
@@ -109,7 +109,7 @@ cat ~/.openclaw/openclaw.json
     - Channel status warnings (probed from the running gateway).
     - Channel-specific permission checks live under `openclaw channels capabilities`; for example, Discord voice channel permissions are audited with `openclaw channels capabilities --channel discord --target channel:<channel-id>`.
     - WhatsApp responsiveness checks for degraded Gateway event-loop health with local TUI clients still running; `--fix` stops only verified local TUI clients.
-    - Codex route repair for legacy `openai-codex/*` model refs in primary models, fallbacks, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and session route pins; `--fix` rewrites them to `openai/*` and selects `agentRuntime.id: "codex"` only when the Codex plugin is installed, enabled, contributes the `codex` harness, and has usable OAuth. Otherwise it selects `agentRuntime.id: "pi"`.
+    - Codex route repair for legacy `openai-codex/*` model refs in primary models, fallbacks, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and session route pins; `--fix` rewrites them to `openai/*`, removes stale session/whole-agent runtime pins, and leaves canonical OpenAI agent refs on the default Codex harness.
     - Supervisor config audit (launchd/systemd/schtasks) with optional repair.
     - Embedded proxy environment cleanup for gateway services that captured shell `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` values during install or update.
     - Gateway runtime best-practice checks (Node vs Bun, version-manager paths).
@@ -269,8 +269,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     In `--fix` / `--repair` mode, doctor rewrites affected default-agent and per-agent refs, including primary models, fallbacks, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and stale persisted session route state:
 
     - `openai-codex/gpt-*` becomes `openai/gpt-*`.
-    - The matching agent runtime becomes `agentRuntime.id: "codex"` only when Codex is installed, enabled, contributes the `codex` harness, and has usable OAuth.
-    - Otherwise the matching agent runtime becomes `agentRuntime.id: "pi"`.
+    - Stale whole-agent runtime config and persisted session runtime pins are removed because runtime selection is provider/model-scoped.
+    - Explicit provider/model runtime policy is preserved.
     - Existing model fallback lists are preserved with their legacy entries rewritten; copied per-model settings move from the legacy key to the canonical `openai/*` key.
     - Persisted session `modelProvider`/`providerOverride`, `model`/`modelOverride`, fallback notices, auth-profile pins, and Codex harness pins are repaired across all discovered agent session stores.
     - `/codex ...` means "control or bind a native Codex conversation from chat."

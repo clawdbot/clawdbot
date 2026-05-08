@@ -162,11 +162,11 @@ function createExecDeps(
 
 function readEncodedRequestFromCommand(command: string): Record<string, unknown> {
   const match = command.match(/'?--request-json-base64'?\s+'?([A-Za-z0-9_-]+)'?/u);
-  expect(match?.[1]).toBeTruthy();
-  return JSON.parse(Buffer.from(match?.[1] ?? "", "base64url").toString("utf8")) as Record<
-    string,
-    unknown
-  >;
+  const encoded = match?.[1];
+  if (encoded === undefined) {
+    throw new Error("expected encoded export request");
+  }
+  return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as Record<string, unknown>;
 }
 
 describe("buildExportTrajectoryReply", () => {

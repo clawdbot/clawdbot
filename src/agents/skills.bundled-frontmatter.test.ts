@@ -17,8 +17,10 @@ describe("bundled taskflow skill frontmatter", () => {
       const raw = await fs.readFile(path.join(repoRoot, relativePath), "utf8");
       const frontmatter = parseFrontmatter(raw);
 
-      expect(frontmatter.name, relativePath).toBeTruthy();
-      expect(frontmatter.description, relativePath).toBeTruthy();
+      expect(frontmatter.name, relativePath).toEqual(expect.any(String));
+      expect(frontmatter.name.length, relativePath).toBeGreaterThan(0);
+      expect(frontmatter.description, relativePath).toEqual(expect.any(String));
+      expect(frontmatter.description.length, relativePath).toBeGreaterThan(0);
     }
   });
 });

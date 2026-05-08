@@ -9,22 +9,19 @@ import { setMediaStoreNetworkDepsForTest } from "../media/store.js";
 
 const authorizeGatewayHttpRequestOrReplyMock = vi.fn();
 const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
-const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
+const resolveOpenAiCompatibleHttpSenderIsOwnerMock = vi.fn();
 const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
 
 vi.mock("./http-utils.js", () => ({
   authorizeGatewayHttpRequestOrReply: authorizeGatewayHttpRequestOrReplyMock,
   resolveOpenAiCompatibleHttpOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopesMock,
+  resolveOpenAiCompatibleHttpSenderIsOwner: resolveOpenAiCompatibleHttpSenderIsOwnerMock,
 }));
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: loadSessionEntryMock,
   readSessionMessagesAsync: readSessionMessagesMock,
-}));
-
-vi.mock("../agents/subagent-registry.js", () => ({
-  getLatestSubagentRunByChildSessionKey: getLatestSubagentRunByChildSessionKeyMock,
 }));
 
 const {
@@ -75,6 +72,15 @@ async function createNoisyPngBuffer(width: number, height: number): Promise<Buff
     .toBuffer();
 }
 
+function requireAttachmentIdFromUrl(url: unknown): string {
+  expect(url).toEqual(expect.any(String));
+  const attachmentId = String(url).split("/").at(-2);
+  if (!attachmentId) {
+    throw new Error(`expected attachment id in URL ${String(url)}`);
+  }
+  return attachmentId;
+}
+
 async function createFixture(
   stateDir: string,
   options?: { sessionKey?: string; attachmentId?: string; filename?: string },
@@ -119,7 +125,6 @@ async function requestManagedImage(params: {
   authResponse?: Record<string, unknown>;
   headers?: Record<string, string>;
   transcriptMessages?: Record<string, unknown>[];
-  subagentRun?: Record<string, unknown> | null;
   sessionEntry?: { sessionId: string; sessionFile?: string };
 }) {
   authorizeGatewayHttpRequestOrReplyMock.mockImplementation(async ({ res }) => {
@@ -131,7 +136,15 @@ async function requestManagedImage(params: {
     return { ok: true, ...params.authResponse };
   });
   resolveOpenAiCompatibleHttpOperatorScopesMock.mockReturnValue(params.scopes ?? ["operator.read"]);
-  getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(params.subagentRun ?? null);
+  resolveOpenAiCompatibleHttpSenderIsOwnerMock.mockImplementation((_req, requestAuth) => {
+    if (requestAuth.authMethod === "token" || requestAuth.authMethod === "password") {
+      return true;
+    }
+    return (
+      requestAuth.trustDeclaredOperatorScopes === true &&
+      (params.scopes ?? ["operator.read"]).includes("operator.admin")
+    );
+  });
   loadSessionEntryMock.mockReturnValue({
     storePath: path.join(params.stateDir, "gateway-sessions.json"),
     entry: params.sessionEntry ?? { sessionId: "sess-1", sessionFile: "session.jsonl" },
@@ -228,7 +241,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     const { result } = await requestManagedImage({
       stateDir,
       pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
-      headers: { "x-openclaw-requester-session-key": sessionKey },
+      authResponse: { authMethod: "token" },
     });
 
     expect(result.statusCode).toBe(200);
@@ -250,25 +263,40 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.body.byteLength).toBe(0);
   });
 
-  it("rejects requests from unrelated sessions", async () => {
+  it("rejects non-owner trusted-proxy requests with self-declared session ownership", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
 
     const { result } = await requestManagedImage({
       stateDir,
       pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
-      headers: { "x-openclaw-requester-session-key": "agent:main:other" },
+      authResponse: { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
+      headers: { "x-openclaw-requester-session-key": sessionKey },
     });
 
     expect(result.statusCode).toBe(403);
   });
 
-  it("allows device-token access without requester session ownership", async () => {
+  it("rejects device-token access with self-declared session ownership", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
 
     const { result } = await requestManagedImage({
       stateDir,
       pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
       authResponse: { authMethod: "device-token" },
+      headers: { "x-openclaw-requester-session-key": sessionKey },
+    });
+
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("serves owner trusted-proxy requests with admin scope", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      authResponse: { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
+      scopes: ["operator.admin"],
     });
 
     expect(result.statusCode).toBe(200);
@@ -323,14 +351,14 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     const first = await requestManagedImage({
       stateDir,
       pathName,
-      headers: { "x-openclaw-requester-session-key": sessionKey },
+      authResponse: { authMethod: "token" },
       sessionEntry: { sessionId: "sess-main", sessionFile },
       transcriptMessages,
     });
     const second = await requestManagedImage({
       stateDir,
       pathName,
-      headers: { "x-openclaw-requester-session-key": sessionKey },
+      authResponse: { authMethod: "token" },
       sessionEntry: { sessionId: "sess-main", sessionFile },
       transcriptMessages,
     });
@@ -345,7 +373,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     const third = await requestManagedImage({
       stateDir,
       pathName,
-      headers: { "x-openclaw-requester-session-key": sessionKey },
+      authResponse: { authMethod: "token" },
       sessionEntry: { sessionId: "sess-main", sessionFile },
       transcriptMessages,
     });
@@ -437,8 +465,7 @@ describe("createManagedOutgoingImageBlocks", () => {
       expect(blocks[0]?.url).toBe(blocks[0]?.openUrl);
       expect(JSON.stringify(blocks[0])).not.toContain(sourcePath);
 
-      const attachmentId = String(blocks[0]?.url).split("/").at(-2);
-      expect(attachmentId).toBeTruthy();
+      const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
       const record = JSON.parse(
         await fs.readFile(
           path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`),
@@ -497,8 +524,7 @@ describe("createManagedOutgoingImageBlocks", () => {
       expect(JSON.stringify(blocks[0])).not.toContain("127.0.0.1");
       expect(JSON.stringify(blocks[0])).not.toContain("sig=secret");
 
-      const attachmentId = String(blocks[0]?.url).split("/").at(-2);
-      expect(attachmentId).toBeTruthy();
+      const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
       const record = JSON.parse(
         await fs.readFile(
           path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`),
@@ -540,8 +566,7 @@ describe("createManagedOutgoingImageBlocks", () => {
         localRoots: [path.join(stateDir, "workspace")],
       });
 
-      const attachmentId = String(blocks[0]?.url).split("/").at(-2);
-      expect(attachmentId).toBeTruthy();
+      const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
 
       const record = JSON.parse(
         await fs.readFile(

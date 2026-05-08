@@ -48,6 +48,9 @@
             "input": ["text", "image"],
             "contextWindow": 256000,
             "maxTokens": 256000,
+            "compat": {
+              "unsupportedToolSchemaKeywords": ["not"]
+            },
             "cost": {
               "input": 0,
               "output": 0,

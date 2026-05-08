@@ -329,8 +329,7 @@ describe("resolveAnnounceTarget", () => {
     });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     const first = callGatewayMock.mock.calls[0]?.[0] as { method?: string } | undefined;
-    expect(first).toBeDefined();
-    expect(first?.method).toBe("sessions.list");
+    expect(first).toMatchObject({ method: "sessions.list" });
   });
 
   it("falls back to origin provider and accountId from sessions.list when legacy route fields are absent", async () => {

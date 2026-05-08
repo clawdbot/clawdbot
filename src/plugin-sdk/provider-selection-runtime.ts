@@ -46,8 +46,7 @@ export function selectConfiguredOrAutoProvider<TProvider extends AutoSelectableP
   return {
     configuredProviderId,
     missingConfiguredProvider: false,
-    provider:
-      configuredProvider ?? [...params.listProviders()].toSorted(compareProviderAutoSelectOrder)[0],
+    provider: configuredProvider ?? selectFirstAutoProvider(params.listProviders()),
   };
 }
 
@@ -143,6 +142,18 @@ function compareProviderAutoSelectOrder<TProvider extends AutoSelectableProvider
     (left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER) -
     (right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER)
   );
+}
+
+function selectFirstAutoProvider<TProvider extends AutoSelectableProvider>(
+  providers: Iterable<TProvider>,
+): TProvider | undefined {
+  let selected: TProvider | undefined;
+  for (const provider of providers) {
+    if (!selected || compareProviderAutoSelectOrder(provider, selected) < 0) {
+      selected = provider;
+    }
+  }
+  return selected;
 }
 
 function readProviderConfig(

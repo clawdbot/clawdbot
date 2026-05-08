@@ -73,6 +73,73 @@ function buildCurrentCodexApprovalElicitation() {
   };
 }
 
+function buildPluginApprovalElicitation(overrides: Record<string, unknown> = {}) {
+  return {
+    threadId: "thread-1",
+    turnId: "turn-1",
+    serverName: "google-calendar-mcp",
+    mode: "form",
+    message: "Approve app action?",
+    _meta: {
+      app_id: "google-calendar-app",
+    },
+    requestedSchema: {
+      type: "object",
+      properties: {
+        approve: {
+          type: "boolean",
+          title: "Approve this app action",
+        },
+      },
+      required: ["approve"],
+    },
+    ...overrides,
+  };
+}
+
+function createPluginAppPolicyContext(
+  params: {
+    allowDestructiveActions?: boolean;
+    apps?: Array<{ appId: string; pluginName: string; mcpServerNames: string[] }>;
+  } = {},
+) {
+  const apps = params.apps ?? [
+    {
+      appId: "google-calendar-app",
+      pluginName: "google-calendar",
+      mcpServerNames: ["google-calendar-mcp"],
+    },
+  ];
+  return {
+    fingerprint: "plugin-policy-1",
+    apps: Object.fromEntries(
+      apps.map((app) => [
+        app.appId,
+        {
+          configKey: app.pluginName,
+          marketplaceName: "openai-curated" as const,
+          pluginName: app.pluginName,
+          allowDestructiveActions: params.allowDestructiveActions ?? false,
+          mcpServerNames: app.mcpServerNames,
+        },
+      ]),
+    ),
+    pluginAppIds: Object.fromEntries(
+      apps.map((app) => [app.pluginName, appsForPlugin(apps, app.pluginName)]),
+    ),
+  };
+}
+
+function appsForPlugin(
+  apps: Array<{ appId: string; pluginName: string; mcpServerNames: string[] }>,
+  pluginName: string,
+): string[] {
+  return apps
+    .filter((app) => app.pluginName === pluginName)
+    .map((app) => app.appId)
+    .toSorted();
+}
+
 describe("Codex app-server elicitation bridge", () => {
   beforeEach(() => {
     mockCallGatewayTool.mockReset();
@@ -447,6 +514,170 @@ describe("Codex app-server elicitation bridge", () => {
       content: null,
       _meta: null,
     });
+  });
+
+  it("declines plugin app elicitations when destructive actions are disabled", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation(),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: false }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("accepts safely mapped plugin app elicitations when destructive actions are enabled", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation(),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: { approve: true },
+      _meta: null,
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("declines plugin app elicitations that are missing active turn correlation", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation({ turnId: null }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("does not answer plugin app elicitations for a different active turn", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation({ turnId: "turn-2" }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+    });
+
+    expect(result).toBeUndefined();
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("declines plugin app elicitations with ambiguous server ownership", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation({
+        serverName: "shared-mcp",
+        _meta: {},
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: true,
+        apps: [
+          {
+            appId: "calendar-app-1",
+            pluginName: "google-calendar",
+            mcpServerNames: ["shared-mcp"],
+          },
+          {
+            appId: "calendar-app-2",
+            pluginName: "google-calendar",
+            mcpServerNames: ["shared-mcp"],
+          },
+        ],
+      }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("declines plugin app elicitations that only match display names", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation({
+        serverName: "unknown-mcp",
+        _meta: {
+          connector_name: "Google Calendar",
+        },
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("declines plugin-scoped elicitations when policy context is missing", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation(),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("declines plugin app elicitations with unmappable schemas", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation({
+        requestedSchema: {
+          type: "object",
+          properties: {
+            template: {
+              type: "string",
+              enum: ["simple", "detailed"],
+            },
+          },
+          required: ["template"],
+        },
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("keeps unrelated MCP approval elicitations on the existing approval bridge", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-unrelated", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-unrelated", decision: "allow-once" });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildCurrentCodexApprovalElicitation(),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: null,
+      _meta: null,
+    });
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
   });
 
   it("ignores unscoped approval elicitations without the active thread id", async () => {

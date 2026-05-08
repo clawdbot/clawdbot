@@ -4,7 +4,7 @@ import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 const channelConversationSessionKey = "agent:main:msteams:channel:19:channel@thread.tacv2";
 
 describe("msteams thread session isolation", () => {
-  it("appends thread suffix to session key for channel thread replies", async () => {
+  it("appends thread suffix to session key for channel thread replies", () => {
     const sessionKey = resolveMSTeamsRouteSessionKey({
       baseSessionKey: channelConversationSessionKey,
       isChannel: true,
@@ -15,7 +15,7 @@ describe("msteams thread session isolation", () => {
     expect(sessionKey).toContain("thread-root-123");
   });
 
-  it("does not append thread suffix for top-level channel messages", async () => {
+  it("does not append thread suffix for top-level channel messages", () => {
     const sessionKey = resolveMSTeamsRouteSessionKey({
       baseSessionKey: channelConversationSessionKey,
       isChannel: true,
@@ -26,7 +26,7 @@ describe("msteams thread session isolation", () => {
     expect(sessionKey).toBe(channelConversationSessionKey);
   });
 
-  it("produces different session keys for different threads in the same channel", async () => {
+  it("produces different session keys for different threads in the same channel", () => {
     const sessionKeyA = resolveMSTeamsRouteSessionKey({
       baseSessionKey: channelConversationSessionKey,
       isChannel: true,
@@ -43,7 +43,7 @@ describe("msteams thread session isolation", () => {
     expect(sessionKeyB).toContain("thread-b");
   });
 
-  it("does not affect DM session keys", async () => {
+  it("does not affect DM session keys", () => {
     const sessionKey = resolveMSTeamsRouteSessionKey({
       baseSessionKey: "agent:main:msteams:dm:user-1",
       isChannel: false,
@@ -53,7 +53,7 @@ describe("msteams thread session isolation", () => {
     expect(sessionKey).not.toContain("thread:");
   });
 
-  it("does not affect group chat session keys", async () => {
+  it("does not affect group chat session keys", () => {
     const sessionKey = resolveMSTeamsRouteSessionKey({
       baseSessionKey: "agent:main:msteams:group:19:group-chat-id@unq.gbl.spaces",
       isChannel: false,
@@ -63,7 +63,7 @@ describe("msteams thread session isolation", () => {
     expect(sessionKey).not.toContain("thread:");
   });
 
-  it("prefers conversation message id over replyToId for deep channel replies", async () => {
+  it("prefers conversation message id over replyToId for deep channel replies", () => {
     const sessionKey = resolveMSTeamsRouteSessionKey({
       baseSessionKey: channelConversationSessionKey,
       isChannel: true,

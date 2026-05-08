@@ -56,7 +56,8 @@ Exec approvals are enforced locally on the execution host:
 
 - Gateway-authenticated callers are trusted operators for that Gateway.
 - Paired nodes extend that trusted operator capability onto the node host.
-- Exec approvals reduce accidental execution risk, but are **not** a per-user auth boundary.
+- Exec approvals reduce accidental execution risk, but are **not** a per-user auth boundary or filesystem read-only policy.
+- Once approved, a command can mutate files according to the selected host or sandbox filesystem permissions.
 - Approved node-host runs bind canonical execution context: canonical cwd, exact argv, env binding when present, and pinned executable path when applicable.
 - For shell scripts and direct interpreter/runtime file invocations, OpenClaw also tries to bind one concrete local file operand. If that bound file changes after approval but before execution, the run is denied instead of executing drifted content.
 - File binding is intentionally best-effort, **not** a complete semantic model of every interpreter/runtime loader path. If approval mode cannot identify exactly one concrete local file to bind, it refuses to mint an approval-backed run instead of pretending full coverage.

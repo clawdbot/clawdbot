@@ -64,10 +64,12 @@ async function runPinCase(input: PinCase = {}): Promise<void> {
   });
   const handlerKey = input.handler ?? "added";
   const handler = handlerKey === "removed" ? removed : added;
-  expect(handler).toBeTruthy();
+  if (!handler) {
+    throw new Error(`expected Slack pin ${handlerKey} handler`);
+  }
   const event = (input.event ?? makePinEvent()) as Record<string, unknown>;
   const body = input.body ?? {};
-  await handler!({
+  await handler({
     body,
     event,
   });

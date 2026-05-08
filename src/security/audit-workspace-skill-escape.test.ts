@@ -10,6 +10,17 @@ const isWindows = process.platform === "win32";
 describe("security audit workspace skill path escape findings", () => {
   const tempCases = new AsyncTempCaseFactory("openclaw-security-audit-workspace-");
 
+  function requireFinding(
+    findings: Awaited<ReturnType<typeof collectWorkspaceSkillSymlinkEscapeFindings>>,
+    checkId: string,
+  ) {
+    const finding = findings.find((entry) => entry.checkId === checkId);
+    if (!finding) {
+      throw new Error(`expected security finding ${checkId}`);
+    }
+    return finding;
+  }
+
   beforeAll(async () => {
     await tempCases.setup();
   });
@@ -55,8 +66,8 @@ describe("security audit workspace skill path escape findings", () => {
         const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
           cfg: { agents: { defaults: { workspace: workspaceDir } } } satisfies OpenClawConfig,
         });
-        expect(findings.some((entry) => entry.checkId === "skills.workspace.symlink_escape")).toBe(
-          false,
+        expect(findings.map((entry) => entry.checkId)).not.toContain(
+          "skills.workspace.symlink_escape",
         );
       })(),
     ];
@@ -90,12 +101,11 @@ describe("security audit workspace skill path escape findings", () => {
       const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
         cfg: { agents: { defaults: { workspace: workspaceDir } } } satisfies OpenClawConfig,
       });
-      const escapeFinding = findings.find((f) => f.checkId === "skills.workspace.symlink_escape");
-      expect(escapeFinding).toBeDefined();
-      expect(escapeFinding?.severity).toBe("warn");
+      const escapeFinding = requireFinding(findings, "skills.workspace.symlink_escape");
+      expect(escapeFinding.severity).toBe("warn");
       // The finding must call out that realpath was unverifiable, not that it
       // resolved to a path outside the workspace.
-      expect(escapeFinding?.detail).toContain("realpath timed out");
+      expect(escapeFinding.detail).toContain("realpath timed out");
     } finally {
       realpathSpy.mockRestore();
     }
@@ -136,10 +146,9 @@ describe("security audit workspace skill path escape findings", () => {
         cfg: { agents: { defaults: { workspace: workspaceDir } } } satisfies OpenClawConfig,
         skillScanLimits: { maxDirVisits: 2 },
       });
-      const truncFinding = findings.find((f) => f.checkId === "skills.workspace.scan_truncated");
-      expect(truncFinding).toBeDefined();
-      expect(truncFinding?.severity).toBe("warn");
-      expect(truncFinding?.detail).toContain(workspaceDir);
+      const truncFinding = requireFinding(findings, "skills.workspace.scan_truncated");
+      expect(truncFinding.severity).toBe("warn");
+      expect(truncFinding.detail).toContain(workspaceDir);
     } finally {
       readdirSpy.mockRestore();
       realpathSpy.mockRestore();

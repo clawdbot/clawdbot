@@ -54,7 +54,11 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
     });
 
     const toolResult = sanitized.find((m) => m && typeof m === "object" && m.role === "toolResult");
-    expect(toolResult).toBeTruthy();
+    expect(toolResult).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call1",
+      toolName: "web_fetch",
+    });
     expect(toolResult).not.toHaveProperty("details");
 
     const serialized = JSON.stringify(sanitized);

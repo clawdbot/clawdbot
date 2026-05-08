@@ -325,10 +325,15 @@ describe("createAcpxRuntimeService", () => {
     await service.start(ctx);
 
     const backend = getAcpRuntimeBackend("acpx");
-    expect(backend?.runtime).toBeDefined();
+    if (!backend) {
+      throw new Error("expected ACPX runtime backend");
+    }
+    expect(backend.runtime).toMatchObject({
+      ensureSession: expect.any(Function),
+    });
     expect(acpxRuntimeConstructorMock).not.toHaveBeenCalled();
 
-    await backend?.runtime.ensureSession({
+    await backend.runtime.ensureSession({
       agent: "codex",
       mode: "oneshot",
       sessionKey: "agent:codex:acp:test",
@@ -509,7 +514,9 @@ describe("createAcpxRuntimeService", () => {
     await service.start(ctx);
 
     expect(probeAvailability).not.toHaveBeenCalled();
-    expect(getAcpRuntimeBackend("acpx")).toBeTruthy();
+    expect(getAcpRuntimeBackend("acpx")).toMatchObject({
+      runtime: expect.any(Object),
+    });
 
     await service.stop?.(ctx);
   });

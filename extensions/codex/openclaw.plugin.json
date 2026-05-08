@@ -38,6 +38,11 @@
         "enum": ["native-first", "openclaw-compat"],
         "default": "native-first"
       },
+      "codexDynamicToolsLoading": {
+        "type": "string",
+        "enum": ["searchable", "direct"],
+        "default": "searchable"
+      },
       "codexDynamicToolsExclude": {
         "type": "array",
         "items": { "type": "string" },
@@ -88,6 +93,42 @@
           "mcpServerName": {
             "type": "string",
             "default": "computer-use"
+          }
+        }
+      },
+      "codexPlugins": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "allow_destructive_actions": {
+            "type": "boolean",
+            "default": false
+          },
+          "plugins": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "marketplaceName": {
+                  "type": "string",
+                  "enum": ["openai-curated"]
+                },
+                "pluginName": {
+                  "type": "string"
+                },
+                "allow_destructive_actions": {
+                  "type": "boolean"
+                }
+              }
+            }
           }
         }
       },
@@ -147,7 +188,7 @@
             "type": "string",
             "enum": ["user", "auto_review", "guardian_subagent"]
           },
-          "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] },
+          "serviceTier": { "type": ["string", "null"] },
           "defaultWorkspaceDir": {
             "type": "string"
           }
@@ -159,6 +200,11 @@
     "codexDynamicToolsProfile": {
       "label": "Dynamic Tools Profile",
       "help": "Select which OpenClaw dynamic tools are exposed to Codex app-server. native-first omits tools Codex already owns.",
+      "advanced": true
+    },
+    "codexDynamicToolsLoading": {
+      "label": "Dynamic Tools Loading",
+      "help": "Use searchable to defer OpenClaw dynamic tools behind Codex tool search, or direct to expose them in the initial context.",
       "advanced": true
     },
     "codexDynamicToolsExclude": {
@@ -222,6 +268,26 @@
     "computerUse.mcpServerName": {
       "label": "MCP Server Name",
       "help": "MCP server name exposed by the Computer Use plugin.",
+      "advanced": true
+    },
+    "codexPlugins": {
+      "label": "Native Codex Plugins",
+      "help": "Controls native Codex plugin availability for Codex harness turns.",
+      "advanced": true
+    },
+    "codexPlugins.enabled": {
+      "label": "Enable Native Plugins",
+      "help": "Expose explicit migrated Codex plugin entries to Codex harness turns.",
+      "advanced": true
+    },
+    "codexPlugins.allow_destructive_actions": {
+      "label": "Allow Destructive Plugin Actions",
+      "help": "Default policy for plugin app write or destructive action elicitations. Defaults to false.",
+      "advanced": true
+    },
+    "codexPlugins.plugins": {
+      "label": "Migrated Plugin Entries",
+      "help": "Explicit migration-authored plugin entries. The wildcard key * is not supported.",
       "advanced": true
     },
     "appServer": {
@@ -297,7 +363,7 @@
     },
     "appServer.serviceTier": {
       "label": "Service Tier",
-      "help": "Optional Codex app-server service tier. Use fast, flex, or null.",
+      "help": "Optional Codex app-server service tier. Use priority, flex, or null. Legacy fast is accepted as priority.",
       "advanced": true
     },
     "appServer.defaultWorkspaceDir": {

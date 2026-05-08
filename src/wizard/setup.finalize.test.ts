@@ -180,8 +180,10 @@ function createWebSearchProviderEntry(
 function expectFirstOnboardingInstallPlanCallOmitsToken() {
   const [firstArg] =
     (buildGatewayInstallPlan.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
-  expect(firstArg).toBeDefined();
-  expect(firstArg && "token" in firstArg).toBe(false);
+  if (!firstArg) {
+    throw new Error("expected first onboarding install plan call");
+  }
+  expect("token" in firstArg).toBe(false);
 }
 
 type AdvancedFinalizeArgs = {

@@ -14,6 +14,7 @@ import {
 } from "../../plugins/provider-runtime.runtime.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
@@ -80,7 +81,7 @@ function isProfileConfigCompatible(params: {
   cfg?: OpenClawConfig;
   profileId: string;
   provider: string;
-  mode: "api_key" | "aws-sdk" | "token" | "oauth";
+  mode: "api_key" | "token" | "oauth";
   allowOAuthTokenCompatibility?: boolean;
 }): boolean {
   const profileConfig = params.cfg?.auth?.profiles?.[params.profileId];
@@ -260,7 +261,7 @@ async function resolveProfileSecretString(params: {
     }
   }
 
-  return resolvedValue;
+  return normalizeOptionalSecretInput(resolvedValue);
 }
 
 export async function resolveApiKeyForProfile(
@@ -310,9 +311,6 @@ export async function resolveApiKeyForProfile(
       return null;
     }
     return buildApiKeyProfileResult({ apiKey: key, provider: cred.provider, email: cred.email });
-  }
-  if (cred.type === "aws-sdk") {
-    return null;
   }
   if (cred.type === "token") {
     const expiryState = resolveTokenExpiryState(cred.expires);

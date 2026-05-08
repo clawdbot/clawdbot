@@ -113,12 +113,12 @@ describe("gateway tool", () => {
     });
   });
 
-  it("marks gateway as owner-only", async () => {
+  it("marks gateway as owner-only", () => {
     const tool = requireGatewayTool();
     expect(tool.ownerOnly).toBe(true);
   });
 
-  it("exposes restart and config actions in the gateway tool schema", async () => {
+  it("exposes restart and config actions in the gateway tool schema", () => {
     const tool = requireGatewayTool();
     const parameters = tool.parameters as {
       properties?: Record<string, unknown>;
@@ -722,12 +722,12 @@ describe("gateway tool", () => {
     const updateCall = vi
       .mocked(callGatewayTool)
       .mock.calls.find((call) => call[0] === "update.run");
-    expect(updateCall).toBeDefined();
-    if (updateCall) {
-      const [, opts, params] = updateCall;
-      expect(opts).toMatchObject({ timeoutMs: 20 * 60_000 });
-      expect(params).toMatchObject({ timeoutMs: 20 * 60_000 });
+    if (updateCall === undefined) {
+      throw new Error("expected update.run gateway call");
     }
+    const [, opts, params] = updateCall;
+    expect(opts).toMatchObject({ timeoutMs: 20 * 60_000 });
+    expect(params).toMatchObject({ timeoutMs: 20 * 60_000 });
   });
 
   it("returns a path-scoped schema lookup result", async () => {

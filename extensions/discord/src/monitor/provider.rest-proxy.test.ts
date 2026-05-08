@@ -79,7 +79,7 @@ describe("resolveDiscordRestFetch", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("falls back to global fetch when proxy URL is invalid", async () => {
+  it("falls back to global fetch when proxy URL is invalid", () => {
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),

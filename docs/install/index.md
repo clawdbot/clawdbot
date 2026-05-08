@@ -9,7 +9,7 @@ title: "Install"
 
 ## System requirements
 
-- **Node 24** (recommended) or Node 22.14+ - the installer script handles this automatically
+- **Node 24** (recommended) or Node 22.16+ - the installer script handles this automatically
 - **macOS, Linux, or Windows** - both native Windows and WSL2 are supported; WSL2 is more stable. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source
 

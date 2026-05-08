@@ -30,6 +30,10 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  openAIProviderUsesCodexRuntimeByDefault,
+} from "../../agents/openai-codex-routing.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { createConfigIO } from "../../config/config.js";
 import {
@@ -246,18 +250,31 @@ export async function modelsStatusCommand(
       .filter(Boolean),
   );
   const providersFromModels = new Set<string>();
-  const providersInUse = new Set<string>();
+  const providerUses: Array<{ provider: string; allowCodexRuntimeFallback: boolean }> = [];
+  const addProviderUse = (raw: string | undefined, allowCodexRuntimeFallback: boolean) => {
+    const modelRef = raw?.trim();
+    if (!modelRef) {
+      return;
+    }
+    const parsed = parseModelRef(modelRef, DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
+    if (parsed?.provider) {
+      providerUses.push({
+        provider: normalizeProviderId(parsed.provider),
+        allowCodexRuntimeFallback,
+      });
+    }
+  };
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks, ...allowed]) {
     const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
     if (parsed?.provider) {
       providersFromModels.add(normalizeProviderId(parsed.provider));
     }
   }
-  for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks]) {
-    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
-    if (parsed?.provider) {
-      providersInUse.add(normalizeProviderId(parsed.provider));
-    }
+  for (const raw of [defaultLabel, ...fallbacks]) {
+    addProviderUse(raw, true);
+  }
+  for (const raw of [imageModel, ...imageFallbacks]) {
+    addProviderUse(raw, false);
   }
 
   const providersFromEnv = new Set<string>();
@@ -344,9 +361,33 @@ export async function modelsStatusCommand(
       return hasAny;
     });
   const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
-  const missingProvidersInUse = Array.from(providersInUse)
-    .filter((provider) => !providerAuthMap.has(provider))
-    .filter((provider) => !syntheticAuthByProvider.has(provider))
+  const hasUsableAuthForProviderInUse = (
+    provider: string,
+    options: { allowCodexRuntimeFallback: boolean },
+  ): boolean => {
+    if (providerAuthMap.has(provider) || syntheticAuthByProvider.has(provider)) {
+      return true;
+    }
+    if (!options.allowCodexRuntimeFallback) {
+      return false;
+    }
+    return (
+      openAIProviderUsesCodexRuntimeByDefault({ provider, config: cfg }) &&
+      providerAuthMap.has(OPENAI_CODEX_PROVIDER_ID)
+    );
+  };
+  const missingProvidersInUse = Array.from(
+    new Set(
+      providerUses
+        .filter(
+          (usage) =>
+            !hasUsableAuthForProviderInUse(usage.provider, {
+              allowCodexRuntimeFallback: usage.allowCodexRuntimeFallback,
+            }),
+        )
+        .map((usage) => usage.provider),
+    ),
+  )
     .filter((provider) => !isCliProvider(provider, cfg))
     .toSorted((a, b) => a.localeCompare(b));
 
@@ -671,7 +712,7 @@ export async function modelsStatusCommand(
       bits.push(
         formatKeyValue(
           "profiles",
-          `${entry.profiles.count} (oauth=${entry.profiles.oauth}, token=${entry.profiles.token}, api_key=${entry.profiles.apiKey}, aws-sdk=${entry.profiles.awsSdk})`,
+          `${entry.profiles.count} (oauth=${entry.profiles.oauth}, token=${entry.profiles.token}, api_key=${entry.profiles.apiKey})`,
         ),
       );
       if (entry.profiles.labels.length > 0) {

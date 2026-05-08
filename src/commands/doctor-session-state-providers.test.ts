@@ -45,14 +45,22 @@ describe("doctor session state provider routes", () => {
     ).toBe(true);
   });
 
-  it("preserves raw configured CLI runtimes before harness policy normalization", () => {
+  it("preserves configured provider CLI runtimes before harness policy normalization", () => {
     expect(
       resolveConfiguredDoctorSessionStateRoute({
         cfg: {
           agents: {
             defaults: {
               model: { primary: "openai/gpt-5.5" },
-              agentRuntime: { id: "codex-cli" },
+            },
+          },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                agentRuntime: { id: "codex-cli" },
+                models: [],
+              },
             },
           },
         },
@@ -66,76 +74,7 @@ describe("doctor session state provider routes", () => {
     });
   });
 
-  it("keeps implicit OpenAI routes on PI", () => {
-    expect(
-      resolveConfiguredDoctorSessionStateRoute({
-        cfg: {
-          agents: {
-            defaults: {
-              model: { primary: "openai/gpt-5.5" },
-            },
-          },
-        },
-        sessionKey: "agent:main:telegram:direct:1",
-        env: {},
-      }),
-    ).toMatchObject({
-      defaultProvider: "openai",
-      configuredModelRefs: ["openai/gpt-5.5"],
-      runtime: "pi",
-    });
-  });
-
-  it("resolves implicit OpenAI Codex routes to the Codex runtime", () => {
-    expect(
-      resolveConfiguredDoctorSessionStateRoute({
-        cfg: {
-          agents: {
-            defaults: {
-              model: { primary: "openai-codex/gpt-5.5" },
-            },
-          },
-        },
-        sessionKey: "agent:main:telegram:direct:1",
-        env: {},
-      }),
-    ).toMatchObject({
-      defaultProvider: "openai-codex",
-      configuredModelRefs: ["openai-codex/gpt-5.5"],
-      runtime: "codex",
-    });
-  });
-
-  it("keeps implicit custom OpenAI-compatible routes on PI", () => {
-    expect(
-      resolveConfiguredDoctorSessionStateRoute({
-        cfg: {
-          agents: {
-            defaults: {
-              model: { primary: "openai/custom-gpt" },
-            },
-          },
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://compatible.example.test/v1",
-                api: "openai-responses",
-                models: [],
-              },
-            },
-          },
-        },
-        sessionKey: "agent:main:telegram:direct:1",
-        env: {},
-      }),
-    ).toMatchObject({
-      defaultProvider: "openai",
-      configuredModelRefs: ["openai/custom-gpt"],
-      runtime: "pi",
-    });
-  });
-
-  it("lets environment CLI runtime overrides reach plugin-owned scanners", () => {
+  it("ignores legacy environment runtime overrides before plugin-owned scans", () => {
     expect(
       resolveConfiguredDoctorSessionStateRoute({
         cfg: {
@@ -150,38 +89,8 @@ describe("doctor session state provider routes", () => {
         env: { OPENCLAW_AGENT_RUNTIME: "codex-cli" },
       }),
     ).toMatchObject({
-      runtime: "codex-cli",
+      runtime: "codex",
     });
-  });
-
-  it("keeps Codex OAuth route state for canonical OpenAI routes", () => {
-    const sessionKey = "agent:main:telegram:direct:1";
-    const scan = scanSessionRouteStateOwners({
-      owners: [codexOwner],
-      store: {
-        [sessionKey]: {
-          sessionId: "sess-codex-openai",
-          updatedAt: 1,
-          modelProvider: "openai",
-          model: "gpt-5.5",
-          agentHarnessId: "codex",
-          authProfileOverride: "openai-codex:default",
-          authProfileOverrideSource: "auto",
-          cliSessionBindings: {
-            "codex-cli": { sessionId: "codex-session-1" },
-          },
-        },
-      },
-      routes: {
-        [sessionKey]: {
-          defaultProvider: "openai",
-          configuredModelRefs: ["openai/gpt-5.5"],
-          runtime: "pi",
-        },
-      },
-    });
-
-    expect(scan).toEqual({ repairs: [], manualReview: [] });
   });
 
   it("clears auto-created route state when current route no longer uses the owner", () => {

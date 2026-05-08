@@ -76,7 +76,6 @@
         {
           "group": "消息平台",
           "pages": [
-            "zh-CN/channels/bluebubbles",
             "zh-CN/channels/discord",
             "zh-CN/channels/feishu",
             "zh-CN/channels/grammy",
@@ -204,7 +203,6 @@
             "zh-CN/tools/slash-commands",
             "zh-CN/tools/skills",
             "zh-CN/tools/skills-config",
-            "zh-CN/tools/clawhub",
             "zh-CN/tools/plugin"
           ]
         },

@@ -54,6 +54,7 @@ export const handleNodeInvokeResult: GatewayRequestHandler = async ({
   const ok = context.nodeRegistry.handleInvokeResult({
     id: p.id,
     nodeId: p.nodeId,
+    connId: client?.connId,
     ok: p.ok,
     payload: p.payload,
     payloadJSON: p.payloadJSON ?? null,

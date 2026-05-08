@@ -168,7 +168,7 @@ describe("cron tool", () => {
     callGatewayMock.mockResolvedValue({ ok: true });
   });
 
-  it("marks cron as owner-only", async () => {
+  it("marks cron as owner-only", () => {
     const tool = createTestCronTool();
     expect(tool.ownerOnly).toBe(true);
   });

@@ -91,6 +91,17 @@ function getOptions(includeSkip = false) {
   });
 }
 
+function requireChoiceGroup(
+  groups: ReturnType<typeof buildAuthChoiceGroups>["groups"],
+  value: string,
+) {
+  const group = groups.find((entry) => entry.value === value);
+  if (!group) {
+    throw new Error(`expected auth choice group ${value}`);
+  }
+  return group;
+}
+
 describe("buildAuthChoiceOptions", () => {
   beforeEach(() => {
     resolveManifestProviderAuthChoices.mockReturnValue([]);
@@ -400,16 +411,13 @@ describe("buildAuthChoiceOptions", () => {
       store: EMPTY_STORE,
       includeSkip: false,
     });
-    const chutesGroup = groups.find((group) => group.value === "chutes");
-    const litellmGroup = groups.find((group) => group.value === "litellm");
-    const ollamaGroup = groups.find((group) => group.value === "ollama");
+    const chutesGroup = requireChoiceGroup(groups, "chutes");
+    const litellmGroup = requireChoiceGroup(groups, "litellm");
+    const ollamaGroup = requireChoiceGroup(groups, "ollama");
 
-    expect(chutesGroup).toBeDefined();
-    expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(true);
-    expect(litellmGroup).toBeDefined();
-    expect(litellmGroup?.options.some((opt) => opt.value === "litellm-api-key")).toBe(true);
-    expect(ollamaGroup).toBeDefined();
-    expect(ollamaGroup?.options.some((opt) => opt.value === "ollama")).toBe(true);
+    expect(chutesGroup.options.some((opt) => opt.value === "chutes")).toBe(true);
+    expect(litellmGroup.options.some((opt) => opt.value === "litellm-api-key")).toBe(true);
+    expect(ollamaGroup.options.some((opt) => opt.value === "ollama")).toBe(true);
   });
 
   it("prefers Anthropic Claude CLI over API key in grouped selection", () => {
@@ -438,10 +446,9 @@ describe("buildAuthChoiceOptions", () => {
       store: EMPTY_STORE,
       includeSkip: false,
     });
-    const anthropicGroup = groups.find((group) => group.value === "anthropic");
+    const anthropicGroup = requireChoiceGroup(groups, "anthropic");
 
-    expect(anthropicGroup).toBeDefined();
-    expect(anthropicGroup?.options.map((option) => option.value)).toEqual([
+    expect(anthropicGroup.options.map((option) => option.value)).toEqual([
       "anthropic-cli",
       "apiKey",
     ]);
@@ -476,10 +483,9 @@ describe("buildAuthChoiceOptions", () => {
       store: EMPTY_STORE,
       includeSkip: false,
     });
-    const openAIGroup = groups.find((group) => group.value === "openai");
+    const openAIGroup = requireChoiceGroup(groups, "openai");
 
-    expect(openAIGroup).toBeDefined();
-    expect(openAIGroup?.options.map((option) => option.value)).toEqual([
+    expect(openAIGroup.options.map((option) => option.value)).toEqual([
       "openai-api-key",
       "openai-codex",
       "openai-codex-device-code",
@@ -511,11 +517,10 @@ describe("buildAuthChoiceOptions", () => {
       store: EMPTY_STORE,
       includeSkip: false,
     });
-    const openCodeGroup = groups.find((group) => group.value === "opencode");
+    const openCodeGroup = requireChoiceGroup(groups, "opencode");
 
-    expect(openCodeGroup).toBeDefined();
-    expect(openCodeGroup?.options.some((opt) => opt.value === "opencode-zen")).toBe(true);
-    expect(openCodeGroup?.options.some((opt) => opt.value === "opencode-go")).toBe(true);
+    expect(openCodeGroup.options.some((opt) => opt.value === "opencode-zen")).toBe(true);
+    expect(openCodeGroup.options.some((opt) => opt.value === "opencode-go")).toBe(true);
   });
 
   it("hides image-generation-only providers from the interactive auth picker", () => {

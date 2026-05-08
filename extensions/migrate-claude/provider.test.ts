@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { redactMigrationPlan } from "openclaw/plugin-sdk/migration";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveHomePath } from "./helpers.js";
 import { buildClaudeMigrationProvider } from "./provider.js";
 import {
   cleanupTempRoots,
@@ -16,10 +18,24 @@ describe("Claude migration provider", () => {
     await cleanupTempRoots();
   });
 
-  it("registers a Claude migration provider", async () => {
+  it("registers a Claude migration provider", () => {
     const provider = buildClaudeMigrationProvider();
     expect(provider.id).toBe("claude");
     expect(provider.label).toBe("Claude");
+  });
+
+  it("resolves tilde source paths against the OS home when OPENCLAW_HOME is set", () => {
+    const previous = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = path.join(path.sep, "tmp", "openclaw-home");
+    try {
+      expect(resolveHomePath("~/.claude")).toBe(path.join(os.homedir(), ".claude"));
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previous;
+      }
+    }
   });
 
   it("rejects missing Claude sources before planning", async () => {

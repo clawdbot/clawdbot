@@ -219,7 +219,7 @@ function expectOpenAiHeaderMarkers(
 }
 
 describe("models-config runtime source snapshot", () => {
-  it("uses runtime source snapshot markers when passed the active runtime config", async () => {
+  it("uses runtime source snapshot markers when passed the active runtime config", () => {
     const sourceConfig: OpenClawConfig = {
       models: {
         providers: {

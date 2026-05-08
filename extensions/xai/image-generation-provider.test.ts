@@ -3,6 +3,7 @@ import { buildXaiImageGenerationProvider } from "./image-generation-provider.js"
 
 const {
   resolveApiKeyForProviderMock,
+  isProviderApiKeyConfiguredMock,
   postJsonRequestMock,
   postMultipartRequestMock,
   assertOkOrThrowHttpErrorMock,
@@ -12,6 +13,7 @@ const {
   sanitizeConfiguredModelProviderRequestMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "xai-key" })),
+  isProviderApiKeyConfiguredMock: vi.fn(() => true),
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
@@ -35,6 +37,10 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
+  isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
+}));
+
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   createProviderOperationDeadline: createProviderOperationDeadlineMock,
@@ -55,6 +61,7 @@ vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
 describe("xai image generation provider", () => {
   afterEach(() => {
     resolveApiKeyForProviderMock.mockClear();
+    isProviderApiKeyConfiguredMock.mockClear();
     postJsonRequestMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
@@ -82,8 +89,15 @@ describe("xai image generation provider", () => {
     ]);
     expect(provider.capabilities.edit.enabled).toBe(true);
     expect(provider.capabilities.edit.maxInputImages).toBe(5);
-    expect(provider.isConfigured).toBeDefined();
-    expect(provider.generateImage).toBeDefined();
+    const isConfigured = provider.isConfigured;
+    if (!isConfigured) {
+      throw new Error("expected XAI image provider config predicate");
+    }
+    expect(isConfigured({ agentDir: "/tmp/openclaw-xai-test" })).toBe(true);
+    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
+      provider: "xai",
+      agentDir: "/tmp/openclaw-xai-test",
+    });
   });
 
   it("uses main provider URL and resolves auth for generation", async () => {

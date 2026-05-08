@@ -2006,6 +2006,24 @@ warn_shell_path_missing_dir() {
     echo "    export PATH=\"${dir}:\$PATH\""
 }
 
+openclaw_command_for_user() {
+    local claw="${1:-}"
+    if [[ -z "$claw" ]]; then
+        echo "openclaw"
+        return 0
+    fi
+
+    local claw_dir="${claw%/*}"
+    if [[ "$claw_dir" != "$claw" ]] && path_has_dir "$ORIGINAL_PATH" "$claw_dir"; then
+        echo "openclaw"
+        return 0
+    fi
+
+    local quoted_claw=""
+    printf -v quoted_claw '%q' "$claw"
+    echo "$quoted_claw"
+}
+
 ensure_npm_global_bin_on_path() {
     local bin_dir=""
     bin_dir="$(npm_global_bin_dir || true)"
@@ -2300,7 +2318,9 @@ run_bootstrap_onboarding_if_needed() {
     fi
 
     if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
-        ui_info "BOOTSTRAP.md found but no TTY; run openclaw onboard to finish setup"
+        local user_claw
+        user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
+        ui_info "BOOTSTRAP.md found but no TTY; run ${user_claw} onboard to finish setup"
         return
     fi
 
@@ -2316,7 +2336,9 @@ run_bootstrap_onboarding_if_needed() {
     fi
 
     "$claw" onboard || {
-        ui_error "Onboarding failed; run openclaw onboard to retry"
+        local user_claw
+        user_claw="$(openclaw_command_for_user "$claw")"
+        ui_error "Onboarding failed; run ${user_claw} onboard to retry"
         return
     }
 }
@@ -2702,11 +2724,15 @@ main() {
                 ui_warn "Doctor failed; skipping plugin updates"
             fi
         else
-            ui_info "No TTY; run openclaw doctor and openclaw plugins update --all manually"
+            local user_claw
+            user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
+            ui_info "No TTY; run ${user_claw} doctor and ${user_claw} plugins update --all manually"
         fi
     else
         if [[ "$NO_ONBOARD" == "1" || "$skip_onboard" == "true" ]]; then
-            ui_info "Skipping onboard (requested); run openclaw onboard later"
+            local user_claw
+            user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
+            ui_info "Skipping onboard (requested); run ${user_claw} onboard later"
         else
             local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
             if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
@@ -2731,7 +2757,9 @@ main() {
                 exec </dev/tty
                 exec "$claw" onboard
             fi
-            ui_info "No TTY; run openclaw onboard to finish setup"
+            local user_claw
+            user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
+            ui_info "No TTY; run ${user_claw} onboard to finish setup"
             return 0
         fi
     fi

@@ -2,13 +2,19 @@ import { randomUUID } from "node:crypto";
 import type { AcpSession } from "./types.js";
 
 export type AcpSessionStore = {
-  createSession: (params: { sessionKey: string; cwd: string; sessionId?: string }) => AcpSession;
+  createSession: (params: {
+    sessionKey: string;
+    cwd: string;
+    sessionId?: string;
+    ledgerSessionId?: string;
+  }) => AcpSession;
   hasSession: (sessionId: string) => boolean;
   getSession: (sessionId: string) => AcpSession | undefined;
   getSessionByRunId: (runId: string) => AcpSession | undefined;
   setActiveRun: (sessionId: string, runId: string, abortController: AbortController) => void;
   clearActiveRun: (sessionId: string) => void;
   cancelActiveRun: (sessionId: string) => boolean;
+  deleteSession: (sessionId: string) => boolean;
   clearAllSessionsForTest: () => void;
 };
 
@@ -83,6 +89,9 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     const existingSession = sessions.get(sessionId);
     if (existingSession) {
       existingSession.sessionKey = params.sessionKey;
+      if ("ledgerSessionId" in params) {
+        existingSession.ledgerSessionId = params.ledgerSessionId;
+      }
       existingSession.cwd = params.cwd;
       touchSession(existingSession, nowMs);
       return existingSession;
@@ -96,6 +105,7 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     const session: AcpSession = {
       sessionId,
       sessionKey: params.sessionKey,
+      ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
       cwd: params.cwd,
       createdAt: nowMs,
       lastTouchedAt: nowMs,
@@ -167,6 +177,8 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     return true;
   };
 
+  const deleteSession: AcpSessionStore["deleteSession"] = (sessionId) => removeSession(sessionId);
+
   const clearAllSessionsForTest: AcpSessionStore["clearAllSessionsForTest"] = () => {
     for (const session of sessions.values()) {
       session.abortController?.abort();
@@ -183,6 +195,7 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     setActiveRun,
     clearActiveRun,
     cancelActiveRun,
+    deleteSession,
     clearAllSessionsForTest,
   };
 }

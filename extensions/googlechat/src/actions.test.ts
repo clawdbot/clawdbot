@@ -51,7 +51,7 @@ describe("googlechat message actions", () => {
     vi.resetModules();
   });
 
-  it("describes send and reaction actions only when enabled accounts exist", async () => {
+  it("describes send and reaction actions only when enabled accounts exist", () => {
     listEnabledGoogleChatAccounts.mockReturnValueOnce([]);
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toBeNull();
 

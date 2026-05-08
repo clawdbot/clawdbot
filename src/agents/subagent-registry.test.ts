@@ -493,7 +493,7 @@ describe("subagent registry seam flow", () => {
       mod
         .listSubagentRunsForRequester("agent:main:main")
         .find((entry) => entry.runId === "run-delete-give-up"),
-    ).toBeDefined();
+    ).toMatchObject({ runId: "run-delete-give-up", cleanup: "delete" });
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);

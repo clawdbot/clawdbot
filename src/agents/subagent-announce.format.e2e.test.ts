@@ -200,8 +200,8 @@ const announceFormatChannelPlugins = [
     source: "test",
   },
   {
-    pluginId: "bluebubbles",
-    plugin: createChannelTestPluginBase({ id: "bluebubbles", label: "BlueBubbles" }),
+    pluginId: "imessage",
+    plugin: createChannelTestPluginBase({ id: "imessage", label: "iMessage" }),
     source: "test",
   },
   {
@@ -707,10 +707,10 @@ describe("subagent announce formatting", () => {
   it("keeps completion delivery enabled for extension channels captured from requester origin", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-direct-completion-bluebubbles",
+      childRunId: "run-direct-completion-imessage",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      requesterOrigin: { channel: "bluebubbles", to: "+1234567890", accountId: "acct-bb" },
+      requesterOrigin: { channel: "imessage", to: "+1234567890", accountId: "acct-bb" },
       ...defaultOutcomeAnnounce,
       expectsCompletionMessage: true,
     });
@@ -720,7 +720,7 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
     expect(call?.params?.deliver).toBe(true);
-    expect(call?.params?.channel).toBe("bluebubbles");
+    expect(call?.params?.channel).toBe("imessage");
     expect(call?.params?.to).toBe("+1234567890");
     expect(call?.params?.accountId).toBe("acct-bb");
   });
@@ -894,6 +894,30 @@ describe("subagent announce formatting", () => {
 
     expect(didAnnounce).toBe(true);
     expect(agentSpy).toHaveBeenCalledTimes(3);
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("retries direct agent announce on fallback cooldown exhaustion", async () => {
+    agentSpy
+      .mockRejectedValueOnce(
+        new Error(
+          "All models failed (1): anthropic/claude-opus-4-7: Provider anthropic is in cooldown (all profiles unavailable) (overloaded)",
+        ),
+      )
+      .mockResolvedValueOnce(visibleAgentResponse());
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-agent-fallback-summary-retry",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:C123", accountId: "default" },
+      ...defaultOutcomeAnnounce,
+      roundOneReply: "worker result",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(2);
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
@@ -1591,7 +1615,7 @@ describe("subagent announce formatting", () => {
     hasSubagentDeliveryTargetHook = true;
     subagentDeliveryTargetHookMock.mockResolvedValueOnce({
       origin: {
-        channel: "bluebubbles",
+        channel: "imessage",
         accountId: "acct-bb",
         to: "+1234567890",
       },
@@ -1599,7 +1623,7 @@ describe("subagent announce formatting", () => {
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-direct-hook-bluebubbles",
+      childRunId: "run-direct-hook-imessage",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       requesterOrigin: {
@@ -1617,7 +1641,7 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
     expect(call?.params?.deliver).toBe(true);
-    expect(call?.params?.channel).toBe("bluebubbles");
+    expect(call?.params?.channel).toBe("imessage");
     expect(call?.params?.to).toBe("+1234567890");
     expect(call?.params?.accountId).toBe("acct-bb");
   });
@@ -2141,9 +2165,9 @@ describe("subagent announce formatting", () => {
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-direct-bluebubbles",
+      childRunId: "run-direct-imessage",
       requesterSessionKey: "agent:main:main",
-      requesterOrigin: { channel: "bluebubbles", accountId: "acct-bb", to: "+1234567890" },
+      requesterOrigin: { channel: "imessage", accountId: "acct-bb", to: "+1234567890" },
       requesterDisplayKey: "main",
       ...defaultOutcomeAnnounce,
     });
@@ -2156,7 +2180,7 @@ describe("subagent announce formatting", () => {
       expectFinal?: boolean;
     };
     expect(call?.params?.deliver).toBe(true);
-    expect(call?.params?.channel).toBe("bluebubbles");
+    expect(call?.params?.channel).toBe("imessage");
     expect(call?.params?.to).toBe("+1234567890");
     expect(call?.params?.accountId).toBe("acct-bb");
     expect(call?.expectFinal).toBe(true);
@@ -2949,7 +2973,7 @@ describe("subagent announce formatting", () => {
   it("prefers requesterOrigin channel over stale session lastChannel in queued announce", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
-    // Session store has stale whatsapp channel, but the requesterOrigin says bluebubbles.
+    // Session store has stale whatsapp channel, but the requesterOrigin says imessage.
     sessionStore = {
       "agent:main:main": {
         sessionId: "session-stale",

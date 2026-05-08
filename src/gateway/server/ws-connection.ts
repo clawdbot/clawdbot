@@ -387,19 +387,23 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           `webchat disconnected code=${code} reason=${logReason || "n/a"} conn=${connId}`,
         );
       }
-      if (client?.presenceKey) {
+      const context = buildRequestContext();
+      context.unsubscribeAllSessionEvents(connId);
+      let currentDisconnectedNodeId: string | null = null;
+      if (client?.connect?.role === "node") {
+        currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
+      }
+      if (
+        client?.presenceKey &&
+        (client.connect.role !== "node" || currentDisconnectedNodeId !== null)
+      ) {
         upsertPresence(client.presenceKey, { reason: "disconnect" });
         broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
       }
-      const context = buildRequestContext();
-      context.unsubscribeAllSessionEvents(connId);
-      if (client?.connect?.role === "node") {
-        const nodeId = context.nodeRegistry.unregister(connId);
-        if (nodeId) {
-          removeRemoteNodeInfo(nodeId);
-          context.nodeUnsubscribeAll(nodeId);
-          clearNodeWakeState(nodeId);
-        }
+      if (currentDisconnectedNodeId) {
+        removeRemoteNodeInfo(currentDisconnectedNodeId);
+        context.nodeUnsubscribeAll(currentDisconnectedNodeId);
+        clearNodeWakeState(currentDisconnectedNodeId);
       }
       logWs("out", "close", {
         connId,

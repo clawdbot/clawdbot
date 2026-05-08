@@ -78,7 +78,10 @@ describe("loginChutes", () => {
       app: { clientId: "cid_test", redirectUri, scopes: ["openid"] },
       onAuth: async ({ url }) => {
         const state = new URL(url).searchParams.get("state");
-        expect(state).toBeTruthy();
+        if (state === null) {
+          throw new Error("expected OAuth state");
+        }
+        expect(state).toMatch(/\S/u);
         await fetch(`${redirectUri}?code=code_local&state=${state}`);
       },
       onPrompt,

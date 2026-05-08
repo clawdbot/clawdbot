@@ -31,6 +31,7 @@ type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
 
 export type SimpleCompletionModelOptions = {
   maxTokens?: number;
+  temperature?: number;
   signal?: AbortSignal;
 };
 

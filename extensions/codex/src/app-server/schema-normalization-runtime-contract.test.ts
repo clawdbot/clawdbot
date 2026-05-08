@@ -49,10 +49,11 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
   };
 }
 
-function threadStartResult(threadId = "thread-1") {
+function threadStartResult(threadId = "thread-1", serviceTier: string | null = null) {
   return {
     thread: {
       id: threadId,
+      sessionId: "session-1",
       forkedFromId: null,
       preview: "",
       ephemeral: false,
@@ -72,7 +73,7 @@ function threadStartResult(threadId = "thread-1") {
     },
     model: "gpt-5.4",
     modelProvider: "openai",
-    serviceTier: null,
+    serviceTier,
     cwd: tempDir,
     instructionSources: [],
     approvalPolicy: "never",
@@ -123,6 +124,27 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
         dynamicTools: [dynamicTool],
       }),
     );
+  });
+
+  it("accepts Codex app-server priority service tier responses", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-priority", "priority");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+
+    expect(binding.threadId).toBe("thread-priority");
   });
 
   it("treats dynamic tool schema changes as thread-fingerprint changes", async () => {

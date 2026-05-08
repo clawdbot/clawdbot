@@ -50,8 +50,17 @@ DigitalOcean is the simplest paid VPS path. If you prefer cheaper or free option
 
     # Install OpenClaw
     curl -fsSL https://openclaw.ai/install.sh | bash
+
+    # Create the non-root user that will own OpenClaw state and services.
+    adduser openclaw
+    usermod -aG sudo openclaw
+    loginctl enable-linger openclaw
+
+    su - openclaw
     openclaw --version
     ```
+
+    Use the root shell only for system bootstrap. Run OpenClaw commands as the non-root `openclaw` user so state lives under `/home/openclaw/.openclaw/` and the Gateway installs as that user's systemd service.
 
   </Step>
 
@@ -97,8 +106,8 @@ DigitalOcean is the simplest paid VPS path. If you prefer cheaper or free option
     **Option B: Tailscale Serve**
 
     ```bash
-    curl -fsSL https://tailscale.com/install.sh | sh
-    tailscale up
+    curl -fsSL https://tailscale.com/install.sh | sudo sh
+    sudo tailscale up
     openclaw config set gateway.tailscale.mode serve
     openclaw gateway restart
     ```

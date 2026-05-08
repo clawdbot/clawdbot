@@ -7,6 +7,7 @@ import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
 } from "../../agents/pi-embedded-runner/runs.js";
+import { clearRuntimeConfigSnapshot } from "../../config/config.js";
 import * as sessionTypesModule from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
@@ -149,6 +150,7 @@ type RunWithModelFallbackParams = {
 };
 
 beforeEach(() => {
+  clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   replyRunRegistryTesting.resetReplyRunRegistry();
@@ -182,6 +184,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
   vi.useRealTimers();
   clearMemoryPluginState();
@@ -1810,7 +1813,6 @@ describe("runReplyAgent claude-cli routing", () => {
     const sessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
-      agentRuntimeOverride: "claude-cli",
     } as SessionEntry;
     const followupRun = {
       prompt: "hello",
@@ -1822,7 +1824,15 @@ describe("runReplyAgent claude-cli routing", () => {
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: { agents: { defaults: { agentRuntime: { id: "claude-cli" } } } },
+        config: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+              },
+            },
+          },
+        },
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude-opus-4-7",

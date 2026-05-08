@@ -47,7 +47,7 @@ function applyCustomModelConfigWithContextWindow(contextWindow?: number) {
   });
 }
 
-it("uses expanded max_tokens for openai verification probes", async () => {
+it("uses expanded max_tokens for openai verification probes", () => {
   const request = buildOpenAiVerificationProbeRequest({
     baseUrl: "https://example.com/v1",
     apiKey: "test-key",
@@ -287,8 +287,14 @@ describe("applyCustomApiConfig", () => {
     });
 
     expect(result.providerId).toBe("custom-2");
-    expect(result.config.models?.providers?.custom).toBeDefined();
-    expect(result.config.models?.providers?.["custom-2"]).toBeDefined();
+    expect(Object.keys(result.config.models?.providers ?? {}).toSorted()).toEqual([
+      "custom",
+      "custom-2",
+    ]);
+    expect(result.config.models?.providers?.["custom-2"]).toMatchObject({
+      baseUrl: "http://localhost:11434/v1",
+      models: [{ id: "llama3" }],
+    });
   });
 
   it("does not add azure fields for non-azure URLs", () => {

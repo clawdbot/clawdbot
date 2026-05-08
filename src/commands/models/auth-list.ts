@@ -46,9 +46,7 @@ function formatTimestamp(value: number | undefined): string | undefined {
 }
 
 function resolveProfileExpiry(profile: AuthProfileCredential): string | undefined {
-  return profile.type === "oauth" || profile.type === "token"
-    ? formatTimestamp(profile.expires)
-    : undefined;
+  return profile.type === "api_key" ? undefined : formatTimestamp(profile.expires);
 }
 
 function summarizeProfile(params: {

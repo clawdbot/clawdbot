@@ -90,7 +90,7 @@ openclaw cron add \
   --tz America/New_York \
   --timeout-seconds 300 \
   --announce \
-  --channel bluebubbles \
+  --channel imessage \
   --to "+1XXXXXXXXXX" \
   --message "Execute daily inbox triage per standing orders. Check mail for new alerts. Parse, categorize, and persist each item. Report summary to owner. Escalate unknowns."
 ```

@@ -174,7 +174,11 @@ describe("zalouser send helpers", () => {
     expect(formatted.text.length).toBeGreaterThan(2000);
     expect(mockSendText).toHaveBeenCalledTimes(2);
     expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(formatted.text);
-    expect(mockSendText.mock.calls.every((call) => call[1].length <= 2000)).toBe(true);
+    expect(
+      mockSendText.mock.calls
+        .map((call, index) => ({ index, length: call[1].length }))
+        .filter((call) => call.length > 2000),
+    ).toEqual([]);
     expect(result).toMatchObject({ ok: true, messageId: "mid-2c-2" });
   });
 

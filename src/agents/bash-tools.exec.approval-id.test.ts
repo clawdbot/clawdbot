@@ -468,7 +468,12 @@ describe("exec approvals", () => {
     ).toMatchObject({
       suppressNotifyOnExit: true,
     });
-    await expect.poll(() => agentParams, { timeout: 2000, interval: 1 }).toBeTruthy();
+    await expect
+      .poll(() => agentParams, { timeout: 2000, interval: 1 })
+      .toMatchObject({
+        message: expect.stringContaining(`id=${approvalId}`),
+        sessionKey: "agent:main:main",
+      });
   });
 
   it("skips approval when node allowlist is satisfied", async () => {

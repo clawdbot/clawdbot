@@ -83,12 +83,12 @@ function normalizeExt(ext: string): string | undefined {
 }
 
 function pickAfconvertRecipe(source: string, target: string): string[] | undefined {
-  // Currently only the MP3→CAF path used by BlueBubbles voice memos.
+  // Currently only the MP3->CAF path used by native Messages voice memos.
   if (target === "caf") {
     // Opus-in-CAF, mono, 24 kHz. Validated against macOS 15.x Messages.app's
     // native voice-memo CAF descriptor (1 ch, 24000 Hz, opus); other CAF
     // flavors (PCM, AAC) get downgraded to plain audio attachments along the
-    // BlueBubbles → Messages.app path. If iMessage stops rendering the result
+    // Messages.app path. If iMessage stops rendering the result
     // as a voice memo after a system update, try forcing frames-per-packet
     // explicitly via `opus@24000#480` and re-validate. See #72506.
     return ["-f", "caff", "-d", "opus@24000", "-c", "1"];

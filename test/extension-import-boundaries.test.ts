@@ -5,22 +5,34 @@ import { main as srcExtensionMain } from "../scripts/check-src-extension-import-
 import { collectModuleReferencesFromSource } from "../scripts/lib/guard-inventory-utils.mjs";
 import { createCapturedIo } from "./helpers/captured-io.js";
 
-const srcJsonOutputPromise = getJsonOutput(srcExtensionMain, ["--json"]);
-const sdkPackageJsonOutputPromise = getJsonOutput(sdkPackageMain, ["--json"]);
-const srcOutsideJsonOutputPromise = getJsonOutput(extensionPluginSdkMain, [
-  "--mode=src-outside-plugin-sdk",
-  "--json",
-]);
-const pluginSdkInternalJsonOutputPromise = getJsonOutput(extensionPluginSdkMain, [
-  "--mode=plugin-sdk-internal",
-  "--json",
-]);
-const relativeOutsidePackageJsonOutputPromise = getJsonOutput(extensionPluginSdkMain, [
-  "--mode=relative-outside-package",
-  "--json",
-]);
-
 type CapturedIo = ReturnType<typeof createCapturedIo>["io"];
+type JsonOutputPromise = ReturnType<typeof getJsonOutput>;
+
+const boundaryInventoryCases: Array<{
+  name: string;
+  output: JsonOutputPromise;
+}> = [
+  {
+    name: "src extension import boundary",
+    output: getJsonOutput(srcExtensionMain, ["--json"]),
+  },
+  {
+    name: "sdk/package extension import boundary",
+    output: getJsonOutput(sdkPackageMain, ["--json"]),
+  },
+  {
+    name: "extension src outside plugin-sdk boundary",
+    output: getJsonOutput(extensionPluginSdkMain, ["--mode=src-outside-plugin-sdk", "--json"]),
+  },
+  {
+    name: "extension plugin-sdk-internal boundary",
+    output: getJsonOutput(extensionPluginSdkMain, ["--mode=plugin-sdk-internal", "--json"]),
+  },
+  {
+    name: "extension relative-outside-package boundary",
+    output: getJsonOutput(extensionPluginSdkMain, ["--mode=relative-outside-package", "--json"]),
+  },
+];
 
 describe("fast module reference scanner", () => {
   it("collects code references without matching comments or strings", () => {
@@ -42,6 +54,16 @@ await import("./runtime");
   });
 });
 
+describe("extension import boundary inventories", () => {
+  it.each(boundaryInventoryCases)("$name JSON output stays empty", async ({ output }) => {
+    const jsonOutput = await output;
+
+    expect(jsonOutput.exitCode).toBe(0);
+    expect(jsonOutput.stderr).toBe("");
+    expect(jsonOutput.json).toEqual([]);
+  });
+});
+
 async function getJsonOutput(
   main: (argv: string[], io: CapturedIo) => Promise<number>,
   argv: string[],
@@ -54,53 +76,3 @@ async function getJsonOutput(
     json: JSON.parse(captured.readStdout()),
   };
 }
-
-describe("src extension import boundary inventory", () => {
-  it("script json output stays empty", async () => {
-    const jsonOutput = await srcJsonOutputPromise;
-
-    expect(jsonOutput.exitCode).toBe(0);
-    expect(jsonOutput.stderr).toBe("");
-    expect(jsonOutput.json).toEqual([]);
-  });
-});
-
-describe("sdk/package extension import boundary inventory", () => {
-  it("script json output stays empty", async () => {
-    const jsonOutput = await sdkPackageJsonOutputPromise;
-
-    expect(jsonOutput.exitCode).toBe(0);
-    expect(jsonOutput.stderr).toBe("");
-    expect(jsonOutput.json).toEqual([]);
-  });
-});
-
-describe("extension src outside plugin-sdk boundary inventory", () => {
-  it("script json output stays empty", async () => {
-    const jsonResult = await srcOutsideJsonOutputPromise;
-
-    expect(jsonResult.exitCode).toBe(0);
-    expect(jsonResult.stderr).toBe("");
-    expect(jsonResult.json).toEqual([]);
-  });
-});
-
-describe("extension plugin-sdk-internal boundary inventory", () => {
-  it("script json output stays empty", async () => {
-    const jsonResult = await pluginSdkInternalJsonOutputPromise;
-
-    expect(jsonResult.exitCode).toBe(0);
-    expect(jsonResult.stderr).toBe("");
-    expect(jsonResult.json).toEqual([]);
-  });
-});
-
-describe("extension relative-outside-package boundary inventory", () => {
-  it("script json output stays empty", async () => {
-    const jsonResult = await relativeOutsidePackageJsonOutputPromise;
-
-    expect(jsonResult.exitCode).toBe(0);
-    expect(jsonResult.stderr).toBe("");
-    expect(jsonResult.json).toEqual([]);
-  });
-});

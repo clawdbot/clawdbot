@@ -98,16 +98,19 @@ describe("models cli", () => {
     });
   }
 
+  function requireCommand(parent: Command, name: string): Command {
+    const command = parent.commands.find((cmd) => cmd.name() === name);
+    if (!command) {
+      throw new Error(`expected ${name} command`);
+    }
+    return command;
+  }
+
   it("registers github-copilot login command", async () => {
     const program = createProgram();
-    const models = program.commands.find((cmd) => cmd.name() === "models");
-    expect(models).toBeTruthy();
-
-    const auth = models?.commands.find((cmd) => cmd.name() === "auth");
-    expect(auth).toBeTruthy();
-
-    const login = auth?.commands.find((cmd) => cmd.name() === "login-github-copilot");
-    expect(login).toBeTruthy();
+    const models = requireCommand(program, "models");
+    const auth = requireCommand(models, "auth");
+    expect(requireCommand(auth, "login-github-copilot").name()).toBe("login-github-copilot");
 
     await program.parseAsync(
       ["models", "auth", "--agent", "poe", "login-github-copilot", "--yes"],

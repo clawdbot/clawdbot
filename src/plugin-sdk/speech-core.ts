@@ -37,6 +37,7 @@ export { parseTtsDirectives } from "../tts/directives.js";
 export {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
+  listLoadedSpeechProviders,
   listSpeechProviders,
   normalizeSpeechProviderId,
 } from "../tts/provider-registry.js";

@@ -132,15 +132,18 @@ describe("nostr outbound cfg threading", () => {
     installOutboundRuntime();
     const { cleanup, sendDm } = await startOutboundAccount();
     const adapter = nostrPlugin.message;
-    expect(adapter).toBeDefined();
-    expect(adapter!.send?.media).toBeUndefined();
+    if (!adapter?.send?.text) {
+      throw new Error("expected Nostr message adapter with text sender");
+    }
+    const sendText = adapter.send.text;
+    expect(adapter.send.media).toBeUndefined();
 
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "nostrMessageAdapter",
-      adapter: adapter!,
+      adapter,
       proofs: {
         text: async () => {
-          const result = await adapter!.send!.text!({
+          const result = await sendText({
             cfg: createCfg() as OpenClawConfig,
             to: "NPUB123",
             text: "hello",
@@ -150,7 +153,7 @@ describe("nostr outbound cfg threading", () => {
           expect(result.receipt.parts[0]?.kind).toBe("text");
         },
         messageSendingHooks: () => {
-          expect(adapter!.send!.text).toBeTypeOf("function");
+          expect(sendText).toBeTypeOf("function");
         },
       },
     });

@@ -1117,12 +1117,16 @@ describe("createImageGenerateTool", () => {
       workspaceDir: process.cwd(),
     });
 
-    await expect(
-      tool.execute("call-openai-edit", {
-        prompt: "Remove the subject but keep the rest unchanged.",
-        image: "./fixtures/reference.png",
-      }),
-    ).resolves.toBeDefined();
+    const result = await tool.execute("call-openai-edit", {
+      prompt: "Remove the subject but keep the rest unchanged.",
+      image: "./fixtures/reference.png",
+    });
+    expect(result).toMatchObject({
+      details: {
+        provider: "openai",
+        model: "gpt-image-1",
+      },
+    });
 
     expect(generateImage).toHaveBeenCalledWith(
       expect.objectContaining({

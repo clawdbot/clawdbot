@@ -1100,7 +1100,7 @@ describe("handleControlUiHttpRequest", () => {
   it("does not handle POST to root-mounted paths (plugin webhook passthrough)", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        for (const webhookPath of ["/bluebubbles-webhook", "/custom-webhook", "/callback"]) {
+        for (const webhookPath of ["/imessage-webhook", "/custom-webhook", "/callback"]) {
           const { res } = makeMockHttpResponse();
           const handled = await handleControlUiHttpRequest(
             { url: webhookPath, method: "POST" } as IncomingMessage,
@@ -1120,7 +1120,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
-          { url: "/bluebubbles-webhook", method: "POST" } as IncomingMessage,
+          { url: "/imessage-webhook", method: "POST" } as IncomingMessage,
           res,
           { basePath: "/openclaw", root: { kind: "resolved", path: tmp } },
         );
@@ -1163,7 +1163,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { handled, end } = await runControlUiRequest({
-          url: "/webhook/bluebubbles",
+          url: "/webhook/imessage",
           method: "POST",
           rootPath: tmp,
         });

@@ -31,4 +31,33 @@ describe("parseIMessageNotification", () => {
     expect(parsed?.text).toBe("hello world");
     expect(parsed?.reply_to_text).toBe("quote");
   });
+
+  it("preserves reaction event metadata", () => {
+    const parsed = parseIMessageNotification({
+      message: {
+        id: 1,
+        guid: "reaction-guid",
+        chat_id: 2,
+        sender: "+10000000000",
+        destination_caller_id: null,
+        is_from_me: false,
+        text: "",
+        is_reaction: true,
+        reaction_type: "like",
+        reaction_emoji: "👍",
+        is_reaction_add: true,
+        reacted_to_guid: "target-guid",
+        attachments: null,
+        chat_identifier: null,
+        chat_guid: null,
+        chat_name: null,
+        participants: null,
+        is_group: false,
+      },
+    });
+
+    expect(parsed?.is_reaction).toBe(true);
+    expect(parsed?.reaction_emoji).toBe("👍");
+    expect(parsed?.reacted_to_guid).toBe("target-guid");
+  });
 });

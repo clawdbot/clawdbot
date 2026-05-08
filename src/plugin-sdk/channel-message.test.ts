@@ -3,14 +3,19 @@ import { defineChannelMessageAdapter } from "./channel-message.js";
 
 describe("defineChannelMessageAdapter", () => {
   it("keeps new and legacy channel plugin SDK subpaths importable", async () => {
-    const [channelMessage, channelMessageRuntime, channelReplyPipeline, compat] = await Promise.all(
-      [
-        import("openclaw/plugin-sdk/channel-message"),
-        import("openclaw/plugin-sdk/channel-message-runtime"),
-        import("openclaw/plugin-sdk/channel-reply-pipeline"),
-        import("openclaw/plugin-sdk/compat"),
-      ],
-    );
+    const [
+      channelMessage,
+      channelMessageRuntime,
+      channelMessageRuntimeDirect,
+      channelReplyPipeline,
+      compat,
+    ] = await Promise.all([
+      import("openclaw/plugin-sdk/channel-message"),
+      import("openclaw/plugin-sdk/channel-message-runtime"),
+      import("../channels/message/runtime.js"),
+      import("openclaw/plugin-sdk/channel-reply-pipeline"),
+      import("openclaw/plugin-sdk/compat"),
+    ]);
 
     expect(channelMessage.createChannelMessageReplyPipeline).toBe(
       channelReplyPipeline.createChannelReplyPipeline,
@@ -19,8 +24,10 @@ describe("defineChannelMessageAdapter", () => {
       channelReplyPipeline.createReplyPrefixOptions,
     );
     expect(channelMessage.createTypingCallbacks).toBe(channelReplyPipeline.createTypingCallbacks);
-    expect(typeof channelMessageRuntime.sendDurableMessageBatch).toBe("function");
-    expect(typeof compat.createChannelReplyPipeline).toBe("function");
+    expect(channelMessageRuntime.sendDurableMessageBatch).toBe(
+      channelMessageRuntimeDirect.sendDurableMessageBatch,
+    );
+    expect(compat.createChannelReplyPipeline).toBe(channelReplyPipeline.createChannelReplyPipeline);
   });
 
   it("defaults new message adapters to plugin-owned receive acknowledgement", () => {

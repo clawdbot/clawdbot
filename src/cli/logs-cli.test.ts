@@ -151,8 +151,10 @@ describe("logs cli", () => {
     const output = stdoutWrites.join("");
     expect(output).toContain("line one");
     const timestamp = output.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z?/u)?.[0];
-    expect(timestamp).toBeTruthy();
-    expect(timestamp?.endsWith("Z")).toBe(false);
+    if (timestamp === undefined) {
+      throw new Error("expected local timestamp in logs output");
+    }
+    expect(timestamp.endsWith("Z")).toBe(false);
   });
 
   it("warns when the output pipe closes", async () => {

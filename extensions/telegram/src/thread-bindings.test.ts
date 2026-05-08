@@ -237,7 +237,9 @@ describe("telegram thread bindings", () => {
       },
     });
     const original = manager.listBySessionKey("agent:main:subagent:child-1")[0];
-    expect(original).toBeDefined();
+    if (!original) {
+      throw new Error("expected original subagent thread binding");
+    }
 
     const idleUpdated = setTelegramThreadBindingIdleTimeoutBySessionKey({
       accountId: "work",

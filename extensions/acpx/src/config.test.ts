@@ -98,7 +98,10 @@ describe("embedded acpx plugin config", () => {
     });
 
     const server = resolved.mcpServers["openclaw-plugin-tools"];
-    expect(server).toBeDefined();
+    expect(server).toMatchObject({
+      command: process.execPath,
+      args: expect.any(Array),
+    });
     expect(server.command).toBe(process.execPath);
     expect(Array.isArray(server.args)).toBe(true);
     expect(server.args?.length).toBeGreaterThan(0);
@@ -113,7 +116,10 @@ describe("embedded acpx plugin config", () => {
     });
 
     const server = resolved.mcpServers["openclaw-tools"];
-    expect(server).toBeDefined();
+    expect(server).toMatchObject({
+      command: process.execPath,
+      args: expect.any(Array),
+    });
     expect(server.command).toBe(process.execPath);
     expect(Array.isArray(server.args)).toBe(true);
     expect(server.args?.length).toBeGreaterThan(0);

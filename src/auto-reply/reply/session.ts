@@ -544,6 +544,18 @@ export async function initSessionState(params: {
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
+  const usageFamilyKey = previousSessionEntry
+    ? (previousSessionEntry.usageFamilyKey ?? sessionKey)
+    : baseEntry?.usageFamilyKey;
+  const usageFamilySessionIds = previousSessionEntry
+    ? Array.from(
+        new Set([
+          ...(previousSessionEntry.usageFamilySessionIds ?? []),
+          previousSessionEntry.sessionId,
+          sessionId,
+        ]),
+      )
+    : baseEntry?.usageFamilySessionIds;
   // Track the originating channel/to for announce routing (subagent announce-back).
   const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
   const isInterSession = isInterSessionInputProvenance(ctx.InputProvenance);
@@ -626,6 +638,8 @@ export async function initSessionState(params: {
     reasoningLevel: persistedReasoning ?? baseEntry?.reasoningLevel,
     ttsAuto: persistedTtsAuto ?? baseEntry?.ttsAuto,
     responseUsage: baseEntry?.responseUsage,
+    usageFamilyKey,
+    usageFamilySessionIds,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     modelOverrideSource: persistedModelOverrideSource ?? baseEntry?.modelOverrideSource,
@@ -768,6 +782,9 @@ export async function initSessionState(params: {
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;
     sessionEntry.contextTokens = undefined;
+    // Skills snapshots are prompt/runtime caches. Do not preserve a stale
+    // snapshot through /new; the next turn must rebuild the visible skill list.
+    sessionEntry.skillsSnapshot = undefined;
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };

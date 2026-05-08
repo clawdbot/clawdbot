@@ -19,7 +19,7 @@ describe("logging.maxFileBytes config", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((issue) => issue.path === "logging.maxFileBytes")).toBe(true);
+      expect(res.issues.map((issue) => issue.path)).toContain("logging.maxFileBytes");
     }
   });
 });

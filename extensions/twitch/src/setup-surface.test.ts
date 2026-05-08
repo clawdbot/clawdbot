@@ -237,7 +237,7 @@ describe("setup surface helpers", () => {
   });
 
   describe("defaultAccount setup resolution", () => {
-    it("reports status for the configured default account", async () => {
+    it("reports status for the configured default account", () => {
       const lines = twitchSetupWizard.status?.resolveStatusLines?.({
         cfg: {
           channels: {
@@ -259,7 +259,7 @@ describe("setup surface helpers", () => {
       expect(lines).toEqual(["Twitch (secondary): configured"]);
     });
 
-    it("reports status for the requested account override", async () => {
+    it("reports status for the requested account override", () => {
       const lines = twitchSetupWizard.status?.resolveStatusLines?.({
         cfg: {
           channels: {

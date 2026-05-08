@@ -128,7 +128,7 @@ describe("debug proxy managed-proxy direct upstream policy", () => {
   });
 
   it("allows direct upstreams when managed proxy mode is inactive", () => {
-    expect(() => assertDebugProxyDirectUpstreamAllowed()).not.toThrow();
+    expect(assertDebugProxyDirectUpstreamAllowed()).toBeUndefined();
   });
 
   it("rejects direct upstreams while managed proxy mode is active", () => {
@@ -151,7 +151,7 @@ describe("debug proxy managed-proxy direct upstream policy", () => {
     process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
     process.env["OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY"] = "1";
 
-    expect(() => assertDebugProxyDirectUpstreamAllowed()).not.toThrow();
+    expect(assertDebugProxyDirectUpstreamAllowed()).toBeUndefined();
   });
 
   it("rejects CONNECT upstreams before opening direct sockets while managed proxy mode is active", async () => {

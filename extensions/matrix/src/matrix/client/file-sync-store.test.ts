@@ -96,7 +96,7 @@ describe("FileBackedMatrixSyncStore", () => {
         type: "com.openclaw.test",
       },
     ]);
-    expect(savedSync?.roomsData.join?.["!room:example.org"]).toBeTruthy();
+    expect(savedSync?.roomsData.join?.["!room:example.org"]).toEqual(expect.any(Object));
     expect(secondStore.hasSavedSyncFromCleanShutdown()).toBe(false);
   });
 

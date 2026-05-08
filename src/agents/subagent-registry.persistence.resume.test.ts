@@ -184,12 +184,12 @@ describe("subagent registry persistence resume", () => {
           requesterOrigin?: { channel?: string; accountId?: string };
         }
       | undefined;
-    expect(run).toBeDefined();
-    if (run) {
-      expect("requesterAccountId" in run).toBe(false);
-      expect("requesterChannel" in run).toBe(false);
+    if (run === undefined) {
+      throw new Error("expected persisted run");
     }
-    expect(run?.requesterOrigin?.channel).toBe("whatsapp");
+    expect("requesterAccountId" in run).toBe(false);
+    expect("requesterChannel" in run).toBe(false);
+    expect(run.requesterOrigin?.channel).toBe("whatsapp");
     expect(run?.requesterOrigin?.accountId).toBe("acct-main");
 
     mod.initSubagentRegistry();

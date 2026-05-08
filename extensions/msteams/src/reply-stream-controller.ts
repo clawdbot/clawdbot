@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-message";
 import {
   createChannelProgressDraftGate,
+  type ChannelProgressDraftLine,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
   resolveChannelPreviewStreamMode,
@@ -70,7 +71,7 @@ export function createTeamsReplyStreamController(params: {
 
   let streamReceivedTokens = false;
   let informativeUpdateSent = false;
-  let progressLines: string[] = [];
+  let progressLines: Array<string | ChannelProgressDraftLine> = [];
   let lastInformativeText = "";
   let pendingFinalize: Promise<void> | undefined;
   let liveState: LiveMessageState<ReplyPayload> = createLiveMessageState({
@@ -125,7 +126,7 @@ export function createTeamsReplyStreamController(params: {
   };
 
   const pushProgressLine = async (
-    line?: string,
+    line?: string | ChannelProgressDraftLine,
     options?: { toolName?: string },
   ): Promise<void> => {
     if (!stream || streamMode !== "progress") {
@@ -135,11 +136,13 @@ export function createTeamsReplyStreamController(params: {
       return;
     }
     if (shouldStreamPreviewToolProgress) {
-      const normalized = line?.replace(/\s+/g, " ").trim();
+      const normalized = normalizeProgressLineIdentity(line);
       if (normalized) {
-        const previous = progressLines.at(-1);
+        const previous = normalizeProgressLineIdentity(progressLines.at(-1));
         if (previous !== normalized) {
-          progressLines = [...progressLines, normalized].slice(
+          const progressLine: string | ChannelProgressDraftLine =
+            typeof line === "object" && line !== undefined ? line : normalized;
+          progressLines = [...progressLines, progressLine].slice(
             -resolveChannelProgressDraftMaxLines(params.msteamsConfig),
           );
         }
@@ -230,7 +233,10 @@ export function createTeamsReplyStreamController(params: {
       stream.update(payload.text);
     },
 
-    async pushProgressLine(line?: string, options?: { toolName?: string }): Promise<void> {
+    async pushProgressLine(
+      line?: string | ChannelProgressDraftLine,
+      options?: { toolName?: string },
+    ): Promise<void> {
       await pushProgressLine(line, options);
     },
 
@@ -326,4 +332,11 @@ export function createTeamsReplyStreamController(params: {
       return streamReceivedTokens;
     },
   };
+}
+
+function normalizeProgressLineIdentity(
+  line: string | ChannelProgressDraftLine | undefined,
+): string {
+  const text = typeof line === "string" ? line : line?.text;
+  return text?.replace(/\s+/g, " ").trim() ?? "";
 }

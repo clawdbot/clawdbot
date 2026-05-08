@@ -91,7 +91,7 @@ describe("configured binding registry", () => {
     ensureConfiguredBindingBuiltinsRegistered();
   });
 
-  it("resolves configured ACP bindings from an already loaded channel plugin", async () => {
+  it("resolves configured ACP bindings from an already loaded channel plugin", () => {
     const plugin = createDiscordAcpPlugin();
     getChannelPluginMock.mockReturnValue(plugin);
 
@@ -107,7 +107,7 @@ describe("configured binding registry", () => {
     expect(plugin.bindings?.compileConfiguredBinding).toHaveBeenCalledTimes(1);
   });
 
-  it("resolves configured ACP bindings from canonical conversation refs", async () => {
+  it("resolves configured ACP bindings from canonical conversation refs", () => {
     const plugin = createDiscordAcpPlugin();
     getChannelPluginMock.mockReturnValue(plugin);
 
@@ -135,7 +135,7 @@ describe("configured binding registry", () => {
     });
   });
 
-  it("primes compiled ACP bindings from the already loaded channel registry", async () => {
+  it("primes compiled ACP bindings from the already loaded channel registry", () => {
     const plugin = createDiscordAcpPlugin();
     const cfg = createConfig({ bindingAgentId: "codex" });
     getChannelPluginMock.mockReturnValue(plugin);
@@ -163,7 +163,7 @@ describe("configured binding registry", () => {
     expect(second?.statefulTarget.agentId).toBe("codex");
   });
 
-  it("resolves wildcard binding session keys from the compiled registry", async () => {
+  it("resolves wildcard binding session keys from the compiled registry", () => {
     const plugin = createDiscordAcpPlugin();
     getChannelPluginMock.mockReturnValue(plugin);
 
@@ -184,7 +184,7 @@ describe("configured binding registry", () => {
     expect(resolved?.record.metadata?.backend).toBe("acpx");
   });
 
-  it("does not perform late plugin discovery when a channel plugin is unavailable", async () => {
+  it("does not perform late plugin discovery when a channel plugin is unavailable", () => {
     const resolved = bindingRegistry.resolveConfiguredBindingRecord({
       cfg: createConfig() as never,
       channel: "discord",
@@ -195,7 +195,7 @@ describe("configured binding registry", () => {
     expect(resolved).toBeNull();
   });
 
-  it("uses the current loaded channel plugin on each resolve", async () => {
+  it("uses the current loaded channel plugin on each resolve", () => {
     const firstPlugin = createDiscordAcpPlugin();
     const secondPlugin = createDiscordAcpPlugin();
     getChannelPluginMock.mockReturnValueOnce(firstPlugin).mockReturnValueOnce(secondPlugin);

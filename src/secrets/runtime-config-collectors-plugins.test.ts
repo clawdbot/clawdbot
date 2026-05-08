@@ -75,8 +75,8 @@ function collectAcpxConfigAssignments(config: OpenClawConfig): ResolverContext {
 function expectInactiveAcpxConfig(config: OpenClawConfig): void {
   const context = collectAcpxConfigAssignments(config);
   expect(context.assignments).toHaveLength(0);
-  expect(context.warnings.some((w) => w.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")).toBe(
-    true,
+  expect(context.warnings.map((warning) => warning.code)).toContain(
+    "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
   );
 }
 

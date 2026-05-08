@@ -12,6 +12,20 @@ import type {
 import type { DmConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
+export type IMessageActionConfig = {
+  reactions?: boolean;
+  edit?: boolean;
+  unsend?: boolean;
+  reply?: boolean;
+  sendWithEffect?: boolean;
+  renameGroup?: boolean;
+  setGroupIcon?: boolean;
+  addParticipant?: boolean;
+  removeParticipant?: boolean;
+  leaveGroup?: boolean;
+  sendAttachment?: boolean;
+};
+
 export type IMessageAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -29,6 +43,8 @@ export type IMessageAccountConfig = {
   dbPath?: string;
   /** Remote SSH host token for SCP attachment fetches (`host` or `user@host`). */
   remoteHost?: string;
+  /** Enable or disable private API message actions. */
+  actions?: IMessageActionConfig;
   /** Optional default send service (imessage|sms|auto). */
   service?: "imessage" | "sms" | "auto";
   /** Optional default region (used when sending SMS). */
@@ -73,6 +89,18 @@ export type IMessageAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** When private API is available, mark inbound chats read before dispatch (default: true). */
+  sendReadReceipts?: boolean;
+  /**
+   * Merge consecutive same-sender DM rows from `chat.db` into a single agent
+   * turn. Mirrors `channels.bluebubbles.coalesceSameSenderDms` so Apple's
+   * split-send (`<command> <URL>` arriving as two separate rows ~0.8-2.0 s
+   * apart) lands as one merged message. DM-only — group chats keep instant
+   * per-message dispatch. Widens the default inbound debounce window to
+   * 2500 ms when enabled without an explicit
+   * `messages.inbound.byChannel.imessage`. Default: `false`.
+   */
+  coalesceSameSenderDms?: boolean;
   groups?: Record<
     string,
     {

@@ -244,7 +244,7 @@ describe("web search provider config", () => {
   it("does not warn for brave plugin config when bundled web search allowlist compat applies", () => {
     const res = validateConfigObjectWithPlugins({
       plugins: {
-        allow: ["bluebubbles", "memory-core"],
+        allow: ["imessage", "memory-core"],
         entries: {
           brave: {
             config: {
@@ -611,11 +611,6 @@ describe("web search provider auto-detection", () => {
   it("auto-detects grok when only XAI_API_KEY is set", () => {
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("grok");
-  });
-
-  it("auto-detects kimi when only KIMI_API_KEY is set", () => {
-    process.env.KIMI_API_KEY = "test-kimi-key"; // pragma: allowlist secret
-    expect(resolveSearchProvider({})).toBe("kimi");
   });
 
   it("auto-detects kimi when only MOONSHOT_API_KEY is set", () => {

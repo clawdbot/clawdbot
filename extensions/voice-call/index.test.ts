@@ -227,8 +227,10 @@ describe("voice-call plugin", () => {
     );
     const { service, methods } = setup({ provider: "mock" });
 
-    expect(service).toBeDefined();
-    expect(service!.start(createServiceContext())).toBeUndefined();
+    if (!service) {
+      throw new Error("expected voice-call service");
+    }
+    expect(service.start(createServiceContext())).toBeUndefined();
     expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
 
     resolveRuntime?.(runtimeStub);

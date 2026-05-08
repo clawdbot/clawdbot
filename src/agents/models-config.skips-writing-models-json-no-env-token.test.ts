@@ -111,7 +111,7 @@ async function runEnvProviderCase(params: {
     const raw = await fs.readFile(modelPath, "utf8");
     const parsed = JSON.parse(raw) as { providers: Record<string, ParsedProviderConfig> };
     const provider = parsed.providers[params.providerKey];
-    expect(provider).toBeDefined();
+    expect(provider).toMatchObject({ apiKey: params.expectedApiKeyRef });
     expect(provider?.apiKey).toBe(params.expectedApiKeyRef);
   } finally {
     if (previousValue === undefined) {

@@ -47,7 +47,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
   it("honors newline chunkMode for plugin channels even before the plugin registry is loaded", () => {
     const cfg = {
       channels: {
-        bluebubbles: {
+        imessage: {
           chunkMode: "newline",
         },
       },
@@ -64,7 +64,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
 
     const resolved = resolveEffectiveBlockStreamingConfig({
       cfg,
-      provider: "bluebubbles",
+      provider: "imessage",
     });
 
     expect(resolved.chunking.flushOnParagraph).toBe(true);

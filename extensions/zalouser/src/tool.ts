@@ -1,3 +1,4 @@
+import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { Type } from "typebox";
@@ -16,17 +17,6 @@ type AgentToolResult = {
   content: Array<{ type: "text"; text: string }>;
   details: unknown;
 };
-
-function stringEnum<T extends readonly string[]>(
-  values: T,
-  options: { description?: string } = {},
-) {
-  return Type.Unsafe<T[number]>({
-    type: "string",
-    enum: [...values],
-    ...options,
-  });
-}
 
 const ZalouserToolSchema = Type.Object(
   {

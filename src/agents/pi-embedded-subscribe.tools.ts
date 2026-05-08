@@ -321,10 +321,12 @@ export function filterToolResultMediaUrls(
     // registered tool's media trust. TTS-generated local files carry a
     // separate trusted-media flag from the owned tool result, so they can
     // survive runs whose exact built-in set omitted the raw tts name.
-    if (builtinToolNames !== undefined && !trustedOwnedTtsLocalMedia) {
-      const registeredName = toolName?.trim();
-      if (!registeredName || !builtinToolNames.has(registeredName)) {
-        return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
+    if (builtinToolNames !== undefined) {
+      if (!trustedOwnedTtsLocalMedia) {
+        const registeredName = toolName?.trim();
+        if (!registeredName || !builtinToolNames.has(registeredName)) {
+          return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
+        }
       }
     }
     return mediaUrls;

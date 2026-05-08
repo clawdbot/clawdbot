@@ -204,7 +204,6 @@ describe("before_agent_start hook merger", () => {
     const runner = createHookRunner(registry);
     await runner.runBeforeAgentStart({ prompt: "test" }, stubCtx);
 
-    expect(capturedCtx).toBeDefined();
-    expect(capturedCtx?.runId).toBe("test-run-id");
+    expect(capturedCtx).toMatchObject({ runId: "test-run-id" });
   });
 });

@@ -40,9 +40,11 @@ describe("registerSlackHomeEvents", () => {
     const trackEvent = vi.fn();
     const { publish, getHomeHandler } = createHomeContext({ trackEvent });
     const handler = getHomeHandler();
-    expect(handler).toBeTruthy();
+    if (!handler) {
+      throw new Error("expected Slack Home handler");
+    }
 
-    await handler!({
+    await handler({
       event: {
         type: "app_home_opened",
         user: "U123",

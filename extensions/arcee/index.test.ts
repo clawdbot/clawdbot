@@ -92,6 +92,12 @@ describe("arcee provider plugin", () => {
       "trinity-large-preview",
       "trinity-large-thinking",
     ]);
+    expect(
+      catalogProvider.models?.find((model) => model.id === "trinity-large-thinking")?.compat,
+    ).toMatchObject({
+      supportsTools: false,
+      supportsReasoningEffort: false,
+    });
   });
 
   it("builds the OpenRouter-backed Arcee AI model catalog", async () => {
@@ -112,6 +118,12 @@ describe("arcee provider plugin", () => {
       "arcee/trinity-large-preview",
       "arcee/trinity-large-thinking",
     ]);
+    expect(
+      catalogProvider.models?.find((model) => model.id === "arcee/trinity-large-thinking")?.compat,
+    ).toMatchObject({
+      supportsTools: false,
+      supportsReasoningEffort: false,
+    });
   });
 
   it("normalizes Arcee OpenRouter models to vendor-prefixed runtime ids", async () => {

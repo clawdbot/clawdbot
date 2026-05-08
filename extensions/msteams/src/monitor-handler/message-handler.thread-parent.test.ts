@@ -87,10 +87,12 @@ describe("msteams thread parent context injection", () => {
     } as unknown as Parameters<typeof handler>[0]);
 
     const parentCall = findParentSystemEventCall(enqueueSystemEvent);
-    expect(parentCall).toBeDefined();
-    expect(parentCall?.[0]).toBe("Replying to @Alice: Can someone investigate the latency spike?");
-    expect(parentCall?.[1]?.contextKey).toContain("msteams:thread-parent:");
-    expect(parentCall?.[1]?.contextKey).toContain("thread-root-123");
+    if (!parentCall) {
+      throw new Error("expected parent thread system event");
+    }
+    expect(parentCall[0]).toBe("Replying to @Alice: Can someone investigate the latency spike?");
+    expect(parentCall[1]?.contextKey).toContain("msteams:thread-parent:");
+    expect(parentCall[1]?.contextKey).toContain("thread-root-123");
   });
 
   it("caches parent fetches across thread replies in the same session", async () => {

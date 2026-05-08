@@ -82,20 +82,19 @@ Full troubleshooting: [Discord troubleshooting](/channels/discord#troubleshootin
 
 Full troubleshooting: [Slack troubleshooting](/channels/slack#troubleshooting)
 
-## iMessage and BlueBubbles
+## iMessage
 
-### iMessage and BlueBubbles failure signatures
+### iMessage failure signatures
 
-| Symptom                          | Fastest check                                                           | Fix                                                   |
-| -------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------- |
-| No inbound events                | Verify webhook/server reachability and app permissions                  | Fix webhook URL or BlueBubbles server state.          |
-| Can send but no receive on macOS | Check macOS privacy permissions for Messages automation                 | Re-grant TCC permissions and restart channel process. |
-| DM sender blocked                | `openclaw pairing list imessage` or `openclaw pairing list bluebubbles` | Approve pairing or update allowlist.                  |
+| Symptom                              | Fastest check                                           | Fix                                                                   |
+| ------------------------------------ | ------------------------------------------------------- | --------------------------------------------------------------------- |
+| `imsg` missing or fails on non-macOS | `openclaw channels status --probe --channel imessage`   | Run OpenClaw on the Messages Mac or use an SSH wrapper for `cliPath`. |
+| Can send but no receive on macOS     | Check macOS privacy permissions for Messages automation | Re-grant TCC permissions and restart channel process.                 |
+| DM sender blocked                    | `openclaw pairing list imessage`                        | Approve pairing or update allowlist.                                  |
 
 Full troubleshooting:
 
 - [iMessage troubleshooting](/channels/imessage#troubleshooting)
-- [BlueBubbles troubleshooting](/channels/bluebubbles#troubleshooting)
 
 ## Signal
 

@@ -96,7 +96,7 @@ describe("finalizeSlackPreviewEdit", () => {
     ).rejects.toThrow("socket closed");
   });
 
-  it("requires matching blocks when finalizing a blocks-only edit", async () => {
+  it("requires matching blocks when finalizing a blocks-only edit", () => {
     const blocks = [{ type: "section", text: { type: "mrkdwn", text: "*Done*" } }] as const;
 
     expect(

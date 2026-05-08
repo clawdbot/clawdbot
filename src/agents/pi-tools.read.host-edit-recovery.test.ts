@@ -262,7 +262,9 @@ describe("edit tool recovery hardening", () => {
         type: "text",
         text: "Successfully replaced text in ~/demo.txt.",
       });
-      await expect(fs.access(path.join(openclawHome, "demo.txt"))).rejects.toBeDefined();
+      await expect(fs.access(path.join(openclawHome, "demo.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     } finally {
       if (previousHome === undefined) {
         delete process.env.HOME;

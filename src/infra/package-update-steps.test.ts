@@ -29,6 +29,10 @@ function createNpmTarget(globalRoot: string): ResolvedGlobalInstallTarget {
   };
 }
 
+function createFsError(code: string, message = code): NodeJS.ErrnoException {
+  return Object.assign(new Error(message), { code });
+}
+
 function createPnpmTarget(globalRoot: string): ResolvedGlobalInstallTarget {
   return {
     manager: "pnpm",
@@ -121,6 +125,71 @@ describe("runGlobalPackageUpdateSteps", () => {
       await expect(fs.readlink(path.join(prefix, "bin", "openclaw"))).resolves.toBe(
         "../lib/node_modules/openclaw/dist/index.js",
       );
+    });
+  });
+
+  it("swaps staged npm package roots through the copy fallback when rename crosses devices", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-exdev-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+
+      const realRename = fs.rename.bind(fs);
+      let exdevMoves = 0;
+      const renameSpy = vi
+        .spyOn(fs, "rename")
+        .mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+          const [from, to] = args;
+          const fromPath = String(from);
+          if (
+            exdevMoves === 0 &&
+            fromPath.includes(`${path.sep}.openclaw-update-stage-`) &&
+            path.basename(fromPath) === "openclaw" &&
+            String(to) === packageRoot
+          ) {
+            exdevMoves += 1;
+            throw createFsError("EXDEV", "cross-device link not permitted");
+          }
+          return await realRename(...args);
+        });
+
+      try {
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep: async ({ name, argv, cwd }) => {
+            const prefixIndex = argv.indexOf("--prefix");
+            const stagePrefix = argv[prefixIndex + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            await writePackageRoot(
+              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+              "2.0.0",
+            );
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+          timeoutMs: 1000,
+        });
+
+        expect(result.failedStep).toBeNull();
+        expect(result.afterVersion).toBe("2.0.0");
+        expect(exdevMoves).toBe(1);
+        await expect(
+          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+        ).resolves.toContain('"version":"2.0.0"');
+      } finally {
+        renameSpy.mockRestore();
+      }
     });
   });
 
@@ -410,8 +479,10 @@ describe("runGlobalPackageUpdateSteps", () => {
         }),
       ).rejects.toThrow("install crashed");
 
-      expect(stagePrefix).toBeDefined();
-      await expect(fs.access(stagePrefix ?? "")).rejects.toMatchObject({ code: "ENOENT" });
+      if (stagePrefix === undefined) {
+        throw new Error("expected staged install prefix");
+      }
+      await expect(fs.access(stagePrefix)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 });

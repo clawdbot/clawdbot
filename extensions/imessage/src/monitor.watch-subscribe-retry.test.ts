@@ -103,6 +103,11 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     expect(firstClient.stop).toHaveBeenCalledTimes(1);
     expect(secondClient.waitForClose).toHaveBeenCalledTimes(1);
     expect(secondClient.stop).toHaveBeenCalledTimes(1);
+    expect(secondClient.request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      { attachments: false, include_reactions: true },
+      expect.any(Object),
+    );
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("watch.subscribe startup failed"),
     );

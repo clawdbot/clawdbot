@@ -271,6 +271,43 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("openclaw approvals get --gateway");
   });
 
+  it("warns when filesystem tools are disabled but exec remains available", async () => {
+    await noteSecurityWarnings({
+      tools: {
+        allow: ["read", "exec", "process"],
+        deny: ["write", "edit", "apply_patch"],
+      },
+    } as OpenClawConfig);
+
+    const message = lastMessage();
+    expect(message).toContain("filesystem write tools are disabled, but exec is still available");
+    expect(message).toContain("Runtime tools: exec, process");
+    expect(message).toContain('sandbox.mode="off"');
+    expect(message).toContain("also deny exec/process");
+  });
+
+  it("does not warn about exec filesystem policy when sandbox access is read-only", async () => {
+    await noteSecurityWarnings({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            workspaceAccess: "ro",
+          },
+        },
+      },
+      tools: {
+        allow: ["read", "exec", "process"],
+        deny: ["write", "edit", "apply_patch"],
+      },
+    } as OpenClawConfig);
+
+    const message = lastMessage();
+    expect(message).not.toContain(
+      "filesystem write tools are disabled, but exec is still available",
+    );
+  });
+
   it("warns when tools.exec is broader than host exec defaults", async () => {
     await withExecApprovalsFile(
       {

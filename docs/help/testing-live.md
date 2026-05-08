@@ -285,8 +285,8 @@ Docker notes:
 - Goal: validate the plugin-owned Codex harness through the normal gateway
   `agent` method:
   - load the bundled `codex` plugin
-  - select `OPENCLAW_AGENT_RUNTIME=codex`
-  - send a first gateway agent turn to `openai/gpt-5.5` with the Codex harness forced
+  - select `openai/gpt-5.5`, which routes OpenAI agent turns through Codex by default
+  - send a first gateway agent turn to `openai/gpt-5.5` with the Codex harness selected
   - send a second turn to the same OpenClaw session and verify the app-server
     thread can resume
   - run `/codex status` and `/codex models` through the same gateway command
@@ -300,8 +300,8 @@ Docker notes:
 - Optional image probe: `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1`
 - Optional MCP/tool probe: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
 - Optional Guardian probe: `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`
-- The smoke uses `agentRuntime.id: "codex"` so a broken Codex harness cannot
-  pass by silently falling back to PI.
+- The smoke forces provider/model `agentRuntime.id: "codex"` so a broken Codex
+  harness cannot pass by silently falling back to PI.
 - Auth: Codex app-server auth from the local Codex subscription login. Docker
   smokes can also provide `OPENAI_API_KEY` for non-Codex probes when applicable,
   plus optional copied `~/.codex/auth.json` and `~/.codex/config.toml`.

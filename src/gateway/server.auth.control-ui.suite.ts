@@ -176,7 +176,6 @@ export function registerControlUiAndPairingSuite(): void {
     deviceId: string,
   ) => {
     const metadata = paired[deviceId];
-    expect(metadata).toBeTruthy();
     if (!metadata) {
       throw new Error(`Expected paired metadata for deviceId=${deviceId}`);
     }
@@ -244,7 +243,9 @@ export function registerControlUiAndPairingSuite(): void {
           let device: Awaited<ReturnType<typeof createSignedDevice>>["device"] | null = null;
           if (tc.withUnpairedNodeDevice) {
             const challengeNonce = await readConnectChallengeNonce(ws);
-            expect(challengeNonce, tc.name).toBeTruthy();
+            if (!challengeNonce) {
+              throw new Error(`expected connect challenge nonce for ${tc.name}`);
+            }
             ({ device } = await createSignedDevice({
               token: null,
               role: "node",
@@ -488,7 +489,9 @@ export function registerControlUiAndPairingSuite(): void {
       await withControlUiGatewayServer(async ({ port }) => {
         const staleDeviceWs = await openWs(port, { origin: originForPort(port) });
         const challengeNonce = await readConnectChallengeNonce(staleDeviceWs);
-        expect(challengeNonce, "stale device challenge").toBeTruthy();
+        if (!challengeNonce) {
+          throw new Error("expected stale device challenge nonce");
+        }
         const { device } = await createSignedDevice({
           token: "secret",
           scopes: [],
@@ -735,7 +738,9 @@ export function registerControlUiAndPairingSuite(): void {
       (entry) => entry.deviceId === identity.deviceId,
     );
     expect(pendingAfterRead).toHaveLength(0);
-    expect(await getPairedDevice(identity.deviceId)).toBeTruthy();
+    if (!(await getPairedDevice(identity.deviceId))) {
+      throw new Error(`expected paired device ${identity.deviceId}`);
+    }
     wsRemoteRead.close();
 
     const ws2 = await openWs(port, { host: "gateway.example" });
@@ -759,7 +764,9 @@ export function registerControlUiAndPairingSuite(): void {
     );
     expect(pendingAfterAdmin).toHaveLength(1);
     expect(pendingAfterAdmin[0]?.scopes ?? []).toEqual(expect.arrayContaining(["operator.admin"]));
-    expect(await getPairedDevice(identity.deviceId)).toBeTruthy();
+    if (!(await getPairedDevice(identity.deviceId))) {
+      throw new Error(`expected paired device ${identity.deviceId}`);
+    }
     ws2.close();
     await server.close();
     restoreGatewayToken(prevToken);
@@ -941,8 +948,9 @@ export function registerControlUiAndPairingSuite(): void {
       const issuedOperatorToken = initialPayload?.auth?.deviceTokens?.find(
         (entry) => entry.role === "operator",
       )?.deviceToken;
-      expect(issuedDeviceToken).toBeDefined();
-      expect(issuedOperatorToken).toBeDefined();
+      if (!issuedDeviceToken || !issuedOperatorToken) {
+        throw new Error("expected issued device and operator tokens");
+      }
       expect(initialPayload?.auth?.role).toBe("node");
       expect(initialPayload?.auth?.scopes ?? []).toEqual([]);
       expect(initialPayload?.auth?.deviceTokens?.some((entry) => entry.role === "node")).toBe(
@@ -1498,7 +1506,9 @@ export function registerControlUiAndPairingSuite(): void {
       const pendingUpgrade = (await listDevicePairing()).pending.find(
         (entry) => entry.deviceId === identity.deviceId,
       );
-      expect(pendingUpgrade).toBeTruthy();
+      if (!pendingUpgrade) {
+        throw new Error(`expected pending upgrade for device ${identity.deviceId}`);
+      }
       expect(pendingUpgrade?.scopes ?? []).toEqual(expect.arrayContaining(["operator.admin"]));
       const repaired = await getPairedDevice(identity.deviceId);
       expect(repaired?.role).toBe("operator");
@@ -1596,7 +1606,9 @@ export function registerControlUiAndPairingSuite(): void {
       expect(dockerCli.ok).toBe(true);
       const pending = await listDevicePairing();
       expect(pending.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual([]);
-      expect(await getPairedDevice(identity.deviceId)).toBeTruthy();
+      if (!(await getPairedDevice(identity.deviceId))) {
+        throw new Error(`expected paired device ${identity.deviceId}`);
+      }
     } finally {
       wsDockerCli.close();
       await server.close();

@@ -1,11 +1,7 @@
-import { stripInlineDirectiveTagsForDisplay } from "openclaw/plugin-sdk/text-runtime";
+import { escapeRegExp, stripInlineDirectiveTagsForDisplay } from "openclaw/plugin-sdk/text-runtime";
 
 const SPEECH_EMOJI_RE =
   /(?:\p{Extended_Pictographic}(?:\uFE0F|\u200D|\p{Extended_Pictographic}|\p{Emoji_Modifier})*)+/gu;
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function stripEmojiForSpeech(text: string): string {
   return text

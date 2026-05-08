@@ -326,7 +326,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledTimes(2);
   });
 
-  it("forwards partial replies into the Teams stream", async () => {
+  it("forwards partial replies into the Teams stream", () => {
     const dispatcher = createDispatcher("personal");
 
     dispatcher.replyOptions.onPartialReply?.({ text: "partial response" });
@@ -376,7 +376,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     );
   });
 
-  it("does not create a stream for channel conversations", async () => {
+  it("does not create a stream for channel conversations", () => {
     createDispatcher("channel");
 
     expect(streamInstances).toHaveLength(0);

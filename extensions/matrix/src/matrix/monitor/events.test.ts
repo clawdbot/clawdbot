@@ -282,7 +282,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("invalidates direct-room membership cache on room member events", async () => {
+  it("invalidates direct-room membership cache on room member events", () => {
     const { invalidateRoom, roomEventListener } = createHarness();
 
     roomEventListener("!room:example.org", {
@@ -299,7 +299,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
   });
 
-  it("remembers invite provenance on room invites", async () => {
+  it("remembers invite provenance on room invites", () => {
     const { invalidateRoom, rememberInvite, roomInviteListener } = createHarness();
     if (!roomInviteListener) {
       throw new Error("room.invite listener was not registered");
@@ -321,7 +321,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(rememberInvite).toHaveBeenCalledWith("!room:example.org", "@alice:example.org");
   });
 
-  it("ignores lifecycle-only invite events emitted with self sender ids", async () => {
+  it("ignores lifecycle-only invite events emitted with self sender ids", () => {
     const { invalidateRoom, rememberInvite, roomInviteListener } = createHarness();
     if (!roomInviteListener) {
       throw new Error("room.invite listener was not registered");
@@ -342,7 +342,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(rememberInvite).not.toHaveBeenCalled();
   });
 
-  it("remembers invite provenance even when Matrix omits the direct invite hint", async () => {
+  it("remembers invite provenance even when Matrix omits the direct invite hint", () => {
     const { invalidateRoom, rememberInvite, roomInviteListener } = createHarness();
     if (!roomInviteListener) {
       throw new Error("room.invite listener was not registered");
@@ -363,7 +363,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(rememberInvite).toHaveBeenCalledWith("!room:example.org", "@alice:example.org");
   });
 
-  it("does not synthesize invite provenance from room joins", async () => {
+  it("does not synthesize invite provenance from room joins", () => {
     const { invalidateRoom, rememberInvite, roomJoinListener } = createHarness();
     if (!roomJoinListener) {
       throw new Error("room.join listener was not registered");

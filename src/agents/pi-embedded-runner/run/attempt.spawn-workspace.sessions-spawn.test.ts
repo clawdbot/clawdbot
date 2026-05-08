@@ -3,7 +3,7 @@ import { createPiToolsSandboxContext } from "../../test-helpers/pi-tools-sandbox
 import { resolveAttemptSpawnWorkspaceDir } from "./attempt.thread-helpers.js";
 
 describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
-  it("passes the real workspace to sessions_spawn when workspaceAccess is ro", async () => {
+  it("passes the real workspace to sessions_spawn when workspaceAccess is ro", () => {
     const realWorkspace = "/tmp/openclaw-real-workspace";
     const sandboxWorkspace = "/tmp/openclaw-sandbox-workspace";
     const sandbox = createPiToolsSandboxContext({
@@ -22,7 +22,7 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
     ).toBe(realWorkspace);
   });
 
-  it("does not override spawned workspace when sandbox workspace is rw", async () => {
+  it("does not override spawned workspace when sandbox workspace is rw", () => {
     const realWorkspace = "/tmp/openclaw-real-workspace";
     const sandbox = createPiToolsSandboxContext({
       workspaceDir: realWorkspace,

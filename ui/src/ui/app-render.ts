@@ -545,7 +545,7 @@ function extractMcpServerCount(state: AppViewState): number {
   return Object.keys(servers).length;
 }
 
-function extractQuickSettingsSecurity(state: AppViewState): {
+export function extractQuickSettingsSecurity(state: AppViewState): {
   gatewayAuth: string;
   execPolicy: string;
   deviceAuth: boolean;
@@ -578,16 +578,16 @@ function extractQuickSettingsSecurity(state: AppViewState): {
       gatewayAuth = "none";
     }
   }
-  const agents = cfg.agents;
   let execPolicy = "allowlist";
-  if (agents && typeof agents === "object") {
-    const defaults = (agents as Record<string, unknown>).defaults;
-    if (defaults && typeof defaults === "object") {
-      const exec = (defaults as Record<string, unknown>).exec;
-      if (exec && typeof exec === "object") {
-        const security = (exec as Record<string, unknown>).security;
-        if (typeof security === "string") {
-          execPolicy = security;
+  const tools = cfg.tools;
+  if (tools && typeof tools === "object") {
+    const exec = (tools as Record<string, unknown>).exec;
+    if (exec && typeof exec === "object") {
+      const security = (exec as Record<string, unknown>).security;
+      if (typeof security === "string") {
+        const trimmedSecurity = security.trim();
+        if (trimmedSecurity) {
+          execPolicy = trimmedSecurity;
         }
       }
     }
@@ -981,7 +981,9 @@ export function renderApp(state: AppViewState) {
       "config",
       {
         tab: state.tab,
+        formMode: overrides.formMode,
         activeSection: overrides.activeSection,
+        activeSubsection: overrides.activeSubsection,
         schemaSectionCount: countTopLevelSchemaProperties(commonConfigProps.schema),
         hasSearch: Boolean(overrides.searchQuery?.trim()),
       },
@@ -2456,7 +2458,7 @@ export function renderApp(state: AppViewState) {
                   onRefresh: () => {
                     state.chatSideResult = null;
                     state.resetToolStream();
-                    return refreshChat(state, { scheduleScroll: false });
+                    return refreshChat(state, { awaitHistory: true, scheduleScroll: false });
                   },
                   onToggleFocusMode: () => {
                     if (state.onboarding) {

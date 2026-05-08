@@ -92,7 +92,9 @@ async function expectSkippedRecovery(store: ReturnType<typeof sessions.loadSessi
 
 function getResumeMessage() {
   const call = vi.mocked(gateway.callGateway).mock.calls[0];
-  expect(call).toBeDefined();
+  if (call === undefined) {
+    throw new Error("expected resume gateway call");
+  }
   const params = call[0].params as Record<string, unknown>;
   return params.message as string;
 }

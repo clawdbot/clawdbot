@@ -7,10 +7,31 @@ vi.mock("@whiskeysockets/baileys", () => {
 describe("whatsapp setup entry", () => {
   it("loads the setup plugin without installing or importing runtime dependencies", async () => {
     const { default: setupEntry } = await import("./setup-entry.js");
-    const { whatsappSetupPlugin } = await import("./setup-plugin-api.js");
 
     expect(setupEntry.kind).toBe("bundled-channel-setup-entry");
+    expect(setupEntry.features).toEqual({
+      legacySessionSurfaces: true,
+      legacyStateMigrations: true,
+    });
+
+    const whatsappSetupPlugin = setupEntry.loadSetupPlugin();
     expect(whatsappSetupPlugin.id).toBe("whatsapp");
+    const detectLegacyStateMigrations = setupEntry.loadLegacyStateMigrationDetector?.();
+    if (!detectLegacyStateMigrations) {
+      throw new Error("expected WhatsApp legacy state migration detector");
+    }
+    expect(
+      detectLegacyStateMigrations({
+        cfg: {},
+        env: {},
+        oauthDir: "/tmp/openclaw-whatsapp-empty",
+        stateDir: "/tmp/openclaw-state",
+      }),
+    ).toEqual([]);
+    expect(setupEntry.loadLegacySessionSurface?.()).toEqual({
+      canonicalizeLegacySessionKey: expect.any(Function),
+      isLegacyGroupSessionKey: expect.any(Function),
+    });
   });
 
   it("loads the delegated setup wizard without importing runtime dependencies", async () => {

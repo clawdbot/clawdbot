@@ -23,7 +23,7 @@ const PRIVATE_BUNDLED_SDK_SURFACE_PATTERN =
   /\b(?:Private helper surface|Narrow plugin-sdk surface for the bundled|Narrow .*runtime exports used by the bundled)\b/i;
 const GENERIC_CORE_HELPER_FILES = ["src/polls.ts", "src/poll-params.ts"] as const;
 const GENERIC_CORE_PLUGIN_OWNER_NAME_PATTERN =
-  /\b(?:bluebubbles|discord|feishu|googlechat|matrix|mattermost|msteams|slack|telegram|whatsapp|zalo|zalouser)\b/gi;
+  /\b(?:imessage|discord|feishu|googlechat|matrix|mattermost|msteams|slack|telegram|whatsapp|zalo|zalouser)\b/gi;
 const PACKAGE_CONTRACT_SCAN_TIMEOUT_MS = 240_000;
 const DEPRECATED_EXTENSION_SDK_SPECIFIERS = new Set([
   "openclaw/plugin-sdk",
@@ -659,7 +659,7 @@ describe("plugin-sdk package contract guardrails", () => {
       "fake-indexeddb",
       "matrix-js-sdk",
     ]) {
-      expect(matrixRuntimeDeps.get(dep)).toBeDefined();
+      expect(matrixRuntimeDeps.get(dep)).toEqual(expect.any(String));
       expect(rootRuntimeDeps.has(dep)).toBe(false);
     }
     expect(rootRuntimeDeps.has("@openclaw/plugin-package-contract")).toBe(false);

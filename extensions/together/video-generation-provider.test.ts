@@ -39,8 +39,8 @@ describe("together video generation provider", () => {
         }),
       })
       .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        headers: new Headers({ "content-type": "video/webm" }),
+        arrayBuffer: async () => Buffer.from("webm-bytes"),
       });
 
     const provider = buildTogetherVideoGenerationProvider();
@@ -57,6 +57,7 @@ describe("together video generation provider", () => {
       }),
     );
     expect(result.videos).toHaveLength(1);
+    expect(result.videos[0]?.fileName).toBe("video-1.webm");
     expect(result.metadata).toEqual(
       expect.objectContaining({
         videoId: "video_123",

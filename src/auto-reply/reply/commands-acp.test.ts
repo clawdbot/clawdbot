@@ -201,7 +201,7 @@ function resolveFirstConversationTargetForTest(params: {
 
 function parsePrefixedConversationIdForTest(
   raw: string | undefined | null,
-  channel: "bluebubbles" | "imessage",
+  channel: "imessage",
 ): string | undefined {
   const trimmed = raw
     ?.trim()
@@ -212,7 +212,7 @@ function parsePrefixedConversationIdForTest(
 
 function resolvePrefixedConversationIdForTest(
   targets: Array<string | undefined | null>,
-  channel: "bluebubbles" | "imessage",
+  channel: "imessage",
 ): string | undefined {
   return targets.map((target) => parsePrefixedConversationIdForTest(target, channel)).find(Boolean);
 }
@@ -319,30 +319,6 @@ function setMinimalAcpCommandRegistryForTests(): void {
         },
       },
       {
-        pluginId: "bluebubbles",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "bluebubbles", label: "BlueBubbles" }),
-          bindings: {
-            resolveCommandConversation: ({
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              const conversationId = resolvePrefixedConversationIdForTest(
-                [originatingTo, commandTo, fallbackTo],
-                "bluebubbles",
-              );
-              return conversationId ? { conversationId } : null;
-            },
-          },
-        },
-      },
-      {
         pluginId: "imessage",
         source: "test",
         plugin: {
@@ -423,7 +399,7 @@ function setMinimalAcpCommandRegistryForTests(): void {
           },
         },
       },
-      ...(["bluebubbles", "imessage", "feishu", "line"] as const).map((channelId) => ({
+      ...(["feishu", "line"] as const).map((channelId) => ({
         pluginId: channelId,
         source: "test",
         plugin: {
@@ -784,20 +760,6 @@ async function runLineDmAcpCommand(commandBody: string, cfg: OpenClawConfig = ba
         channel: "line",
         originatingTo: "U1234567890abcdef1234567890abcdef",
         senderId: "U1234567890abcdef1234567890abcdef",
-      },
-      cfg,
-    ),
-    true,
-  );
-}
-
-async function runBlueBubblesDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  return handleAcpCommand(
-    createConversationParams(
-      commandBody,
-      {
-        channel: "bluebubbles",
-        originatingTo: "bluebubbles:+15555550123",
       },
       cfg,
     ),
@@ -1199,15 +1161,15 @@ describe("/acp command", () => {
     );
   });
 
-  it("binds BlueBubbles DMs with --bind here", async () => {
-    const result = await runBlueBubblesDmAcpCommand("/acp spawn codex --bind here");
+  it("binds iMessage DMs with --bind here", async () => {
+    const result = await runIMessageDmAcpCommand("/acp spawn codex --bind here");
 
     expect(result?.reply?.text).toContain("Bound this conversation to");
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         placement: "current",
         conversation: expect.objectContaining({
-          channel: "bluebubbles",
+          channel: "imessage",
           accountId: "default",
           conversationId: "+15555550123",
         }),

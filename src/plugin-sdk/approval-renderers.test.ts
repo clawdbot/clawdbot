@@ -196,10 +196,10 @@ describe("plugin-sdk/approval-renderers", () => {
       },
     },
   ])("$name", ({ payload, textExpected, interactiveExpected, channelDataExpected }) => {
-    expect(payload.text).toBeDefined();
-    if (payload.text !== undefined) {
-      textExpected(payload.text);
+    if (payload.text === undefined) {
+      throw new Error("expected rendered approval text");
     }
+    textExpected(payload.text);
     if (interactiveExpected) {
       expect(payload.interactive).toEqual(interactiveExpected);
     }

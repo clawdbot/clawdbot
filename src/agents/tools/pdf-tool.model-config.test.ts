@@ -56,12 +56,12 @@ describe("resolvePdfModelConfigForTool", () => {
     vi.unstubAllEnvs();
   });
 
-  it("returns null without any auth", async () => {
+  it("returns null without any auth", () => {
     const cfg = withDefaultModel("openai/gpt-5.4");
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toBeNull();
   });
 
-  it("prefers explicit pdfModel config", async () => {
+  it("prefers explicit pdfModel config", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -75,7 +75,7 @@ describe("resolvePdfModelConfigForTool", () => {
     });
   });
 
-  it("falls back to imageModel config when no pdfModel set", async () => {
+  it("falls back to imageModel config when no pdfModel set", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -89,7 +89,7 @@ describe("resolvePdfModelConfigForTool", () => {
     });
   });
 
-  it("prefers anthropic when available for native PDF support", async () => {
+  it("prefers anthropic when available for native PDF support", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     const cfg = withDefaultModel("openai/gpt-5.4");
@@ -98,7 +98,7 @@ describe("resolvePdfModelConfigForTool", () => {
     );
   });
 
-  it("uses anthropic primary when provider is anthropic", async () => {
+  it("uses anthropic primary when provider is anthropic", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
     const cfg = withDefaultModel(ANTHROPIC_PDF_MODEL);
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })?.primary).toBe(

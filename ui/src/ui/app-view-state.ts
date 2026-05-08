@@ -106,6 +106,7 @@ export type AppViewState = {
   chatAvatarReason?: string | null;
   chatThinkingLevel: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
+  chatModelSwitchPromises: Record<string, Promise<boolean>>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   sessionSwitchNotice: { id: number; text: string } | null;
@@ -284,6 +285,7 @@ export type AppViewState = {
   usageError: string | null;
   usageStartDate: string;
   usageEndDate: string;
+  usageScope: "instance" | "family";
   usageSelectedSessions: string[];
   usageSelectedDays: string[];
   usageSelectedHours: number[];

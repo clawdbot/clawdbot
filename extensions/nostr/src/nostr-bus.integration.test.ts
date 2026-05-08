@@ -170,7 +170,7 @@ describe("SeenTracker", () => {
   });
 
   describe("TTL expiration", () => {
-    it("expires entries after TTL", async () => {
+    it("expires entries after TTL", () => {
       vi.useFakeTimers();
 
       const tracker = createTracker({
@@ -192,7 +192,7 @@ describe("SeenTracker", () => {
       vi.useRealTimers();
     });
 
-    it("has() refreshes TTL", async () => {
+    it("has() refreshes TTL", () => {
       vi.useFakeTimers();
 
       const tracker = createTracker({
@@ -273,9 +273,12 @@ describe("Metrics", () => {
       metrics.emit("relay.error", 1, { relay: TEST_RELAY_URL_1 });
 
       const snapshot = metrics.getSnapshot();
-      expect(snapshot.relays[TEST_RELAY_URL_1]).toBeDefined();
-      expect(snapshot.relays[TEST_RELAY_URL_1].connects).toBe(1);
-      expect(snapshot.relays[TEST_RELAY_URL_1].errors).toBe(2);
+      const relayOne = snapshot.relays[TEST_RELAY_URL_1];
+      if (!relayOne) {
+        throw new Error("expected first relay metrics");
+      }
+      expect(relayOne.connects).toBe(1);
+      expect(relayOne.errors).toBe(2);
       expect(snapshot.relays[TEST_RELAY_URL_2].connects).toBe(1);
       expect(snapshot.relays[TEST_RELAY_URL_2].errors).toBe(0);
     });

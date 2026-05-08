@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { applyTemplate, runLegacyCliEntry } from "./index.js";
 
 describe("legacy root entry", () => {
@@ -15,8 +15,14 @@ describe("legacy root entry", () => {
     expect(packageJson.exports?.["."]).toBe("./dist/index.js");
   });
 
-  it("does not run CLI bootstrap when imported as a library dependency", () => {
-    expect(typeof applyTemplate).toBe("function");
-    expect(typeof runLegacyCliEntry).toBe("function");
+  it("does not run CLI bootstrap when imported as a library dependency", async () => {
+    const runCli = vi.fn(async () => undefined);
+
+    expect(applyTemplate("Hello {{MessageSid}}", { MessageSid: "operator" })).toBe(
+      "Hello operator",
+    );
+
+    await runLegacyCliEntry(["openclaw", "status"], { runCli });
+    expect(runCli).toHaveBeenCalledWith(["openclaw", "status"]);
   });
 });

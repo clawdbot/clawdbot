@@ -706,7 +706,7 @@ describe("listSessionsFromStore subagent metadata", () => {
     });
   });
 
-  test("prefers persisted terminal session state when only stale active subagent snapshots remain", async () => {
+  test("prefers persisted terminal session state when only stale active subagent snapshots remain", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-subagent-"));
     const stateDir = path.join(tempRoot, "state");
     fs.mkdirSync(stateDir, { recursive: true });
@@ -1279,8 +1279,8 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       } as OpenClawConfig;
 
       const { store } = loadCombinedSessionStoreForGateway(cfg);
-      expect(store["agent:main:main"]).toBeDefined();
-      expect(store["agent:codex:acp-task"]).toBeDefined();
+      expect(store["agent:main:main"]).toMatchObject({ sessionId: "s-main" });
+      expect(store["agent:codex:acp-task"]).toMatchObject({ sessionId: "s-codex" });
     });
   });
 
@@ -1325,7 +1325,7 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       const { store, storePath } = loadCombinedSessionStoreForGateway(cfg, { agentId: "codex" });
 
       expect(storePath).toBe(fs.realpathSync.native(codexStorePath));
-      expect(store["agent:codex:acp-task"]).toBeDefined();
+      expect(store["agent:codex:acp-task"]).toMatchObject({ sessionId: "s-codex" });
       expect(store["agent:main:main"]).toBeUndefined();
       const readPaths = readSpy.mock.calls
         .map((call) => call[0])

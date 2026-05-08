@@ -2460,8 +2460,8 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendMatrix).toHaveBeenCalledTimes(1);
-    expect(sendMatrix.mock.calls[0]?.[1]).toBeTruthy();
-    expect(sendMatrix.mock.calls[0]?.[1]).not.toBe("NO_REPLY");
+    const deliveredText = sendMatrix.mock.calls[0]?.[1];
+    expect(deliveredText).toBe("No extra update from me.");
   });
 
   it("keeps allowed group silent replies silent during outbound delivery", async () => {

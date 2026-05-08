@@ -47,6 +47,23 @@ async function expectNoForwardedInvoke(hasInvoke: () => boolean): Promise<void> 
   expect(hasInvoke()).toBe(false);
 }
 
+function requireNonEmptyString(value: string | null | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
+function requireRecord(
+  value: Record<string, unknown> | null | undefined,
+  label: string,
+): Record<string, unknown> {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 async function getConnectedNodeId(ws: WebSocket): Promise<string> {
   const nodes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
     ws,
@@ -54,9 +71,10 @@ async function getConnectedNodeId(ws: WebSocket): Promise<string> {
     {},
   );
   expect(nodes.ok).toBe(true);
-  const nodeId = nodes.payload?.nodes?.find((n) => n.connected)?.nodeId ?? "";
-  expect(nodeId).toBeTruthy();
-  return nodeId;
+  return requireNonEmptyString(
+    nodes.payload?.nodes?.find((n) => n.connected)?.nodeId,
+    "connected node id",
+  );
 }
 
 async function getConnectedNodeIds(ws: WebSocket): Promise<string[]> {
@@ -176,12 +194,14 @@ describe("node.invoke approval bypass", () => {
     const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
     const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
     const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
-    const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
-    expect(deviceId).toBeTruthy();
+    const deviceId = requireNonEmptyString(
+      deriveDeviceIdFromPublicKey(publicKeyRaw),
+      "operator device id",
+    );
     return await connectOperatorWithRetry(scopes, (nonce) => {
       const signedAtMs = Date.now();
       const payload = buildDeviceAuthPayload({
-        deviceId: deviceId!,
+        deviceId,
         clientId: GATEWAY_CLIENT_NAMES.TEST,
         clientMode: GATEWAY_CLIENT_MODES.TEST,
         role: "operator",
@@ -191,7 +211,7 @@ describe("node.invoke approval bypass", () => {
         nonce,
       });
       return {
-        id: deviceId!,
+        id: deviceId,
         publicKey: publicKeyRaw,
         signature: signDevicePayload(privateKeyPem, payload),
         signedAt: signedAtMs,
@@ -395,10 +415,10 @@ describe("node.invoke approval bypass", () => {
         }
         await sleep(50);
       }
-      expect(lastInvokeParams).toBeTruthy();
-      expect(lastInvokeParams?.["approved"]).toBe(true);
-      expect(lastInvokeParams?.["approvalDecision"]).toBe("allow-once");
-      expect(lastInvokeParams?.["injected"]).toBeUndefined();
+      const forwardedParams = requireRecord(lastInvokeParams, "forwarded invoke params");
+      expect(forwardedParams["approved"]).toBe(true);
+      expect(forwardedParams["approvalDecision"]).toBe("allow-once");
+      expect(forwardedParams["injected"]).toBeUndefined();
 
       const replayApprovalId = await requestAllowOnceApproval(wsApprover, "echo hi", nodeId);
       const invokeCountBeforeReplay = invokeCount;
@@ -449,10 +469,11 @@ describe("node.invoke approval bypass", () => {
         })
         .toBeGreaterThanOrEqual(2);
       const connectedNodeIds = await getConnectedNodeIds(wsApprover);
-      const approvedNodeId = connectedNodeIds[0] ?? "";
-      const replayNodeId = connectedNodeIds.find((id) => id !== approvedNodeId) ?? "";
-      expect(approvedNodeId).toBeTruthy();
-      expect(replayNodeId).toBeTruthy();
+      const approvedNodeId = requireNonEmptyString(connectedNodeIds[0], "approved node id");
+      const replayNodeId = requireNonEmptyString(
+        connectedNodeIds.find((id) => id !== approvedNodeId),
+        "replay node id",
+      );
 
       const approvalId = await requestAllowOnceApproval(wsApprover, "echo hi", approvedNodeId);
       const beforeReplayApprovedNode = invokeCounts.get(approvedNodeId) ?? 0;

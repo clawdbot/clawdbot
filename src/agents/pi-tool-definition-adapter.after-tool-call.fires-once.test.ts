@@ -228,7 +228,7 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
 
     const call = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[0];
     const event = call?.[0] as { error?: unknown } | undefined;
-    expect(event?.error).toBeDefined();
+    expect(event?.error).toBe("tool failed");
   });
 
   it("uses before_tool_call adjusted params for after_tool_call payload", async () => {

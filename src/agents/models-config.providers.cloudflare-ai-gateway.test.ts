@@ -56,7 +56,7 @@ describe("cloudflare-ai-gateway profile provenance", () => {
     }
   });
 
-  it("uses non-env marker for non-env keyRef cloudflare profiles", async () => {
+  it("uses non-env marker for non-env keyRef cloudflare profiles", () => {
     const provider = buildCloudflareAiGatewayCatalogProvider({
       credential: {
         type: "api_key",
@@ -72,7 +72,7 @@ describe("cloudflare-ai-gateway profile provenance", () => {
     expect(provider?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
   });
 
-  it("keeps Cloudflare gateway metadata and apiKey from the same auth profile", async () => {
+  it("keeps Cloudflare gateway metadata and apiKey from the same auth profile", () => {
     const provider = buildCloudflareAiGatewayCatalogProvider({
       credential: {
         type: "api_key",

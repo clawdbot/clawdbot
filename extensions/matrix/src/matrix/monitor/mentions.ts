@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { RoomMessageEventContent } from "./types.js";
 
@@ -60,10 +61,6 @@ function resolveMatrixUserLocalpart(userId: string): string | null {
     return null;
   }
   return trimmed.slice(1, colonIndex).trim() || null;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function resolveMatrixMentionPrefixCandidates(params: {

@@ -270,6 +270,25 @@ describe("sanitizeSessionHistory", () => {
       | undefined;
   };
 
+  const expectAssistantUsageSnapshot = (assistant: unknown) => {
+    expect(assistant).toMatchObject({
+      usage: {
+        input: expect.any(Number),
+        output: expect.any(Number),
+        cacheRead: expect.any(Number),
+        cacheWrite: expect.any(Number),
+        totalTokens: expect.any(Number),
+        cost: {
+          input: expect.any(Number),
+          output: expect.any(Number),
+          cacheRead: expect.any(Number),
+          cacheWrite: expect.any(Number),
+          total: expect.any(Number),
+        },
+      },
+    });
+  };
+
   beforeAll(async () => {
     const harness = await loadSanitizeSessionHistoryWithCleanMocks();
     sanitizeSessionHistory = harness.sanitizeSessionHistory;
@@ -472,8 +491,9 @@ describe("sanitizeSessionHistory", () => {
     const staleAssistant = result.find((message) => message.role === "assistant") as
       | (AgentMessage & { usage?: unknown })
       | undefined;
-    expect(staleAssistant).toBeDefined();
-    expect(staleAssistant?.usage).toEqual(makeZeroUsageSnapshot());
+    expect(staleAssistant).toMatchObject({
+      usage: makeZeroUsageSnapshot(),
+    });
   });
 
   it("preserves fresh assistant usage snapshots created after latest compaction summary", async () => {
@@ -497,7 +517,7 @@ describe("sanitizeSessionHistory", () => {
     const assistants = getAssistantMessages(result);
     expect(assistants).toHaveLength(2);
     expect(assistants[0]?.usage).toEqual(makeZeroUsageSnapshot());
-    expect(assistants[1]?.usage).toBeDefined();
+    expectAssistantUsageSnapshot(assistants[1]);
   });
 
   it("adds a zeroed assistant usage snapshot when usage is missing", async () => {
@@ -655,7 +675,7 @@ describe("sanitizeSessionHistory", () => {
       JSON.stringify(message.content).includes("fresh answer"),
     );
     expect(keptAssistant?.usage).toEqual(makeZeroUsageSnapshot());
-    expect(freshAssistant?.usage).toBeDefined();
+    expectAssistantUsageSnapshot(freshAssistant);
   });
 
   it("keeps reasoning-only assistant messages for openai-responses", async () => {

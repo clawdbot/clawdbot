@@ -92,6 +92,7 @@ function execLoginShellEnvZero(params: {
     timeout: params.timeoutMs,
     maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
     env: params.env,
+    windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
 }

@@ -50,8 +50,7 @@ describe("createReplyDispatcher", () => {
 
     await dispatcher.waitForIdle();
     expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver.mock.calls[0]?.[0]?.text).not.toBe(SILENT_REPLY_TOKEN);
-    expect(deliver.mock.calls[0]?.[0]?.text).toBeTruthy();
+    expect(deliver.mock.calls[0]?.[0]?.text).toBe("No further response from me.");
   });
 
   it("preserves exact NO_REPLY final payloads for direct sessions where rewrite is disabled", async () => {

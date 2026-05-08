@@ -337,12 +337,7 @@ function hasAuthProfileCredentialSource(params: {
     if (
       dedupeProfileIds(order).some((profileId) => {
         const cred = store.profiles[profileId];
-        return (
-          cred?.type === "api_key" ||
-          cred?.type === "aws-sdk" ||
-          cred?.type === "oauth" ||
-          cred?.type === "token"
-        );
+        return cred?.type === "api_key" || cred?.type === "oauth" || cred?.type === "token";
       })
     ) {
       return true;

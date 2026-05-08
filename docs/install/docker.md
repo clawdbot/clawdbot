@@ -335,6 +335,32 @@ See [ClawDock](/install/clawdock) for the full helper guide.
     `no-new-privileges` on both `openclaw-gateway` and `openclaw-cli`.
   </Accordion>
 
+  <Accordion title="Docker Desktop DNS failures in openclaw-cli">
+    Some Docker Desktop setups fail DNS lookups from the shared-network
+    `openclaw-cli` sidecar after `NET_RAW` is dropped, which shows up as
+    `EAI_AGAIN` during npm-backed commands such as `openclaw plugins install`.
+    Keep the default hardened compose file for normal gateway operation. The
+    local override below loosens the CLI container's security posture by
+    restoring Docker's default capabilities, so use it only for the one-off CLI
+    command that needs package registry access, not as your default Compose
+    invocation:
+
+    ```bash
+    printf '%s\n' \
+      'services:' \
+      '  openclaw-cli:' \
+      '    cap_drop: !reset []' \
+      > docker-compose.cli-no-dropped-caps.local.yml
+
+    docker compose -f docker-compose.yml -f docker-compose.cli-no-dropped-caps.local.yml run --rm openclaw-cli plugins install <package>
+    ```
+
+    If you already created a long-running `openclaw-cli` container, recreate it
+    with the same override. `docker compose exec` and `docker exec` cannot
+    change Linux capabilities on an already-created container.
+
+  </Accordion>
+
   <Accordion title="Permissions and EACCES">
     The image runs as `node` (uid 1000). If you see permission errors on
     `/home/node/.openclaw`, make sure your host bind mounts are owned by uid 1000:
@@ -401,8 +427,7 @@ See [ClawDock](/install/clawdock) for the full helper guide.
   </Accordion>
 
   <Accordion title="Base image metadata">
-    The main Docker runtime image uses `node:24-bookworm-slim` and publishes OCI
-    base-image annotations including `org.opencontainers.image.base.name`,
+    The main Docker runtime image uses `node:24-bookworm-slim` and includes `tini` as the entrypoint init process (PID 1) to ensure zombie processes are reaped and signals are handled correctly in long-running containers. It publishes OCI base-image annotations including `org.opencontainers.image.base.name`,
     `org.opencontainers.image.source`, and others. The Node base digest is
     refreshed through Dependabot Docker base-image PRs; release builds do not run
     a distro upgrade layer. See

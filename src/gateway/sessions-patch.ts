@@ -6,10 +6,6 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
-import {
-  modelSelectionRequiresCodexRuntime,
-  modelSelectionShouldEnsureCodexPlugin,
-} from "../agents/openai-codex-routing.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -70,39 +66,6 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
   return undefined;
 }
 
-async function applyCodexRuntimeForSessionModelSelection(params: {
-  cfg: OpenClawConfig;
-  entry: SessionEntry;
-  provider: string;
-  model: string;
-  ensurePluginInstall?: (params: { cfg: OpenClawConfig; model: string }) => Promise<{
-    warnings: string[];
-  }>;
-}): Promise<{ ok: true } | { ok: false; error: ErrorShape }> {
-  const modelRef = `${params.provider}/${params.model}`;
-  const requiresCodexRuntime = modelSelectionRequiresCodexRuntime({
-    model: modelRef,
-    config: params.cfg,
-  });
-  if (!requiresCodexRuntime) {
-    if (normalizeOptionalLowercaseString(params.entry.agentRuntimeOverride) === "codex") {
-      delete params.entry.agentRuntimeOverride;
-    }
-  } else {
-    params.entry.agentRuntimeOverride = "codex";
-  }
-  if (
-    params.ensurePluginInstall &&
-    modelSelectionShouldEnsureCodexPlugin({ model: modelRef, config: params.cfg })
-  ) {
-    await params.ensurePluginInstall({
-      cfg: params.cfg,
-      model: modelRef,
-    });
-  }
-  return { ok: true };
-}
-
 function supportsSpawnLineage(storeKey: string): boolean {
   return isSubagentSessionKey(storeKey) || isAcpSessionKey(storeKey);
 }
@@ -129,9 +92,6 @@ export async function applySessionsPatchToStore(params: {
   storeKey: string;
   patch: SessionsPatchParams;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
-  ensureCodexRuntimePluginInstall?: (params: { cfg: OpenClawConfig; model: string }) => Promise<{
-    warnings: string[];
-  }>;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, store, storeKey, patch } = params;
   const now = Date.now();
@@ -450,9 +410,6 @@ export async function applySessionsPatchToStore(params: {
         },
         markLiveSwitchPending: true,
       });
-      if (normalizeOptionalLowercaseString(next.agentRuntimeOverride) === "codex") {
-        delete next.agentRuntimeOverride;
-      }
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {
@@ -493,18 +450,6 @@ export async function applySessionsPatchToStore(params: {
         },
         markLiveSwitchPending: true,
       });
-      const runtimeApplied = await applyCodexRuntimeForSessionModelSelection({
-        cfg,
-        entry: next,
-        provider: resolved.ref.provider,
-        model: resolved.ref.model,
-        ...(params.ensureCodexRuntimePluginInstall
-          ? { ensurePluginInstall: params.ensureCodexRuntimePluginInstall }
-          : {}),
-      });
-      if (!runtimeApplied.ok) {
-        return runtimeApplied;
-      }
     }
   }
 

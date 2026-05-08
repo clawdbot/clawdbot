@@ -847,6 +847,19 @@ export const AgentEntrySchema = z
     agentRuntime: AgentRuntimePolicySchema,
     embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
+    models: z
+      .record(
+        z.string(),
+        z
+          .object({
+            alias: z.string().optional(),
+            params: z.record(z.string(), z.unknown()).optional(),
+            agentRuntime: AgentRuntimePolicySchema,
+            streaming: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
       .optional(),

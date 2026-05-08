@@ -34,6 +34,7 @@ type RegisterContextEngineForOwnerOptions = {
 };
 
 const LEGACY_SESSION_KEY_COMPAT = Symbol.for("openclaw.contextEngine.sessionKeyCompat");
+const RESOLVED_CONTEXT_ENGINE_METADATA = new WeakMap<ContextEngine, { owner: string }>();
 const SESSION_KEY_COMPAT_METHODS = [
   "bootstrap",
   "maintain",
@@ -317,6 +318,15 @@ function wrapContextEngineWithSessionKeyCompat(engine: ContextEngine): ContextEn
   return proxy;
 }
 
+function wrapResolvedContextEngine(
+  engine: ContextEngine,
+  metadata: { owner: string },
+): ContextEngine {
+  const wrapped = wrapContextEngineWithSessionKeyCompat(engine);
+  RESOLVED_CONTEXT_ENGINE_METADATA.set(wrapped, metadata);
+  return wrapped;
+}
+
 // ---------------------------------------------------------------------------
 // Registry (module-level singleton)
 // ---------------------------------------------------------------------------
@@ -422,6 +432,23 @@ export function clearContextEnginesForOwner(owner: string): void {
       registry.delete(id);
     }
   }
+}
+
+/**
+ * Return the trusted plugin id that registered a resolved context engine.
+ */
+export function resolveContextEngineOwnerPluginId(
+  engine: ContextEngine | undefined | null,
+): string | undefined {
+  if (!engine) {
+    return undefined;
+  }
+  const owner = RESOLVED_CONTEXT_ENGINE_METADATA.get(engine)?.owner;
+  if (!owner?.startsWith("plugin:")) {
+    return undefined;
+  }
+  const pluginId = owner.slice("plugin:".length).trim();
+  return pluginId || undefined;
 }
 
 function describeResolvedContextEngineContractError(
@@ -571,7 +598,7 @@ export async function resolveContextEngine(
     return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
 
-  return wrapContextEngineWithSessionKeyCompat(engine);
+  return wrapResolvedContextEngine(engine, { owner: entry.owner });
 }
 
 /**
@@ -596,5 +623,5 @@ async function resolveDefaultContextEngine(
   if (contractError) {
     throw new Error(`[context-engine] ${contractError}`);
   }
-  return wrapContextEngineWithSessionKeyCompat(engine);
+  return wrapResolvedContextEngine(engine, { owner: defaultEntry.owner });
 }

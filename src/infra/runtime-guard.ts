@@ -9,7 +9,7 @@ type Semver = {
   patch: number;
 };
 
-const MIN_NODE: Semver = { major: 22, minor: 14, patch: 0 };
+const MIN_NODE: Semver = { major: 22, minor: 16, patch: 0 };
 const MINIMUM_ENGINE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)\s*$/i;
 
 export type RuntimeDetails = {
@@ -111,7 +111,7 @@ export function assertSupportedRuntime(
 
   runtime.error(
     [
-      "openclaw requires Node >=22.14.0.",
+      "openclaw requires Node >=22.16.0.",
       `Detected: ${runtimeLabel} (exec: ${execLabel}).`,
       `PATH searched: ${details.pathEnv}`,
       "Install Node: https://nodejs.org/en/download",

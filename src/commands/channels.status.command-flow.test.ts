@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   requireValidConfigSnapshot: vi.fn(),
   listChannelPlugins: vi.fn(),
   listConfiguredChannelIdsForReadOnlyScope: vi.fn((_params: unknown) => ["discord"]),
+  missingOfficialExternalChannels: new Set<string>(),
   withProgress: vi.fn(async (_opts: unknown, run: () => Promise<unknown>) => await run()),
 }));
 
@@ -36,8 +37,26 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  listExplicitConfiguredChannelIdsForConfig: (config: { channels?: Record<string, unknown> }) =>
+    Object.keys(config.channels ?? {}),
   listConfiguredChannelIdsForReadOnlyScope: (params: unknown) =>
     mocks.listConfiguredChannelIdsForReadOnlyScope(params),
+}));
+
+vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
+  resolveMissingOfficialExternalChannelPluginRepairHint: ({ channelId }: { channelId: string }) =>
+    mocks.missingOfficialExternalChannels.has(channelId)
+      ? {
+          pluginId: channelId,
+          channelId,
+          label: "Feishu",
+          installSpec: "@openclaw/feishu",
+          installCommand: "openclaw plugins install @openclaw/feishu",
+          doctorFixCommand: "openclaw doctor --fix",
+          repairHint:
+            "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+        }
+      : null,
 }));
 
 vi.mock("./channels/shared.js", () => ({
@@ -184,6 +203,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     mocks.readConfigFileSnapshot.mockClear();
     mocks.requireValidConfigSnapshot.mockReset();
     mocks.listChannelPlugins.mockReset();
+    mocks.missingOfficialExternalChannels.clear();
     mocks.listConfiguredChannelIdsForReadOnlyScope.mockClear();
     mocks.listConfiguredChannelIdsForReadOnlyScope.mockReturnValue(["discord"]);
     mocks.withProgress.mockClear();
@@ -238,6 +258,29 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(joined).toContain("token:config");
     expect(joined).not.toContain("secret unavailable in this command path");
     expect(joined).not.toContain("token:config (unavailable)");
+  });
+
+  it("shows missing official external plugin repair hints in config-only output", async () => {
+    mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
+    mocks.requireValidConfigSnapshot.mockResolvedValue({
+      channels: { feishu: { appId: "cli_xxx" } },
+    });
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
+      resolvedConfig: { channels: { feishu: { appId: "cli_xxx" } } },
+      effectiveConfig: { channels: { feishu: { appId: "cli_xxx" } } },
+      diagnostics: [],
+    });
+    mocks.missingOfficialExternalChannels.add("feishu");
+    mocks.listChannelPlugins.mockReturnValue([]);
+    const { runtime, logs } = createCapturingTestRuntime();
+
+    await channelsStatusCommand({ probe: false }, runtime as never);
+
+    const joined = logs.join("\n");
+    expect(joined).toContain("Missing official external plugins:");
+    expect(joined).toContain(
+      "Feishu: Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+    );
   });
 
   it("keeps JSON fallback structured without rendering config-only text", async () => {

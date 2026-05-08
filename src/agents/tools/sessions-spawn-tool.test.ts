@@ -68,6 +68,19 @@ describe("sessions_spawn tool", () => {
     });
   }
 
+  function requireSchemaProperty(
+    properties:
+      | Record<string, { description?: string; enum?: string[]; type?: string } | undefined>
+      | undefined,
+    name: string,
+  ) {
+    const property = properties?.[name];
+    if (!property) {
+      throw new Error(`expected ${name} schema property`);
+    }
+    return property;
+  }
+
   it("hides ACP runtime affordances when no ACP backend is loaded", () => {
     const tool = createSessionsSpawnTool();
     const schema = tool.parameters as {
@@ -101,17 +114,13 @@ describe("sessions_spawn tool", () => {
     expect(tool.displaySummary).toBe("Spawn sub-agent or ACP sessions.");
     expect(tool.description).toContain('runtime="acp"');
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
-    expect(schema.properties?.resumeSessionId).toBeDefined();
-    expect(schema.properties?.streamTo).toBeDefined();
-    expect(schema.properties?.resumeSessionId?.description).toContain("ACP-only resume target");
-    expect(schema.properties?.resumeSessionId?.description).toContain(
-      'ignored for runtime="subagent"',
-    );
-    expect(schema.properties?.resumeSessionId?.description).toContain(
-      "already recorded for this requester",
-    );
-    expect(schema.properties?.streamTo?.description).toContain("ACP-only stream target");
-    expect(schema.properties?.streamTo?.description).toContain('ignored for runtime="subagent"');
+    const resumeSessionId = requireSchemaProperty(schema.properties, "resumeSessionId");
+    const streamTo = requireSchemaProperty(schema.properties, "streamTo");
+    expect(resumeSessionId.description).toContain("ACP-only resume target");
+    expect(resumeSessionId.description).toContain('ignored for runtime="subagent"');
+    expect(resumeSessionId.description).toContain("already recorded for this requester");
+    expect(streamTo.description).toContain("ACP-only stream target");
+    expect(streamTo.description).toContain('ignored for runtime="subagent"');
   });
 
   it("hides ACP runtime affordances when the ACP backend is unhealthy", () => {
@@ -202,8 +211,8 @@ describe("sessions_spawn tool", () => {
     });
     const schema = tool.parameters as {
       properties?: {
-        thread?: unknown;
-        mode?: { enum?: string[] };
+        thread?: { description?: string; enum?: string[]; type?: string };
+        mode?: { description?: string; enum?: string[]; type?: string };
       };
     };
 
@@ -228,12 +237,13 @@ describe("sessions_spawn tool", () => {
     });
     const schema = tool.parameters as {
       properties?: {
-        thread?: unknown;
-        mode?: { enum?: string[] };
+        thread?: { description?: string; enum?: string[]; type?: string };
+        mode?: { description?: string; enum?: string[]; type?: string };
       };
     };
 
-    expect(schema.properties?.thread).toBeDefined();
+    const thread = requireSchemaProperty(schema.properties, "thread");
+    expect(thread.type).toBe("boolean");
     expect(schema.properties?.mode?.enum).toEqual(["run", "session"]);
     expect(tool.description).toContain("thread-bound");
   });

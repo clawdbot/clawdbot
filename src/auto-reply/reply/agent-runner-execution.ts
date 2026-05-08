@@ -12,13 +12,12 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
-import {
-  isCliRuntimeAlias,
-  resolveCliRuntimeExecutionProvider,
-} from "../../agents/model-runtime-aliases.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider, resolveModelRefFromString } from "../../agents/model-selection.js";
+import { resolveOpenAIRuntimeProviderForPi } from "../../agents/openai-codex-routing.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatRateLimitOrOverloadedErrorCopy,
@@ -340,10 +339,13 @@ function extractCodexUsageLimitMessage(text: string): string | undefined {
     "You've reached your Codex subscription usage limit.",
     "Codex usage limit reached.",
   ];
-  const markerIndex = markers
-    .map((marker) => text.indexOf(marker))
-    .filter((index) => index >= 0)
-    .toSorted((left, right) => left - right)[0];
+  let markerIndex: number | undefined;
+  for (const marker of markers) {
+    const index = text.indexOf(marker);
+    if (index >= 0 && (markerIndex === undefined || index < markerIndex)) {
+      markerIndex = index;
+    }
+  }
   if (markerIndex === undefined) {
     return undefined;
   }
@@ -465,7 +467,7 @@ function buildMissingApiKeyFailureText(message: string): string | null {
     return null;
   }
   if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
-    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` through the Codex runtime, or set `OPENAI_API_KEY`, then try again.";
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.5`, or set `OPENAI_API_KEY`, then try again.";
   }
   if (SAFE_MISSING_API_KEY_PROVIDERS.has(provider)) {
     return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
@@ -1402,15 +1404,12 @@ export async function runAgentTurnWithFallback(params: {
             );
           }
 
-          const agentRuntimeOverride = normalizeOptionalString(
-            params.getActiveSessionEntry()?.agentRuntimeOverride,
-          );
           const cliExecutionProvider =
             resolveCliRuntimeExecutionProvider({
               provider,
               cfg: runtimeConfig,
               agentId: params.followupRun.run.agentId,
-              runtimeOverride: agentRuntimeOverride,
+              modelId: model,
             }) ?? provider;
 
           if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
@@ -1563,6 +1562,21 @@ export async function runAgentTurnWithFallback(params: {
               model,
             },
           );
+          const agentHarnessPolicy = resolveAgentHarnessPolicy({
+            provider,
+            modelId: model,
+            config: runtimeConfig,
+            agentId: params.followupRun.run.agentId,
+            sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
+          });
+          const embeddedRunProvider = resolveOpenAIRuntimeProviderForPi({
+            provider,
+            harnessRuntime: agentHarnessPolicy.runtime,
+            authProfileProvider: runBaseParams.authProfileId?.split(":", 1)[0],
+            authProfileId: runBaseParams.authProfileId,
+            config: runtimeConfig,
+            workspaceDir: params.followupRun.run.workspaceDir,
+          });
           return (async () => {
             let attemptCompactionCount = 0;
             const lifecycleBackstop = createEmbeddedLifecycleTerminalBackstop({
@@ -1581,12 +1595,7 @@ export async function runAgentTurnWithFallback(params: {
                 groupSpace: normalizeOptionalString(params.sessionCtx.GroupSpace),
                 ...senderContext,
                 ...runBaseParams,
-                ...(agentRuntimeOverride &&
-                agentRuntimeOverride !== "auto" &&
-                agentRuntimeOverride !== "default" &&
-                !isCliRuntimeAlias(agentRuntimeOverride)
-                  ? { agentHarnessId: agentRuntimeOverride }
-                  : {}),
+                provider: embeddedRunProvider,
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,

@@ -32,7 +32,10 @@ describe("agents_list tool", () => {
             id: "codex",
             name: "Codex",
             model: "openai/gpt-5.5",
-            agentRuntime: { id: "codex" },
+            agentRuntime: { id: "pi" },
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
           },
         ],
       },
@@ -52,7 +55,7 @@ describe("agents_list tool", () => {
           name: "Codex",
           configured: true,
           model: "openai/gpt-5.5",
-          agentRuntime: { id: "codex", source: "agent" },
+          agentRuntime: { id: "codex", source: "model" },
         },
       ],
     });
@@ -83,7 +86,7 @@ describe("agents_list tool", () => {
     });
   });
 
-  it("reports env-forced plugin runtime selections", async () => {
+  it("ignores legacy env-forced plugin runtime selections", async () => {
     vi.stubEnv("OPENCLAW_AGENT_RUNTIME", "codex");
     loadConfigMock.mockReturnValue({
       agents: {
@@ -104,13 +107,13 @@ describe("agents_list tool", () => {
       agents: [
         {
           id: "main",
-          agentRuntime: { id: "codex", source: "env" },
+          agentRuntime: { id: "codex", source: "implicit" },
         },
       ],
     });
   });
 
-  it("reports per-agent runtime overrides", async () => {
+  it("ignores legacy per-agent runtime overrides", async () => {
     loadConfigMock.mockReturnValue({
       agents: {
         defaults: {
@@ -134,7 +137,7 @@ describe("agents_list tool", () => {
       agents: [
         {
           id: "strict",
-          agentRuntime: { id: "codex", source: "agent" },
+          agentRuntime: { id: "codex", source: "implicit" },
         },
       ],
     });

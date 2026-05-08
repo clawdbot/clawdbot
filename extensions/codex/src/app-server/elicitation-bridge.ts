@@ -10,6 +10,10 @@ import {
   type AppServerApprovalOutcome,
   waitForPluginApprovalDecision,
 } from "./plugin-approval-roundtrip.js";
+import type {
+  PluginAppPolicyContext,
+  PluginAppPolicyContextEntry,
+} from "./plugin-thread-config.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
 type ApprovalPropertyContext = {
@@ -25,12 +29,26 @@ type BridgeableApprovalElicitation = {
   meta: JsonObject;
 };
 
+type PluginElicitationResolution =
+  | { kind: "not_plugin" }
+  | { kind: "matched"; entry: PluginAppPolicyContextEntry }
+  | { kind: "decline"; reason: string };
+
 const MCP_TOOL_APPROVAL_KIND = "mcp_tool_call";
 const MCP_TOOL_APPROVAL_KIND_KEY = "codex_approval_kind";
 const MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY = "connector_name";
 const MCP_TOOL_APPROVAL_TOOL_TITLE_KEY = "tool_title";
 const MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY = "tool_description";
 const MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY = "tool_params_display";
+const PLUGIN_APP_ID_META_KEYS = ["app_id", "appId", "codex_app_id", "codexAppId"];
+const PLUGIN_NAME_META_KEYS = ["plugin_name", "pluginName", "codex_plugin_name", "codexPluginName"];
+const PLUGIN_CONFIG_KEY_META_KEYS = ["config_key", "configKey", "codex_config_key"];
+const PLUGIN_MARKETPLACE_NAME_META_KEYS = [
+  "marketplace_name",
+  "marketplaceName",
+  "codex_marketplace_name",
+  "codexMarketplaceName",
+];
 const MAX_DISPLAY_PARAM_ENTRIES = 8;
 const MAX_DISPLAY_PARAM_VALUE_LENGTH = 120;
 const MAX_DISPLAY_VALUE_ARRAY_ITEMS = 8;
@@ -59,12 +77,35 @@ export async function handleCodexAppServerElicitationRequest(params: {
   paramsForRun: EmbeddedRunAttemptParams;
   threadId: string;
   turnId: string;
+  pluginAppPolicyContext?: PluginAppPolicyContext;
   signal?: AbortSignal;
 }): Promise<JsonValue | undefined> {
   const requestParams = isJsonObject(params.requestParams) ? params.requestParams : undefined;
-  if (!matchesCurrentTurn(requestParams, params.threadId, params.turnId)) {
+  if (!requestParams) {
     return undefined;
   }
+  if (!matchesCurrentThread(requestParams, params.threadId)) {
+    return undefined;
+  }
+  if (turnIdMismatches(requestParams, params.turnId)) {
+    return undefined;
+  }
+  const pluginResolution = resolvePluginElicitation({
+    requestParams,
+    pluginAppPolicyContext: params.pluginAppPolicyContext,
+  });
+  if (pluginResolution.kind !== "not_plugin") {
+    if (pluginResolution.kind === "decline") {
+      logPluginElicitationDecline(pluginResolution.reason, requestParams);
+      return declineElicitationResponse();
+    }
+    if (!hasExactTurnId(requestParams, params.turnId)) {
+      logPluginElicitationDecline("missing_active_turn", requestParams);
+      return declineElicitationResponse();
+    }
+    return buildPluginPolicyElicitationResponse(pluginResolution.entry, requestParams);
+  }
+
   const approvalPrompt = readBridgeableApprovalElicitation(requestParams);
   if (!approvalPrompt) {
     return undefined;
@@ -79,23 +120,174 @@ export async function handleCodexAppServerElicitationRequest(params: {
   return buildElicitationResponse(approvalPrompt.requestedSchema, approvalPrompt.meta, outcome);
 }
 
-function matchesCurrentTurn(
-  requestParams: JsonObject | undefined,
-  threadId: string,
-  turnId: string,
-): boolean {
+function matchesCurrentThread(requestParams: JsonObject | undefined, threadId: string): boolean {
   if (!requestParams) {
     return false;
   }
   const requestThreadId = readString(requestParams, "threadId");
-  if (requestThreadId !== threadId) {
+  return requestThreadId === threadId;
+}
+
+function turnIdMismatches(requestParams: JsonObject | undefined, turnId: string): boolean {
+  const rawTurnId = requestParams?.turnId;
+  return rawTurnId !== null && rawTurnId !== undefined && rawTurnId !== turnId;
+}
+
+function hasExactTurnId(requestParams: JsonObject | undefined, turnId: string): boolean {
+  return requestParams?.turnId === turnId;
+}
+
+function resolvePluginElicitation(params: {
+  requestParams: JsonObject | undefined;
+  pluginAppPolicyContext?: PluginAppPolicyContext;
+}): PluginElicitationResolution {
+  const requestParams = params.requestParams;
+  if (!requestParams) {
+    return { kind: "not_plugin" };
+  }
+  const meta = isJsonObject(requestParams._meta) ? requestParams._meta : {};
+  const context = params.pluginAppPolicyContext;
+  const entries = context ? Object.values(context.apps) : [];
+
+  const appId =
+    readFirstString(meta, PLUGIN_APP_ID_META_KEYS) ??
+    readFirstString(requestParams, PLUGIN_APP_ID_META_KEYS);
+  if (appId) {
+    if (!context) {
+      return { kind: "decline", reason: "missing_policy_context" };
+    }
+    const entry = context.apps[appId];
+    return uniquePluginMatch(entry ? [entry] : [], "app_id");
+  }
+
+  const serverName = readString(requestParams, "serverName");
+  if (serverName && context) {
+    const matches = entries.filter((entry) => entry.mcpServerNames.includes(serverName));
+    if (matches.length > 0) {
+      return uniquePluginMatch(matches, "server_name");
+    }
+  }
+
+  const metadataResolution = resolvePluginStableMetadataMatch({
+    meta,
+    requestParams,
+    entries,
+    context,
+  });
+  if (metadataResolution.kind !== "not_plugin") {
+    return metadataResolution;
+  }
+
+  if (context && hasDisplayNameOnlyPluginMatch(meta, entries)) {
+    return { kind: "decline", reason: "display_name_only" };
+  }
+
+  return { kind: "not_plugin" };
+}
+
+function resolvePluginStableMetadataMatch(params: {
+  meta: JsonObject;
+  requestParams: JsonObject;
+  entries: PluginAppPolicyContextEntry[];
+  context?: PluginAppPolicyContext;
+}): PluginElicitationResolution {
+  const pluginName =
+    readFirstString(params.meta, PLUGIN_NAME_META_KEYS) ??
+    readFirstString(params.requestParams, PLUGIN_NAME_META_KEYS);
+  const configKey =
+    readFirstString(params.meta, PLUGIN_CONFIG_KEY_META_KEYS) ??
+    readFirstString(params.requestParams, PLUGIN_CONFIG_KEY_META_KEYS);
+  const marketplaceName =
+    readFirstString(params.meta, PLUGIN_MARKETPLACE_NAME_META_KEYS) ??
+    readFirstString(params.requestParams, PLUGIN_MARKETPLACE_NAME_META_KEYS);
+  if (!pluginName && !configKey) {
+    return { kind: "not_plugin" };
+  }
+  if (!params.context) {
+    return { kind: "decline", reason: "missing_policy_context" };
+  }
+  const matches = params.entries.filter((entry) => {
+    if (marketplaceName && entry.marketplaceName !== marketplaceName) {
+      return false;
+    }
+    if (pluginName && entry.pluginName !== pluginName) {
+      return false;
+    }
+    if (configKey && entry.configKey !== configKey) {
+      return false;
+    }
+    return true;
+  });
+  return uniquePluginMatch(matches, "metadata");
+}
+
+function uniquePluginMatch(
+  matches: PluginAppPolicyContextEntry[],
+  source: string,
+): PluginElicitationResolution {
+  if (matches.length === 1 && matches[0]) {
+    return { kind: "matched", entry: matches[0] };
+  }
+  return {
+    kind: "decline",
+    reason: matches.length === 0 ? `${source}_not_enabled` : `${source}_ambiguous`,
+  };
+}
+
+function hasDisplayNameOnlyPluginMatch(
+  meta: JsonObject,
+  entries: PluginAppPolicyContextEntry[],
+): boolean {
+  const connectorName = readString(meta, MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY);
+  if (!connectorName) {
     return false;
   }
-  const rawTurnId = requestParams.turnId;
-  if (rawTurnId !== null && rawTurnId !== undefined && rawTurnId !== turnId) {
-    return false;
+  const normalized = normalizePluginIdentityText(connectorName);
+  return entries.some(
+    (entry) =>
+      normalizePluginIdentityText(entry.pluginName) === normalized ||
+      normalizePluginIdentityText(entry.configKey) === normalized,
+  );
+}
+
+function normalizePluginIdentityText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function buildPluginPolicyElicitationResponse(
+  entry: PluginAppPolicyContextEntry,
+  requestParams: JsonObject,
+): JsonValue {
+  if (!entry.allowDestructiveActions) {
+    logPluginElicitationDecline("destructive_actions_disabled", requestParams);
+    return declineElicitationResponse();
   }
-  return true;
+  if (
+    readString(requestParams, "mode") !== "form" ||
+    !isJsonObject(requestParams.requestedSchema)
+  ) {
+    logPluginElicitationDecline("unsupported_schema", requestParams);
+    return declineElicitationResponse();
+  }
+  const meta = isJsonObject(requestParams._meta) ? requestParams._meta : {};
+  const response = buildElicitationResponse(requestParams.requestedSchema, meta, "approved-once");
+  if (isJsonObject(response) && response.action === "accept") {
+    return response;
+  }
+  logPluginElicitationDecline("unmappable_schema", requestParams);
+  return declineElicitationResponse();
+}
+
+function declineElicitationResponse(): JsonValue {
+  return { action: "decline", content: null, _meta: null };
+}
+
+function logPluginElicitationDecline(reason: string, requestParams: JsonObject | undefined): void {
+  embeddedAgentLog.debug("codex plugin elicitation declined", {
+    reason,
+    serverName: readString(requestParams, "serverName"),
+    mode: readString(requestParams, "mode"),
+  });
 }
 
 function readBridgeableApprovalElicitation(
@@ -554,4 +746,14 @@ function isSessionApprovalOption(option: { value: string; label: string }): bool
 function readString(record: JsonObject | undefined, key: string): string | undefined {
   const value = record?.[key];
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function readFirstString(record: JsonObject | undefined, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = readString(record, key);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
 }

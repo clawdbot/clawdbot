@@ -1,4 +1,5 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import type { GoogleMeetConfig } from "../config.js";
 import {
   asBrowserTabs,
@@ -69,10 +70,6 @@ export function isGoogleMeetBrowserManualActionError(
   error: unknown,
 ): error is GoogleMeetBrowserManualActionError {
   return error instanceof GoogleMeetBrowserManualActionError;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function formatBrowserAutomationError(error: unknown): string {

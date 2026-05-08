@@ -62,6 +62,18 @@ Explicit copy flows, such as `openclaw agents add`, use this portability policy:
 Non-portable profiles remain available through read-through inheritance unless
 the target agent signs in separately and creates its own local profile.
 
+## Config-only auth routes
+
+`auth.profiles` entries with `mode: "aws-sdk"` are routing metadata, not stored
+credentials. They are valid when the target provider uses
+`models.providers.<id>.auth: "aws-sdk"` or the built-in Amazon Bedrock default
+AWS SDK route. These profile ids may appear in `auth.order` and session
+overrides even when no matching entry exists in `auth-profiles.json`.
+
+Do not write `type: "aws-sdk"` into `auth-profiles.json`. If a legacy install
+has such a marker, `openclaw doctor --fix` moves it to `auth.profiles` and
+removes the marker from the credential store.
+
 ## Explicit auth order filtering
 
 - When `auth.order.<provider>` or the auth-store order override is set for a

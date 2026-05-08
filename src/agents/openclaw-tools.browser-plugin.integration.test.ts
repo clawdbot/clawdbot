@@ -112,8 +112,7 @@ describe("createOpenClawTools browser plugin integration", () => {
     });
 
     const browserTool = tools.find((tool) => tool.name === "browser");
-    expect(browserTool).toBeDefined();
-    if (!browserTool) {
+    if (browserTool === undefined) {
       throw new Error("expected browser tool");
     }
 

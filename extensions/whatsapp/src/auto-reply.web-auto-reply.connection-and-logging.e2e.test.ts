@@ -29,6 +29,15 @@ import {
 
 installWebAutoReplyTestHomeHooks();
 
+function requireOnMessage(
+  value: unknown,
+): Parameters<typeof sendWebDirectInboundMessage>[0]["onMessage"] {
+  if (typeof value !== "function") {
+    throw new Error("expected web listener onMessage callback");
+  }
+  return value as Parameters<typeof sendWebDirectInboundMessage>[0]["onMessage"];
+}
+
 async function startWatchdogScenario(params: {
   monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
 }) {
@@ -79,7 +88,7 @@ describe("web auto-reply connection", () => {
 
   it("handles helper envelope timestamps with trimmed timezones (regression)", () => {
     const d = new Date("2025-01-01T00:00:00.000Z");
-    expect(() => formatEnvelopeTimestamp(d, " America/Los_Angeles ")).not.toThrow();
+    expect(formatEnvelopeTimestamp(d, " America/Los_Angeles ")).toBe("Tue 2024-12-31 16:00 PST");
   });
 
   it("handles reconnect progress and max-attempt stop behavior", async () => {
@@ -730,12 +739,11 @@ describe("web auto-reply connection", () => {
         }));
 
         await monitorWebChannel(false, capture.listenerFactory as never, false, resolver);
-        const capturedOnMessage = capture.getOnMessage();
-        expect(capturedOnMessage).toBeDefined();
+        const capturedOnMessage = requireOnMessage(capture.getOnMessage());
 
         const spies = { sendMedia, reply, sendComposing };
         await sendWebDirectInboundMessage({
-          onMessage: capturedOnMessage!,
+          onMessage: capturedOnMessage,
           body: "first",
           from: "+1",
           to: "+2",
@@ -744,7 +752,7 @@ describe("web auto-reply connection", () => {
           spies,
         });
         await sendWebDirectInboundMessage({
-          onMessage: capturedOnMessage!,
+          onMessage: capturedOnMessage,
           body: "second",
           from: "+1",
           to: "+2",
@@ -828,10 +836,9 @@ describe("web auto-reply connection", () => {
 
     const resolver = vi.fn().mockResolvedValue({ text: "auto" });
     await monitorWebChannel(false, capture.listenerFactory as never, false, resolver as never);
-    const capturedOnMessage = capture.getOnMessage();
-    expect(capturedOnMessage).toBeDefined();
+    const capturedOnMessage = requireOnMessage(capture.getOnMessage());
 
-    await capturedOnMessage?.({
+    await capturedOnMessage({
       body: "hello",
       from: "+1",
       conversationId: "+1",

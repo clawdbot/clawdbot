@@ -327,7 +327,7 @@ describe("buildLineMessageContext", () => {
     expect(context!.route.matchedBy).toBe("binding.peer");
   });
 
-  it("normalizes LINE ACP binding conversation ids through the plugin bindings surface", async () => {
+  it("normalizes LINE ACP binding conversation ids through the plugin bindings surface", () => {
     const compiled = lineBindingsAdapter.compileConfiguredBinding({
       conversationId: "line:user:U1234567890abcdef1234567890abcdef",
     });
@@ -346,7 +346,7 @@ describe("buildLineMessageContext", () => {
     });
   });
 
-  it("normalizes canonical LINE targets through the plugin bindings surface", async () => {
+  it("normalizes canonical LINE targets through the plugin bindings surface", () => {
     const compiled = lineBindingsAdapter.compileConfiguredBinding({
       conversationId: "line:U1234567890abcdef1234567890abcdef",
     });

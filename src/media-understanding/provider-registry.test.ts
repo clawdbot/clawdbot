@@ -67,10 +67,12 @@ describe("media-understanding provider registry", () => {
     const glmProvider = getMediaUnderstandingProvider("glm", registry);
     const textOnlyProvider = getMediaUnderstandingProvider("textOnly", registry);
 
-    expect(glmProvider?.id).toBe("glm");
-    expect(glmProvider?.capabilities).toEqual(["image"]);
-    expect(glmProvider?.describeImage).toBeDefined();
-    expect(glmProvider?.describeImages).toBeDefined();
+    expect(glmProvider).toMatchObject({
+      id: "glm",
+      capabilities: ["image"],
+      describeImage: expect.any(Function),
+      describeImages: expect.any(Function),
+    });
     expect(textOnlyProvider).toBeUndefined();
   });
 

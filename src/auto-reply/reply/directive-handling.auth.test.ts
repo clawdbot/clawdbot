@@ -24,6 +24,21 @@ vi.mock("../../agents/auth-health.js", () => ({
 }));
 
 vi.mock("../../agents/auth-profiles.js", () => ({
+  isConfiguredAwsSdkAuthProfileForProvider: ({
+    cfg,
+    provider,
+    profileId,
+  }: {
+    cfg?: OpenClawConfig;
+    provider: string;
+    profileId: string;
+  }) => {
+    const profile = cfg?.auth?.profiles?.[profileId];
+    return (
+      profile?.mode === "aws-sdk" &&
+      profile.provider.trim().toLowerCase() === provider.trim().toLowerCase()
+    );
+  },
   isProfileInCooldown: () => false,
   resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
   resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
@@ -126,6 +141,72 @@ describe("resolveAuthLabel ref-aware labels", () => {
 
     expect(result.label).toContain("github-copilot:default=token:ref");
     expect(result.label).not.toContain("token:missing");
+  });
+
+  it("labels config-only aws-sdk profiles as valid in compact mode", async () => {
+    mockOrder = ["amazon-bedrock:default"];
+    const result = await resolveAuthLabel(
+      "amazon-bedrock",
+      {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              auth: "aws-sdk",
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              api: "bedrock-converse-stream",
+              models: [],
+            },
+          },
+        },
+        auth: {
+          profiles: {
+            "amazon-bedrock:default": {
+              provider: "amazon-bedrock",
+              mode: "aws-sdk",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      "/tmp/models.json",
+      undefined,
+      "compact",
+    );
+
+    expect(result.label).toBe("amazon-bedrock:default aws-sdk");
+    expect(result.label).not.toContain("missing");
+  });
+
+  it("labels config-only aws-sdk profiles as valid in verbose mode", async () => {
+    mockOrder = ["amazon-bedrock:default"];
+    const result = await resolveAuthLabel(
+      "amazon-bedrock",
+      {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              auth: "aws-sdk",
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              api: "bedrock-converse-stream",
+              models: [],
+            },
+          },
+        },
+        auth: {
+          profiles: {
+            "amazon-bedrock:default": {
+              provider: "amazon-bedrock",
+              mode: "aws-sdk",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      "/tmp/models.json",
+      undefined,
+      "verbose",
+    );
+
+    expect(result.label).toContain("amazon-bedrock:default=aws-sdk");
+    expect(result.label).not.toContain("missing");
   });
 
   it("passes workspace scope to env auth labels", async () => {

@@ -31,6 +31,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export { probeIMessage } from "./src/probe.js";',
       'export type { IMessageProbe } from "./src/probe.js";',
       'export { sendMessageIMessage } from "./src/send.js";',
+      'export { imessageMessageActions } from "./src/actions.js";',
       'export { setIMessageRuntime } from "./src/runtime.js";',
       'export { chunkTextForOutbound } from "./src/channel-api.js";',
       'export type IMessageAccountConfig = Omit< NonNullable<NonNullable<RuntimeApiOpenClawConfig["channels"]>["imessage"]>, "accounts" | "defaultAccount" >;',

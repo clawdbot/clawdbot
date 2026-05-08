@@ -482,10 +482,6 @@ Group inbound payloads set:
 - `WasMentioned` (mention gating result)
 - Telegram forum topics also include `MessageThreadId` and `IsForum`.
 
-Channel-specific notes:
-
-- BlueBubbles can optionally enrich unnamed macOS group participants from the local Contacts database before populating `GroupMembers`. This is off by default and only runs after normal group gating passes.
-
 The agent system prompt includes a group intro on the first turn of a new group session. It reminds the model to respond like a human, avoid Markdown tables, minimize empty lines and follow normal chat spacing, and avoid typing literal `\n` sequences. Channel-sourced group names and participant labels are rendered as fenced untrusted metadata, not inline system instructions.
 
 ## iMessage specifics

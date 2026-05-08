@@ -1,8 +1,8 @@
 import { messagingApi } from "@line/bot-sdk";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/agent-media-payload";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveLineAccount } from "./accounts.js";
 import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
@@ -113,7 +113,7 @@ export async function uploadRichMenuImage(
   const contentType =
     media.contentType === "image/png" || media.contentType === "image/jpeg"
       ? media.contentType
-      : normalizeLowercaseStringOrEmpty(imagePath).endsWith(".png")
+      : mimeTypeFromFilePath(imagePath) === "image/png"
         ? "image/png"
         : "image/jpeg";
 

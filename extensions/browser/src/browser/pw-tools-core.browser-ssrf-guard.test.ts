@@ -7,6 +7,7 @@ const pageState = vi.hoisted(() => ({
 
 const sessionMocks = vi.hoisted(() => ({
   assertPageNavigationCompletedSafely: vi.fn(async () => {}),
+  closeBlockedNavigationTarget: vi.fn(async () => {}),
   ensurePageState: vi.fn(() => ({})),
   forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
   getPageForTargetId: vi.fn(async () => {
@@ -16,6 +17,7 @@ const sessionMocks = vi.hoisted(() => ({
     return pageState.page;
   }),
   gotoPageWithNavigationGuard: vi.fn(async () => null),
+  isPolicyDenyNavigationError: vi.fn(() => false),
   refLocator: vi.fn(() => {
     if (!pageState.locator) {
       throw new Error("missing locator");

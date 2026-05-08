@@ -29,9 +29,9 @@ describe("scripts/ui windows spawn behavior", () => {
   });
 
   it("allows safe forwarded args when shell mode is required on Windows", () => {
-    expect(() =>
+    expect(
       assertSafeWindowsShellArgs(["run", "build", "--filter", "@openclaw/ui"], "win32"),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("rejects dangerous forwarded args when shell mode is required on Windows", () => {
@@ -44,6 +44,6 @@ describe("scripts/ui windows spawn behavior", () => {
   });
 
   it("does not reject args on non-windows platforms", () => {
-    expect(() => assertSafeWindowsShellArgs(["contains&metacharacters"], "linux")).not.toThrow();
+    expect(assertSafeWindowsShellArgs(["contains&metacharacters"], "linux")).toBeUndefined();
   });
 });

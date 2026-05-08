@@ -316,6 +316,8 @@ export function renderUsage(props: UsageProps) {
     { label: t("usage.presets.today"), days: 1 },
     { label: t("usage.presets.last7d"), days: 7 },
     { label: t("usage.presets.last30d"), days: 30 },
+    { label: t("usage.presets.last90d"), days: 90 },
+    { label: t("usage.presets.last1y"), days: 365 },
   ];
   const applyPreset = (days: number) => {
     const end = new Date();
@@ -323,6 +325,10 @@ export function renderUsage(props: UsageProps) {
     start.setDate(start.getDate() - (days - 1));
     filterActions.onStartDateChange(formatIsoDate(start));
     filterActions.onEndDateChange(formatIsoDate(end));
+  };
+  const applyAllRange = () => {
+    filterActions.onStartDateChange("1970-01-01");
+    filterActions.onEndDateChange(formatIsoDate(new Date()));
   };
   const renderFilterSelect = (key: string, label: string, options: string[]) => {
     if (options.length === 0) {
@@ -550,6 +556,7 @@ export function renderUsage(props: UsageProps) {
                   </button>
                 `,
               )}
+              <button class="btn btn--sm" @click=${applyAllRange}>${t("usage.presets.all")}</button>
             </div>
             <div class="usage-date-range">
               <input
@@ -585,6 +592,22 @@ export function renderUsage(props: UsageProps) {
               <option value="local">${t("usage.filters.timeZoneLocal")}</option>
               <option value="utc">${t("usage.filters.timeZoneUtc")}</option>
             </select>
+            <div class="chart-toggle">
+              <button
+                class="btn btn--sm toggle-btn ${filters.scope === "instance" ? "active" : ""}"
+                title=${t("usage.scope.instanceHint")}
+                @click=${() => filterActions.onScopeChange("instance")}
+              >
+                ${t("usage.scope.instance")}
+              </button>
+              <button
+                class="btn btn--sm toggle-btn ${filters.scope === "family" ? "active" : ""}"
+                title=${t("usage.scope.familyHint")}
+                @click=${() => filterActions.onScopeChange("family")}
+              >
+                ${t("usage.scope.family")}
+              </button>
+            </div>
             <div class="chart-toggle">
               <button
                 class="btn btn--sm toggle-btn ${isTokenMode ? "active" : ""}"

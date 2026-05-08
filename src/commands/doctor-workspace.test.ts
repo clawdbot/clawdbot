@@ -71,8 +71,10 @@ describe("root memory repair", () => {
     await expect(fs.access(path.join(tmpDir, "memory.md"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    expect(migration.archivedLegacyPath).toBeTruthy();
-    await expect(fs.access(migration.archivedLegacyPath ?? "")).resolves.toBeUndefined();
+    if (migration.archivedLegacyPath === undefined) {
+      throw new Error("expected archived legacy memory path");
+    }
+    await expect(fs.access(migration.archivedLegacyPath)).resolves.toBeUndefined();
   });
 
   it("warns and repairs split-brain root memory through workspace doctor helpers", async () => {

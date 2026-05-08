@@ -219,7 +219,11 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       await server.start();
       expect(mocks.getRealtimeTranscriptionProvider).not.toHaveBeenCalled();
       expect(mocks.listRealtimeTranscriptionProviders).toHaveBeenCalledWith(null);
-      expect(server.getMediaStreamHandler()).toBeTruthy();
+      expect(server.getMediaStreamHandler()).toMatchObject({
+        handleUpgrade: expect.any(Function),
+        sendAudio: expect.any(Function),
+        closeAll: expect.any(Function),
+      });
     } finally {
       await server.stop();
     }
@@ -1117,7 +1121,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       unblockReadBodies();
 
       const settled = await Promise.all(inFlightRequests);
-      expect(settled.every((response) => response.status === 200)).toBe(true);
+      expect(settled.map((response) => response.status)).toEqual(Array(8).fill(200));
     } finally {
       unblockReadBodies();
       readBodySpy.mockRestore();
@@ -1192,7 +1196,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       unblockReadBodies();
 
       const settled = await Promise.all(inFlightRequests);
-      expect(settled.every((response) => response.statusCode === 200)).toBe(true);
+      expect(settled.map((response) => response.statusCode)).toEqual(Array(8).fill(200));
     } finally {
       unblockReadBodies();
       readBodySpy.mockRestore();
@@ -1282,8 +1286,7 @@ describe("VoiceCallWebhookServer start idempotency", () => {
     const config = createConfig();
     const server = new VoiceCallWebhookServer(config, manager, provider);
 
-    // Should not throw
-    await server.stop();
+    await expect(server.stop()).resolves.toBeUndefined();
   });
 });
 

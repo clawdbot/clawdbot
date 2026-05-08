@@ -66,8 +66,28 @@ function createFixtureSkill(params: {
   return createCanonicalFixtureSkill(params);
 }
 
+type WorkspaceSkillStatus = ReturnType<typeof buildWorkspaceSkillStatus>["skills"][number];
+
+function requireReportedSkill(
+  report: ReturnType<typeof buildWorkspaceSkillStatus>,
+  name: string,
+): WorkspaceSkillStatus {
+  const skill = report.skills.find((entry) => entry.name === name);
+  if (!skill) {
+    throw new Error(`reported skill ${name} missing`);
+  }
+  return skill;
+}
+
+function requireSkillEntry(entry: SkillEntry | undefined, name: string): SkillEntry {
+  if (!entry) {
+    throw new Error(`skill entry ${name} missing`);
+  }
+  return entry;
+}
+
 describe("buildWorkspaceSkillStatus", () => {
-  it("reports missing requirements and install options", async () => {
+  it("reports missing requirements and install options", () => {
     const entry = makeEntry({
       name: "status-skill",
       requires: {
@@ -92,14 +112,13 @@ describe("buildWorkspaceSkillStatus", () => {
         config: { browser: { enabled: false } },
       }),
     );
-    const skill = report.skills.find((entry) => entry.name === "status-skill");
+    const skill = requireReportedSkill(report, "status-skill");
 
-    expect(skill).toBeDefined();
-    expect(skill?.eligible).toBe(false);
-    expect(skill?.missing.bins).toContain("fakebin");
-    expect(skill?.missing.env).toContain("ENV_KEY");
-    expect(skill?.missing.config).toContain("browser.enabled");
-    expect(skill?.install[0]?.id).toBe("brew");
+    expect(skill.eligible).toBe(false);
+    expect(skill.missing.bins).toContain("fakebin");
+    expect(skill.missing.env).toContain("ENV_KEY");
+    expect(skill.missing.config).toContain("browser.enabled");
+    expect(skill.install[0]?.id).toBe("brew");
   });
 
   it("honors legacy clawdbot skill metadata requirements and install hints", async () => {
@@ -117,13 +136,12 @@ describe("buildWorkspaceSkillStatus", () => {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
       }),
     );
-    const skill = report.skills.find((entry) => entry.name === "legacy-skill");
+    const skill = requireReportedSkill(report, "legacy-skill");
 
-    expect(skill).toBeDefined();
-    expect(skill?.eligible).toBe(false);
-    expect(skill?.requirements.bins).toEqual(["fakebin"]);
-    expect(skill?.missing.bins).toEqual(["fakebin"]);
-    expect(skill?.install[0]).toMatchObject({
+    expect(skill.eligible).toBe(false);
+    expect(skill.requirements.bins).toEqual(["fakebin"]);
+    expect(skill.missing.bins).toEqual(["fakebin"]);
+    expect(skill.install[0]).toMatchObject({
       id: "brew",
       kind: "brew",
       label: "Install fakebin",
@@ -131,25 +149,24 @@ describe("buildWorkspaceSkillStatus", () => {
     });
   });
 
-  it("respects OS-gated skills", async () => {
+  it("respects OS-gated skills", () => {
     const entry = makeEntry({
       name: "os-skill",
       os: ["darwin"],
     });
 
     const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
-    const skill = report.skills.find((entry) => entry.name === "os-skill");
+    const skill = requireReportedSkill(report, "os-skill");
 
-    expect(skill).toBeDefined();
     if (process.platform === "darwin") {
-      expect(skill?.eligible).toBe(true);
-      expect(skill?.missing.os).toEqual([]);
+      expect(skill.eligible).toBe(true);
+      expect(skill.missing.os).toEqual([]);
     } else {
-      expect(skill?.eligible).toBe(false);
-      expect(skill?.missing.os).toEqual(["darwin"]);
+      expect(skill.eligible).toBe(false);
+      expect(skill.missing.os).toEqual(["darwin"]);
     }
   });
-  it("marks bundled skills blocked by allowlist", async () => {
+  it("marks bundled skills blocked by allowlist", () => {
     const entry = makeEntry({
       name: "peekaboo",
       source: "openclaw-bundled",
@@ -159,12 +176,11 @@ describe("buildWorkspaceSkillStatus", () => {
       entries: [entry],
       config: { skills: { allowBundled: ["other-skill"] } },
     });
-    const skill = report.skills.find((reportEntry) => reportEntry.name === "peekaboo");
+    const skill = requireReportedSkill(report, "peekaboo");
 
-    expect(skill).toBeDefined();
-    expect(skill?.blockedByAllowlist).toBe(true);
-    expect(skill?.eligible).toBe(false);
-    expect(skill?.bundled).toBe(true);
+    expect(skill.blockedByAllowlist).toBe(true);
+    expect(skill.eligible).toBe(false);
+    expect(skill.bundled).toBe(true);
   });
 
   it("requires explicit enablement before exposing bundled coding-agent", async () => {
@@ -179,8 +195,10 @@ describe("buildWorkspaceSkillStatus", () => {
         },
       },
     });
-    const codingAgent = entries.find((entry) => entry.skill.name === "coding-agent");
-    expect(codingAgent).toBeDefined();
+    const codingAgent = requireSkillEntry(
+      entries.find((entry) => entry.skill.name === "coding-agent"),
+      "coding-agent",
+    );
 
     const eligibility = {
       remote: {
@@ -191,7 +209,7 @@ describe("buildWorkspaceSkillStatus", () => {
     };
     const defaultReport = withEnv({ PATH: "" }, () =>
       buildWorkspaceSkillStatus(workspaceDir, {
-        entries: [codingAgent as SkillEntry],
+        entries: [codingAgent],
         config: {
           skills: {
             allowBundled: ["coding-agent"],
@@ -207,7 +225,7 @@ describe("buildWorkspaceSkillStatus", () => {
 
     const enabledReport = withEnv({ PATH: "" }, () =>
       buildWorkspaceSkillStatus(workspaceDir, {
-        entries: [codingAgent as SkillEntry],
+        entries: [codingAgent],
         config: {
           skills: {
             allowBundled: ["coding-agent"],
@@ -243,17 +261,16 @@ describe("buildWorkspaceSkillStatus", () => {
         ],
         config: { skills: { allowBundled: ["other-skill"] } },
       });
-      const skill = report.skills.find((reportEntry) => reportEntry.name === "peekaboo");
+      const skill = requireReportedSkill(report, "peekaboo");
 
-      expect(skill).toBeDefined();
-      expect(skill?.source).toBe("openclaw-workspace");
-      expect(skill?.bundled).toBe(false);
-      expect(skill?.blockedByAllowlist).toBe(false);
-      expect(skill?.eligible).toBe(true);
+      expect(skill.source).toBe("openclaw-workspace");
+      expect(skill.bundled).toBe(false);
+      expect(skill.blockedByAllowlist).toBe(false);
+      expect(skill.eligible).toBe(true);
     });
   });
 
-  it("filters install options by OS", async () => {
+  it("filters install options by OS", () => {
     const entry = makeEntry({
       name: "install-skill",
       requires: {
@@ -286,17 +303,16 @@ describe("buildWorkspaceSkillStatus", () => {
         entries: [entry],
       }),
     );
-    const skill = report.skills.find((reportEntry) => reportEntry.name === "install-skill");
+    const skill = requireReportedSkill(report, "install-skill");
 
-    expect(skill).toBeDefined();
     if (process.platform === "darwin") {
-      expect(skill?.install.map((opt) => opt.id)).toEqual(["mac"]);
+      expect(skill.install.map((opt) => opt.id)).toEqual(["mac"]);
     } else if (process.platform === "linux") {
-      expect(skill?.install.map((opt) => opt.id)).toEqual(["linux"]);
+      expect(skill.install.map((opt) => opt.id)).toEqual(["linux"]);
     } else if (process.platform === "win32") {
-      expect(skill?.install.map((opt) => opt.id)).toEqual(["win"]);
+      expect(skill.install.map((opt) => opt.id)).toEqual(["win"]);
     } else {
-      expect(skill?.install).toEqual([]);
+      expect(skill.install).toEqual([]);
     }
   });
 });

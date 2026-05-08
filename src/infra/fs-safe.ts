@@ -1,14 +1,19 @@
 import "./fs-safe-defaults.js";
+import path from "node:path";
+import { writeViaSiblingTempPath } from "@openclaw/fs-safe/advanced";
 import { root as fsSafeRoot, type ReadResult } from "@openclaw/fs-safe/root";
 
 export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 export {
   assertAbsolutePathInput,
   canonicalPathFromExistingAncestor,
+  ensureAbsoluteDirectory,
   findExistingAncestor,
   resolveAbsolutePathForRead,
   resolveAbsolutePathForWrite,
   type AbsolutePathSymlinkPolicy,
+  type EnsureAbsoluteDirectoryOptions,
+  type EnsureAbsoluteDirectoryResult,
   type ResolvedAbsolutePath,
   type ResolvedWritableAbsolutePath,
 } from "@openclaw/fs-safe/advanced";
@@ -45,11 +50,32 @@ export {
   type WalkDirectoryResult,
 } from "@openclaw/fs-safe/walk";
 export { withTimeout } from "@openclaw/fs-safe/advanced";
-export {
-  writeExternalFileWithinRoot,
-  type ExternalFileWriteOptions,
-  type ExternalFileWriteResult,
-} from "@openclaw/fs-safe/output";
+
+export type ExternalFileWriteOptions = {
+  rootDir: string;
+  path: string;
+  write: (tempPath: string) => Promise<void>;
+  fallbackFileName?: string;
+  tempPrefix?: string;
+};
+
+export type ExternalFileWriteResult = {
+  path: string;
+};
+
+export async function writeExternalFileWithinRoot(
+  options: ExternalFileWriteOptions,
+): Promise<ExternalFileWriteResult> {
+  const targetPath = path.resolve(options.rootDir, options.path);
+  await writeViaSiblingTempPath({
+    rootDir: options.rootDir,
+    targetPath,
+    writeTemp: options.write,
+    fallbackFileName: options.fallbackFileName,
+    tempPrefix: options.tempPrefix,
+  });
+  return { path: targetPath };
+}
 
 /** @deprecated Use root(rootDir).read(relativePath, options). */
 export async function readFileWithinRoot(params: {

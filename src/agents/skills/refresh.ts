@@ -141,6 +141,8 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
 
   const watcher = chokidar.watch(watchTargets, {
     ignoreInitial: true,
+    // Skill discovery reads root skills, direct child skills, and one grouped skill level.
+    depth: 2,
     awaitWriteFinish: {
       stabilityThreshold: debounceMs,
       pollInterval: 100,

@@ -41,12 +41,12 @@ describe("security audit config symlink findings", () => {
     expect(findings).toEqual(
       expect.arrayContaining([expect.objectContaining({ checkId: "fs.config.symlink" })]),
     );
-    expect(findings.some((finding) => finding.checkId === "fs.config.perms_writable")).toBe(false);
-    expect(findings.some((finding) => finding.checkId === "fs.config.perms_world_readable")).toBe(
-      false,
-    );
-    expect(findings.some((finding) => finding.checkId === "fs.config.perms_group_readable")).toBe(
-      false,
+    expect(findings.map((finding) => finding.checkId)).not.toEqual(
+      expect.arrayContaining([
+        "fs.config.perms_writable",
+        "fs.config.perms_world_readable",
+        "fs.config.perms_group_readable",
+      ]),
     );
   });
 });

@@ -113,6 +113,14 @@ function isGroupJid(jid: string): boolean {
   return (typeof isJidGroup === "function" ? isJidGroup(jid) : jid.endsWith("@g.us")) === true;
 }
 
+function recordAcceptedInboundActivity(accountId: string): void {
+  recordChannelActivity({
+    channel: "whatsapp",
+    accountId,
+    direction: "inbound",
+  });
+}
+
 function isRetryableSendDisconnectError(err: unknown): boolean {
   return /closed|reset|timed\s*out|disconnect|no active socket/i.test(formatError(err));
 }
@@ -799,11 +807,6 @@ export async function attachWebInboxToSocket(
       return;
     }
     for (const msg of upsert.messages ?? []) {
-      recordChannelActivity({
-        channel: "whatsapp",
-        accountId: options.accountId,
-        direction: "inbound",
-      });
       const inbound = await normalizeInboundMessage(msg);
       if (!inbound) {
         continue;
@@ -832,6 +835,7 @@ export async function attachWebInboxToSocket(
         continue;
       }
 
+      recordAcceptedInboundActivity(options.accountId);
       await enqueueInboundMessage(msg, inbound, enriched);
     }
   };

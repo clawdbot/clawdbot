@@ -173,7 +173,6 @@ async function ensureSandboxCreateCallForTest(params: {
   const createCall = spawnState.calls.find(
     (call) => call.command === "docker" && call.args[0] === "create",
   );
-  expect(createCall).toBeDefined();
   if (!createCall) {
     throw new Error("expected docker create call");
   }
@@ -238,8 +237,10 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       ),
     ).toBe(true);
     const createCall = dockerCalls.find((call) => call.args[0] === "create");
-    expect(createCall).toBeDefined();
-    expect(createCall?.args).toContain(`openclaw.configHash=${newHash}`);
+    if (!createCall) {
+      throw new Error("expected recreated docker create call");
+    }
+    expect(createCall.args).toContain(`openclaw.configHash=${newHash}`);
     expect(registryMocks.updateRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         containerName: "oc-test-shared",

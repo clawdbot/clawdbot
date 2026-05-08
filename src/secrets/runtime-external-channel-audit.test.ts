@@ -39,7 +39,6 @@ import {
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
 const EXTERNALIZED_CHANNEL_IDS = [
-  "bluebubbles",
   "discord",
   "feishu",
   "googlechat",
@@ -128,20 +127,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     const records = configureExternalChannelRecords();
     const config = asConfig({
       channels: {
-        bluebubbles: {
-          serverUrl: "http://127.0.0.1:1234",
-          password: ref("BLUEBUBBLES_PASSWORD"),
-          accounts: {
-            inherited: {
-              enabled: true,
-            },
-            work: {
-              enabled: true,
-              serverUrl: "http://127.0.0.1:1235",
-              password: ref("BLUEBUBBLES_WORK_PASSWORD"),
-            },
-          },
-        },
         discord: {
           token: ref("DISCORD_TOKEN"),
           pluralkit: {
@@ -248,8 +233,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config,
       env: {
-        BLUEBUBBLES_PASSWORD: "bluebubbles-password",
-        BLUEBUBBLES_WORK_PASSWORD: "bluebubbles-work-password",
         DISCORD_TOKEN: "discord-token",
         DISCORD_PLURALKIT_TOKEN: "discord-pluralkit-token",
         DISCORD_VOICE_TTS_API_KEY: "discord-voice-tts-api-key",
@@ -279,8 +262,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     });
 
     expectResolvedPaths(snapshot.config, {
-      "channels.bluebubbles.password": "bluebubbles-password",
-      "channels.bluebubbles.accounts.work.password": "bluebubbles-work-password",
       "channels.discord.token": "discord-token",
       "channels.discord.pluralkit.token": "discord-pluralkit-token",
       "channels.discord.voice.tts.providers.openai.apiKey": "discord-voice-tts-api-key",
@@ -314,16 +295,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     const records = configureExternalChannelRecords();
     const config = asConfig({
       channels: {
-        bluebubbles: {
-          enabled: false,
-          password: inactiveExecRef("BLUEBUBBLES_DISABLED_PASSWORD"),
-          accounts: {
-            disabled: {
-              enabled: false,
-              password: inactiveExecRef("BLUEBUBBLES_DISABLED_ACCOUNT_PASSWORD"),
-            },
-          },
-        },
         discord: {
           enabled: false,
           token: inactiveExecRef("DISCORD_DISABLED_TOKEN"),
@@ -435,8 +406,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     ).toEqual(inactiveExecRef("ZALO_DISABLED_ACCOUNT_BOT_TOKEN"));
     expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
       expect.arrayContaining([
-        "channels.bluebubbles.password",
-        "channels.bluebubbles.accounts.disabled.password",
         "channels.discord.token",
         "channels.discord.pluralkit.token",
         "channels.discord.voice.tts.providers.openai.apiKey",

@@ -137,7 +137,7 @@ describe("buildChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0].messages).toHaveLength(1);
-    expect(firstMessageContent(groups[0]).some((block) => isCanvasBlock(block))).toBe(true);
+    expect(canvasBlocksIn(groups[0])).toHaveLength(1);
   });
 
   it("suppresses active HEARTBEAT_OK streams before rendering", () => {
@@ -149,6 +149,39 @@ describe("buildChatItems", () => {
     );
 
     expect(items).toEqual([]);
+  });
+
+  it("renders only the last 100 history messages and shows a hidden-count notice", () => {
+    const items = buildChatItems(
+      createProps({
+        messages: Array.from({ length: 105 }, (_, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `message ${index}`,
+          timestamp: index,
+        })),
+      }),
+    );
+
+    const groups = items.filter((item) => item.kind === "group");
+
+    expect(items[0]).toMatchObject({
+      kind: "group",
+      messages: [
+        expect.objectContaining({
+          message: expect.objectContaining({
+            role: "system",
+            content: "Showing last 100 messages (5 hidden).",
+          }),
+        }),
+      ],
+    });
+    expect(groups).toHaveLength(101);
+    expect(groups[1].messages[0].message).toMatchObject({
+      content: "message 5",
+    });
+    expect(groups.at(-1)?.messages[0].message).toMatchObject({
+      content: "message 104",
+    });
   });
 
   it("does not collapse duplicate text messages separated by another message", () => {
@@ -227,8 +260,8 @@ describe("buildChatItems", () => {
       ],
     });
 
-    expect(firstMessageContent(groups[0]).some((block) => isCanvasBlock(block))).toBe(true);
-    expect(firstMessageContent(groups[1]).some((block) => isCanvasBlock(block))).toBe(false);
+    expect(canvasBlocksIn(groups[0])).toHaveLength(1);
+    expect(canvasBlocksIn(groups[1])).toEqual([]);
   });
 
   it("does not lift generic view handles from non-canvas payloads", () => {
@@ -267,7 +300,7 @@ describe("buildChatItems", () => {
       ],
     });
 
-    expect(firstMessageContent(groups[0]).some((block) => isCanvasBlock(block))).toBe(false);
+    expect(canvasBlocksIn(groups[0])).toEqual([]);
   });
 
   it("lifts streamed canvas toolresult blocks into the assistant bubble", () => {
@@ -314,7 +347,7 @@ describe("buildChatItems", () => {
       ],
     });
 
-    const canvasBlocks = firstMessageContent(groups[0]).filter((block) => isCanvasBlock(block));
+    const canvasBlocks = canvasBlocksIn(groups[0]);
     expect(canvasBlocks).toHaveLength(1);
     expect(canvasBlocks[0]).toMatchObject({
       preview: {
@@ -353,6 +386,10 @@ describe("buildChatItems", () => {
     });
   });
 });
+
+function canvasBlocksIn(group: MessageGroup): unknown[] {
+  return firstMessageContent(group).filter((block) => isCanvasBlock(block));
+}
 
 function isCanvasBlock(block: unknown): boolean {
   return (

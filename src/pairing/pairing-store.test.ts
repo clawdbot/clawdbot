@@ -173,7 +173,7 @@ async function expectAccountScopedEntryIsolated(entry: string, accountId = "yy")
   expect(channelScoped).not.toContain(entry);
 }
 
-async function withAllowFromCacheReadSpy(params: {
+async function expectAllowFromCacheInvalidationWithReadSpy(params: {
   stateDir: string;
   createReadSpy: (filePath: string) => FileReadSpy;
   readAllowFrom: () => Promise<string[]>;
@@ -628,7 +628,7 @@ describe("pairing store", () => {
         },
       ]) {
         clearOAuthFixtures(stateDir);
-        await withAllowFromCacheReadSpy({
+        await expectAllowFromCacheInvalidationWithReadSpy({
           stateDir,
           createReadSpy: variant.createReadSpy,
           readAllowFrom: variant.readAllowFrom,

@@ -4,6 +4,7 @@ import { isAbsolute, resolve } from "node:path";
 import { basename } from "node:path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
@@ -577,7 +578,7 @@ async function resolveUploadInput(
       );
     }
     const mimeMatch = header.match(/data:([^;]+)/);
-    const ext = mimeMatch?.[1]?.split("/")[1] ?? "png";
+    const ext = extensionForMime(mimeMatch?.[1])?.slice(1) ?? "png";
     // Estimate decoded byte count from base64 length BEFORE allocating the
     // full buffer to avoid spiking memory on oversized payloads.
     const estimatedBytes = Math.ceil((trimmedData.length * 3) / 4);

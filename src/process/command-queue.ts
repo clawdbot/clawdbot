@@ -311,8 +311,12 @@ export function markGatewayDraining(): void {
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   const cleaned = normalizeLane(lane);
   const state = getLaneState(cleaned);
-  state.maxConcurrent = Math.max(1, Math.floor(maxConcurrent));
-  drainLane(cleaned);
+  const isProbeLane = cleaned.startsWith("auth-probe:") || cleaned.startsWith("session:probe-");
+  const minConcurrent = isProbeLane ? 1 : 0;
+  state.maxConcurrent = Math.max(minConcurrent, Math.floor(maxConcurrent));
+  if (state.maxConcurrent > 0) {
+    drainLane(cleaned);
+  }
 }
 
 export function enqueueCommandInLane<T>(

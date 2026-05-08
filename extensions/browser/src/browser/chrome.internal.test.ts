@@ -96,6 +96,14 @@ function effectiveSpawnCommand(call: unknown[] | undefined): unknown {
   return command;
 }
 
+function mockExpiredLaunchPollingClock(): void {
+  let now = 1_000_000;
+  vi.spyOn(Date, "now").mockImplementation(() => {
+    now += 1_000;
+    return now;
+  });
+}
+
 async function withMockChromeCdpServer(params: {
   wsPath: string;
   onConnection?: (wss: WebSocketServer) => void;
@@ -340,6 +348,7 @@ describe("chrome.ts internal", () => {
             extraArgs: [],
           } as unknown as ResolvedBrowserConfig;
           const running = await launchOpenClawChrome(resolved, profile);
+          expect(running.pid).toBe(4242);
           running.proc.kill?.("SIGTERM");
         },
       });
@@ -506,15 +515,16 @@ describe("chrome.ts internal", () => {
       let spawnCalls = 0;
       const firstProc = makeFakeProc();
       const secondProc = makeFakeProc();
+      mockExpiredLaunchPollingClock();
       spawnMock.mockImplementation(() => {
         spawnCalls += 1;
         if (spawnCalls === 1) {
-          setTimeout(() => {
+          void Promise.resolve().then(() => {
             firstProc.stderr.emit(
               "data",
               Buffer.from("The profile appears to be in use by another Chromium process"),
             );
-          }, 0);
+          });
           return firstProc;
         }
         cdpReachable = true;
@@ -565,7 +575,10 @@ describe("chrome.ts internal", () => {
         const fakeProc = makeFakeProc();
         spawnMock.mockReturnValue(fakeProc);
         // Leak some stderr into the buffer so the hint renders.
-        setTimeout(() => fakeProc.stderr.emit("data", Buffer.from("crash dump\n")), 10);
+        void Promise.resolve().then(() =>
+          fakeProc.stderr.emit("data", Buffer.from("crash dump\n")),
+        );
+        mockExpiredLaunchPollingClock();
 
         // fetch always fails → isChromeReachable returns false every poll.
         vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
@@ -586,38 +599,32 @@ describe("chrome.ts internal", () => {
     });
 
     it("uses the configured local launch timeout while waiting for CDP discovery", async () => {
-      vi.useFakeTimers();
-      try {
-        const executablePath = path.join(tmpDir, "chrome");
-        await fsp.writeFile(executablePath, "");
-        const existsSync = fs.existsSync.bind(fs);
-        vi.spyOn(fs, "existsSync").mockImplementation((p) => {
-          const s = String(p);
-          if (s.endsWith("Local State") || s.endsWith("Preferences")) {
-            return true;
-          }
-          return existsSync(p);
-        });
-        const fakeProc = makeFakeProc();
-        spawnMock.mockReturnValue(fakeProc);
-        vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+      const executablePath = path.join(tmpDir, "chrome");
+      await fsp.writeFile(executablePath, "");
+      const existsSync = fs.existsSync.bind(fs);
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s.endsWith("Local State") || s.endsWith("Preferences")) {
+          return true;
+        }
+        return existsSync(p);
+      });
+      const fakeProc = makeFakeProc();
+      spawnMock.mockReturnValue(fakeProc);
+      mockExpiredLaunchPollingClock();
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
 
-        const resolved = {
-          ...makeResolved(),
-          executablePath,
-          localLaunchTimeoutMs: 1,
-        };
-        const profile = makeProfile(55556);
-        const rejection = expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
-          /Failed to start Chrome CDP/,
-        );
+      const resolved = {
+        ...makeResolved(),
+        executablePath,
+        localLaunchTimeoutMs: 1,
+      };
+      const profile = makeProfile(55556);
 
-        await vi.advanceTimersByTimeAsync(10);
-        await rejection;
-        expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
-      } finally {
-        vi.useRealTimers();
-      }
+      await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+        /Failed to start Chrome CDP/,
+      );
+      expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
     });
   });
 
@@ -925,6 +932,7 @@ describe("chrome.ts internal", () => {
               extraArgs: [],
             } as unknown as ResolvedBrowserConfig;
             const running = await launchOpenClawChrome(resolved, profile);
+            expect(running.pid).toBe(4242);
             running.proc.kill?.("SIGTERM");
           },
         });
@@ -969,6 +977,7 @@ describe("chrome.ts internal", () => {
             extraArgs: [],
           } as unknown as ResolvedBrowserConfig;
           const running = await launchOpenClawChrome(resolved, profile);
+          expect(running.pid).toBe(4242);
           running.proc.kill?.("SIGTERM");
         },
       });
@@ -994,9 +1003,12 @@ describe("chrome.ts internal", () => {
       const fakeProc = makeFakeProc();
       spawnMock.mockImplementation(() => {
         // Synthesize stderr data shortly after spawn.
-        setTimeout(() => fakeProc.stderr.emit("data", Buffer.from("chrome crash log\n")), 5);
+        void Promise.resolve().then(() =>
+          fakeProc.stderr.emit("data", Buffer.from("chrome crash log\n")),
+        );
         return fakeProc;
       });
+      mockExpiredLaunchPollingClock();
       vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
       const profile = {
         name: "openclaw-stderr",
@@ -1033,6 +1045,7 @@ describe("chrome.ts internal", () => {
           return false;
         });
         spawnMock.mockImplementation(() => makeFakeProc());
+        mockExpiredLaunchPollingClock();
         vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
         const profile = {
           name: "openclaw-mac",
@@ -1061,13 +1074,9 @@ describe("chrome.ts internal", () => {
 
     it("breaks out of the bootstrap prefs-wait loop as soon as both files exist", async () => {
       // Covers the `if (exists(localStatePath) && exists(preferencesPath)) break;` branch.
-      // Use a wallclock flag that the mock checks each call so the loop
-      // iterates (awaiting its 100ms setTimeout) once with prefs-absent,
-      // then the flag flips and the next iteration hits the break.
-      let prefsVisible = false;
-      setTimeout(() => {
-        prefsVisible = true;
-      }, 50);
+      // The first prefs probe makes bootstrap necessary; subsequent probes
+      // make both prefs files visible so the polling loop breaks immediately.
+      let prefsProbeCount = 0;
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
         if (
@@ -1078,7 +1087,8 @@ describe("chrome.ts internal", () => {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {
-          return prefsVisible;
+          prefsProbeCount += 1;
+          return prefsProbeCount > 1;
         }
         return false;
       });
@@ -1106,6 +1116,8 @@ describe("chrome.ts internal", () => {
             extraArgs: [],
           } as unknown as ResolvedBrowserConfig;
           const running = await launchOpenClawChrome(resolved, profile);
+          expect(spawnCount).toBe(2);
+          expect(running.proc).toBe(runtimeProc);
           running.proc.kill?.("SIGTERM");
         },
       });
@@ -1131,17 +1143,15 @@ describe("chrome.ts internal", () => {
       });
       const bootstrapProc = makeFakeProc();
       const runtimeProc = makeFakeProc();
+      bootstrapProc.kill = vi.fn((_sig?: string) => {
+        bootstrapProc.killed = true;
+        bootstrapProc.exitCode = 0;
+        return true;
+      });
       let callCount = 0;
       spawnMock.mockImplementation(() => {
         callCount += 1;
-        if (callCount === 1) {
-          // Set exitCode shortly after spawn so the exit-wait loop breaks.
-          setTimeout(() => {
-            bootstrapProc.exitCode = 0;
-          }, 25);
-          return bootstrapProc;
-        }
-        return runtimeProc;
+        return callCount === 1 ? bootstrapProc : runtimeProc;
       });
       await withMockChromeCdpServer({
         wsPath: "/devtools/browser/EXIT_BREAK",
@@ -1160,6 +1170,8 @@ describe("chrome.ts internal", () => {
             extraArgs: [],
           } as unknown as ResolvedBrowserConfig;
           const running = await launchOpenClawChrome(resolved, profile);
+          expect(callCount).toBe(2);
+          expect(running.proc).toBe(runtimeProc);
           running.proc.kill?.("SIGTERM");
         },
       });
@@ -1213,6 +1225,7 @@ describe("chrome.ts internal", () => {
             extraArgs: [],
           } as unknown as ResolvedBrowserConfig;
           const running = await launchOpenClawChrome(resolved, profile);
+          expect(running.pid).toBe(4242);
           running.proc.kill?.("SIGTERM");
         },
       });

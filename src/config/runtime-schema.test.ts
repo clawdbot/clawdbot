@@ -200,9 +200,9 @@ describe("readBestEffortRuntimeConfigSchema", () => {
     expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
       "bundledChannelConfigCollector",
     );
-    expect(channelProps?.telegram).toBeTruthy();
-    expect(channelProps?.matrix).toBeTruthy();
-    expect(entryProps?.demo).toBeTruthy();
+    expect(channelProps).toHaveProperty("telegram");
+    expect(channelProps).toHaveProperty("matrix");
+    expect(entryProps).toHaveProperty("demo");
   });
 
   it("falls back to bundled channel metadata when config is invalid", async () => {
@@ -219,8 +219,8 @@ describe("readBestEffortRuntimeConfigSchema", () => {
     expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
       "bundledChannelConfigCollector",
     );
-    expect(channelProps?.telegram).toBeTruthy();
-    expect(channelProps?.slack).toBeTruthy();
+    expect(channelProps).toHaveProperty("telegram");
+    expect(channelProps).toHaveProperty("slack");
     expect(entryProps?.demo).toBeUndefined();
   });
 });
@@ -232,7 +232,7 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
   });
 
-  it("uses manifest metadata instead of booting plugin runtime", async () => {
+  it("uses manifest metadata instead of booting plugin runtime", () => {
     const result = loadGatewayRuntimeConfigSchema();
     const schema = result.schema as { properties?: Record<string, unknown> };
     const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
@@ -246,8 +246,8 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
       "bundledChannelConfigCollector",
     );
-    expect(channelProps?.telegram).toBeTruthy();
-    expect(channelProps?.matrix).toBeTruthy();
+    expect(channelProps).toHaveProperty("telegram");
+    expect(channelProps).toHaveProperty("matrix");
   });
 
   it("reuses the current gateway plugin metadata snapshot for config schema requests", () => {
@@ -294,9 +294,9 @@ describe("loadGatewayRuntimeConfigSchema", () => {
       }),
     );
     expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
-    expect(channelProps?.telegram).toBeTruthy();
+    expect(channelProps).toHaveProperty("telegram");
     expect(JSON.stringify(channelProps?.telegram)).toContain("botToken");
-    expect(channelProps?.matrix).toBeTruthy();
+    expect(channelProps).toHaveProperty("matrix");
   });
 
   it("does not activate or replace the active plugin registry across repeated schema loads (regression guard for #54816)", () => {

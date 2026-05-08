@@ -115,11 +115,11 @@ describe("program routes", () => {
 
   it("passes parsed channel read-only route flags through", async () => {
     const listRoute = expectRoute(["channels", "list"]);
-    await expect(
-      listRoute?.run(["node", "openclaw", "channels", "list", "--json", "--no-usage"]),
-    ).resolves.toBe(true);
+    await expect(listRoute?.run(["node", "openclaw", "channels", "list", "--json"])).resolves.toBe(
+      true,
+    );
     expect(channelsListCommandMock).toHaveBeenCalledWith(
-      { json: true, usage: false },
+      { json: true, all: false },
       expect.any(Object),
     );
 

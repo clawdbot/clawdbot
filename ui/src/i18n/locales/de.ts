@@ -712,6 +712,16 @@ export const de: TranslationMap = {
       today: "Heute",
       last7d: "7d",
       last30d: "30d",
+      last90d: "90 T",
+      last1y: "1 J",
+      all: "Alle",
+    },
+    scope: {
+      instance: "Aktuelle Instanz",
+      instanceHint: "Nur die aktive Sitzungs-ID für jede logische Sitzung anzeigen.",
+      family: "Historische Abstammung",
+      familyHint: "Bekannte rotierte, transkriptbasierte Sitzungs-IDs zusammenfassen.",
+      familyIncluded: "Die historische Abstammung umfasst {count} Sitzungsinstanzen.",
     },
     filters: {
       title: "Filter",
@@ -933,6 +943,98 @@ export const de: TranslationMap = {
     showPassword: "Passwort anzeigen",
     hidePassword: "Passwort ausblenden",
     togglePasswordVisibility: "Sichtbarkeit des Passworts umschalten",
+    failure: {
+      rawError: "Rohfehler",
+      docsAuth: "Control-UI-Auth-Dokumentation",
+      docsPairing: "Dokumentation zur Gerätekopplung",
+      docsInsecure: "Dokumentation zu unsicherem HTTP",
+      authRequired: {
+        title: "Authentifizierung erforderlich",
+        summary:
+          "Das Gateway ist erreichbar, benötigt aber ein passendes Token oder Passwort, bevor dieser Browser eine Verbindung herstellen kann.",
+        stepPaste:
+          "Füge das Token aus openclaw dashboard --no-open ein oder gib das konfigurierte Passwort ein.",
+        stepGenerate:
+          "Wenn kein Token konfiguriert ist, führe openclaw doctor --generate-gateway-token auf dem Gateway-Host aus.",
+        stepConnect: "Klicke nach dem Aktualisieren der Zugangsdaten erneut auf Connect.",
+      },
+      authFailed: {
+        title: "Authentifizierung passt nicht",
+        summary:
+          "Die angegebenen Zugangsdaten wurden abgelehnt. Häufigste Ursache ist ein veraltetes Token oder ein Token von einer anderen Gateway-URL.",
+        stepDashboard:
+          "Führe openclaw dashboard --no-open aus und öffne die frische URL oder füge ihr Token ein.",
+        stepReplace:
+          "Ersetze veraltete Token-/Passwortwerte; verwende kein Token von einer anderen Gateway-URL erneut.",
+        stepMode:
+          "Verwende jeweils nur einen passenden Auth-Modus: Gateway-Token für den Token-Modus, Passwort für den Passwortmodus.",
+      },
+      rateLimited: {
+        title: "Zu viele fehlgeschlagene Versuche",
+        summary: "Das Gateway begrenzt vorübergehend Authentifizierungsversuche für diesen Client.",
+        stepStop: "Stoppe die Wiederholungsversuche aus diesem Tab für einen Moment.",
+        stepWait:
+          "Warte, bis der Auth-Limiter abgekühlt ist, und verbinde dich dann mit den korrigierten Zugangsdaten erneut.",
+        stepCheckClients:
+          "Wenn dies ein gemeinsam genutzter Host ist, prüfe andere Clients auf wiederholte falsche Versuche.",
+      },
+      pairing: {
+        title: "Gerätekopplung erforderlich",
+        scopeTitle: "Scope-Upgrade ausstehend",
+        roleTitle: "Rollen-Upgrade ausstehend",
+        metadataTitle: "Geräteaktualisierung ausstehend",
+        summary:
+          "Dieser Browser benötigt eine einmalige Freigabe vom Gateway-Host, bevor er die Control UI verwenden kann.",
+        upgradeSummary:
+          "Dieser Browser ist bereits bekannt, aber der angeforderte Zugriff hat sich geändert und benötigt eine neue Freigabe.",
+        stepList: "Führe openclaw devices list auf dem Gateway-Host aus.",
+        stepApproveId: "Genehmige diese Anfrage: openclaw devices approve {requestId}.",
+        stepApprove: "Genehmige die ausstehende Browser-/Geräteanfrage aus dieser Liste.",
+        stepReconnect: "Verbinde dich erneut, nachdem die Freigabe abgeschlossen ist.",
+      },
+      insecure: {
+        title: "Sicherer Browserkontext erforderlich",
+        summary:
+          "Diese Seite läuft über normales HTTP, daher kann der Browser die vom Gateway erwartete Geräteidentität nicht erstellen.",
+        stepHttps:
+          "Nutze HTTPS/Tailscale Serve oder öffne http://127.0.0.1:18789 auf dem Gateway-Host.",
+        stepLocalCompat:
+          "Für lokale Token-only-Kompatibilität setze gateway.controlUi.allowInsecureAuth: true.",
+        stepAvoidDisable:
+          "Vermeide es, Geräteauthentifizierung für entfernten HTTP-Zugriff zu deaktivieren.",
+      },
+      origin: {
+        title: "Browser-Origin nicht erlaubt",
+        summary:
+          "Das Gateway hat diesen Seiten-Origin abgelehnt, bevor es die Control-UI-Verbindung akzeptiert hat.",
+        stepAllowedOrigins: "Füge diesen Browser-Origin zu gateway.controlUi.allowedOrigins hinzu.",
+        stepFullOrigin:
+          "Verwende vollständige Origins wie http://localhost:5173, keine Wildcard-Muster.",
+        stepRestart: "Starte oder lade das Gateway nach dem Ändern der erlaubten Origins neu.",
+      },
+      protocol: {
+        title: "Protokoll stimmt nicht überein",
+        summary:
+          "Die bereitgestellte Control UI und das laufende Gateway stimmen beim unterstützten Verbindungsprotokoll nicht überein.",
+        stepDashboard:
+          "Öffne das bereitgestellte Dashboard mit openclaw dashboard erneut, damit UI und Gateway aus derselben Installation stammen.",
+        stepDevUi:
+          "Wenn du pnpm ui:dev verwendest, baue oder starte die Dev-UI gegen den aktuellen Checkout neu.",
+        stepRestart:
+          "Starte das Gateway nach dem Aktualisieren von OpenClaw neu, damit es das aktuelle Protokoll bereitstellt.",
+      },
+      network: {
+        title: "Verbindung nicht möglich",
+        summary:
+          "Der Browser konnte die Gateway-Verbindung nicht abschließen. Prüfe Ziel und Transport, bevor du Zugangsdaten erneut versuchst.",
+        stepGateway:
+          "Bestätige mit openclaw status oder openclaw gateway run, dass das Gateway läuft.",
+        stepUrl:
+          "Prüfe die WebSocket-URL und verwende wss://, wenn das Gateway hinter HTTPS/Tailscale Serve liegt.",
+        stepDashboard:
+          "Öffne das Dashboard mit openclaw dashboard --no-open erneut, um die aktuelle URL und Auth-Details zu kopieren.",
+      },
+    },
   },
   chat: {
     disconnected: "Verbindung zum Gateway getrennt.",

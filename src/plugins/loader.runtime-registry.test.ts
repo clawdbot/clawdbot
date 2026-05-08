@@ -66,6 +66,22 @@ function createLoadedPluginRecord(id: string): PluginRecord {
   };
 }
 
+function requireMemoryRuntime() {
+  const runtime = getMemoryRuntime();
+  if (!runtime) {
+    throw new Error("expected memory runtime registration");
+  }
+  return runtime;
+}
+
+function requireMemoryEmbeddingProvider(providerId: string) {
+  const provider = getMemoryEmbeddingProvider(providerId);
+  if (!provider) {
+    throw new Error(`expected ${providerId} memory embedding provider`);
+  }
+  return provider;
+}
+
 describe("getCompatibleActivePluginRegistry", () => {
   it("reuses the active registry only when the load context cache key matches", () => {
     const registry = createEmptyPluginRegistry();
@@ -614,8 +630,10 @@ describe("clearPluginLoaderCache", () => {
     ]);
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/stale.md");
-    expect(getMemoryRuntime()).toBeDefined();
-    expect(getMemoryEmbeddingProvider("stale")).toBeDefined();
+    expect(
+      requireMemoryRuntime().resolveMemoryBackendConfig({ cfg: {} as never, agentId: "main" }),
+    ).toEqual({ backend: "builtin" });
+    expect(requireMemoryEmbeddingProvider("stale").id).toBe("stale");
 
     clearPluginLoaderCache();
 
@@ -659,7 +677,7 @@ describe("clearPluginRegistryLoadCache", () => {
     clearPluginRegistryLoadCache();
 
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["still live"]);
-    expect(getMemoryEmbeddingProvider("still-live")).toBeDefined();
+    expect(requireMemoryEmbeddingProvider("still-live").id).toBe("still-live");
   });
 
   it("invalidates full-workspace load snapshots", () => {

@@ -17,14 +17,25 @@ function requireGatewayToken(): string {
     typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
       ? ((testState.gatewayAuth as { token?: string }).token ?? "")
       : "";
-  expect(token).toBeTruthy();
+  if (!token) {
+    throw new Error("expected gateway auth token");
+  }
   return token;
 }
 
 function statePath(...parts: string[]): string {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
-  expect(stateDir).toBeTruthy();
-  return path.join(stateDir ?? "", ...parts);
+  if (!stateDir) {
+    throw new Error("expected OPENCLAW_STATE_DIR");
+  }
+  return path.join(stateDir, ...parts);
+}
+
+function expectRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
 }
 
 async function seedCachedOperatorToken(scopes: string[]): Promise<void> {
@@ -46,7 +57,9 @@ async function seedCachedOperatorToken(scopes: string[]): Promise<void> {
   expect(approved?.status).toBe("approved");
   const token =
     approved?.status === "approved" ? (approved.device.tokens?.operator?.token ?? "") : "";
-  expect(token).toBeTruthy();
+  if (!token) {
+    throw new Error("expected approved operator token");
+  }
   storeDeviceAuthToken({
     deviceId: identity.deviceId,
     role: "operator",
@@ -67,7 +80,7 @@ describe("probeGateway auth integration", () => {
         timeoutMs: 5_000,
       });
 
-      expect(status).toBeTruthy();
+      expectRecord(status, "status response");
     });
   });
 

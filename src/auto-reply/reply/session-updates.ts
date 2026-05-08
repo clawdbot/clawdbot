@@ -278,6 +278,10 @@ export async function incrementCompactionCount(params: {
         storePath,
         newSessionId,
       });
+    updates.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
+    updates.usageFamilySessionIds = Array.from(
+      new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
+    );
   } else if (sessionFileChanged && explicitNewSessionFile) {
     updates.sessionFile = explicitNewSessionFile;
   }

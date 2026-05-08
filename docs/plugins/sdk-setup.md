@@ -492,7 +492,7 @@ The `ChannelSetupWizard` type supports `credentials`, `textInputs`, `dmPolicy`, 
 
 ## Publishing and installing
 
-**External plugins:** publish to [ClawHub](/tools/clawhub), then install:
+**External plugins:** publish to [ClawHub](/clawhub), then install:
 
 <Tabs>
   <Tab title="npm">

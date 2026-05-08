@@ -48,7 +48,7 @@ function findSseEventBoundary(buffer: string): { index: number; length: number }
 
 function sanitizeOpenAISdkSseResponse(response: Response): Response {
   const contentType = response.headers.get("content-type") ?? "";
-  if (!response.body || !/\btext\/event-stream\b/i.test(contentType)) {
+  if (!response.ok || !response.body || !/\btext\/event-stream\b/i.test(contentType)) {
     return response;
   }
 

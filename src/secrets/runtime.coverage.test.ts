@@ -824,7 +824,9 @@ describe("secrets runtime target coverage", () => {
         loadAuthStore: () => authStore,
       });
       const resolvedStore = snapshot.authStores[0]?.store;
-      expect(resolvedStore).toBeDefined();
+      if (!resolvedStore) {
+        throw new Error("expected resolved auth store snapshot");
+      }
       for (const [index, entry] of batch.entries()) {
         const resolved = getPath(
           resolvedStore,

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { zalouserDoctor } from "./doctor.js";
 
+function getZaloUserCompatibilityNormalizer(): NonNullable<
+  typeof zalouserDoctor.normalizeCompatibilityConfig
+> {
+  const normalize = zalouserDoctor.normalizeCompatibilityConfig;
+  if (!normalize) {
+    throw new Error("Expected zalouser doctor to expose normalizeCompatibilityConfig");
+  }
+  return normalize;
+}
+
 describe("zalouser doctor", () => {
   it("warns when mutable group names rely on disabled name matching", () => {
     expect(
@@ -26,11 +36,7 @@ describe("zalouser doctor", () => {
   });
 
   it("normalizes legacy group allow aliases to enabled", () => {
-    const normalize = zalouserDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getZaloUserCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {

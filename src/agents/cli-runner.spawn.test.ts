@@ -134,6 +134,26 @@ function buildPreparedCliRunContext(params: {
   };
 }
 
+function requireArgAfter(argv: string[] | undefined, flag: string): string {
+  const index = argv?.indexOf(flag) ?? -1;
+  if (index < 0) {
+    throw new Error(`expected CLI arg ${flag}`);
+  }
+  const value = argv?.[index + 1]?.trim();
+  if (!value) {
+    throw new Error(`expected value after CLI arg ${flag}`);
+  }
+  return value;
+}
+
+function requireRegexMatch(value: string, pattern: RegExp): RegExpExecArray {
+  const match = pattern.exec(value);
+  if (!match) {
+    throw new Error(`expected ${value} to match ${pattern}`);
+  }
+  return match;
+}
+
 describe("runCliAgent spawn path", () => {
   it("formats redacted CLI resume diagnostics without exposing raw session ids", () => {
     const logLine = buildCliExecLogLine({
@@ -326,9 +346,7 @@ describe("runCliAgent spawn path", () => {
     };
     expect(input.mode).toBe("child");
     expect(input.argv).toContain("claude");
-    const sessionArgIndex = input.argv?.indexOf("--session-id") ?? -1;
-    expect(sessionArgIndex).toBeGreaterThanOrEqual(0);
-    expect(input.argv?.[sessionArgIndex + 1]?.trim()).toBeTruthy();
+    expect(requireArgAfter(input.argv, "--session-id")).not.toBe("");
     expect(input.input).toContain("hi");
     expect(input.argv).not.toContain("hi");
   });
@@ -628,9 +646,8 @@ describe("runCliAgent spawn path", () => {
       const configArgIndex = input.argv?.indexOf("-c") ?? -1;
       expect(configArgIndex).toBeGreaterThanOrEqual(0);
       const configArg = input.argv?.[configArgIndex + 1] ?? "";
-      const match = /^model_instructions_file="(.+)"$/.exec(configArg);
-      expect(match?.[1]).toBeTruthy();
-      promptFileText = await fs.readFile(match?.[1] ?? "", "utf-8");
+      const match = requireRegexMatch(configArg, /^model_instructions_file="(.+)"$/);
+      promptFileText = await fs.readFile(match[1], "utf-8");
       return createManagedRun({
         reason: "exit",
         exitCode: 0,
@@ -1365,7 +1382,6 @@ describe("runCliAgent spawn path", () => {
 
     await vi.waitFor(() => expect(supervisorSpawnMock).toHaveBeenCalledTimes(16));
     const rejectedRun = runs[16];
-    expect(rejectedRun).toBeDefined();
     await expect(rejectedRun).rejects.toThrow("Too many Claude CLI live sessions are active.");
     releaseSpawn?.();
     await expect(Promise.all(runs.slice(0, 16))).resolves.toHaveLength(16);

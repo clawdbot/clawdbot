@@ -974,7 +974,7 @@ describe("statusCommand", () => {
     expect(payload.memoryPlugin.slot).toBe("memory-core");
     expect(payload.sessions.count).toBe(1);
     expect(payload.sessions.paths).toContain("/tmp/sessions.json");
-    expect(payload.sessions.defaults.model).toBeTruthy();
+    expect(payload.sessions.defaults.model).toEqual(expect.any(String));
     expect(payload.sessions.defaults.contextTokens).toBeGreaterThan(0);
     expect(payload.sessions.recent[0].percentUsed).toBe(50);
     expect(payload.sessions.recent[0].cacheRead).toBe(2_000);

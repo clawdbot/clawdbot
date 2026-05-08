@@ -244,7 +244,6 @@ async function persistProviderAuthResult(params: {
   agentDir: string;
   runtime: RuntimeEnv;
   prompter: ReturnType<typeof createClackPrompter>;
-  workspaceDir: string;
   setDefault?: boolean;
 }) {
   for (const profile of params.result.profiles) {
@@ -279,7 +278,7 @@ async function persistProviderAuthResult(params: {
     }
     return next;
   });
-  if (params.setDefault && params.result.defaultModel) {
+  if (params.result.defaultModel) {
     const repaired = await repairCodexRuntimePluginInstallForModelSelection({
       cfg: updated,
       model: params.result.defaultModel,
@@ -342,7 +341,6 @@ async function runProviderAuthMethod(params: {
     agentDir: params.agentDir,
     runtime: params.runtime,
     prompter: params.prompter,
-    workspaceDir: params.workspaceDir,
     setDefault: params.setDefault,
   });
 }
@@ -600,12 +598,9 @@ export function resolveRequestedLoginProviderOrThrow(
   return resolveRequestedProviderOrThrow(providers, rawProvider);
 }
 
-function credentialMode(credential: AuthProfileCredential): AuthProfileCredential["type"] {
+function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" | "token" {
   if (credential.type === "api_key") {
     return "api_key";
-  }
-  if (credential.type === "aws-sdk") {
-    return "aws-sdk";
   }
   if (credential.type === "token") {
     return "token";

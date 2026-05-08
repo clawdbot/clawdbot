@@ -160,34 +160,28 @@ function makeAppInferenceProfileDescriptor(modelId: string): never {
   } as never;
 }
 
-/**
- * Call wrapStreamFn and then invoke the returned stream function, capturing
- * the payload via the onPayload hook that streamWithPayloadPatch installs.
- */
 async function callWrappedStream(
   provider: RegisteredProviderPlugin,
   modelId: string,
   modelDescriptor: never,
   config?: OpenClawConfig,
+  extraParams?: Record<string, unknown>,
+  payload: Record<string, unknown> = {},
 ): Promise<Record<string, unknown>> {
   const wrapped = provider.wrapStreamFn?.({
     provider: "amazon-bedrock",
     modelId,
     config,
     streamFn: spyStreamFn,
+    ...(extraParams ? { extraParams } : {}),
   } as never);
 
-  // The wrapped stream returns the options object (from spyStreamFn).
-  // For guardrail-wrapped streams, streamWithPayloadPatch intercepts onPayload,
-  // so we need to invoke onPayload on the returned options to trigger the patch.
   const result = wrapped?.(modelDescriptor, { messages: [] } as never, {}) as unknown as Record<
     string,
     unknown
   >;
 
-  // If onPayload was installed by streamWithPayloadPatch, call it to apply the patch.
   if (typeof result?.onPayload === "function") {
-    const payload: Record<string, unknown> = {};
     await (result.onPayload as (p: Record<string, unknown>, model: unknown) => Promise<unknown>)(
       payload,
       modelDescriptor,
@@ -539,9 +533,10 @@ describe("amazon-bedrock provider plugin", () => {
       const discovery = pluginJson.configSchema?.properties?.discovery;
       const guardrail = pluginJson.configSchema?.properties?.guardrail;
 
-      expect(discovery).toBeDefined();
-      expect(discovery.type).toBe("object");
-      expect(discovery.additionalProperties).toBe(false);
+      expect(discovery).toMatchObject({
+        type: "object",
+        additionalProperties: false,
+      });
       expect(discovery.properties.enabled).toEqual({ type: "boolean" });
       expect(discovery.properties.region).toEqual({ type: "string" });
       expect(discovery.properties.providerFilter).toEqual({
@@ -561,9 +556,10 @@ describe("amazon-bedrock provider plugin", () => {
         minimum: 1,
       });
 
-      expect(guardrail).toBeDefined();
-      expect(guardrail.type).toBe("object");
-      expect(guardrail.additionalProperties).toBe(false);
+      expect(guardrail).toMatchObject({
+        type: "object",
+        additionalProperties: false,
+      });
 
       // Required fields
       expect(guardrail.required).toEqual(["guardrailIdentifier", "guardrailVersion"]);
@@ -714,6 +710,89 @@ describe("amazon-bedrock provider plugin", () => {
 
       expect(result).not.toHaveProperty("_capturedPayload");
       expect(result).toMatchObject({ cacheRetention: "none" });
+    });
+  });
+
+  describe("service tier", () => {
+    const CONVERSE_MODEL_DESCRIPTOR = {
+      api: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+      id: NON_ANTHROPIC_MODEL,
+    } as never;
+
+    it("injects serviceTier for valid camelCase value ('flex')", async () => {
+      const provider = await registerWithConfig(undefined);
+      const result = await callWrappedStream(
+        provider,
+        NON_ANTHROPIC_MODEL,
+        CONVERSE_MODEL_DESCRIPTOR,
+        runtimePluginConfig(undefined),
+        { serviceTier: "flex" },
+      );
+      expect(result._capturedPayload).toMatchObject({ serviceTier: { type: "flex" } });
+    });
+
+    it("injects serviceTier for valid snake_case value ('priority')", async () => {
+      const provider = await registerWithConfig(undefined);
+      const result = await callWrappedStream(
+        provider,
+        NON_ANTHROPIC_MODEL,
+        CONVERSE_MODEL_DESCRIPTOR,
+        runtimePluginConfig(undefined),
+        { service_tier: "priority" },
+      );
+      expect(result._capturedPayload).toMatchObject({ serviceTier: { type: "priority" } });
+    });
+
+    it("injects serviceTier for all valid tier names", async () => {
+      const provider = await registerWithConfig(undefined);
+      for (const tier of ["flex", "priority", "default", "reserved"] as const) {
+        const result = await callWrappedStream(
+          provider,
+          NON_ANTHROPIC_MODEL,
+          CONVERSE_MODEL_DESCRIPTOR,
+          runtimePluginConfig(undefined),
+          { serviceTier: tier },
+        );
+        expect(result._capturedPayload).toMatchObject({ serviceTier: { type: tier } });
+      }
+    });
+
+    it("does not inject serviceTier when value is invalid", async () => {
+      const provider = await registerWithConfig(undefined);
+      const result = await callWrappedStream(
+        provider,
+        NON_ANTHROPIC_MODEL,
+        CONVERSE_MODEL_DESCRIPTOR,
+        runtimePluginConfig(undefined),
+        { serviceTier: "not-a-tier" },
+      );
+      expect(result).not.toHaveProperty("_capturedPayload");
+    });
+
+    it("does not overwrite caller-provided serviceTier in payload", async () => {
+      const provider = await registerWithConfig(undefined);
+      const result = await callWrappedStream(
+        provider,
+        NON_ANTHROPIC_MODEL,
+        CONVERSE_MODEL_DESCRIPTOR,
+        runtimePluginConfig(undefined),
+        { serviceTier: "flex" },
+        { serviceTier: { type: "priority" } },
+      );
+      expect(result._capturedPayload).toMatchObject({ serviceTier: { type: "priority" } });
+    });
+
+    it("skips injection for non-converse API models", async () => {
+      const provider = await registerWithConfig(undefined);
+      const result = await callWrappedStream(
+        provider,
+        NON_ANTHROPIC_MODEL,
+        { api: "openai-completions", provider: "amazon-bedrock", id: NON_ANTHROPIC_MODEL } as never,
+        runtimePluginConfig(undefined),
+        { serviceTier: "flex" },
+      );
+      expect(result).not.toHaveProperty("_capturedPayload");
     });
   });
 

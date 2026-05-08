@@ -175,7 +175,7 @@ async function resolveBinaryPath(binary: string): Promise<string> {
       throw new Error("Bun not found in PATH. Install bun: https://bun.sh");
     }
     throw new Error(
-      "Node not found in PATH. Install Node 24 (recommended) or Node 22 LTS (22.14+).",
+      "Node not found in PATH. Install Node 24 (recommended) or Node 22 LTS (22.16+).",
     );
   }
 }

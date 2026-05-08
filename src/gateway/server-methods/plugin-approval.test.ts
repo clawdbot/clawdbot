@@ -40,6 +40,11 @@ function createNoExecApprovalContext(): GatewayRequestHandlerOptions["context"] 
   } as unknown as GatewayRequestHandlerOptions["context"];
 }
 
+const invalidParamMethodCases = [
+  { method: "plugin.approval.request" },
+  { method: "plugin.approval.resolve" },
+] as const;
+
 describe("createPluginApprovalHandlers", () => {
   let manager: ExecApprovalManager<PluginApprovalRequestPayload>;
 
@@ -51,21 +56,21 @@ describe("createPluginApprovalHandlers", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns handlers for all three plugin approval methods", () => {
+  it("returns handlers for every plugin approval method", () => {
     const handlers = createPluginApprovalHandlers(manager);
-    expect(handlers).toHaveProperty("plugin.approval.request");
-    expect(handlers).toHaveProperty("plugin.approval.waitDecision");
-    expect(handlers).toHaveProperty("plugin.approval.resolve");
-    expect(typeof handlers["plugin.approval.request"]).toBe("function");
-    expect(typeof handlers["plugin.approval.waitDecision"]).toBe("function");
-    expect(typeof handlers["plugin.approval.resolve"]).toBe("function");
+    expect(Object.keys(handlers).toSorted()).toEqual([
+      "plugin.approval.list",
+      "plugin.approval.request",
+      "plugin.approval.resolve",
+      "plugin.approval.waitDecision",
+    ]);
   });
 
-  describe("plugin.approval.request", () => {
-    it("rejects invalid params", async () => {
+  describe("invalid params", () => {
+    it.each(invalidParamMethodCases)("$method rejects invalid params", async ({ method }) => {
       const handlers = createPluginApprovalHandlers(manager);
-      const opts = createMockOptions("plugin.approval.request", {});
-      await handlers["plugin.approval.request"](opts);
+      const opts = createMockOptions(method, {});
+      await handlers[method](opts);
       expect(opts.respond).toHaveBeenCalledWith(
         false,
         undefined,
@@ -74,7 +79,9 @@ describe("createPluginApprovalHandlers", () => {
         }),
       );
     });
+  });
 
+  describe("plugin.approval.request", () => {
     it("creates and registers approval with twoPhase", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const respond = vi.fn();
@@ -450,19 +457,6 @@ describe("createPluginApprovalHandlers", () => {
   });
 
   describe("plugin.approval.resolve", () => {
-    it("rejects invalid params", async () => {
-      const handlers = createPluginApprovalHandlers(manager);
-      const opts = createMockOptions("plugin.approval.resolve", {});
-      await handlers["plugin.approval.resolve"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: expect.any(String),
-        }),
-      );
-    });
-
     it("rejects invalid decision", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const record = manager.create({ title: "T", description: "D" }, 60_000);

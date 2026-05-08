@@ -113,7 +113,7 @@ describe("embedded attempt context injection", () => {
     expect(resolver).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards senderIsOwner into embedded message-action discovery", async () => {
+  it("forwards senderIsOwner into embedded message-action discovery", () => {
     const input = buildEmbeddedMessageActionDiscoveryInput({
       cfg: {},
       channel: "matrix",

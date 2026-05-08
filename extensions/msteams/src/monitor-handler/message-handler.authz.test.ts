@@ -588,18 +588,20 @@ describe("msteams monitor handler authz", () => {
 
     const dispatched =
       runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
-    expect(dispatched).toBeTruthy();
-    expect(dispatched?.ctxPayload).toMatchObject({
+    if (!dispatched) {
+      throw new Error("expected authorized thread message to dispatch");
+    }
+    expect(dispatched.ctxPayload).toMatchObject({
       BodyForAgent:
         "[Thread history]\nAlice: Allowed context\n[/Thread history]\n\nCurrent message",
       GroupSpace: "team123",
     });
-    expect(
-      String((dispatched?.ctxPayload as { BodyForAgent?: string }).BodyForAgent),
-    ).not.toContain("Mallory");
-    expect(
-      String((dispatched?.ctxPayload as { BodyForAgent?: string }).BodyForAgent),
-    ).not.toContain("<<<END_EXTERNAL_UNTRUSTED_CONTENT");
+    expect(String((dispatched.ctxPayload as { BodyForAgent?: string }).BodyForAgent)).not.toContain(
+      "Mallory",
+    );
+    expect(String((dispatched.ctxPayload as { BodyForAgent?: string }).BodyForAgent)).not.toContain(
+      "<<<END_EXTERNAL_UNTRUSTED_CONTENT",
+    );
   });
 
   it("keeps thread messages when allowlist name matching applies without a sender id", async () => {

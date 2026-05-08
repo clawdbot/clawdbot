@@ -41,9 +41,16 @@ import {
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import {
+  buildCodexAppInventoryCacheKey,
+  defaultCodexAppInventoryCache,
+} from "./app-inventory-cache.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
   refreshCodexAppServerAuthTokens,
+  resolveCodexAppServerAuthAccountCacheKey,
+  resolveCodexAppServerEnvApiKeyCacheKey,
+  resolveCodexAppServerHomeDir,
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
 } from "./auth-bridge.js";
@@ -59,7 +66,9 @@ import {
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
   readCodexPluginConfig,
+  resolveCodexPluginsPolicy,
   resolveCodexAppServerRuntimeOptions,
+  withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./config.js";
@@ -76,6 +85,11 @@ import {
   buildCodexNativeHookRelayConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
 } from "./native-hook-relay.js";
+import {
+  buildCodexPluginThreadConfig,
+  buildCodexPluginThreadConfigInputFingerprint,
+  shouldBuildCodexPluginThreadConfig,
+} from "./plugin-thread-config.js";
 import {
   assertCodexTurnStartResponse,
   readCodexDynamicToolCallParams,
@@ -356,6 +370,50 @@ function toCodexTextInput(text: string): CodexUserInput {
   return { type: "text", text, text_elements: [] };
 }
 
+function resolveCodexPluginAppCacheEndpoint(appServer: CodexAppServerRuntimeOptions): string {
+  return JSON.stringify({
+    transport: appServer.start.transport,
+    command: appServer.start.command,
+    args: appServer.start.args,
+    url: appServer.start.url ?? null,
+    credentialFingerprint: fingerprintCodexPluginAppCacheCredentials(appServer.start),
+  });
+}
+
+function fingerprintCodexPluginAppCacheCredentials(
+  startOptions: CodexAppServerRuntimeOptions["start"],
+): string | null {
+  const authToken = startOptions.authToken ?? "";
+  const headers = Object.entries(startOptions.headers)
+    .map(([key, value]) => [key.toLowerCase(), value] as const)
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  if (!authToken && headers.length === 0) {
+    return null;
+  }
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:plugin-app-cache-credentials:v1");
+  hash.update("\0");
+  hash.update(authToken);
+  for (const [key, value] of headers) {
+    hash.update("\0");
+    hash.update(key);
+    hash.update("\0");
+    hash.update(value);
+  }
+  return `sha256:${hash.digest("hex")}`;
+}
+
+function resolveCodexPluginAppCacheCodexHome(
+  appServer: CodexAppServerRuntimeOptions,
+  agentDir: string,
+): string | undefined {
+  const configuredCodexHome = appServer.start.env?.CODEX_HOME?.trim();
+  if (configuredCodexHome) {
+    return configuredCodexHome;
+  }
+  return appServer.start.transport === "stdio" ? resolveCodexAppServerHomeDir(agentDir) : undefined;
+}
+
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -376,6 +434,7 @@ export async function runCodexAppServerAttempt(
   const attemptClientFactory = resolveCodexAppServerClientFactory();
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+  let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
     appServer,
@@ -433,6 +492,17 @@ export async function runCodexAppServerAttempt(
     sessionKey: sandboxSessionKey,
     ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
   };
+  const startupAuthAccountCacheKey = await resolveCodexAppServerAuthAccountCacheKey({
+    authProfileId: startupAuthProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir,
+    config: params.config,
+  });
+  const startupEnvApiKeyCacheKey = startupAuthProfileId
+    ? undefined
+    : resolveCodexAppServerEnvApiKeyCacheKey({
+        startOptions: appServer.start,
+      });
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
@@ -453,6 +523,8 @@ export async function runCodexAppServerAttempt(
   const toolBridge = createCodexDynamicToolBridge({
     tools,
     signal: runAbortController.signal,
+    loading: pluginConfig.codexDynamicToolsLoading ?? "searchable",
+    directToolNames: shouldForceMessageTool(params) ? ["message"] : [],
     hookContext: {
       agentId: sessionAgentId,
       config: params.config,
@@ -602,6 +674,36 @@ export async function runCodexAppServerAttempt(
         ? buildCodexNativeHookRelayDisabledConfig()
         : undefined;
     const threadConfig = nativeHookRelayConfig;
+    const pluginThreadConfigEnabled = shouldBuildCodexPluginThreadConfig(pluginConfig);
+    const pluginAppCacheKey = buildCodexAppInventoryCacheKey({
+      codexHome: resolveCodexPluginAppCacheCodexHome(appServer, agentDir),
+      endpoint: resolveCodexPluginAppCacheEndpoint(appServer),
+      authProfileId: startupAuthProfileId,
+      accountId: startupAuthAccountCacheKey,
+      envApiKeyFingerprint: startupEnvApiKeyCacheKey,
+    });
+    const pluginThreadConfigInputFingerprint = pluginThreadConfigEnabled
+      ? buildCodexPluginThreadConfigInputFingerprint({
+          pluginConfig,
+          appCacheKey: pluginAppCacheKey,
+        })
+      : undefined;
+    const resolvedPluginPolicy = pluginThreadConfigEnabled
+      ? resolveCodexPluginsPolicy(pluginConfig)
+      : undefined;
+    const enabledPluginConfigKeys = resolvedPluginPolicy
+      ? resolvedPluginPolicy.pluginPolicies
+          .filter((plugin) => plugin.enabled)
+          .map((plugin) => plugin.configKey)
+          .toSorted()
+      : undefined;
+    pluginAppServer =
+      resolvedPluginPolicy?.enabled === true
+        ? {
+            ...appServer,
+            approvalPolicy: withMcpElicitationsApprovalPolicy(appServer.approvalPolicy),
+          }
+        : appServer;
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
       timeoutFloorMs: options.startupTimeoutFloorMs,
@@ -628,9 +730,27 @@ export async function runCodexAppServerAttempt(
             params: runtimeParams,
             cwd: effectiveWorkspace,
             dynamicTools: toolBridge.specs,
-            appServer,
+            appServer: pluginAppServer,
             developerInstructions: promptBuild.developerInstructions,
             config: threadConfig,
+            pluginThreadConfig: pluginThreadConfigEnabled
+              ? {
+                  enabled: true,
+                  inputFingerprint: pluginThreadConfigInputFingerprint,
+                  enabledPluginConfigKeys,
+                  build: () =>
+                    buildCodexPluginThreadConfig({
+                      pluginConfig,
+                      request: (method, requestParams) =>
+                        startupClient.request(method, requestParams, {
+                          timeoutMs: appServer.requestTimeoutMs,
+                          signal: runAbortController.signal,
+                        }),
+                      appCache: defaultCodexAppInventoryCache,
+                      appCacheKey: pluginAppCacheKey,
+                    }),
+                }
+              : undefined,
           });
           return { client: startupClient, thread: startupThread };
         };
@@ -1005,6 +1125,7 @@ export async function runCodexAppServerAttempt(
           paramsForRun: params,
           threadId: thread.threadId,
           turnId,
+          pluginAppPolicyContext: thread.pluginAppPolicyContext,
           signal: runAbortController.signal,
         });
       }
@@ -1131,7 +1252,7 @@ export async function runCodexAppServerAttempt(
         buildTurnStartParams(params, {
           threadId: thread.threadId,
           cwd: effectiveWorkspace,
-          appServer,
+          appServer: pluginAppServer,
           promptText: promptBuild.prompt,
         }),
         { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
@@ -2134,6 +2255,7 @@ export const __testing = {
   filterCodexDynamicToolsForAllowlist,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
+  resolveCodexPluginAppCacheEndpoint,
   resolveOpenClawCodingToolsSessionKeys,
   shouldForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {

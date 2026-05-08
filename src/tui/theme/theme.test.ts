@@ -1,10 +1,32 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, describe, expect, it } from "vitest";
 
 const { markdownTheme, searchableSelectListTheme, selectListTheme, theme } =
   await import("./theme.js");
 
 const stripAnsi = (str: string) =>
   str.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
+
+let themeImportCase = 0;
+const originalEnv = { ...process.env };
+
+afterEach(() => {
+  process.env = { ...originalEnv };
+});
+
+async function importThemeWithEnv(env: Record<string, string | undefined>) {
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  return importFreshModule<typeof import("./theme.js")>(
+    import.meta.url,
+    `./theme.js?env=${++themeImportCase}`,
+  );
+}
 
 function relativeLuminance(hex: string): number {
   const channels = hex
@@ -47,24 +69,6 @@ describe("theme", () => {
 });
 
 describe("light background detection", () => {
-  const originalEnv = { ...process.env };
-
-  afterEach(() => {
-    process.env = { ...originalEnv };
-  });
-
-  async function importThemeWithEnv(env: Record<string, string | undefined>) {
-    vi.resetModules();
-    for (const [key, value] of Object.entries(env)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-    return import("./theme.js");
-  }
-
   it("uses dark palette by default", async () => {
     const mod = await importThemeWithEnv({
       OPENCLAW_THEME: undefined,
@@ -202,9 +206,7 @@ describe("light background detection", () => {
 
 describe("light palette accessibility", () => {
   it("keeps light theme text colors at WCAG AA contrast or better", async () => {
-    vi.resetModules();
-    process.env.OPENCLAW_THEME = "light";
-    const mod = await import("./theme.js");
+    const mod = await importThemeWithEnv({ OPENCLAW_THEME: "light" });
     const backgrounds = {
       page: "#FFFFFF",
       user: mod.lightPalette.userBg,

@@ -17,12 +17,14 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
+import { resolveAgentHarnessPolicy } from "./harness/selection.js";
 import {
   resolveImageSanitizationLimits,
   type ImageSanitizationLimits,
 } from "./image-sanitization.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { resolveModelWithRegistry } from "./pi-embedded-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./pi-embedded-runner/runs.js";
@@ -215,6 +217,7 @@ async function resolveRuntimeModel(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
+  agentId?: string;
   agentDir: string;
   workspaceDir?: string;
   sessionEntry?: StoredSessionEntry;
@@ -244,6 +247,16 @@ async function resolveRuntimeModel(params: {
   const authProfileId = await resolveSessionAuthProfileOverride({
     cfg: params.cfg,
     provider: params.provider,
+    acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
+      provider: params.provider,
+      harnessRuntime: resolveAgentHarnessPolicy({
+        provider: params.provider,
+        modelId: params.model,
+        config: params.cfg,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      }).runtime,
+    }),
     agentDir: params.agentDir,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
@@ -330,6 +343,7 @@ export async function runBtwSideQuestion(
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
+    agentId: sessionAgentId,
     agentDir: params.agentDir,
     workspaceDir,
     sessionEntry: params.sessionEntry,

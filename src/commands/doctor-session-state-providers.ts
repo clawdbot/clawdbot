@@ -1,6 +1,4 @@
-import { resolveAgentRuntimePolicy } from "../agents/agent-runtime-policy.js";
 import {
-  listAgentEntries,
   resolveAgentModelFallbacksOverride,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
@@ -17,7 +15,6 @@ import { updateSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginDoctorSessionRouteStateOwners } from "../plugins/doctor-contract-registry.js";
 import type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { note } from "../terminal/note.js";
 
@@ -63,27 +60,6 @@ function resolveSessionAgentId(cfg: OpenClawConfig, sessionKey: string): string 
   return parseAgentSessionKey(sessionKey)?.agentId ?? resolveDefaultAgentId(cfg);
 }
 
-function resolveRawConfiguredRuntime(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  env?: NodeJS.ProcessEnv;
-}): string | undefined {
-  const envRuntime = params.env?.OPENCLAW_AGENT_RUNTIME?.trim();
-  if (envRuntime) {
-    return normalizeProviderId(envRuntime);
-  }
-  const agentRuntime = resolveAgentRuntimePolicy(
-    listAgentEntries(params.cfg).find(
-      (entry) => normalizeAgentId(entry.id) === normalizeAgentId(params.agentId),
-    ),
-  )?.id?.trim();
-  if (agentRuntime) {
-    return normalizeProviderId(agentRuntime);
-  }
-  const defaultsRuntime = resolveAgentRuntimePolicy(params.cfg.agents?.defaults)?.id?.trim();
-  return defaultsRuntime ? normalizeProviderId(defaultsRuntime) : undefined;
-}
-
 export function resolveConfiguredDoctorSessionStateRoute(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -113,12 +89,11 @@ export function resolveConfiguredDoctorSessionStateRoute(params: {
     config: params.cfg,
     agentId,
     sessionKey: params.sessionKey,
-    env: params.env,
   }).runtime;
   return {
     defaultProvider: primary.provider,
     configuredModelRefs: [...configuredModelRefs],
-    runtime: resolveRawConfiguredRuntime({ cfg: params.cfg, agentId, env: params.env }) ?? runtime,
+    runtime,
   };
 }
 
@@ -218,36 +193,6 @@ function routeAllowsOwnerState(params: {
   );
 }
 
-function routeHasConfiguredProvider(
-  route: DoctorSessionRouteState | undefined,
-  providerId: string,
-): boolean {
-  const normalizedProvider = normalizeProviderId(providerId);
-  if (!route || !normalizedProvider) {
-    return false;
-  }
-  if (normalizeProviderId(route.defaultProvider) === normalizedProvider) {
-    return true;
-  }
-  return route.configuredModelRefs.some((ref) => {
-    const slash = ref.indexOf("/");
-    return slash > 0 && normalizeProviderId(ref.slice(0, slash)) === normalizedProvider;
-  });
-}
-
-function routeAllowsOpenAICodexAuthState(params: {
-  ownerProviderIds: ReadonlySet<string>;
-  authProfilePrefixes: readonly string[];
-  entry: Record<string, unknown>;
-  route: DoctorSessionRouteState | undefined;
-}): boolean {
-  return (
-    params.ownerProviderIds.has("openai-codex") &&
-    ownsPrefixedValue(params.authProfilePrefixes, params.entry.authProfileOverride) &&
-    routeHasConfiguredProvider(params.route, "openai")
-  );
-}
-
 function hasOwnedCliSession(params: {
   entry: Record<string, unknown>;
   cliSessionKeys: readonly string[];
@@ -286,14 +231,7 @@ function scanEntryForOwner(params: {
   const runtimeIds = normalizeIdSet(params.owner.runtimeIds);
   const cliSessionKeys = [...normalizeIdSet(params.owner.cliSessionKeys)];
   const authProfilePrefixes = normalizePrefixList(params.owner.authProfilePrefixes);
-  const routeAllowsOwner =
-    routeAllowsOwnerState({ owner: params.owner, route: params.route }) ||
-    routeAllowsOpenAICodexAuthState({
-      ownerProviderIds: providerIds,
-      authProfilePrefixes,
-      entry: params.entry,
-      route: params.route,
-    });
+  const routeAllowsOwner = routeAllowsOwnerState({ owner: params.owner, route: params.route });
   const reasons: string[] = [];
   const directOverride = resolvePersistedOverrideModelRef({
     defaultProvider: params.route?.defaultProvider ?? "",

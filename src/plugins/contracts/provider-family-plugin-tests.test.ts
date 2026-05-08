@@ -209,7 +209,9 @@ describe("provider family plugin-boundary inventory", () => {
     for (const [pluginId, expected] of Object.entries(
       EXPECTED_SENTINEL_SHARED_FAMILY_ASSIGNMENTS,
     )) {
-      expect(actualAssignments[pluginId], pluginId).toBeDefined();
+      if (actualAssignments[pluginId] === undefined) {
+        throw new Error(`missing shared provider-family assignment for ${pluginId}`);
+      }
       if (expected.replayFamilies) {
         expect(actualAssignments[pluginId]?.replayFamilies ?? []).toEqual(
           expect.arrayContaining([...expected.replayFamilies]),

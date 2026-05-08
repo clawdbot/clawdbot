@@ -859,39 +859,38 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     });
     await logCapture.flush();
 
-    const decisionRecord = logCapture.records.find(
-      (record) =>
-        record.message === "embedded run failover decision" &&
-        record.attributes?.decision === "rotate_profile",
-    );
-
-    expect(decisionRecord).toBeDefined();
     const safeProfileId = redactIdentifier("openai:p1", { len: 12 });
-    expect(decisionRecord?.attributes).toMatchObject({
-      event: "embedded_run_failover_decision",
-      runId: "run:overloaded-logging",
-      decision: "rotate_profile",
-      failoverReason: "overloaded",
-      profileId: safeProfileId,
-      sourceProvider: "openai",
-      sourceModel: "mock-1",
-      providerErrorType: "overloaded_error",
-      rawErrorPreview: expect.stringContaining('"request_id":"sha256:'),
-    });
-
-    const stateRecord = logCapture.records.find(
-      (record) =>
-        record.message === "auth profile failure state updated" &&
-        record.attributes?.profileId === safeProfileId,
+    expect(logCapture.records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: "embedded run failover decision",
+          attributes: expect.objectContaining({
+            event: "embedded_run_failover_decision",
+            runId: "run:overloaded-logging",
+            decision: "rotate_profile",
+            failoverReason: "overloaded",
+            profileId: safeProfileId,
+            sourceProvider: "openai",
+            sourceModel: "mock-1",
+            providerErrorType: "overloaded_error",
+            rawErrorPreview: expect.stringContaining('"request_id":"sha256:'),
+          }),
+        }),
+      ]),
     );
-
-    expect(stateRecord).toBeDefined();
-    expect(stateRecord?.attributes).toMatchObject({
-      event: "auth_profile_failure_state_updated",
-      runId: "run:overloaded-logging",
-      profileId: safeProfileId,
-      reason: "overloaded",
-    });
+    expect(logCapture.records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: "auth profile failure state updated",
+          attributes: expect.objectContaining({
+            event: "auth_profile_failure_state_updated",
+            runId: "run:overloaded-logging",
+            profileId: safeProfileId,
+            reason: "overloaded",
+          }),
+        }),
+      ]),
+    );
   });
 
   it("rotates for overloaded prompt failures across auto-pinned profiles", async () => {

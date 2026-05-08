@@ -1,41 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("typebox", () => ({
-  Type: {
-    Object: (schema: unknown) => schema,
-    String: (schema?: unknown) => schema,
-    Optional: (schema: unknown) => schema,
-    Unknown: (schema?: unknown) => schema,
-    Number: (schema?: unknown) => schema,
-  },
-}));
-
-vi.mock("ajv", () => ({
-  default: class MockAjv {
-    compile(schema: unknown) {
-      return (value: unknown) => {
-        if (
-          schema &&
-          typeof schema === "object" &&
-          !Array.isArray(schema) &&
-          (schema as { properties?: Record<string, { type?: string }> }).properties?.foo?.type ===
-            "string"
-        ) {
-          const ok = typeof (value as { foo?: unknown })?.foo === "string";
-          (this as { errors?: Array<{ instancePath: string; message: string }> }).errors = ok
-            ? undefined
-            : [{ instancePath: "/foo", message: "must be string" }];
-          return ok;
-        }
-        (this as { errors?: Array<{ instancePath: string; message: string }> }).errors = undefined;
-        return true;
-      };
-    }
-
-    errors?: Array<{ instancePath: string; message: string }>;
-  },
-}));
-
 vi.mock("../api.js", async () => {
   const actual = await vi.importActual<typeof import("../api.js")>("../api.js");
   return {
@@ -45,8 +9,6 @@ vi.mock("../api.js", async () => {
 });
 
 afterAll(() => {
-  vi.doUnmock("typebox");
-  vi.doUnmock("ajv");
   vi.doUnmock("../api.js");
   vi.resetModules();
 });
@@ -168,6 +130,45 @@ describe("llm-task tool (json-only)", () => {
     };
     const res = await tool.execute("id", { prompt: "return foo", schema });
     expect((res as any).details.json).toEqual({ foo: "bar" });
+  });
+
+  it("validates caller schemas with repeated $id independently across calls", async () => {
+    const tool = createLlmTaskTool(fakeApi());
+    (runEmbeddedPiAgent as any)
+      .mockResolvedValueOnce({
+        meta: {},
+        payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
+      })
+      .mockResolvedValueOnce({
+        meta: {},
+        payloads: [{ text: JSON.stringify({ count: 1 }) }],
+      });
+
+    await expect(
+      tool.execute("id", {
+        prompt: "return foo",
+        schema: {
+          $id: "https://example.test/llm-task-result",
+          type: "object",
+          properties: { foo: { type: "string" } },
+          required: ["foo"],
+          additionalProperties: false,
+        },
+      }),
+    ).resolves.toMatchObject({ details: { json: { foo: "bar" } } });
+
+    await expect(
+      tool.execute("id", {
+        prompt: "return count",
+        schema: {
+          $id: "https://example.test/llm-task-result",
+          type: "object",
+          properties: { count: { type: "number" } },
+          required: ["count"],
+          additionalProperties: false,
+        },
+      }),
+    ).resolves.toMatchObject({ details: { json: { count: 1 } } });
   });
 
   it("throws on invalid json", async () => {

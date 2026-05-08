@@ -640,7 +640,7 @@ export async function setupChannels(
       // disk keeps it out of `installedCatalogEntries`. Before falling back
       // to the bundled-plugin enable path, consult the catalog directly so
       // users with a stale config entry for an externalized channel (qqbot,
-      // bluebubbles, discord, whatsapp, ...) still get auto-install instead
+      // imessage, discord, whatsapp, ...) still get auto-install instead
       // of a dead-end "plugin not available" note.
       const fallbackCatalogEntry = getTrustedChannelPluginCatalogEntry(channel, {
         cfg: next,

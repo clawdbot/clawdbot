@@ -374,7 +374,7 @@ describe("stuck session diagnostics threshold", () => {
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
-  it("flags stale terminal bridge progress in stalled session diagnostics", async () => {
+  it("flags stale terminal bridge progress in stalled session diagnostics", () => {
     const events: DiagnosticEventPayload[] = [];
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
     const unsubscribe = onDiagnosticEvent((event) => {

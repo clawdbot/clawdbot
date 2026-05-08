@@ -58,18 +58,29 @@ function createSingleAgentAvatarConfig(workspace: string): OpenClawConfig {
 
 function createModelDefaultsConfig(params: {
   primary: string;
-  models?: Record<string, Record<string, never>>;
+  models?: Record<string, { agentRuntime?: { id: string } }>;
   agentRuntime?: { id: string };
 }): OpenClawConfig {
   return {
     agents: {
       defaults: {
         model: { primary: params.primary },
-        models: params.models,
-        agentRuntime: params.agentRuntime,
+        models: {
+          ...params.models,
+          ...(params.agentRuntime
+            ? { [params.primary]: { agentRuntime: params.agentRuntime } }
+            : {}),
+        },
       },
     },
   } as OpenClawConfig;
+}
+
+function requireString(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
 }
 
 describe("gateway session utils", () => {
@@ -300,19 +311,22 @@ describe("gateway session utils", () => {
     });
 
     expect(result.sessions).toHaveLength(5);
-    expect(
-      result.sessions.every((session) =>
-        session.thinkingLevels?.some((level) => level.id === "medium"),
-      ),
-    ).toBe(true);
-    expect(result.sessions.every((session) => session.thinkingOptions?.includes("medium"))).toBe(
-      true,
+    const missingMediumLevelSessionIds = result.sessions
+      .filter((session) => !session.thinkingLevels?.some((level) => level.id === "medium"))
+      .map((session) => session.sessionId);
+    const missingMediumOptionSessionIds = result.sessions
+      .filter((session) => !session.thinkingOptions?.includes("medium"))
+      .map((session) => session.sessionId);
+
+    expect(missingMediumLevelSessionIds).toEqual([]);
+    expect(missingMediumOptionSessionIds).toEqual([]);
+    expect(result.sessions.map((session) => session.thinkingDefault)).toEqual(
+      Array.from({ length: result.sessions.length }, () => "medium"),
     );
-    expect(result.sessions.every((session) => session.thinkingDefault === "medium")).toBe(true);
     expect(resolveThinkingProfile).toHaveBeenCalled();
   });
 
-  test("session list thinking cache preserves case-distinct model catalog entries", async () => {
+  test("session list thinking cache preserves case-distinct model catalog entries", () => {
     const cfg = createModelDefaultsConfig({ primary: "custom/CaseModel" });
     const modelCatalog = [
       {
@@ -1042,9 +1056,8 @@ describe("gateway session utils", () => {
             primary: "openai/gpt-5.4",
             fallbacks: ["openai-codex/gpt-5.4"],
           },
-          agentRuntime: { id: "pi" },
         },
-        list: [{ id: "main", default: true, agentRuntime: { id: "claude-cli" } }],
+        list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
 
@@ -1057,8 +1070,8 @@ describe("gateway session utils", () => {
         fallbacks: ["openai-codex/gpt-5.4"],
       },
       agentRuntime: {
-        id: "claude-cli",
-        source: "agent",
+        id: "codex",
+        source: "implicit",
       },
     });
   });
@@ -1066,9 +1079,18 @@ describe("gateway session utils", () => {
   test("listAgentsForGateway reports explicit plugin runtime metadata", () => {
     const cfg = {
       session: { mainKey: "main" },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            agentRuntime: { id: "codex" },
+            models: [],
+          },
+        },
+      },
       agents: {
         defaults: {
-          agentRuntime: { id: "codex" },
+          model: { primary: "openai/gpt-5.4" },
         },
         list: [{ id: "main", default: true }],
       },
@@ -1079,7 +1101,7 @@ describe("gateway session utils", () => {
       id: "main",
       agentRuntime: {
         id: "codex",
-        source: "defaults",
+        source: "provider",
       },
     });
   });
@@ -1305,11 +1327,11 @@ describe("listSessionsFromStore selected model display", () => {
           lastMessagePreview: "last 0",
         }),
       );
-      expect(listed.sessions[0]?.agentRuntime).toEqual({ id: "pi", source: "implicit" });
+      expect(listed.sessions[0]?.agentRuntime).toEqual({ id: "codex", source: "implicit" });
       expect(listed.sessions[0]?.thinkingLevel).toBeUndefined();
       expect(listed.sessions[0]?.thinkingLevels?.length).toBeGreaterThan(0);
       expect(listed.sessions[0]?.thinkingOptions?.length).toBeGreaterThan(0);
-      expect(listed.sessions[0]?.thinkingDefault).toBeDefined();
+      expect(listed.sessions[0]?.thinkingDefault).toBe("off");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -1434,7 +1456,7 @@ describe("listSessionsFromStore selected model display", () => {
     expect(result.sessions[0]?.model).toBe("claude-opus-4-7");
     expect(result.sessions[0]?.agentRuntime).toEqual({
       id: "claude-cli",
-      source: "defaults",
+      source: "model",
     });
   });
 
@@ -1773,10 +1795,9 @@ describe("deriveSessionTitle", () => {
     } as SessionEntry;
     const longMsg =
       "This is a very long message that exceeds sixty characters and should be truncated appropriately";
-    const result = deriveSessionTitle(entry, longMsg);
-    expect(result).toBeDefined();
-    expect(result!.length).toBeLessThanOrEqual(60);
-    expect(result!.endsWith("…")).toBe(true);
+    const result = requireString(deriveSessionTitle(entry, longMsg), "truncated session title");
+    expect(result.length).toBeLessThanOrEqual(60);
+    expect(result.endsWith("…")).toBe(true);
   });
 
   test("truncates at word boundary when possible", () => {
@@ -1785,10 +1806,9 @@ describe("deriveSessionTitle", () => {
       updatedAt: Date.now(),
     } as SessionEntry;
     const longMsg = "This message has many words and should be truncated at a word boundary nicely";
-    const result = deriveSessionTitle(entry, longMsg);
-    expect(result).toBeDefined();
-    expect(result!.endsWith("…")).toBe(true);
-    expect(result!.includes("  ")).toBe(false);
+    const result = requireString(deriveSessionTitle(entry, longMsg), "word-boundary session title");
+    expect(result.endsWith("…")).toBe(true);
+    expect(result.includes("  ")).toBe(false);
   });
 
   test("falls back to sessionId prefix with date", () => {

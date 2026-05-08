@@ -101,6 +101,15 @@ export const pluginSdkDocMetadata = {
   "runtime-store": {
     category: "runtime",
   },
+  "agent-runtime": {
+    category: "runtime",
+  },
+  "speech-core": {
+    category: "provider",
+  },
+  "tts-runtime": {
+    category: "runtime",
+  },
   "allow-from": {
     category: "utilities",
   },

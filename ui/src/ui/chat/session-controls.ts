@@ -155,7 +155,11 @@ function renderChatModelSelect(state: AppViewState) {
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
   const disabled =
-    !state.connected || busy || (state.chatModelsLoading && options.length === 0) || !state.client;
+    !state.connected ||
+    busy ||
+    Boolean(state.chatModelSwitchPromises?.[state.sessionKey]) ||
+    (state.chatModelsLoading && options.length === 0) ||
+    !state.client;
   const selectedLabel =
     currentOverride === ""
       ? defaultLabel
@@ -326,13 +330,13 @@ export function renderChatThinkingSelect(state: AppViewState) {
   `;
 }
 
-async function switchChatModel(state: AppViewState, nextModel: string) {
+async function switchChatModel(state: AppViewState, nextModel: string): Promise<boolean> {
   if (!state.client || !state.connected) {
-    return;
+    return false;
   }
   const currentOverride = resolveChatModelOverrideValue(state);
   if (currentOverride === nextModel) {
-    return;
+    return true;
   }
   const targetSessionKey = state.sessionKey;
   const prevOverride = state.chatModelOverrides[targetSessionKey];
@@ -342,18 +346,38 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
     ...state.chatModelOverrides,
     [targetSessionKey]: createChatModelOverride(nextModel),
   };
-  try {
-    await state.client.request("sessions.patch", {
-      key: targetSessionKey,
-      model: nextModel || null,
-    });
-    void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
-    await refreshSessionOptions(state);
-  } catch (err) {
-    // Roll back so the picker reflects the actual server model.
-    state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
-    state.lastError = `Failed to set model: ${String(err)}`;
-  }
+  const client = state.client;
+  let switchPromise: Promise<boolean>;
+  const clearPendingSwitch = () => {
+    if (state.chatModelSwitchPromises?.[targetSessionKey] === switchPromise) {
+      const nextSwitches = { ...state.chatModelSwitchPromises };
+      delete nextSwitches[targetSessionKey];
+      state.chatModelSwitchPromises = nextSwitches;
+    }
+  };
+  switchPromise = (async () => {
+    try {
+      await client.request("sessions.patch", {
+        key: targetSessionKey,
+        model: nextModel || null,
+      });
+      void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
+      await refreshSessionOptions(state);
+      return true;
+    } catch (err) {
+      // Roll back so the picker reflects the actual server model.
+      state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
+      state.lastError = `Failed to set model: ${String(err)}`;
+      return false;
+    } finally {
+      clearPendingSwitch();
+    }
+  })();
+  state.chatModelSwitchPromises = {
+    ...state.chatModelSwitchPromises,
+    [targetSessionKey]: switchPromise,
+  };
+  return switchPromise;
 }
 
 function patchSessionThinkingLevel(
@@ -407,7 +431,7 @@ async function switchChatThinkingLevel(state: AppViewState, nextThinkingLevel: s
 
 /* Channel display labels. */
 const CHANNEL_LABELS: Record<string, string> = {
-  bluebubbles: "iMessage",
+  imessage: "iMessage",
   telegram: "Telegram",
   discord: "Discord",
   signal: "Signal",
@@ -471,7 +495,7 @@ export function parseSessionKey(key: string): SessionKeyInfo {
     return { prefix: "", fallbackName: `${channelLabel} Group` };
   }
 
-  // Channel-prefixed legacy keys, for example "bluebubbles:g-...".
+  // Channel-prefixed legacy keys, for example "imessage:g-...".
   for (const ch of KNOWN_CHANNEL_KEYS) {
     if (key === ch || key.startsWith(`${ch}:`)) {
       return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
@@ -569,9 +593,15 @@ function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): 
     return state.sessionKey;
   }
   const rows = state.sessionsResult?.sessions ?? [];
-  const row = rows
-    .filter((entry) => isSessionKeyTiedToAgent(entry.key, normalizedAgentId, defaultAgentId))
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
+  let row: (typeof rows)[number] | undefined;
+  for (const entry of rows) {
+    if (!isSessionKeyTiedToAgent(entry.key, normalizedAgentId, defaultAgentId)) {
+      continue;
+    }
+    if (!row || (entry.updatedAt ?? 0) > (row.updatedAt ?? 0)) {
+      row = entry;
+    }
+  }
   return row?.key ?? buildAgentMainSessionKey({ agentId: normalizedAgentId });
 }
 

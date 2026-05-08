@@ -8,6 +8,7 @@ import type {
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import { isInterpreterLikeSafeBin } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
+  isBlockedShellWrapperCommand,
   POSIX_SHELL_WRAPPERS,
   normalizeExecutableToken,
   unwrapKnownDispatchWrapperInvocation,
@@ -1302,6 +1303,12 @@ export function buildSystemRunApprovalPlan(params: {
   }
   if (command.argv.length === 0) {
     return { ok: false, message: "command required" };
+  }
+  if (command.shellPayload === null && isBlockedShellWrapperCommand(command.argv)) {
+    return {
+      ok: false,
+      message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+    };
   }
   const hardening = hardenApprovedExecutionPaths({
     approvedByAsk: true,

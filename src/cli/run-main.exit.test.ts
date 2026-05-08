@@ -10,6 +10,8 @@ const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
 const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
+const listAgentHarnessIdsMock = vi.hoisted(() => vi.fn((): string[] => []));
+const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
 const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
 const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
@@ -120,6 +122,11 @@ vi.mock("../plugins/memory-state.js", () => ({
   hasMemoryRuntime: hasMemoryRuntimeMock,
 }));
 
+vi.mock("../agents/harness/registry.js", () => ({
+  listAgentHarnessIds: listAgentHarnessIdsMock,
+  disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock,
+}));
+
 vi.mock("../tasks/task-registry.js", () => ({
   ensureTaskRegistryReady: ensureTaskRegistryReadyMock,
 }));
@@ -216,6 +223,7 @@ describe("runCli exit behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hasMemoryRuntimeMock.mockReturnValue(false);
+    listAgentHarnessIdsMock.mockReturnValue([]);
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
     hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(false);
@@ -242,10 +250,26 @@ describe("runCli exit behavior", () => {
     expect(maybeRunCliInContainerMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(tryRouteCliMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
+    expect(disposeRegisteredAgentHarnessesMock).not.toHaveBeenCalled();
     expect(ensureTaskRegistryReadyMock).not.toHaveBeenCalled();
     expect(startTaskRegistryMaintenanceMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it("disposes registered harnesses after full CLI command completion", async () => {
+    listAgentHarnessIdsMock.mockReturnValueOnce(["codex"]);
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "agent", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "agent", "--local"]);
+
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "agent", "--local"]);
+    expect(disposeRegisteredAgentHarnessesMock).toHaveBeenCalledTimes(1);
   });
 
   it("pauses non-tty stdin after full CLI command completion", async () => {
@@ -730,12 +754,12 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "status"]);
 
     const handler = processOnSpy.mock.calls.find(([event]) => event === "uncaughtException")?.[1];
-    expect(typeof handler).toBe("function");
+    if (typeof handler !== "function") {
+      throw new Error("uncaughtException handler was not registered");
+    }
 
     try {
-      expect(() => (handler as (error: unknown) => void)(new Error("boom"))).toThrow(
-        "process.exit(1)",
-      );
+      expect(() => handler(new Error("boom"))).toThrow("process.exit(1)");
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         "[openclaw] Uncaught exception:",
         expect.stringContaining("boom"),
@@ -768,13 +792,15 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "status"]);
 
     const handler = processOnSpy.mock.calls.find(([event]) => event === "uncaughtException")?.[1];
-    expect(typeof handler).toBe("function");
+    if (typeof handler !== "function") {
+      throw new Error("uncaughtException handler was not registered");
+    }
 
     try {
       const hostUnreachable = Object.assign(new Error("connect EHOSTUNREACH 149.154.167.220:443"), {
         code: "EHOSTUNREACH",
       });
-      expect(() => (handler as (error: unknown) => void)(hostUnreachable)).not.toThrow();
+      expect(() => handler(hostUnreachable)).not.toThrow();
       expect(consoleWarnSpy).toHaveBeenCalledWith(
         "[openclaw] Non-fatal uncaught exception (continuing):",
         expect.stringContaining("EHOSTUNREACH"),

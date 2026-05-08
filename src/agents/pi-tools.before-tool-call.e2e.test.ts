@@ -192,11 +192,24 @@ describe("before_tool_call loop detection behavior", () => {
     });
   }
 
+  async function expectUnblockedToolExecution(
+    tool: ReturnType<typeof createWrappedTool>,
+    toolCallId: string,
+    params: unknown,
+  ) {
+    const result = await tool.execute(toolCallId, params, undefined, undefined);
+    expect(result).toMatchObject({
+      content: expect.any(Array),
+      details: expect.any(Object),
+    });
+    return result;
+  }
+
   it("blocks known poll loops when no progress repeats", async () => {
     const { tool, params } = createNoProgressProcessFixture("sess-1");
 
     for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-      await expect(tool.execute(`poll-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expectUnblockedToolExecution(tool, `poll-${i}`, params);
     }
 
     const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
@@ -214,7 +227,7 @@ describe("before_tool_call loop detection behavior", () => {
     const params = { action: "poll", sessionId: "sess-off" };
 
     for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-      await expect(tool.execute(`poll-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expectUnblockedToolExecution(tool, `poll-${i}`, params);
     }
   });
 
@@ -229,9 +242,7 @@ describe("before_tool_call loop detection behavior", () => {
     const params = { action: "poll", sessionId: "sess-2" };
 
     for (let i = 0; i < CRITICAL_THRESHOLD + 5; i += 1) {
-      await expect(
-        tool.execute(`poll-progress-${i}`, params, undefined, undefined),
-      ).resolves.toBeDefined();
+      await expectUnblockedToolExecution(tool, `poll-progress-${i}`, params);
     }
   });
 
@@ -239,7 +250,7 @@ describe("before_tool_call loop detection behavior", () => {
     const { tool, params } = createGenericReadRepeatFixture();
 
     for (let i = 0; i < CRITICAL_THRESHOLD + 5; i += 1) {
-      await expect(tool.execute(`read-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expectUnblockedToolExecution(tool, `read-${i}`, params);
     }
   });
 
@@ -247,7 +258,7 @@ describe("before_tool_call loop detection behavior", () => {
     const { tool, params } = createGenericReadRepeatFixture();
 
     for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
-      await expect(tool.execute(`read-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expectUnblockedToolExecution(tool, `read-${i}`, params);
     }
 
     const result = await tool.execute(
@@ -275,14 +286,10 @@ describe("before_tool_call loop detection behavior", () => {
     });
 
     for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
-      await expect(
-        firstRunTool.execute(`old-run-${i}`, params, undefined, undefined),
-      ).resolves.toBeDefined();
+      await expectUnblockedToolExecution(firstRunTool, `old-run-${i}`, params);
     }
 
-    await expect(
-      secondRunTool.execute("new-run-0", params, undefined, undefined),
-    ).resolves.toBeDefined();
+    await expectUnblockedToolExecution(secondRunTool, "new-run-0", params);
   });
 
   it("coalesces repeated generic warning events into threshold buckets", async () => {
@@ -350,14 +357,9 @@ describe("before_tool_call loop detection behavior", () => {
       const { readTool, listTool } = createPingPongTools({ withProgress: true });
       await runPingPongSequence(readTool, listTool, CRITICAL_THRESHOLD - 1);
 
-      await expect(
-        listTool.execute(
-          `list-${CRITICAL_THRESHOLD - 1}`,
-          { dir: "/workspace" },
-          undefined,
-          undefined,
-        ),
-      ).resolves.toBeDefined();
+      await expectUnblockedToolExecution(listTool, `list-${CRITICAL_THRESHOLD - 1}`, {
+        dir: "/workspace",
+      });
 
       const criticalPingPong = emitted.find(
         (evt) => evt.level === "critical" && evt.detector === "ping_pong",
@@ -366,7 +368,12 @@ describe("before_tool_call loop detection behavior", () => {
       const warningPingPong = emitted.find(
         (evt) => evt.level === "warning" && evt.detector === "ping_pong",
       );
-      expect(warningPingPong).toBeTruthy();
+      expect(warningPingPong).toMatchObject({
+        type: "tool.loop",
+        level: "warning",
+        action: "warn",
+        detector: "ping_pong",
+      });
     });
   });
 

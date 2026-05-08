@@ -126,7 +126,6 @@ describe("xai web search config resolution", () => {
           },
         },
       });
-      expect(maybeTool).toBeTruthy();
       if (!maybeTool) {
         throw new Error("expected xai web search tool");
       }

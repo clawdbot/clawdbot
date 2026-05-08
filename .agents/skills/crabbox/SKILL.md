@@ -32,6 +32,14 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
   Even if config still says AWS, maintainer validation should normally pass
   `--provider blacksmith-testbox`.
 - Prefer local targeted tests for tight edit loops. Broad gates belong remote.
+- Do not treat inherited shell env as operator intent. In particular,
+  `OPENCLAW_LOCAL_CHECK_MODE=throttled` from the local shell is not permission
+  to move broad `pnpm check:changed`, `pnpm test:changed`, full `pnpm test`, or
+  lint/typecheck fan-out onto the laptop.
+- Only use `OPENCLAW_LOCAL_CHECK_MODE=throttled|full` when the user explicitly
+  asks for local proof in the current task. If Testbox is queued or capacity is
+  constrained, report the blocker and keep only targeted local edit-loop checks
+  running.
 
 ## macOS And Windows Targets
 
@@ -198,6 +206,10 @@ Common Crabbox-only failures:
   printed Actions URL.
 - Cleanup uncertainty: run `blacksmith testbox list` and stop only boxes you
   created.
+- Testbox queued/capacity pressure: do not convert a broad changed gate or full
+  suite into local `OPENCLAW_LOCAL_CHECK_MODE=throttled pnpm ...`. Leave the
+  remote lane queued, switch to a narrower targeted local check, or stop and
+  report the capacity blocker.
 
 If Crabbox cannot dispatch, sync, attach, or stop but Blacksmith itself works,
 use direct Blacksmith from the repo root:
@@ -284,8 +296,26 @@ Install/auth for owned Crabbox if needed:
 
 ```sh
 brew install openclaw/tap/crabbox
-printf '%s' "$CRABBOX_COORDINATOR_TOKEN" | crabbox login --url https://crabbox.openclaw.ai --provider aws --token-stdin
+crabbox login --url https://crabbox.openclaw.ai --provider aws
 ```
+
+New users should self-resolve broker auth before anyone asks for AWS keys:
+
+```sh
+crabbox config show
+crabbox doctor
+crabbox whoami
+```
+
+- If broker auth is missing, run `crabbox login --url https://crabbox.openclaw.ai --provider aws`.
+- If the CLI asks for `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or AWS
+  profile setup during normal OpenClaw validation, assume the agent selected
+  the wrong path. Use brokered `crabbox login`, `--provider blacksmith-testbox`,
+  or an existing brokered lease before asking the user for cloud credentials.
+- Ask for AWS keys only for explicit direct-provider/account administration,
+  not for normal brokered OpenClaw proof.
+- Trusted automation may still use
+  `printf '%s' "$CRABBOX_COORDINATOR_TOKEN" | crabbox login --url https://crabbox.openclaw.ai --provider aws --token-stdin`.
 
 macOS config lives at:
 

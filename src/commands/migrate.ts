@@ -14,6 +14,7 @@ import { runMigrationApply } from "./migrate/apply.js";
 import { formatMigrationPlan } from "./migrate/output.js";
 import { createMigrationPlan, resolveMigrationProvider } from "./migrate/providers.js";
 import {
+  applyMigrationPluginSelection,
   applyMigrationSelectedSkillItemIds,
   applyMigrationSkillSelection,
   formatMigrationSkillSelectionHint,
@@ -35,8 +36,11 @@ import type {
 
 export type { MigrateApplyOptions, MigrateCommonOptions, MigrateDefaultOptions };
 
-function selectMigrationSkills(plan: MigrationPlan, opts: MigrateCommonOptions): MigrationPlan {
-  return applyMigrationSkillSelection(plan, opts.skills);
+function selectMigrationItems(plan: MigrationPlan, opts: MigrateCommonOptions): MigrationPlan {
+  return applyMigrationPluginSelection(
+    applyMigrationSkillSelection(plan, opts.skills),
+    opts.plugins,
+  );
 }
 
 async function promptCodexMigrationSkillSelection(
@@ -137,7 +141,7 @@ export async function migratePlanCommand(
   if (!providerId) {
     throw new Error("Migration provider is required.");
   }
-  const plan = selectMigrationSkills(
+  const plan = selectMigrationItems(
     await createMigrationPlan(runtime, { ...opts, provider: providerId }),
     opts,
   );
@@ -224,7 +228,7 @@ export async function migrateDefaultCommand(
   }
   const plan =
     opts.json && opts.yes && !opts.dryRun
-      ? selectMigrationSkills(
+      ? selectMigrationItems(
           await createMigrationPlan(runtime, { ...opts, provider: providerId }),
           opts,
         )

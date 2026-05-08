@@ -706,6 +706,16 @@ export const id: TranslationMap = {
       today: "Hari ini",
       last7d: "7h",
       last30d: "30h",
+      last90d: "90h",
+      last1y: "1th",
+      all: "Semua",
+    },
+    scope: {
+      instance: "Instans saat ini",
+      instanceHint: "Tampilkan hanya id sesi aktif untuk setiap sesi logis.",
+      family: "Garis keturunan historis",
+      familyHint: "Gabungkan id sesi berbasis transkrip yang diketahui telah dirotasi.",
+      familyIncluded: "Garis keturunan historis mencakup {count} instans sesi.",
     },
     filters: {
       title: "Filter",
@@ -927,6 +937,95 @@ export const id: TranslationMap = {
     showPassword: "Tampilkan kata sandi",
     hidePassword: "Sembunyikan kata sandi",
     togglePasswordVisibility: "Alihkan visibilitas kata sandi",
+    failure: {
+      rawError: "Error mentah",
+      docsAuth: "Dokumentasi auth Control UI",
+      docsPairing: "Dokumentasi pemasangan perangkat",
+      docsInsecure: "Dokumentasi HTTP tidak aman",
+      authRequired: {
+        title: "Auth diperlukan",
+        summary:
+          "Gateway dapat dijangkau, tetapi memerlukan token atau kata sandi yang cocok sebelum browser ini dapat terhubung.",
+        stepPaste:
+          "Tempel token dari openclaw dashboard --no-open atau masukkan kata sandi yang dikonfigurasi.",
+        stepGenerate:
+          "Jika belum ada token yang dikonfigurasi, jalankan openclaw doctor --generate-gateway-token di host Gateway.",
+        stepConnect: "Klik Connect lagi setelah memperbarui kredensial.",
+      },
+      authFailed: {
+        title: "Auth tidak cocok",
+        summary:
+          "Kredensial yang diberikan ditolak. Penyebab paling umum adalah token kedaluwarsa atau token yang disalin dari URL Gateway lain.",
+        stepDashboard:
+          "Jalankan openclaw dashboard --no-open lalu buka URL baru atau tempel tokennya.",
+        stepReplace:
+          "Ganti nilai token/kata sandi yang lama; jangan gunakan ulang token dari URL Gateway lain.",
+        stepMode:
+          "Gunakan satu mode auth yang cocok pada satu waktu: token gateway untuk mode token, kata sandi untuk mode kata sandi.",
+      },
+      rateLimited: {
+        title: "Terlalu banyak percobaan gagal",
+        summary: "Gateway sementara membatasi percobaan autentikasi untuk klien ini.",
+        stepStop: "Berhenti mencoba ulang dari tab ini sebentar.",
+        stepWait:
+          "Tunggu pembatas auth mereda, lalu hubungkan ulang dengan kredensial yang sudah diperbaiki.",
+        stepCheckClients:
+          "Jika ini host bersama, periksa klien lain yang terus mencoba dengan kredensial salah.",
+      },
+      pairing: {
+        title: "Pemasangan perangkat diperlukan",
+        scopeTitle: "Peningkatan scope tertunda",
+        roleTitle: "Peningkatan peran tertunda",
+        metadataTitle: "Penyegaran perangkat tertunda",
+        summary:
+          "Browser ini memerlukan persetujuan satu kali dari host Gateway sebelum dapat menggunakan Control UI.",
+        upgradeSummary:
+          "Browser ini sudah dikenal, tetapi akses yang diminta berubah dan memerlukan persetujuan baru.",
+        stepList: "Jalankan openclaw devices list di host Gateway.",
+        stepApproveId: "Setujui permintaan ini: openclaw devices approve {requestId}.",
+        stepApprove: "Setujui permintaan browser/perangkat yang tertunda dari daftar tersebut.",
+        stepReconnect: "Hubungkan ulang setelah persetujuan selesai.",
+      },
+      insecure: {
+        title: "Konteks browser aman diperlukan",
+        summary:
+          "Halaman ini berjalan melalui HTTP biasa, sehingga browser tidak dapat membuat identitas perangkat yang diharapkan Gateway.",
+        stepHttps:
+          "Gunakan HTTPS/Tailscale Serve, atau buka http://127.0.0.1:18789 di host Gateway.",
+        stepLocalCompat:
+          "Untuk kompatibilitas lokal hanya-token, setel gateway.controlUi.allowInsecureAuth: true.",
+        stepAvoidDisable: "Hindari menonaktifkan auth perangkat untuk akses HTTP jarak jauh.",
+      },
+      origin: {
+        title: "Origin browser tidak diizinkan",
+        summary: "Gateway menolak origin halaman ini sebelum menerima koneksi Control UI.",
+        stepAllowedOrigins: "Tambahkan origin browser ini ke gateway.controlUi.allowedOrigins.",
+        stepFullOrigin:
+          "Gunakan origin lengkap seperti http://localhost:5173, bukan pola wildcard.",
+        stepRestart: "Mulai ulang atau muat ulang Gateway setelah mengubah origin yang diizinkan.",
+      },
+      protocol: {
+        title: "Protokol tidak cocok",
+        summary:
+          "Control UI yang disajikan dan Gateway yang berjalan tidak sepakat tentang protokol koneksi yang didukung.",
+        stepDashboard:
+          "Buka kembali dashboard yang disajikan dengan openclaw dashboard agar UI dan Gateway berasal dari instalasi yang sama.",
+        stepDevUi:
+          "Jika menggunakan pnpm ui:dev, bangun ulang atau mulai ulang UI dev terhadap checkout saat ini.",
+        stepRestart:
+          "Mulai ulang Gateway setelah memperbarui OpenClaw agar menyajikan protokol saat ini.",
+      },
+      network: {
+        title: "Tidak dapat terhubung",
+        summary:
+          "Browser tidak dapat menyelesaikan koneksi Gateway. Periksa target dan transport sebelum mencoba ulang kredensial.",
+        stepGateway: "Pastikan Gateway berjalan dengan openclaw status atau openclaw gateway run.",
+        stepUrl:
+          "Periksa URL WebSocket dan gunakan wss:// saat Gateway berada di belakang HTTPS/Tailscale Serve.",
+        stepDashboard:
+          "Buka kembali dashboard dengan openclaw dashboard --no-open untuk menyalin ulang URL dan detail auth saat ini.",
+      },
+    },
   },
   chat: {
     disconnected: "Terputus dari gateway.",

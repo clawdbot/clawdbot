@@ -741,7 +741,7 @@ describe("config io write", () => {
       ]);
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(cleanRaw);
       const entries = await fs.readdir(path.dirname(configPath));
-      expect(entries.some((entry) => entry.includes(".clobbered."))).toBe(true);
+      expect(entries.filter((entry) => entry.includes(".clobbered."))).toHaveLength(1);
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("Config auto-stripped non-JSON prefix:"),
       );
@@ -830,7 +830,7 @@ describe("config io write", () => {
 
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
       const entries = await fs.readdir(path.dirname(configPath));
-      expect(entries.some((entry) => entry.includes(".rejected."))).toBe(true);
+      expect(entries.filter((entry) => entry.includes(".rejected."))).toHaveLength(1);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("Config write rejected:"));
     });
   });

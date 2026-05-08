@@ -48,6 +48,8 @@ export const AgentSummarySchema = Type.Object(
             Type.Literal("env"),
             Type.Literal("agent"),
             Type.Literal("defaults"),
+            Type.Literal("model"),
+            Type.Literal("provider"),
             Type.Literal("implicit"),
           ]),
         },

@@ -119,6 +119,16 @@ function createPayloadCapturingStream(capture: PayloadCapture) {
   };
 }
 
+function requireThinkingWrapper(
+  wrapper: ReturnType<typeof createDeepSeekV4ThinkingWrapper>,
+  label: string,
+): NonNullable<ReturnType<typeof createDeepSeekV4ThinkingWrapper>> {
+  if (!wrapper) {
+    throw new Error(`expected DeepSeek thinking wrapper for ${label}`);
+  }
+  return wrapper;
+}
+
 describe("deepseek provider plugin", () => {
   it("registers DeepSeek with api-key auth wizard metadata", async () => {
     const provider = await registerSingleProviderPlugin(deepseekPlugin);
@@ -225,9 +235,11 @@ describe("deepseek provider plugin", () => {
       return stream;
     };
 
-    const wrapThinkingOff = createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "off");
-    expect(wrapThinkingOff).toBeDefined();
-    await wrapThinkingOff?.(
+    const wrapThinkingOff = requireThinkingWrapper(
+      createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "off"),
+      "off",
+    );
+    await wrapThinkingOff(
       {
         provider: "deepseek",
         id: "deepseek-v4-pro",
@@ -240,9 +252,11 @@ describe("deepseek provider plugin", () => {
     expect(capturedPayload).toMatchObject({ thinking: { type: "disabled" } });
     expect(capturedPayload).not.toHaveProperty("reasoning_effort");
 
-    const wrapThinkingXhigh = createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "xhigh");
-    expect(wrapThinkingXhigh).toBeDefined();
-    await wrapThinkingXhigh?.(
+    const wrapThinkingXhigh = requireThinkingWrapper(
+      createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "xhigh"),
+      "xhigh",
+    );
+    await wrapThinkingXhigh(
       {
         provider: "deepseek",
         id: "deepseek-v4-pro",
@@ -264,9 +278,11 @@ describe("deepseek provider plugin", () => {
     const context = deepSeekReasoningToolReplayContext();
     const baseStreamFn = createPayloadCapturingStream(capture);
 
-    const wrapThinkingHigh = createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "high");
-    expect(wrapThinkingHigh).toBeDefined();
-    await wrapThinkingHigh?.(model, context, {});
+    const wrapThinkingHigh = requireThinkingWrapper(
+      createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "high"),
+      "high",
+    );
+    await wrapThinkingHigh(model, context, {});
 
     expect(capture.payload).toMatchObject({
       thinking: { type: "enabled" },
@@ -301,9 +317,11 @@ describe("deepseek provider plugin", () => {
     );
     const baseStreamFn = createPayloadCapturingStream(capture);
 
-    const wrapThinkingHigh = createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "high");
-    expect(wrapThinkingHigh).toBeDefined();
-    await wrapThinkingHigh?.(model, context, {});
+    const wrapThinkingHigh = requireThinkingWrapper(
+      createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "high"),
+      "high",
+    );
+    await wrapThinkingHigh(model, context, {});
 
     expect((capture.payload?.messages as Array<Record<string, unknown>>)[1]).toMatchObject({
       role: "assistant",
@@ -338,9 +356,11 @@ describe("deepseek provider plugin", () => {
     } as Context;
     const baseStreamFn = createPayloadCapturingStream(capture);
 
-    const wrapThinkingHigh = createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "high");
-    expect(wrapThinkingHigh).toBeDefined();
-    await wrapThinkingHigh?.(model, context, {});
+    const wrapThinkingHigh = requireThinkingWrapper(
+      createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "high"),
+      "high",
+    );
+    await wrapThinkingHigh(model, context, {});
 
     expect((capture.payload?.messages as Array<Record<string, unknown>>)[1]).toMatchObject({
       role: "assistant",
@@ -355,12 +375,11 @@ describe("deepseek provider plugin", () => {
     const context = deepSeekReasoningToolReplayContext();
     const baseStreamFn = createPayloadCapturingStream(capture);
 
-    const wrapThinkingNone = createDeepSeekV4ThinkingWrapper(
-      baseStreamFn as never,
-      "none" as never,
+    const wrapThinkingNone = requireThinkingWrapper(
+      createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "none" as never),
+      "none",
     );
-    expect(wrapThinkingNone).toBeDefined();
-    await wrapThinkingNone?.(model, context, {});
+    await wrapThinkingNone(model, context, {});
 
     expect(capture.payload).toMatchObject({ thinking: { type: "disabled" } });
     expect(capture.payload).not.toHaveProperty("reasoning_effort");

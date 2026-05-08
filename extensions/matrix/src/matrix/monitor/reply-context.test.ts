@@ -31,9 +31,11 @@ describe("matrix reply context", () => {
         body: longBody,
       },
     } as MatrixRawEvent);
-    expect(result).toBeDefined();
-    expect(result!.length).toBeLessThanOrEqual(500);
-    expect(result!.endsWith("...")).toBe(true);
+    if (result === undefined) {
+      throw new Error("expected truncated reply context");
+    }
+    expect(result.length).toBeLessThanOrEqual(500);
+    expect(result.endsWith("...")).toBe(true);
   });
 
   it("handles media-only reply events", () => {

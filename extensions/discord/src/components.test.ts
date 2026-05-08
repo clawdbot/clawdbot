@@ -135,10 +135,15 @@ describe("discord component registry", () => {
     });
     const confirm = result.entries.find((entry) => entry.label === "Confirm");
     const cancel = result.entries.find((entry) => entry.label === "Cancel");
-    expect(confirm?.consumptionGroupId).toBeTruthy();
-    expect(cancel?.consumptionGroupId).toBe(confirm?.consumptionGroupId);
+    if (!confirm?.consumptionGroupId) {
+      throw new Error("expected confirm entry to carry a consumption group id");
+    }
+    if (!cancel) {
+      throw new Error("expected cancel entry");
+    }
+    expect(cancel.consumptionGroupId).toBe(confirm.consumptionGroupId);
     expect(confirm?.consumptionGroupEntryIds).toEqual(
-      expect.arrayContaining([confirm?.id, cancel?.id]),
+      expect.arrayContaining([confirm.id, cancel.id]),
     );
 
     registerDiscordComponentEntries({

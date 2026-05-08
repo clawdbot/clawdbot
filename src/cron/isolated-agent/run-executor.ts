@@ -141,6 +141,7 @@ export function createCronPromptExecutor(params: {
             provider: providerOverride,
             cfg: params.cfgWithAgentDefaults,
             agentId: params.agentId,
+            modelId: modelOverride,
           }) ?? providerOverride;
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];

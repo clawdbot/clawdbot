@@ -237,6 +237,12 @@ function createMention(params: { openId: string; name: string; key?: string }): 
   };
 }
 
+function mentionOpenIds(event: FeishuMessageEvent): string[] {
+  return (event.message.mentions ?? []).flatMap((mention) =>
+    mention.id.open_id ? [mention.id.open_id] : [],
+  );
+}
+
 function createFeishuMonitorRuntime(params?: {
   createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
@@ -541,9 +547,9 @@ describe("Feishu inbound debounce regressions", () => {
     await vi.advanceTimersByTimeAsync(25);
 
     const dispatched = expectSingleDispatchedEvent();
-    const mergedMentions = dispatched.message.mentions ?? [];
-    expect(mergedMentions.some((mention) => mention.id.open_id === "ou_bot")).toBe(true);
-    expect(mergedMentions.some((mention) => mention.id.open_id === "ou_user_a")).toBe(false);
+    const mergedOpenIds = mentionOpenIds(dispatched);
+    expect(mergedOpenIds).toContain("ou_bot");
+    expect(mergedOpenIds).not.toContain("ou_user_a");
   });
 
   it("passes prefetched botName through to handleFeishuMessage", async () => {
@@ -601,8 +607,7 @@ describe("Feishu inbound debounce regressions", () => {
     const { dispatched, parsed } = expectParsedFirstDispatchedEvent();
     expect(parsed.mentionedBot).toBe(true);
     expect(parsed.mentionTargets).toBeUndefined();
-    const mergedMentions = dispatched.message.mentions ?? [];
-    expect(mergedMentions.every((mention) => mention.id.open_id === "ou_bot")).toBe(true);
+    expect(mentionOpenIds(dispatched)).toEqual(["ou_bot"]);
   });
 
   it("preserves bot mention signal when the latest merged message has no mentions", async () => {

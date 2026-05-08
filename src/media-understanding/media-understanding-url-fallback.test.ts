@@ -60,7 +60,7 @@ describe("media understanding attachment URL fallback", () => {
         });
         // getPath should fall through to getBuffer URL fetch, write a temp file,
         // and return a path to that temp file instead of throwing.
-        expect(result.path).toBeTruthy();
+        expect(result.path).toEqual(expect.stringMatching(/\S/u));
         expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
         expect(fetchRemoteMediaMock).toHaveBeenCalledWith(
           expect.objectContaining({ url: fallbackUrl, maxBytes: 1024 }),

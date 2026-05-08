@@ -96,6 +96,18 @@ describe("json file helpers", () => {
     });
   });
 
+  it("can skip durable fsync work for hot state writes", async () => {
+    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "state.json");
+      const openSpy = vi.spyOn(fs, "open");
+
+      await writeTextAtomic(filePath, "new", { durable: false });
+
+      expect(openSpy).not.toHaveBeenCalled();
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("new");
+    });
+  });
+
   it("preserves text when Windows rename reports EPERM", async () => {
     await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "state.json");

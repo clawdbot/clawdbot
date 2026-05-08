@@ -81,13 +81,15 @@ describe("cron service store seam coverage", () => {
     await ensureLoaded(state);
 
     const job = state.store?.jobs[0];
-    expect(job).toBeDefined();
-    expect(job?.sessionTarget).toBe("isolated");
-    expect(job?.payload.kind).toBe("agentTurn");
-    if (job?.payload.kind === "agentTurn") {
+    if (!job) {
+      throw new Error("expected loaded cron job");
+    }
+    expect(job.sessionTarget).toBe("isolated");
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
       expect(job.payload.message).toBe("ping");
     }
-    expect(job?.delivery).toMatchObject({
+    expect(job.delivery).toMatchObject({
       mode: "announce",
       channel: "telegram",
       to: "123",

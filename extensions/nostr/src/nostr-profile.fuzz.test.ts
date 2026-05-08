@@ -6,6 +6,11 @@ import {
   validateProfile,
 } from "./nostr-profile-core.js";
 
+const max256ProfileFieldCases = [
+  { field: "name", char: "a" },
+  { field: "displayName", char: "b" },
+] as const;
+
 // ============================================================================
 // Unicode Attack Vectors
 // ============================================================================
@@ -45,15 +50,15 @@ describe("profile unicode attacks", () => {
         name: "\u202Eevil\u202C", // Right-to-left override + pop direction
       };
       const result = validateProfile(profile);
-      expect(result.valid).toBe(true);
-      expect(result.profile).toBeDefined();
       if (!result.profile) {
         throw new Error("expected validated profile");
       }
+      expect(result.valid).toBe(true);
+      expect(result.profile).toMatchObject({ name: "\u202Eevil\u202C" });
 
       // UI should escape or handle this
       const sanitized = sanitizeProfileForDisplay(result.profile);
-      expect(sanitized.name).toBeDefined();
+      expect(sanitized.name).toEqual(expect.any(String));
     });
 
     it("handles bidi embedding in about", () => {
@@ -318,32 +323,25 @@ describe("profile XSS attacks", () => {
 // ============================================================================
 
 describe("profile length boundaries", () => {
-  describe("name field (max 256)", () => {
-    it("accepts exactly 256 characters", () => {
-      const result = validateProfile({ name: "a".repeat(256) });
-      expect(result.valid).toBe(true);
-    });
+  describe("short text fields (max 256)", () => {
+    it.each(max256ProfileFieldCases)(
+      "accepts exactly 256 characters for $field",
+      ({ char, field }) => {
+        const result = validateProfile({ [field]: char.repeat(256) });
+        expect(result.valid).toBe(true);
+      },
+    );
 
-    it("rejects 257 characters", () => {
-      const result = validateProfile({ name: "a".repeat(257) });
+    it.each(max256ProfileFieldCases)("rejects 257 characters for $field", ({ char, field }) => {
+      const result = validateProfile({ [field]: char.repeat(257) });
       expect(result.valid).toBe(false);
-    });
-
-    it("accepts empty string", () => {
-      const result = validateProfile({ name: "" });
-      expect(result.valid).toBe(true);
     });
   });
 
-  describe("displayName field (max 256)", () => {
-    it("accepts exactly 256 characters", () => {
-      const result = validateProfile({ displayName: "b".repeat(256) });
+  describe("name field (max 256)", () => {
+    it("accepts empty string", () => {
+      const result = validateProfile({ name: "" });
       expect(result.valid).toBe(true);
-    });
-
-    it("rejects 257 characters", () => {
-      const result = validateProfile({ displayName: "b".repeat(257) });
-      expect(result.valid).toBe(false);
     });
   });
 

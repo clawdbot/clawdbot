@@ -305,7 +305,7 @@ function expectPersistedAcpTranscript(params: { userContent: string; assistantTe
   );
 }
 
-async function runAcpSessionWithPolicyOverrides(params: {
+async function runAcpSessionWithPolicyOverridesAndExpectBlocked(params: {
   acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>;
   resolveSession?: Parameters<typeof mockAcpManager>[0]["resolveSession"];
 }) {
@@ -434,7 +434,7 @@ describe("agentCommand ACP runtime routing", () => {
       { enabled: false },
       { dispatch: { enabled: false } },
     ] satisfies Array<Partial<NonNullable<OpenClawConfig["acp"]>>>) {
-      await runAcpSessionWithPolicyOverrides({ acpOverrides });
+      await runAcpSessionWithPolicyOverridesAndExpectBlocked({ acpOverrides });
     }
   });
 

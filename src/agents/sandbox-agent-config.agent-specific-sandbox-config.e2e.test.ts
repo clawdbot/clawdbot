@@ -158,8 +158,9 @@ describe("Agent-specific sandbox config", () => {
 
     const context = await resolveContext(cfg, "agent:isolated:main", "/tmp/test-isolated");
 
-    expect(context).toBeDefined();
-    expect(context?.workspaceDir).toContain(path.resolve("/tmp/isolated-sandboxes"));
+    expect(context).toMatchObject({
+      workspaceDir: expect.stringContaining(path.resolve("/tmp/isolated-sandboxes")),
+    });
   });
 
   it("should prefer agent config over global for multiple agents", () => {
@@ -267,9 +268,10 @@ describe("Agent-specific sandbox config", () => {
       const cfg = createWorkSetupCommandConfig(scenario.scope);
       const context = await resolveContext(cfg, "agent:work:main", "/tmp/test-work");
 
-      expect(context).toBeDefined();
-      expect(context?.docker.setupCommand).toBe(scenario.expectedSetup);
-      expect(context?.containerName).toContain(scenario.expectedContainerFragment);
+      expect(context).toMatchObject({
+        docker: { setupCommand: scenario.expectedSetup },
+        containerName: expect.stringContaining(scenario.expectedContainerFragment),
+      });
       expectDockerSetupCommand(scenario.expectedSetup);
       spawnCalls.length = 0;
     }
@@ -399,7 +401,7 @@ describe("Agent-specific sandbox config", () => {
     expect(sandbox.scope).toBe("agent");
   });
 
-  it("enforces required allowlist tools in default and explicit sandbox configs", async () => {
+  it("enforces required allowlist tools in default and explicit sandbox configs", () => {
     for (const scenario of [
       {
         cfg: createDefaultsSandboxConfig(),

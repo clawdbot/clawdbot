@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { authenticate } from "./urbit/auth.js";
 import { scryUrbitPath } from "./urbit/channel-ops.js";
 import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "./urbit/context.js";
@@ -44,16 +44,6 @@ type UploadResult = {
 
 const MEMEX_BASE_URL = "https://memex.tlon.network";
 
-const mimeToExt: Record<string, string> = {
-  "image/gif": ".gif",
-  "image/heic": ".heic",
-  "image/heif": ".heif",
-  "image/jpeg": ".jpg",
-  "image/jpg": ".jpg",
-  "image/png": ".png",
-  "image/webp": ".webp",
-};
-
 let currentClientConfig: ClientConfig | null = null;
 
 export function configureClient(params: ClientConfig): void {
@@ -71,10 +61,7 @@ function requireClientConfig(): ClientConfig {
 }
 
 function getExtensionFromMimeType(mimeType?: string): string {
-  if (!mimeType) {
-    return ".jpg";
-  }
-  return mimeToExt[normalizeLowercaseStringOrEmpty(mimeType)] || ".jpg";
+  return extensionForMime(mimeType) || ".jpg";
 }
 
 function hasCustomS3Creds(

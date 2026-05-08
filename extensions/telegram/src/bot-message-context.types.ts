@@ -8,6 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/config-types";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
+import type { TelegramReplyChainEntry } from "./message-cache.js";
 
 export type TelegramMediaRef = {
   path: string;
@@ -70,6 +71,7 @@ export type BuildTelegramMessageContextParams = {
   primaryCtx: TelegramContext;
   allMedia: TelegramMediaRef[];
   replyMedia?: TelegramMediaRef[];
+  replyChain?: TelegramReplyChainEntry[];
   storeAllowFrom: string[];
   options?: TelegramMessageContextOptions;
   bot: Bot;

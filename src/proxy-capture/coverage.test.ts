@@ -8,7 +8,8 @@ describe("debug proxy coverage report", () => {
     expect(report.summary.total).toBe(report.entries.length);
     expect(report.summary.captured).toBeGreaterThan(0);
     expect(report.summary.proxyOnly).toBeGreaterThan(0);
-    expect(report.entries.some((entry) => entry.id === "provider-transport-fetch")).toBe(true);
-    expect(report.entries.some((entry) => entry.id === "feishu-client-http")).toBe(true);
+    expect(report.entries.map((entry) => entry.id)).toEqual(
+      expect.arrayContaining(["provider-transport-fetch", "feishu-client-http"]),
+    );
   });
 });

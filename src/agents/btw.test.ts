@@ -15,7 +15,9 @@ const requireApiKeyMock = vi.fn();
 const resolveSessionAuthProfileOverrideMock = vi.fn();
 const getActiveEmbeddedRunSnapshotMock = vi.fn();
 const resolveSessionAgentIdMock = vi.fn();
+const resolveSessionAgentIdsMock = vi.fn();
 const resolveAgentWorkspaceDirMock = vi.fn();
+const listAgentEntriesMock = vi.fn();
 const prepareProviderRuntimeAuthMock = vi.fn();
 const registerProviderStreamForModelMock = vi.fn();
 const diagDebugMock = vi.fn();
@@ -66,6 +68,8 @@ vi.mock("./pi-embedded-runner/runs.js", () => ({
 }));
 
 vi.mock("./agent-scope.js", () => ({
+  listAgentEntries: (...args: unknown[]) => listAgentEntriesMock(...args),
+  resolveSessionAgentIds: (...args: unknown[]) => resolveSessionAgentIdsMock(...args),
   resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
   resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
 }));
@@ -294,7 +298,9 @@ describe("runBtwSideQuestion", () => {
     resolveSessionAuthProfileOverrideMock.mockReset();
     getActiveEmbeddedRunSnapshotMock.mockReset();
     resolveSessionAgentIdMock.mockReset();
+    resolveSessionAgentIdsMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
+    listAgentEntriesMock.mockReset();
     prepareProviderRuntimeAuthMock.mockReset();
     registerProviderStreamForModelMock.mockReset();
     diagDebugMock.mockReset();
@@ -328,7 +334,9 @@ describe("runBtwSideQuestion", () => {
     resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-1");
     getActiveEmbeddedRunSnapshotMock.mockReturnValue(undefined);
     resolveSessionAgentIdMock.mockReturnValue("main");
+    resolveSessionAgentIdsMock.mockReturnValue({ defaultAgentId: "main", sessionAgentId: "main" });
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
+    listAgentEntriesMock.mockReturnValue([]);
     prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
     registerProviderStreamForModelMock.mockReturnValue(undefined);
   });

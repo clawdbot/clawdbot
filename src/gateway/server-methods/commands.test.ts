@@ -176,7 +176,18 @@ function callHandler(params: Record<string, unknown> = {}) {
     isWebchatConnect: () => false,
     context: { getRuntimeConfig: () => ({}) } as never,
   });
-  return result!;
+  if (!result) {
+    throw new Error("expected commands.list response");
+  }
+  return result;
+}
+
+function requireCommand<T extends { name: string }>(commands: T[], name: string): T {
+  const command = commands.find((entry) => entry.name === name);
+  if (!command) {
+    throw new Error(`expected ${name} command`);
+  }
+  return command;
 }
 
 describe("commands.list handler", () => {
@@ -194,8 +205,12 @@ describe("commands.list handler", () => {
 
   it("maps native commands with category, scope, and args", () => {
     const { payload } = callHandler();
-    const { commands } = payload as { commands: Array<Record<string, unknown>> };
-    const model = commands.find((c) => c.name === "model");
+    const { commands } = payload as {
+      commands: Array<
+        Record<string, unknown> & { name: string; args?: Array<Record<string, unknown>> }
+      >;
+    };
+    const model = requireCommand(commands, "model");
     expect(model).toMatchObject({
       name: "model",
       nativeName: "model",
@@ -206,7 +221,7 @@ describe("commands.list handler", () => {
       scope: "both",
       acceptsArgs: true,
     });
-    const args = model!.args as Array<Record<string, unknown>>;
+    const args = model.args ?? [];
     expect(args).toHaveLength(1);
     expect(args[0].choices).toEqual([
       { value: "gpt-5.4", label: "GPT-5.4" },
@@ -217,17 +232,20 @@ describe("commands.list handler", () => {
   it("exposes per-command scope", () => {
     const { payload } = callHandler();
     const { commands } = payload as { commands: Array<{ name: string; scope: string }> };
-    expect(commands.find((c) => c.name === "model")!.scope).toBe("both");
-    expect(commands.find((c) => c.name === "commands")!.scope).toBe("text");
-    expect(commands.find((c) => c.name === "debug_prompt")!.scope).toBe("native");
-    expect(commands.find((c) => c.name === "tts")!.scope).toBe("both");
+    expect(requireCommand(commands, "model").scope).toBe("both");
+    expect(requireCommand(commands, "commands").scope).toBe("text");
+    expect(requireCommand(commands, "debug_prompt").scope).toBe("native");
+    expect(requireCommand(commands, "tts").scope).toBe("both");
   });
 
   it("skips args when acceptsArgs is false", () => {
     const { payload } = callHandler();
     const { commands } = payload as { commands: Array<Record<string, unknown>> };
-    const debug = commands.find((c) => c.name === "debug_prompt");
-    expect(debug!.args).toBeUndefined();
+    const debug = requireCommand(
+      commands as Array<Record<string, unknown> & { name: string }>,
+      "debug_prompt",
+    );
+    expect(debug.args).toBeUndefined();
   });
 
   it("serializes dynamic choices when acceptsArgs is true", () => {
@@ -237,8 +255,11 @@ describe("commands.list handler", () => {
     try {
       const { payload } = callHandler();
       const { commands } = payload as { commands: Array<Record<string, unknown>> };
-      const debug = commands.find((c) => c.name === "debug_prompt");
-      const args = debug!.args as Array<Record<string, unknown>>;
+      const debug = requireCommand(
+        commands as Array<Record<string, unknown> & { name: string }>,
+        "debug_prompt",
+      );
+      const args = debug.args as Array<Record<string, unknown>>;
       expect(args[0].dynamic).toBe(true);
       expect(args[0].choices).toBeUndefined();
     } finally {
@@ -281,14 +302,14 @@ describe("commands.list handler", () => {
   it("resolves provider-specific native names", () => {
     const { payload } = callHandler({ provider: "discord" });
     const { commands } = payload as { commands: Array<{ name: string }> };
-    expect(commands.find((c) => c.name === "set_model")).toBeDefined();
+    expect(requireCommand(commands, "set_model").name).toBe("set_model");
     expect(commands.find((c) => c.name === "model")).toBeUndefined();
   });
 
   it("normalizes mixed-case provider", () => {
     const { payload } = callHandler({ provider: "Discord" });
     const { commands } = payload as { commands: Array<{ name: string; source: string }> };
-    expect(commands.find((c) => c.name === "set_model")).toBeDefined();
+    expect(requireCommand(commands, "set_model").name).toBe("set_model");
     const plugin = commands.find((c) => c.source === "plugin");
     expect(plugin).toMatchObject({ name: "discord_tts" });
   });
@@ -296,7 +317,7 @@ describe("commands.list handler", () => {
   it("uses default names without provider", () => {
     const { payload } = callHandler();
     const { commands } = payload as { commands: Array<{ name: string }> };
-    expect(commands.find((c) => c.name === "model")).toBeDefined();
+    expect(requireCommand(commands, "model").name).toBe("model");
     expect(commands.find((c) => c.name === "set_model")).toBeUndefined();
   });
 
@@ -369,8 +390,11 @@ describe("commands.list handler", () => {
   it("excludes args when includeArgs=false", () => {
     const { payload } = callHandler({ includeArgs: false });
     const { commands } = payload as { commands: Array<Record<string, unknown>> };
-    const model = commands.find((c) => c.name === "model");
-    expect(model!.args).toBeUndefined();
+    const model = requireCommand(
+      commands as Array<Record<string, unknown> & { name: string }>,
+      "model",
+    );
+    expect(model.args).toBeUndefined();
   });
 
   it("caps serialized command payload size and field lengths", () => {

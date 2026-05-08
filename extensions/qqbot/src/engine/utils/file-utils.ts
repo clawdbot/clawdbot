@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import {
   openLocalFileSafely,
   readRegularFile,
@@ -10,7 +11,7 @@ import { getPlatformAdapter } from "../adapter/index.js";
 import type { SsrfPolicyConfig } from "../adapter/types.js";
 import { MediaFileType } from "../types.js";
 import { formatErrorMessage } from "./format.js";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-normalize.js";
+import { normalizeOptionalString } from "./string-normalize.js";
 
 /** Maximum file size accepted by the QQ Bot one-shot upload API (base64 direct). */
 export const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
@@ -133,33 +134,8 @@ export function formatFileSize(bytes: number): string {
 
 /** Infer a MIME type from the file extension. */
 export function getMimeType(filePath: string): string {
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
-  return MIME_TYPES[ext] ?? "application/octet-stream";
+  return mimeTypeFromFilePath(filePath) ?? "application/octet-stream";
 }
-
-/** Canonical ext → MIME table. Single source of truth. */
-const MIME_TYPES: Record<string, string> = {
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".png": "image/png",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".bmp": "image/bmp",
-  ".mp4": "video/mp4",
-  ".mov": "video/quicktime",
-  ".avi": "video/x-msvideo",
-  ".mkv": "video/x-matroska",
-  ".webm": "video/webm",
-  ".pdf": "application/pdf",
-  ".doc": "application/msword",
-  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  ".xls": "application/vnd.ms-excel",
-  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  ".zip": "application/zip",
-  ".tar": "application/x-tar",
-  ".gz": "application/gzip",
-  ".txt": "text/plain",
-};
 
 /** Extensions accepted as image uploads by the QQ Bot media pipeline. */
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
@@ -173,11 +149,12 @@ const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bm
  * `data:image/...;base64,` URL).
  */
 export function getImageMimeType(filePath: string): string | null {
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
+  const ext = path.extname(filePath).toLowerCase();
   if (!IMAGE_EXTENSIONS.has(ext)) {
     return null;
   }
-  return MIME_TYPES[ext] ?? null;
+  const mime = mimeTypeFromFilePath(filePath);
+  return mime?.startsWith("image/") ? mime : null;
 }
 
 /** Download a remote file into a local directory. */

@@ -37,20 +37,6 @@ describe("createFixedWindowRateLimiter", () => {
     expect(calls.map((nowMs) => limiter.isRateLimited("k", nowMs))).toEqual(expected);
   });
 
-  it("caps tracked keys", () => {
-    const limiter = createFixedWindowRateLimiter({
-      windowMs: 60_000,
-      maxRequests: 10,
-      maxTrackedKeys: 5,
-    });
-
-    for (let i = 0; i < 20; i += 1) {
-      limiter.isRateLimited(`key-${i}`, 1_000 + i);
-    }
-
-    expect(limiter.size()).toBeLessThanOrEqual(5);
-  });
-
   it("prunes stale keys", () => {
     const limiter = createFixedWindowRateLimiter({
       windowMs: 10,
@@ -69,14 +55,22 @@ describe("createFixedWindowRateLimiter", () => {
   });
 });
 
-describe("createBoundedCounter", () => {
-  it("increments and returns per-key counts", () => {
-    const counter = createBoundedCounter({ maxTrackedKeys: 100 });
+describe("webhook memory guard key caps", () => {
+  it("createFixedWindowRateLimiter caps tracked keys", () => {
+    const limiter = createFixedWindowRateLimiter({
+      windowMs: 60_000,
+      maxRequests: 10,
+      maxTrackedKeys: 5,
+    });
 
-    expect([1_000, 1_001, 1_002].map((nowMs) => counter.increment("k", nowMs))).toEqual([1, 2, 3]);
+    for (let i = 0; i < 20; i += 1) {
+      limiter.isRateLimited(`key-${i}`, 1_000 + i);
+    }
+
+    expect(limiter.size()).toBeLessThanOrEqual(5);
   });
 
-  it("caps tracked keys", () => {
+  it("createBoundedCounter caps tracked keys", () => {
     const counter = createBoundedCounter({ maxTrackedKeys: 3 });
 
     for (let i = 0; i < 10; i += 1) {
@@ -84,6 +78,14 @@ describe("createBoundedCounter", () => {
     }
 
     expect(counter.size()).toBeLessThanOrEqual(3);
+  });
+});
+
+describe("createBoundedCounter", () => {
+  it("increments and returns per-key counts", () => {
+    const counter = createBoundedCounter({ maxTrackedKeys: 100 });
+
+    expect([1_000, 1_001, 1_002].map((nowMs) => counter.increment("k", nowMs))).toEqual([1, 2, 3]);
   });
 
   it("expires stale keys when ttl is set", () => {

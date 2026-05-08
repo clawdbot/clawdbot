@@ -8,8 +8,10 @@ import { createDiscordRequestClient, DISCORD_REST_TIMEOUT_MS } from "./proxy-req
 describe("createDiscordRequestClient", () => {
   it("preserves the REST client's abort signal for proxied fetch calls", async () => {
     const fetchSpy = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-      expect(init?.signal).toBeDefined();
-      expect(init!.signal!.aborted).toBe(false);
+      if (!(init?.signal instanceof AbortSignal)) {
+        throw new Error("Expected proxied fetch init to include an AbortSignal");
+      }
+      expect(init.signal.aborted).toBe(false);
       return createJsonResponse([]);
     });
 
@@ -67,8 +69,10 @@ describe("createDiscordRequestClient", () => {
 
     await client.get("/channels/123/messages");
 
-    expect(receivedSignal).toBeDefined();
-    expect(receivedSignal!.aborted).toBe(false);
+    if (!receivedSignal) {
+      throw new Error("Expected proxied fetch to receive the REST timeout signal");
+    }
+    expect(receivedSignal.aborted).toBe(false);
   });
 
   it("exports a reasonable timeout constant", () => {

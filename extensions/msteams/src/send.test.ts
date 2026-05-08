@@ -95,6 +95,32 @@ function mockContinueConversationFailure(error: string) {
   return mockContinueConversation;
 }
 
+const continueConversationFailureCases = [
+  {
+    name: "editMessageMSTeams",
+    error: "Service unavailable",
+    expected: "msteams edit failed",
+    invoke: () =>
+      editMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "conversation:19:conversation@thread.tacv2",
+        activityId: "activity-123",
+        text: "Updated text",
+      }),
+  },
+  {
+    name: "deleteMessageMSTeams",
+    error: "Not found",
+    expected: "msteams delete failed",
+    invoke: () =>
+      deleteMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "conversation:19:conversation@thread.tacv2",
+        activityId: "activity-456",
+      }),
+  },
+];
+
 function createSharePointSendContext(params: {
   conversationId: string;
   graphChatId: string | null;
@@ -394,6 +420,21 @@ describe("sendMessageMSTeams", () => {
   });
 });
 
+describe("MSTeams continueConversation failure handling", () => {
+  beforeEach(() => {
+    mockState.resolveMSTeamsSendContext.mockReset();
+  });
+
+  it.each(continueConversationFailureCases)(
+    "$name throws a descriptive error when continueConversation fails",
+    async ({ error, expected, invoke }) => {
+      mockContinueConversationFailure(error);
+
+      await expect(invoke()).rejects.toThrow(expected);
+    },
+  );
+});
+
 describe("editMessageMSTeams", () => {
   beforeEach(() => {
     mockState.resolveMSTeamsSendContext.mockReset();
@@ -445,19 +486,6 @@ describe("editMessageMSTeams", () => {
       text: "Updated message text",
     });
   });
-
-  it("throws a descriptive error when continueConversation fails", async () => {
-    mockContinueConversationFailure("Service unavailable");
-
-    await expect(
-      editMessageMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: "conversation:19:conversation@thread.tacv2",
-        activityId: "activity-123",
-        text: "Updated text",
-      }),
-    ).rejects.toThrow("msteams edit failed");
-  });
 });
 
 describe("deleteMessageMSTeams", () => {
@@ -505,18 +533,6 @@ describe("deleteMessageMSTeams", () => {
       expect.any(Function),
     );
     expect(mockDeleteActivity).toHaveBeenCalledWith("activity-456");
-  });
-
-  it("throws a descriptive error when continueConversation fails", async () => {
-    mockContinueConversationFailure("Not found");
-
-    await expect(
-      deleteMessageMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: "conversation:19:conversation@thread.tacv2",
-        activityId: "activity-456",
-      }),
-    ).rejects.toThrow("msteams delete failed");
   });
 
   it("passes the appId and proactive ref to continueConversation", async () => {

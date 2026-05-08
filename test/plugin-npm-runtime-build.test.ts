@@ -7,6 +7,10 @@ import {
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
+function expectDistRelativePaths(paths: string[]) {
+  expect(paths.filter((entry) => !entry.startsWith("./dist/"))).toEqual([]);
+}
+
 describe("plugin npm runtime build planning", () => {
   it("plans package-local runtime entries for every publishable plugin package", () => {
     const packageDirs = listPublishablePluginPackageDirs({ repoRoot });
@@ -23,8 +27,8 @@ describe("plugin npm runtime build planning", () => {
     );
     for (const plan of plans) {
       expect(plan?.outDir).toBe(path.join(plan?.packageDir ?? "", "dist"));
-      expect(plan?.runtimeExtensions.every((entry) => entry.startsWith("./dist/"))).toBe(true);
-      expect(plan?.runtimeBuildOutputs.every((entry) => entry.startsWith("./dist/"))).toBe(true);
+      expectDistRelativePaths(plan?.runtimeExtensions ?? []);
+      expectDistRelativePaths(plan?.runtimeBuildOutputs ?? []);
       expect(plan?.packageFiles).toContain("dist/**");
       expect(plan?.packagePeerMetadata.peerDependencies.openclaw).toBe(
         plan?.packageJson.openclaw.compat.pluginApi,

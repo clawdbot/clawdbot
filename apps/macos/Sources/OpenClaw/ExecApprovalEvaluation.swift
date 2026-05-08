@@ -43,7 +43,8 @@ enum ExecApprovalEvaluator {
         let allowAlwaysPatterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
             command: command,
             cwd: cwd,
-            env: env)
+            env: env,
+            rawCommand: allowlistRawCommand)
         let allowlistMatches = security == .allowlist
             ? ExecAllowlistMatcher.matchAll(entries: approvals.allowlist, resolutions: allowlistResolutions)
             : []

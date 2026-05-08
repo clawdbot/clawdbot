@@ -109,12 +109,12 @@ describe("system-presence", () => {
       reason: "connect",
     });
 
-    expect(listSystemPresence().some((entry) => entry.deviceId === deviceId)).toBe(true);
+    expect(listSystemPresence().map((entry) => entry.deviceId)).toContain(deviceId);
 
     vi.advanceTimersByTime(5 * 60 * 1000 + 1);
 
     const entries = listSystemPresence();
-    expect(entries.some((entry) => entry.deviceId === deviceId)).toBe(false);
-    expect(entries.some((entry) => entry.reason === "self")).toBe(true);
+    expect(entries.map((entry) => entry.deviceId)).not.toContain(deviceId);
+    expect(entries.map((entry) => entry.reason)).toContain("self");
   });
 });

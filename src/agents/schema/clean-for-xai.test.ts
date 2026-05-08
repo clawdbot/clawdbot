@@ -43,7 +43,7 @@ describe("stripXaiUnsupportedKeywords", () => {
     const result = stripXaiUnsupportedKeywords(schema) as Record<string, unknown>;
     expect(result.minContains).toBeUndefined();
     expect(result.maxContains).toBeUndefined();
-    expect(result.contains).toBeDefined();
+    expect(result.contains).toEqual({ type: "string" });
   });
 
   it("strips keywords recursively inside nested objects", () => {

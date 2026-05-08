@@ -3,12 +3,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocketServer } from "ws";
 import type { ResolvedGatewayAuth } from "../auth.js";
 
-const { attachGatewayWsMessageHandlerMock } = vi.hoisted(() => ({
-  attachGatewayWsMessageHandlerMock: vi.fn(),
-}));
+const { attachGatewayWsMessageHandlerMock, broadcastPresenceSnapshotMock, upsertPresenceMock } =
+  vi.hoisted(() => ({
+    attachGatewayWsMessageHandlerMock: vi.fn(),
+    broadcastPresenceSnapshotMock: vi.fn(),
+    upsertPresenceMock: vi.fn(),
+  }));
 
 vi.mock("./ws-connection/message-handler.js", () => ({
   attachGatewayWsMessageHandler: attachGatewayWsMessageHandlerMock,
+}));
+vi.mock("../../infra/system-presence.js", () => ({
+  upsertPresence: upsertPresenceMock,
+}));
+vi.mock("./presence-events.js", () => ({
+  broadcastPresenceSnapshot: broadcastPresenceSnapshotMock,
 }));
 
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
@@ -122,6 +131,8 @@ async function connectTestWs(
 describe("attachGatewayWsConnectionHandler", () => {
   beforeEach(() => {
     attachGatewayWsMessageHandlerMock.mockReset();
+    broadcastPresenceSnapshotMock.mockReset();
+    upsertPresenceMock.mockReset();
   });
 
   afterEach(() => {
@@ -233,5 +244,79 @@ describe("attachGatewayWsConnectionHandler", () => {
     socket.emit("close", 1000, Buffer.from("done"));
     vi.advanceTimersByTime(25_000);
     expect(socket.ping).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips node presence disconnects for stale reconnected sockets", async () => {
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const unregister = vi.fn(() => null);
+    const wss = {
+      on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+        listeners.set(event, handler);
+      }),
+    } as unknown as WebSocketServer;
+    const socket = Object.assign(new EventEmitter(), {
+      _socket: {
+        remoteAddress: "127.0.0.1",
+        remotePort: 1234,
+        localAddress: "127.0.0.1",
+        localPort: 5678,
+      },
+      send: vi.fn(),
+      close: vi.fn(),
+    });
+    const upgradeReq = {
+      headers: { host: "127.0.0.1:19001" },
+      socket: { localAddress: "127.0.0.1" },
+    };
+
+    attachGatewayWsConnectionHandler({
+      wss,
+      clients: new Set(),
+      preauthConnectionBudget: { release: vi.fn() } as never,
+      port: 19001,
+      resolvedAuth: createResolvedAuth("token"),
+      gatewayMethods: [],
+      events: [],
+      refreshHealthSnapshot: vi.fn(),
+      logGateway: createLogger() as never,
+      logHealth: createLogger() as never,
+      logWsControl: createLogger() as never,
+      extraHandlers: {},
+      broadcast: vi.fn(),
+      buildRequestContext: () =>
+        ({
+          unsubscribeAllSessionEvents: vi.fn(),
+          nodeRegistry: { unregister },
+          nodeUnsubscribeAll: vi.fn(),
+        }) as never,
+    });
+
+    const onConnection = listeners.get("connection");
+    expect(onConnection).toBeTypeOf("function");
+    onConnection?.(socket, upgradeReq);
+    await waitForLazyMessageHandler();
+
+    const passed = attachGatewayWsMessageHandlerMock.mock.calls[0]?.[0] as {
+      setClient: (client: unknown) => boolean;
+    };
+    expect(
+      passed.setClient({
+        socket,
+        connect: {
+          role: "node",
+          client: { id: "openclaw-macos", mode: "node" },
+          device: { id: "node-1" },
+        },
+        connId: "conn-old",
+        presenceKey: "node-1",
+        usesSharedGatewayAuth: false,
+      }),
+    ).toBe(true);
+
+    socket.emit("close", 1000, Buffer.from("stale"));
+
+    expect(unregister).toHaveBeenCalledTimes(1);
+    expect(upsertPresenceMock).not.toHaveBeenCalled();
+    expect(broadcastPresenceSnapshotMock).not.toHaveBeenCalled();
   });
 });

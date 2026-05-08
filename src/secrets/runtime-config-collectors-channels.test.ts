@@ -31,7 +31,7 @@ describe("runtime channel config collectors", () => {
     collectChannelConfigAssignments({
       config: {
         channels: {
-          bluebubbles: {
+          imessage: {
             accounts: {
               ops: {},
             },
@@ -43,7 +43,7 @@ describe("runtime channel config collectors", () => {
     });
 
     expect(loadChannelSecretContractApi).toHaveBeenCalledWith({
-      channelId: "bluebubbles",
+      channelId: "imessage",
       config: expect.any(Object),
       env: undefined,
       loadablePluginOrigins: undefined,

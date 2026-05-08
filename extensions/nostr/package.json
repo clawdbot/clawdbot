@@ -8,8 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "nostr-tools": "^2.23.3",
-    "zod": "^4.4.3"
+    "nostr-tools": "^2.23.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

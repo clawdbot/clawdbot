@@ -29,14 +29,17 @@ async function withListeningServer(cb: (address: net.AddressInfo) => Promise<voi
 
 describe("tryListenOnPort", () => {
   it("can bind and release an ephemeral loopback port", async () => {
+    let listened = false;
     try {
       await tryListenOnPort({ port: 0, host: "127.0.0.1", exclusive: true });
+      listened = true;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "EPERM") {
         return;
       }
       throw err;
     }
+    expect(listened).toBe(true);
   });
 
   it("rejects when the port is already in use", async () => {

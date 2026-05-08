@@ -16,6 +16,7 @@ import {
   getContextEngineFactory,
   listContextEngineIds,
   resolveContextEngine,
+  resolveContextEngineOwnerPluginId,
 } from "./registry.js";
 import type {
   ContextEngineFactory,
@@ -89,6 +90,25 @@ function registerPromptTrackingEngine(engineId: string) {
     },
   }));
   return calls;
+}
+
+function requireFactoryContext(
+  context: ContextEngineFactoryContext | undefined,
+): ContextEngineFactoryContext {
+  if (!context) {
+    throw new Error("expected context engine factory context");
+  }
+  return context;
+}
+
+function requireRegistryState() {
+  const registryState = (globalThis as Record<symbol, unknown>)[
+    Symbol.for("openclaw.contextEngineRegistryState")
+  ] as { engines: Map<string, unknown> } | undefined;
+  if (!registryState) {
+    throw new Error("expected context engine registry state");
+  }
+  return registryState;
 }
 
 /** A minimal mock engine that satisfies the ContextEngine interface. */
@@ -455,7 +475,6 @@ describe("Registry tests", () => {
 
     const retrieved = getContextEngineFactory("reg-test-2");
     expect(retrieved).toBe(factory);
-    expect(typeof retrieved).toBe("function");
   });
 
   it("listContextEngineIds() returns all registered ids", () => {
@@ -503,6 +522,17 @@ describe("Registry tests", () => {
       existingOwner: "owner-a",
     });
     expect(getContextEngineFactory("reg-owner-guard")).toBe(factory1);
+  });
+
+  it("exposes the trusted plugin owner for a resolved registered engine", async () => {
+    const engineId = `owner-policy-${Date.now().toString(36)}`;
+    registerContextEngineForOwner(engineId, () => new MockContextEngine(), "plugin:lossless-claw", {
+      allowSameOwnerRefresh: true,
+    });
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+
+    expect(resolveContextEngineOwnerPluginId(engine)).toBe("lossless-claw");
   });
 
   it("public registerContextEngine cannot spoof owner or refresh existing ids", () => {
@@ -729,10 +759,10 @@ describe("Factory context passing", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(receivedCtx).toBeDefined();
-    expect(receivedCtx!.config).toBe(cfg);
-    expect(receivedCtx!.agentDir).toBe("/tmp/agent");
-    expect(receivedCtx!.workspaceDir).toBe("/tmp/workspace");
+    const context = requireFactoryContext(receivedCtx);
+    expect(context.config).toBe(cfg);
+    expect(context.agentDir).toBe("/tmp/agent");
+    expect(context.workspaceDir).toBe("/tmp/workspace");
   });
 
   it("no-arg factories still work when context is passed", async () => {
@@ -792,10 +822,10 @@ describe("Factory context passing", () => {
 
     await resolveContextEngine(undefined);
 
-    expect(receivedCtx).toBeDefined();
-    expect(receivedCtx!.config).toBeUndefined();
-    expect(receivedCtx!.agentDir).toBeUndefined();
-    expect(receivedCtx!.workspaceDir).toBeUndefined();
+    const context = requireFactoryContext(receivedCtx);
+    expect(context.config).toBeUndefined();
+    expect(context.agentDir).toBeUndefined();
+    expect(context.workspaceDir).toBeUndefined();
   });
 });
 
@@ -898,18 +928,15 @@ describe("Invalid engine fallback", () => {
     // so even the default engine is missing. The symbol key must match the
     // private CONTEXT_ENGINE_REGISTRY_STATE constant in registry.ts — guard
     // against a silent key mismatch so a rename surfaces loudly.
-    const registryState = (globalThis as Record<symbol, unknown>)[
-      Symbol.for("openclaw.contextEngineRegistryState")
-    ] as { engines: Map<string, unknown> } | undefined;
-    expect(registryState).toBeDefined();
-    const snapshot = new Map(registryState!.engines);
-    registryState!.engines.clear();
+    const registryState = requireRegistryState();
+    const snapshot = new Map(registryState.engines);
+    registryState.engines.clear();
 
     try {
       await expect(resolveContextEngine()).rejects.toThrow("not registered");
     } finally {
       for (const [key, value] of snapshot) {
-        registryState!.engines.set(key, value);
+        registryState.engines.set(key, value);
       }
     }
   });

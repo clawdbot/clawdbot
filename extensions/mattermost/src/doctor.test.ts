@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { mattermostDoctor } from "./doctor.js";
 
+function getMattermostCompatibilityNormalizer(): NonNullable<
+  typeof mattermostDoctor.normalizeCompatibilityConfig
+> {
+  const normalize = mattermostDoctor.normalizeCompatibilityConfig;
+  if (!normalize) {
+    throw new Error("Expected mattermost doctor to expose normalizeCompatibilityConfig");
+  }
+  return normalize;
+}
+
 describe("mattermost doctor", () => {
   it("normalizes legacy private-network aliases", () => {
-    const normalize = mattermostDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getMattermostCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {

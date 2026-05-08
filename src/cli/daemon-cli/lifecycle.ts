@@ -249,6 +249,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
     serviceNoun: "Gateway",
     service,
     opts,
+    stopWhenNotLoaded: process.platform === "darwin" && Boolean(opts.disable),
     onNotLoaded: async () => {
       gatewayPortPromise ??= resolveGatewayLifecyclePort(service).catch(() =>
         resolveGatewayPortFallback(),

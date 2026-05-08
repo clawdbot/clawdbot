@@ -95,7 +95,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       stateDir,
       installRecords: {},
     });
-    expect(staleIndex.plugins.some((plugin) => plugin.pluginId === "whatsapp")).toBe(false);
+    expect(staleIndex.plugins.map((plugin) => plugin.pluginId)).not.toContain("whatsapp");
     writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
 
     const result = loadPluginRegistrySnapshotWithMetadata({
@@ -166,8 +166,19 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     writePackagePlugin(rootDir);
     const index = loadInstalledPluginIndex({ config, env });
     const [record] = index.plugins;
-    expect(record?.manifestFile).toBeDefined();
-    expect(record?.packageJson?.fileSignature).toBeDefined();
+    if (!record?.packageJson?.fileSignature || !record.manifestFile) {
+      throw new Error("expected package plugin index record with file signatures");
+    }
+    expect(record.manifestFile).toEqual(
+      expect.objectContaining({
+        size: fs.statSync(path.join(rootDir, "openclaw.plugin.json")).size,
+      }),
+    );
+    expect(record.packageJson.fileSignature).toEqual(
+      expect.objectContaining({
+        size: fs.statSync(path.join(rootDir, "package.json")).size,
+      }),
+    );
     writePersistedInstalledPluginIndexSync(index, { stateDir });
 
     const result = loadPluginRegistrySnapshotWithMetadata({

@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-runtime";
+import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
 
 type ResponsesInputItem = Record<string, unknown>;
@@ -173,12 +175,13 @@ type MockScenarioState = {
   subagentFanoutPhase: number;
 };
 
+const MOCK_OPENAI_MAX_BODY_BYTES = 16 * 1024 * 1024;
+const MOCK_OPENAI_BODY_TIMEOUT_MS = 30_000;
+
 function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+  return readRequestBodyWithLimit(req, {
+    maxBytes: MOCK_OPENAI_MAX_BODY_BYTES,
+    timeoutMs: MOCK_OPENAI_BODY_TIMEOUT_MS,
   });
 }
 
@@ -577,7 +580,7 @@ function extractExactMarkerDirective(text: string) {
 }
 
 function extractLabeledMarkerDirective(text: string, label: string) {
-  const escapedLabel = label.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedLabel = escapeRegExp(label);
   const backtickedMatch = extractLastCapture(
     text,
     new RegExp(`${escapedLabel}:\\s*\`([^\\\`]+)\``, "i"),
@@ -592,12 +595,12 @@ function extractLabeledMarkerDirective(text: string, label: string) {
 }
 
 function extractQuotedToolArg(text: string, name: string) {
-  const escapedName = name.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedName = escapeRegExp(name);
   return extractLastCapture(text, new RegExp(`\\b${escapedName}\\s*=\\s*"([^"]+)"`, "i"));
 }
 
 function extractBareToolArg(text: string, name: string) {
-  const escapedName = name.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedName = escapeRegExp(name);
   return extractLastCapture(text, new RegExp(`\\b${escapedName}\\s*=\\s*([^\\s\\\`.,;:!?]+)`, "i"));
 }
 

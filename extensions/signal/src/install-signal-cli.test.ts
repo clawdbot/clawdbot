@@ -75,6 +75,13 @@ beforeEach(() => {
   fetchWithSsrFGuardMock.mockReset();
 });
 
+function requireAsset(asset: ReleaseAsset | undefined, label: string): ReleaseAsset {
+  if (!asset) {
+    throw new Error(`expected release asset for ${label}`);
+  }
+  return asset;
+}
+
 describe("looksLikeArchive", () => {
   it("recognises .tar.gz", () => {
     expect(looksLikeArchive("foo.tar.gz")).toBe(true);
@@ -100,10 +107,9 @@ describe("looksLikeArchive", () => {
 describe("pickAsset", () => {
   describe("linux", () => {
     it("selects the Linux-native asset on x64", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "linux", "x64");
-      expect(result).toBeDefined();
-      expect(result!.name).toContain("Linux-native");
-      expect(result!.name).toMatch(/\.tar\.gz$/);
+      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "linux", "x64"), "linux x64");
+      expect(result.name).toContain("Linux-native");
+      expect(result.name).toMatch(/\.tar\.gz$/);
     });
 
     it("returns undefined on arm64 (triggers brew fallback)", () => {
@@ -119,24 +125,21 @@ describe("pickAsset", () => {
 
   describe("darwin", () => {
     it("selects the macOS-native asset", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "darwin", "arm64");
-      expect(result).toBeDefined();
-      expect(result!.name).toContain("macOS-native");
+      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "darwin", "arm64"), "darwin arm64");
+      expect(result.name).toContain("macOS-native");
     });
 
     it("selects the macOS-native asset on x64", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "darwin", "x64");
-      expect(result).toBeDefined();
-      expect(result!.name).toContain("macOS-native");
+      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "darwin", "x64"), "darwin x64");
+      expect(result.name).toContain("macOS-native");
     });
   });
 
   describe("win32", () => {
     it("selects the Windows-native asset", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "win32", "x64");
-      expect(result).toBeDefined();
-      expect(result!.name).toContain("Windows-native");
-      expect(result!.name).toMatch(/\.zip$/);
+      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "win32", "x64"), "win32 x64");
+      expect(result.name).toContain("Windows-native");
+      expect(result.name).toMatch(/\.zip$/);
     });
   });
 
@@ -154,15 +157,16 @@ describe("pickAsset", () => {
     });
 
     it("falls back to first archive for unknown platform", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "freebsd" as NodeJS.Platform, "x64");
-      expect(result).toBeDefined();
-      expect(result!.name).toMatch(/\.tar\.gz$/);
+      const result = requireAsset(
+        pickAsset(SAMPLE_ASSETS, "freebsd" as NodeJS.Platform, "x64"),
+        "unknown platform",
+      );
+      expect(result.name).toMatch(/\.tar\.gz$/);
     });
 
     it("never selects .asc signature files", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "linux", "x64");
-      expect(result).toBeDefined();
-      expect(result!.name).not.toMatch(/\.asc$/);
+      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "linux", "x64"), "linux x64");
+      expect(result.name).not.toMatch(/\.asc$/);
     });
   });
 });

@@ -31,6 +31,30 @@ function dropSingleAssistantContent(content: Array<Record<string, unknown>>) {
   };
 }
 
+const noThinkingReferenceCases = [
+  { name: "dropThinkingBlocks", drop: dropThinkingBlocks },
+  { name: "dropReasoningFromHistory", drop: dropReasoningFromHistory },
+];
+
+function createNoThinkingMessages(): AgentMessage[] {
+  return [
+    castAgentMessage({ role: "user", content: "hello" }),
+    castAgentMessage({ role: "assistant", content: [{ type: "text", text: "world" }] }),
+  ];
+}
+
+describe("thinking-free history contract", () => {
+  it.each(noThinkingReferenceCases)(
+    "$name returns the original reference when no thinking blocks are present",
+    ({ drop }) => {
+      const messages = createNoThinkingMessages();
+
+      const result = drop(messages);
+      expect(result).toBe(messages);
+    },
+  );
+});
+
 describe("isAssistantMessageWithContent", () => {
   it("accepts assistant messages with array content and rejects others", () => {
     const assistant = castAgentMessage({
@@ -47,16 +71,6 @@ describe("isAssistantMessageWithContent", () => {
 });
 
 describe("dropThinkingBlocks", () => {
-  it("returns the original reference when no thinking blocks are present", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({ role: "user", content: "hello" }),
-      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "world" }] }),
-    ];
-
-    const result = dropThinkingBlocks(messages);
-    expect(result).toBe(messages);
-  });
-
   it("preserves thinking blocks when the assistant message is the latest assistant turn", () => {
     const { assistant, messages, result } = dropSingleAssistantContent([
       { type: "thinking", thinking: "internal" },
@@ -159,16 +173,6 @@ describe("dropThinkingBlocks", () => {
 });
 
 describe("dropReasoningFromHistory", () => {
-  it("returns the original reference when no thinking blocks are present", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({ role: "user", content: "hello" }),
-      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "world" }] }),
-    ];
-
-    const result = dropReasoningFromHistory(messages);
-    expect(result).toBe(messages);
-  });
-
   it("strips assistant reasoning from prior completed turns", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({ role: "user", content: "first" }),

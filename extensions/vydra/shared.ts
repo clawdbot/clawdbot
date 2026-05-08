@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -9,7 +10,6 @@ import {
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
@@ -193,27 +193,11 @@ export function extractVydraResultUrls(payload: unknown, kind: VydraMediaKind): 
   return [...urls];
 }
 
-function inferExtension(kind: VydraMediaKind, mimeType: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(mimeType);
-  if (normalized.includes("jpeg")) {
-    return "jpg";
-  }
-  if (normalized.includes("webp")) {
-    return "webp";
-  }
-  if (normalized.includes("wav")) {
-    return "wav";
-  }
-  if (normalized.includes("mpeg") || normalized.includes("mp3")) {
-    return "mp3";
-  }
-  if (normalized.includes("webm")) {
-    return "webm";
-  }
-  if (normalized.includes("quicktime")) {
-    return "mov";
-  }
-  return kind === "image" ? "png" : kind === "audio" ? "mp3" : "mp4";
+function resolveVydraFileExtension(kind: VydraMediaKind, mimeType: string): string {
+  return (
+    extensionForMime(mimeType)?.slice(1) ??
+    (kind === "image" ? "png" : kind === "audio" ? "mp3" : "mp4")
+  );
 }
 
 export async function downloadVydraAsset(params: {
@@ -233,7 +217,7 @@ export async function downloadVydraAsset(params: {
     response.headers.get("content-type")?.trim() ||
     (params.kind === "image" ? "image/png" : params.kind === "audio" ? "audio/mpeg" : "video/mp4");
   const arrayBuffer = await response.arrayBuffer();
-  const extension = inferExtension(params.kind, mimeType);
+  const extension = resolveVydraFileExtension(params.kind, mimeType);
   const fileStem = params.kind === "image" ? "image" : params.kind === "audio" ? "audio" : "video";
   return {
     buffer: Buffer.from(arrayBuffer),

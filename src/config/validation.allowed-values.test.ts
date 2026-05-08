@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { __testing, validateConfigObjectRaw } from "./validation.js";
 
+function requireIssue<T extends { path: string }>(issues: T[], path: string): T {
+  const issue = issues.find((entry) => entry.path === path);
+  if (!issue) {
+    throw new Error(`expected validation issue at ${path}`);
+  }
+  return issue;
+}
+
 function mapFirstIssue(
   schema: { safeParse: (value: unknown) => { success: true } | { success: false; error: unknown } },
   value: unknown,
@@ -12,7 +20,9 @@ function mapFirstIssue(
     throw new Error("expected schema parse failure");
   }
   const issue = (result.error as { issues?: unknown[] }).issues?.[0];
-  expect(issue).toBeDefined();
+  if (!issue) {
+    throw new Error("expected first zod issue");
+  }
   return __testing.mapZodIssueToConfigIssue(issue);
 }
 
@@ -24,11 +34,10 @@ describe("config validation allowed-values metadata", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      const issue = result.issues.find((entry) => entry.path === "update.channel");
-      expect(issue).toBeDefined();
-      expect(issue?.message).toContain('(allowed: "stable", "beta", "dev")');
-      expect(issue?.allowedValues).toEqual(["stable", "beta", "dev"]);
-      expect(issue?.allowedValuesHiddenCount).toBe(0);
+      const issue = requireIssue(result.issues, "update.channel");
+      expect(issue.message).toContain('(allowed: "stable", "beta", "dev")');
+      expect(issue.allowedValues).toEqual(["stable", "beta", "dev"]);
+      expect(issue.allowedValuesHiddenCount).toBe(0);
     }
   });
 
@@ -65,11 +74,10 @@ describe("config validation allowed-values metadata", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      const issue = result.issues.find((entry) => entry.path === "cron.sessionRetention");
-      expect(issue).toBeDefined();
-      expect(issue?.allowedValues).toBeUndefined();
-      expect(issue?.allowedValuesHiddenCount).toBeUndefined();
-      expect(issue?.message).not.toContain("(allowed:");
+      const issue = requireIssue(result.issues, "cron.sessionRetention");
+      expect(issue.allowedValues).toBeUndefined();
+      expect(issue.allowedValuesHiddenCount).toBeUndefined();
+      expect(issue.message).not.toContain("(allowed:");
     }
   });
 

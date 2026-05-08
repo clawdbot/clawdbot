@@ -145,7 +145,7 @@ describe("shared runtime seam contracts", () => {
     const runtimeFetch = vi.fn(async () => new Response("runtime", { status: 200 }));
     const globalFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(requestInit.dispatcher).toBeDefined();
+      expect(requestInit.dispatcher).toBeInstanceOf(MockAgent);
       return new Response("mock", { status: 200 });
     });
 

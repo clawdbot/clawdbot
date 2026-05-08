@@ -100,7 +100,9 @@ async function getConnectedNodeId(ws: WebSocket): Promise<string> {
   );
   expect(nodes.ok).toBe(true);
   const nodeId = nodes.payload?.nodes?.find((node) => node.connected)?.nodeId ?? "";
-  expect(nodeId).toBeTruthy();
+  if (!nodeId) {
+    throw new Error("expected connected node id");
+  }
   return nodeId;
 }
 
@@ -189,7 +191,11 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
       expect(rotate.payload?.rotatedAtMs).toBeTypeOf("number");
       expect(rotate.payload?.token).toBeUndefined();
       const pairedAfterRotate = await getPairedDevice(device.deviceId);
-      expect(pairedAfterRotate?.tokens?.operator?.token).toBeTruthy();
+      const persistedToken = pairedAfterRotate?.tokens?.operator?.token;
+      if (typeof persistedToken !== "string") {
+        throw new Error("expected rotated operator token to persist");
+      }
+      expect(persistedToken.length).toBeGreaterThan(0);
 
       const revoke = await rpcReq<{ revokedAtMs?: number }>(started.ws, "device.token.revoke", {
         deviceId: device.deviceId,

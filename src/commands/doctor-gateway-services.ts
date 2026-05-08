@@ -422,15 +422,16 @@ export async function maybeRepairGatewayServiceConfig(
     ? await resolveSystemNodeInfo({ env: process.env })
     : null;
   const systemNodePath = systemNodeInfo?.supported ? systemNodeInfo.path : null;
-  if (needsNodeRuntime && !systemNodePath) {
+  if (needsNodeRuntime && !systemNodePath && runtimeChoice !== "node") {
     const warning = renderSystemNodeWarning(systemNodeInfo);
     if (warning) {
       note(warning, "Gateway runtime");
+    } else {
+      note(
+        "System Node 22 LTS (22.16+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
+        "Gateway runtime",
+      );
     }
-    note(
-      "System Node 22 LTS (22.14+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
-      "Gateway runtime",
-    );
   }
 
   const expectedRuntimePlan =

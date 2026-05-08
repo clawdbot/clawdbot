@@ -53,6 +53,8 @@ import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveFastModeState } from "./fast-mode.js";
+import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
+import { resolveAgentHarnessPolicy } from "./harness/selection.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
@@ -67,6 +69,7 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "./model-selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { hydrateResolvedSkillsAsync } from "./skills/snapshot-hydration.js";
@@ -832,11 +835,20 @@ async function agentCommandInternal(
         const profileAuthProvider = profile
           ? resolveProviderIdForAuth(profile.provider, { config: cfg, workspaceDir })
           : undefined;
-        const validationAuthProvider = resolveProviderIdForAuth(providerForAuthProfileValidation, {
+        const validationHarnessPolicy = resolveAgentHarnessPolicy({
+          provider: providerForAuthProfileValidation,
+          modelId: model,
           config: cfg,
-          workspaceDir,
+          agentId: sessionAgentId,
+          sessionKey,
         });
-        if (!profile || profileAuthProvider !== validationAuthProvider) {
+        const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
+          provider: providerForAuthProfileValidation,
+          harnessRuntime: validationHarnessPolicy.runtime,
+        }).map((candidateProvider) =>
+          resolveProviderIdForAuth(candidateProvider, { config: cfg, workspaceDir }),
+        );
+        if (!profile || !acceptedAuthProviders.includes(profileAuthProvider ?? "")) {
           if (sessionStore && sessionKey) {
             await clearSessionAuthProfileOverride({
               sessionEntry: entry,
@@ -905,6 +917,14 @@ async function agentCommandInternal(
         }
       }
     }
+    await ensureSelectedAgentHarnessPlugin({
+      config: cfg,
+      provider,
+      modelId: model,
+      agentId: sessionAgentId,
+      sessionKey,
+      workspaceDir,
+    });
     const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
     let sessionFile: string | undefined;
     if (sessionStore && sessionKey) {

@@ -1,6 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   inspectProviderToolSchemasWithPlugin,
@@ -19,6 +20,7 @@ type ProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = u
   modelId?: string;
   modelApi?: string | null;
   model?: ProviderRuntimeModel;
+  runtimeHandle?: ProviderRuntimePluginHandle;
 };
 
 function buildProviderToolSchemaContext<TSchemaType extends TSchema = TSchema, TResult = unknown>(
@@ -51,6 +53,7 @@ export function normalizeProviderToolSchemas<
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    runtimeHandle: params.runtimeHandle,
     context: buildProviderToolSchemaContext(params, provider),
   });
   return Array.isArray(pluginNormalized)
@@ -68,6 +71,7 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    runtimeHandle: params.runtimeHandle,
     context: buildProviderToolSchemaContext(params, provider),
   });
   if (!Array.isArray(diagnostics)) {

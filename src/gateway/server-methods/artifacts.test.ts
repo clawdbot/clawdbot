@@ -41,6 +41,13 @@ function createResponder() {
   };
 }
 
+function requireNonEmptyString(value: unknown, message: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(message);
+  }
+  return value;
+}
+
 describe("artifacts RPC handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -125,12 +132,12 @@ describe("artifacts RPC handlers", () => {
       ],
     });
     const artifactId = listed[0]?.id;
-    expect(artifactId).toBeTruthy();
+    const artifactIdString = requireNonEmptyString(artifactId, "expected listed artifact id");
 
     const get = createResponder();
     await artifactsHandlers["artifacts.get"]?.({
       req: { type: "req", id: "2", method: "artifacts.get", params: {} },
-      params: { sessionKey: "agent:main:main", artifactId },
+      params: { sessionKey: "agent:main:main", artifactId: artifactIdString },
       client: null,
       isWebchatConnect: () => false,
       respond: get.respond,
@@ -229,12 +236,12 @@ describe("artifacts RPC handlers", () => {
     });
 
     const artifactId = listPayload.artifacts?.[0]?.id as string | undefined;
-    expect(artifactId).toBeTruthy();
+    const artifactIdString = requireNonEmptyString(artifactId, "expected task artifact id");
 
     const get = createResponder();
     await artifactsHandlers["artifacts.get"]?.({
       req: { type: "req", id: "task-get", method: "artifacts.get", params: {} },
-      params: { taskId: "task-1", artifactId },
+      params: { taskId: "task-1", artifactId: artifactIdString },
       client: null,
       isWebchatConnect: () => false,
       respond: get.respond,
@@ -369,7 +376,7 @@ describe("artifacts RPC handlers", () => {
     expect(artifacts[0]).not.toHaveProperty("data");
   });
 
-  it("treats unsafe artifact URLs as unsupported downloads", async () => {
+  it("treats unsafe artifact URLs as unsupported downloads", () => {
     const artifacts = collectArtifactsFromMessages({
       sessionKey: "agent:main:main",
       messages: [

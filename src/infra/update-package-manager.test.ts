@@ -34,7 +34,9 @@ describe("resolveUpdateBuildManager", () => {
     expect(result.kind).toBe("resolved");
     if (result.kind === "resolved") {
       expect(result.manager).toBe("pnpm");
-      expect(paths.some((value) => value.includes("openclaw-update-pnpm-"))).toBe(true);
+      expect(paths).toEqual(
+        expect.arrayContaining([expect.stringContaining("openclaw-update-pnpm-")]),
+      );
       await result.cleanup?.();
     }
   });

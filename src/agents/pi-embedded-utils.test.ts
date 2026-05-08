@@ -794,13 +794,13 @@ describe("extractAssistantVisibleText", () => {
 });
 
 describe("promoteThinkingTagsToBlocks", () => {
-  it("does not crash on malformed null content entries", () => {
+  it("preserves malformed null content entries while promoting thinking tags", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [null as never, { type: "text", text: "<thinking>hello</thinking>ok" }],
       timestamp: Date.now(),
     });
-    expect(() => promoteThinkingTagsToBlocks(msg)).not.toThrow();
+    promoteThinkingTagsToBlocks(msg);
     const types = msg.content.map((b: { type?: string }) => b?.type);
     expect(types).toContain("thinking");
     expect(types).toContain("text");
@@ -820,13 +820,14 @@ describe("promoteThinkingTagsToBlocks", () => {
     ]);
   });
 
-  it("does not crash on undefined content entries", () => {
+  it("preserves undefined content entries when there are no thinking tags", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [undefined as never, { type: "text", text: "no tags here" }],
       timestamp: Date.now(),
     });
-    expect(() => promoteThinkingTagsToBlocks(msg)).not.toThrow();
+    promoteThinkingTagsToBlocks(msg);
+    expect(msg.content).toEqual([undefined, { type: "text", text: "no tags here" }]);
   });
 
   it("passes through well-formed content unchanged when no thinking tags", () => {

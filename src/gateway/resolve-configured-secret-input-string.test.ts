@@ -53,7 +53,7 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
     });
   });
 
-  it("returns resolved SecretRef value", async () => {
+  it("returns resolved SecretRef value with fallback metadata", async () => {
     const resolved = await resolveConfiguredSecretInputWithFallback({
       config: createConfig("${CUSTOM_GATEWAY_TOKEN}"),
       env: { CUSTOM_GATEWAY_TOKEN: "resolved-token" } as NodeJS.ProcessEnv,
@@ -113,7 +113,7 @@ describe("resolveRequiredConfiguredSecretRefInputString", () => {
     expect(value).toBeUndefined();
   });
 
-  it("returns resolved SecretRef value", async () => {
+  it("returns resolved SecretRef value when required", async () => {
     const value = await resolveRequiredConfiguredSecretRefInputString({
       config: createConfig("${CUSTOM_GATEWAY_TOKEN}"),
       env: { CUSTOM_GATEWAY_TOKEN: "resolved-token" } as NodeJS.ProcessEnv,

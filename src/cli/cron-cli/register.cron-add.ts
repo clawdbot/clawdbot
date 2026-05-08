@@ -14,6 +14,7 @@ import { resolveCronCreateSchedule } from "./schedule-options.js";
 import {
   getCronChannelOptions,
   coerceCronDeliveryPreviews,
+  enrichCronJsonWithStatus,
   handleCronCliError,
   parseCronToolsAllow,
   printCronJson,
@@ -58,7 +59,7 @@ export function registerCronListCommand(cron: Command) {
           }
           const res = await callGatewayFromCli("cron.list", opts, listParams);
           if (opts.json) {
-            printCronJson(res);
+            printCronJson(enrichCronJsonWithStatus(res));
             return;
           }
           const jobs = (res as { jobs?: CronJob[] } | null)?.jobs ?? [];

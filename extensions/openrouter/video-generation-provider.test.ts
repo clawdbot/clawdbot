@@ -295,7 +295,7 @@ describe("openrouter video generation provider", () => {
       }),
     );
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
-      releasedVideo({ contentType: "video/mp4", bytes: "mp4-bytes" }),
+      releasedVideo({ contentType: "video/webm", bytes: "webm-bytes" }),
     );
 
     const provider = buildOpenRouterVideoGenerationProvider();
@@ -313,7 +313,8 @@ describe("openrouter video generation provider", () => {
       expect.any(Function),
       expect.objectContaining({ auditContext: "openrouter-video-download" }),
     );
-    expect(result.videos[0]?.buffer?.toString()).toBe("mp4-bytes");
+    expect(result.videos[0]?.buffer?.toString()).toBe("webm-bytes");
+    expect(result.videos[0]?.fileName).toBe("video-1.webm");
   });
 
   it("rejects video reference inputs", async () => {

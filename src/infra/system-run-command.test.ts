@@ -34,8 +34,12 @@ describe("system run command helpers", () => {
     expect(formatExecCommand(["runner "])).toBe('"runner "');
   });
 
-  test("extractShellCommandFromArgv extracts sh -lc command", () => {
-    expect(extractShellCommandFromArgv(["/bin/sh", "-lc", "echo hi"])).toBe("echo hi");
+  test("extractShellCommandFromArgv fails closed for rawless sh -lc command", () => {
+    expect(extractShellCommandFromArgv(["/bin/sh", "-lc", "echo hi"])).toBe(null);
+  });
+
+  test("extractShellCommandFromArgv extracts sh -c command", () => {
+    expect(extractShellCommandFromArgv(["/bin/sh", "-c", "echo hi"])).toBe("echo hi");
   });
 
   test("extractShellCommandFromArgv extracts cmd.exe /c command", () => {
@@ -43,16 +47,16 @@ describe("system run command helpers", () => {
   });
 
   test("extractShellCommandFromArgv unwraps /usr/bin/env shell wrappers", () => {
-    expect(extractShellCommandFromArgv(["/usr/bin/env", "bash", "-lc", "echo hi"])).toBe("echo hi");
+    expect(extractShellCommandFromArgv(["/usr/bin/env", "bash", "-c", "echo hi"])).toBe("echo hi");
     expect(extractShellCommandFromArgv(["/usr/bin/env", "FOO=bar", "zsh", "-c", "echo hi"])).toBe(
       "echo hi",
     );
   });
 
   test.each([
-    { argv: ["/usr/bin/nice", "/bin/bash", "-lc", "echo hi"], expected: "echo hi" },
+    { argv: ["/usr/bin/nice", "/bin/bash", "-c", "echo hi"], expected: "echo hi" },
     {
-      argv: ["/usr/bin/timeout", "--signal=TERM", "5", "zsh", "-lc", "echo hi"],
+      argv: ["/usr/bin/timeout", "--signal=TERM", "5", "zsh", "-c", "echo hi"],
       expected: "echo hi",
     },
     {
@@ -74,7 +78,7 @@ describe("system run command helpers", () => {
     { argv: ["pwsh", "-EncodedCommand", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
     { argv: ["powershell", "-enc", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
     { argv: ["busybox", "sh", "-c", "echo hi"], expected: "echo hi" },
-    { argv: ["toybox", "ash", "-lc", "echo hi"], expected: "echo hi" },
+    { argv: ["toybox", "ash", "-c", "echo hi"], expected: "echo hi" },
   ])("extractShellCommandFromArgv unwraps %j", ({ argv, expected }) => {
     expect(extractShellCommandFromArgv(argv)).toBe(expected);
   });
@@ -131,6 +135,26 @@ describe("system run command helpers", () => {
     expect(res.previewText).toBe("echo hi");
   });
 
+  test("validateSystemRunCommandConsistency preserves legacy sh -lc payload binding only for sh", () => {
+    const sh = expectValidResult(
+      validateSystemRunCommandConsistency({
+        argv: ["/bin/sh", "-lc", "/usr/bin/printf ok"],
+        rawCommand: "/usr/bin/printf ok",
+        allowLegacyShellText: true,
+      }),
+    );
+    expect(sh.previewText).toBe("/usr/bin/printf ok");
+
+    expectRawCommandMismatch({
+      argv: ["/bin/bash", "-lc", "/usr/bin/printf ok"],
+      rawCommand: "/usr/bin/printf ok",
+    });
+  });
+
+  test("extractShellCommandFromArgv treats uppercase posix C as a shell option, not command mode", () => {
+    expect(extractShellCommandFromArgv(["/bin/bash", "-C", "echo hi"])).toBe(null);
+  });
+
   test("validateSystemRunCommandConsistency rejects shell-only rawCommand for positional-argv carrier wrappers", () => {
     expectRawCommandMismatch({
       argv: ["/bin/sh", "-lc", '$0 "$1"', "/usr/bin/touch", "/tmp/marker"],
@@ -141,7 +165,7 @@ describe("system run command helpers", () => {
   test("validateSystemRunCommandConsistency accepts rawCommand matching env shell wrapper argv", () => {
     const res = expectValidResult(
       validateSystemRunCommandConsistency({
-        argv: ["/usr/bin/env", "bash", "-lc", "echo hi"],
+        argv: ["/usr/bin/env", "bash", "-c", "echo hi"],
         rawCommand: "echo hi",
         allowLegacyShellText: true,
       }),
@@ -156,6 +180,33 @@ describe("system run command helpers", () => {
     });
   });
 
+  test.each([
+    { argv: ["/bin/bash", "--login", "-c", "/usr/bin/printf ok"] },
+    { argv: ["/bin/bash", "-i", "-c", "/usr/bin/printf ok"] },
+    { argv: ["/usr/bin/fish", "--init-command=/tmp/payload.fish", "-c", "/usr/bin/printf ok"] },
+  ])(
+    "validateSystemRunCommandConsistency rejects shell-only rawCommand for startup wrapper %j",
+    ({ argv }) => {
+      expectRawCommandMismatch({
+        argv,
+        rawCommand: "/usr/bin/printf ok",
+      });
+    },
+  );
+
+  test("validateSystemRunCommandConsistency accepts full rawCommand for startup wrapper argv", () => {
+    const raw = '/bin/bash --login -c "/usr/bin/printf ok"';
+    const res = expectValidResult(
+      validateSystemRunCommandConsistency({
+        argv: ["/bin/bash", "--login", "-c", "/usr/bin/printf ok"],
+        rawCommand: raw,
+      }),
+    );
+    expect(res.shellPayload).toBe(null);
+    expect(res.commandText).toBe(raw);
+    expect(res.previewText).toBe(null);
+  });
+
   test("validateSystemRunCommandConsistency accepts full rawCommand for env assignment prelude", () => {
     const raw = '/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo hi"';
     const res = expectValidResult(
@@ -164,7 +215,7 @@ describe("system run command helpers", () => {
         rawCommand: raw,
       }),
     );
-    expect(res.shellPayload).toBe("echo hi");
+    expect(res.shellPayload).toBe(null);
     expect(res.commandText).toBe(raw);
     expect(res.previewText).toBe(null);
   });
@@ -241,9 +292,9 @@ describe("system run command helpers", () => {
         resolveSystemRunCommand({
           command: ["/usr/bin/arch", "-arm64", "/bin/sh", "-lc", "echo hi"],
         }),
-      expectedShellPayload: process.platform === "darwin" ? "echo hi" : null,
+      expectedShellPayload: null,
       expectedCommandText: '/usr/bin/arch -arm64 /bin/sh -lc "echo hi"',
-      expectedPreviewText: process.platform === "darwin" ? "echo hi" : null,
+      expectedPreviewText: null,
     },
     {
       name: "resolveSystemRunCommand unwraps xcrun before deriving shell previews",
@@ -251,9 +302,9 @@ describe("system run command helpers", () => {
         resolveSystemRunCommand({
           command: ["/usr/bin/xcrun", "/bin/sh", "-lc", "echo hi"],
         }),
-      expectedShellPayload: process.platform === "darwin" ? "echo hi" : null,
+      expectedShellPayload: null,
       expectedCommandText: '/usr/bin/xcrun /bin/sh -lc "echo hi"',
-      expectedPreviewText: process.platform === "darwin" ? "echo hi" : null,
+      expectedPreviewText: null,
     },
     {
       name: "resolveSystemRunCommandRequest accepts legacy shell payloads but returns canonical command text",
@@ -273,7 +324,7 @@ describe("system run command helpers", () => {
         resolveSystemRunCommand({
           command: ["/bin/sh", "-lc", '$0 "$1"', "/usr/bin/touch", "/tmp/marker"],
         }),
-      expectedShellPayload: '$0 "$1"',
+      expectedShellPayload: null,
       expectedCommandText: '/bin/sh -lc "$0 \\"$1\\"" /usr/bin/touch /tmp/marker',
       expectedPreviewText: null,
     },
@@ -283,7 +334,7 @@ describe("system run command helpers", () => {
         resolveSystemRunCommand({
           command: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
         }),
-      expectedShellPayload: "echo hi",
+      expectedShellPayload: null,
       expectedCommandText: '/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo hi"',
       expectedPreviewText: null,
     },

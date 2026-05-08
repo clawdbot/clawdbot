@@ -30,6 +30,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
         }
       : {
           getGlobalHookRunner: vi.fn(() => undefined),
+          initializeGlobalHookRunner: vi.fn(),
         },
   );
   vi.doMock("../../context-engine/init.js", () => ({
@@ -39,9 +40,13 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
     resolveContextEngine: vi.fn(async () => ({
       dispose: async () => undefined,
     })),
+    resolveContextEngineOwnerPluginId: vi.fn(() => undefined),
   }));
   vi.doMock("../runtime-plugins.js", () => ({
     ensureRuntimePluginsLoaded: vi.fn(),
+  }));
+  vi.doMock("../harness/runtime-plugin.js", () => ({
+    ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),
   }));
 }
 
@@ -55,6 +60,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
       supports: vi.fn(() => ({ supported: false })),
       runAttempt: vi.fn(),
     })),
+    resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "pi" })),
     runAgentHarnessAttempt: (params: unknown) => options.runEmbeddedAttempt(params),
   }));
   vi.doMock("../runtime-plan/build.js", () => ({
@@ -81,6 +87,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
           provider: params.provider,
           modelId: params.modelId,
           resolveSystemPromptContribution: vi.fn(() => undefined),
+          transformSystemPrompt: vi.fn((context) => context.systemPrompt),
         },
         tools: {
           normalize: vi.fn((tools: unknown[]) => tools),

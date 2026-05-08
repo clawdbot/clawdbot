@@ -21,17 +21,21 @@ on:
           - plugin-sdk-package-contract
           - plugin-sdk-reply-runtime
           - provider-runtime-boundary
+          - network-runtime-boundary
           - session-diagnostics-boundary
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - ".github/codeql/**"
       - ".github/workflows/codeql-critical-quality.yml"
+      - "extensions/*.ts"
+      - "extensions/**/*.ts"
       - "packages/plugin-package-contract/**"
       - "packages/plugin-sdk/**"
       - "packages/memory-host-sdk/**"
+      - "src/*.ts"
+      - "src/**/*.ts"
       - "src/config/**"
-      - "extensions/bluebubbles/src/**"
       - "extensions/discord/src/**"
       - "extensions/feishu/src/**"
       - "extensions/googlechat/src/**"
@@ -159,6 +163,7 @@ jobs:
       plugin_sdk_package: ${{ steps.detect.outputs.plugin_sdk_package }}
       plugin_sdk_reply: ${{ steps.detect.outputs.plugin_sdk_reply }}
       provider: ${{ steps.detect.outputs.provider }}
+      network_runtime: ${{ steps.detect.outputs.network_runtime }}
       session_diagnostics: ${{ steps.detect.outputs.session_diagnostics }}
     steps:
       - name: Detect PR shard paths
@@ -182,6 +187,7 @@ jobs:
           plugin_sdk_package=false
           plugin_sdk_reply=false
           provider=false
+          network_runtime=false
           session_diagnostics=false
 
           if [[ "${EVENT_NAME}" != "pull_request" ]]; then
@@ -196,6 +202,7 @@ jobs:
             plugin_sdk_package=true
             plugin_sdk_reply=true
             provider=true
+            network_runtime=true
             session_diagnostics=true
           else
             while IFS= read -r file; do
@@ -212,6 +219,7 @@ jobs:
                   plugin_sdk_package=true
                   plugin_sdk_reply=true
                   provider=true
+                  network_runtime=true
                   session_diagnostics=true
                   ;;
                 src/acp/control-plane/*|src/agents/cli-runner/*|src/agents/command/*|src/agents/pi-embedded-runner/*|src/agents/tools/*|src/agents/*completion*.ts|src/agents/*transport*.ts|src/agents/model-*.ts|src/agents/openclaw-tools*.ts|src/agents/provider-*.ts|src/agents/session*.ts|src/agents/tool-call*.ts|src/auto-reply/reply/agent-runner*.ts|src/auto-reply/reply/commands*.ts|src/auto-reply/reply/directive-handling*.ts|src/auto-reply/reply/dispatch-*.ts|src/auto-reply/reply/get-reply-run*.ts|src/auto-reply/reply/provider-dispatcher*.ts|src/auto-reply/reply/queue*.ts|src/auto-reply/reply/reply-run-registry*.ts|src/auto-reply/reply/session*.ts)
@@ -220,7 +228,7 @@ jobs:
                 src/auto-reply/reply/post-compaction-context.ts|src/auto-reply/reply/queue/*|src/auto-reply/reply/startup-context.ts|src/commands/doctor-session-*.ts|src/commands/session-store-targets.ts|src/commands/sessions*.ts|src/infra/diagnostic-*.ts|src/infra/diagnostics-timeline.ts|src/infra/session-delivery-queue*.ts|src/logging/diagnostic*.ts)
                   session_diagnostics=true
                   ;;
-                extensions/bluebubbles/src/*|extensions/discord/src/*|extensions/feishu/src/*|extensions/googlechat/src/*|extensions/imessage/src/*|extensions/irc/src/*|extensions/line/src/*|extensions/matrix/src/*|extensions/mattermost/src/*|extensions/msteams/src/*|extensions/nextcloud-talk/src/*|extensions/nostr/src/*|extensions/qa-channel/src/*|extensions/qqbot/src/*|extensions/signal/src/*|extensions/slack/src/*|extensions/synology-chat/src/*|extensions/telegram/src/*|extensions/tlon/src/*|extensions/twitch/src/*|extensions/whatsapp/src/*|extensions/zalo/src/*|extensions/zalouser/src/*|src/channels/*)
+                extensions/discord/src/*|extensions/feishu/src/*|extensions/googlechat/src/*|extensions/imessage/src/*|extensions/irc/src/*|extensions/line/src/*|extensions/matrix/src/*|extensions/mattermost/src/*|extensions/msteams/src/*|extensions/nextcloud-talk/src/*|extensions/nostr/src/*|extensions/qa-channel/src/*|extensions/qqbot/src/*|extensions/signal/src/*|extensions/slack/src/*|extensions/synology-chat/src/*|extensions/telegram/src/*|extensions/tlon/src/*|extensions/twitch/src/*|extensions/whatsapp/src/*|extensions/zalo/src/*|extensions/zalouser/src/*|src/channels/*)
                   channel=true
                   ;;
                 src/config/*)
@@ -281,6 +289,12 @@ jobs:
                   plugin_sdk_package=true
                   ;;
               esac
+
+              case "${file}" in
+                src/*.ts|src/**/*.ts|extensions/*.ts|extensions/**/*.ts)
+                  network_runtime=true
+                  ;;
+              esac
             done < <(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '.[].filename')
           fi
 
@@ -296,6 +310,7 @@ jobs:
             echo "plugin_sdk_package=${plugin_sdk_package}"
             echo "plugin_sdk_reply=${plugin_sdk_reply}"
             echo "provider=${provider}"
+            echo "network_runtime=${network_runtime}"
             echo "session_diagnostics=${session_diagnostics}"
           } >> "${GITHUB_OUTPUT}"
 
@@ -390,6 +405,62 @@ jobs:
         uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
           category: "/codeql-critical-quality/channel-runtime-boundary"
+
+  network-runtime-boundary:
+    name: Critical Quality (network-runtime-boundary)
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.network_runtime == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'network-runtime-boundary') }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          submodules: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          languages: javascript-typescript
+          config-file: ./.github/codeql/codeql-network-runtime-boundary-critical-quality.yml
+
+      - name: Analyze
+        id: analyze
+        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          output: sarif-results
+          category: "/codeql-critical-quality/network-runtime-boundary"
+
+      - name: Fail on network runtime boundary findings
+        env:
+          SARIF_OUTPUT: sarif-results
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          files=("$SARIF_OUTPUT"/*.sarif)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No SARIF files found in $SARIF_OUTPUT" >&2
+            exit 1
+          fi
+
+          findings="$(jq -s '[.[].runs[]?.results[]?] | length' "${files[@]}")"
+          if [ "$findings" = "0" ]; then
+            exit 0
+          fi
+
+          echo "Found ${findings} network runtime boundary finding(s):" >&2
+          jq -r '
+            .runs[]?.results[]?
+            | .locations[0].physicalLocation as $location
+            | "- "
+              + ($location.artifactLocation.uri // "unknown")
+              + ":"
+              + (($location.region.startLine // 0) | tostring)
+              + " "
+              + (.message.text // .ruleId)
+          ' "${files[@]}" >&2
+          exit 1
 
   agent-runtime-boundary:
     name: Critical Quality (agent-runtime-boundary)

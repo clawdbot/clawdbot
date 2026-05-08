@@ -45,8 +45,7 @@ describe("sessionsCommand", () => {
 
     fs.rmSync(store);
 
-    const tableHeader = logs.find((line) => line.includes("Tokens (ctx %"));
-    expect(tableHeader).toBeTruthy();
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("Tokens (ctx %")]));
 
     const row = logs.find((line) => line.includes("+15555550123")) ?? "";
     expect(row).toContain("2.0k/32k (6%)");
@@ -58,9 +57,10 @@ describe("sessionsCommand", () => {
     setMockSessionsConfig(() => ({
       agents: {
         defaults: {
-          agentRuntime: { id: "claude-cli" },
           model: { primary: "anthropic/claude-opus-4-7" },
-          models: { "anthropic/claude-opus-4-7": {} },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
           contextTokens: 200_000,
         },
       },
@@ -82,8 +82,7 @@ describe("sessionsCommand", () => {
 
     fs.rmSync(store);
 
-    const tableHeader = logs.find((line) => line.includes("Runtime"));
-    expect(tableHeader).toBeTruthy();
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("Runtime")]));
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toContain("claude-opus-4-7");
@@ -94,9 +93,10 @@ describe("sessionsCommand", () => {
     setMockSessionsConfig(() => ({
       agents: {
         defaults: {
-          agentRuntime: { id: "claude-cli" },
           model: { primary: "anthropic/claude-opus-4-7" },
-          models: { "anthropic/claude-opus-4-7": {} },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
           contextTokens: 200_000,
         },
       },

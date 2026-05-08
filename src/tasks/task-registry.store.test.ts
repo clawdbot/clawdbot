@@ -107,7 +107,11 @@ describe("task-registry store runtime", () => {
       },
     });
 
-    expect(findTaskByRunId("run-restored")).toBeTruthy();
+    expect(findTaskByRunId("run-restored")).toMatchObject({
+      runId: "run-restored",
+      taskId: "task-restored",
+      task: "Restored task",
+    });
     const created = createTaskRecord({
       runtime: "acp",
       ownerKey: "agent:main:main",

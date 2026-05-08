@@ -24,11 +24,13 @@ describe("mattermost channel message adapter", () => {
 
   it("backs declared durable-final capabilities with outbound send proofs", async () => {
     const adapter = mattermostPlugin.message;
-    expect(adapter).toBeDefined();
+    if (!adapter) {
+      throw new Error("Expected mattermost plugin to expose a channel message adapter");
+    }
 
     const proveText = async () => {
       sendMessageMattermostMock.mockClear();
-      const result = await adapter!.send!.text!({
+      const result = await adapter.send!.text!({
         cfg: {},
         to: "channel:team-1",
         text: "hello",
@@ -45,7 +47,7 @@ describe("mattermost channel message adapter", () => {
 
     const proveMedia = async () => {
       sendMessageMattermostMock.mockClear();
-      const result = await adapter!.send!.media!({
+      const result = await adapter.send!.media!({
         cfg: {},
         to: "channel:team-1",
         text: "caption",
@@ -65,7 +67,7 @@ describe("mattermost channel message adapter", () => {
 
     const proveReplyThread = async () => {
       sendMessageMattermostMock.mockClear();
-      const result = await adapter!.send!.text!({
+      const result = await adapter.send!.text!({
         cfg: {},
         to: "channel:parent-1",
         text: "threaded",
@@ -82,7 +84,7 @@ describe("mattermost channel message adapter", () => {
 
     const proveExplicitReply = async () => {
       sendMessageMattermostMock.mockClear();
-      const result = await adapter!.send!.text!({
+      const result = await adapter.send!.text!({
         cfg: {},
         to: "channel:parent-1",
         text: "reply",
@@ -100,14 +102,14 @@ describe("mattermost channel message adapter", () => {
 
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "mattermostMessageAdapter",
-      adapter: adapter!,
+      adapter: adapter,
       proofs: {
         text: proveText,
         media: proveMedia,
         replyTo: proveExplicitReply,
         thread: proveReplyThread,
         messageSendingHooks: () => {
-          expect(adapter!.send!.text).toBeTypeOf("function");
+          expect(adapter.send!.text).toBeTypeOf("function");
         },
       },
     });

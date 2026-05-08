@@ -220,3 +220,12 @@ proxy:
 - Gateway control-plane proxy bypass is intentionally limited to `localhost` and literal loopback IP URLs. Use `ws://127.0.0.1:18789`, `ws://[::1]:18789`, or `ws://localhost:18789` for local direct Gateway control-plane connections; other hostnames route like ordinary hostname-based traffic.
 - OpenClaw does not inspect, test, or certify your proxy policy.
 - Treat proxy policy changes as security-sensitive operational changes.
+
+| Surface                                                      | Managed proxy status                                                                               |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `fetch`, `node:http`, `node:https`, common WebSocket clients | Routed through managed proxy hooks when configured.                                                |
+| APNs direct HTTP/2                                           | Routed through the APNs managed CONNECT helper.                                                    |
+| Gateway control-plane loopback                               | Direct only for the configured local loopback Gateway URL.                                         |
+| Debug proxy upstream forwarding                              | Disabled while managed proxy mode is active unless explicitly enabled for local diagnostics.       |
+| IRC                                                          | Raw TCP/TLS; not proxied by managed HTTP proxy mode. Disable unless direct IRC egress is approved. |
+| Other raw `net`, `tls`, or `http2` client calls              | Must be classified by the raw socket guard before landing.                                         |

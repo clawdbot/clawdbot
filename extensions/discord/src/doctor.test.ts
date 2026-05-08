@@ -8,13 +8,19 @@ import {
   scanDiscordNumericIdEntries,
 } from "./doctor.js";
 
+function getDiscordCompatibilityNormalizer(): NonNullable<
+  typeof discordDoctor.normalizeCompatibilityConfig
+> {
+  const normalize = discordDoctor.normalizeCompatibilityConfig;
+  if (!normalize) {
+    throw new Error("Expected discord doctor to expose normalizeCompatibilityConfig");
+  }
+  return normalize;
+}
+
 describe("discord doctor", () => {
   it("normalizes legacy discord streaming aliases for runtime config", () => {
-    const normalize = discordDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getDiscordCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {
@@ -76,11 +82,7 @@ describe("discord doctor", () => {
   });
 
   it("moves account voice.tts.edge into providers.microsoft", () => {
-    const normalize = discordDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getDiscordCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {
@@ -117,11 +119,7 @@ describe("discord doctor", () => {
   });
 
   it("moves legacy guild channel allow toggles into enabled", () => {
-    const normalize = discordDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getDiscordCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {
@@ -169,11 +167,7 @@ describe("discord doctor", () => {
   });
 
   it("moves legacy guild channel agentId into a top-level route binding", () => {
-    const normalize = discordDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getDiscordCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {
@@ -213,11 +207,7 @@ describe("discord doctor", () => {
   });
 
   it("moves account-scoped guild channel agentId into an account-scoped route binding", () => {
-    const normalize = discordDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getDiscordCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {
@@ -263,11 +253,7 @@ describe("discord doctor", () => {
   });
 
   it("removes legacy guild channel agentId when a matching route binding already exists", () => {
-    const normalize = discordDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getDiscordCompatibilityNormalizer();
 
     const existingBinding = {
       agentId: "video",

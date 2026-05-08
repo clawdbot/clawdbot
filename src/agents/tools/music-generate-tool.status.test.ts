@@ -26,7 +26,7 @@ describe("createMusicGenerateTool status actions", () => {
     vi.unstubAllEnvs();
   });
 
-  it("returns active task status instead of starting a duplicate generation", async () => {
+  it("returns active task status instead of starting a duplicate generation", () => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
       {
         taskId: "task-active",
@@ -68,7 +68,7 @@ describe("createMusicGenerateTool status actions", () => {
     });
   });
 
-  it("reports active task status when action=status is requested", async () => {
+  it("reports active task status when action=status is requested", () => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
       {
         taskId: "task-active",

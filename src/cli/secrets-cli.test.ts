@@ -197,7 +197,7 @@ describe("secrets CLI", () => {
 
     await expect(
       createProgram().parseAsync(["secrets", "audit", "--check"], { from: "user" }),
-    ).rejects.toBeTruthy();
+    ).rejects.toThrow("__exit__:2");
     expect(runSecretsAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         allowExec: false,

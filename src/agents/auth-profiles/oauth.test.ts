@@ -357,6 +357,30 @@ describe("resolveApiKeyForProfile secret refs", () => {
     }
   });
 
+  it("normalizes inline api_key values from auth profiles before header use", async () => {
+    const profileId = "openrouter:masked";
+    const result = await resolveApiKeyForProfile({
+      cfg: cfgFor(profileId, "openrouter", "api_key"),
+      store: {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "api_key",
+            provider: "openrouter",
+            key: " sk-or-\u202650ec ",
+          },
+        },
+      },
+      profileId,
+    });
+
+    expect(result).toEqual({
+      apiKey: "sk-or-50ec", // pragma: allowlist secret
+      provider: "openrouter",
+      email: undefined,
+    });
+  });
+
   it("resolves token tokenRef from env", async () => {
     const profileId = "github-copilot:default";
     await withEnvVar("GITHUB_TOKEN", "gh-ref-token", async () => {

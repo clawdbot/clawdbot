@@ -62,8 +62,10 @@ async function runMemberCase(args: MemberCaseArgs = {}): Promise<void> {
   });
   const key = args.handler ?? "joined";
   const handler = handlers[key];
-  expect(handler).toBeTruthy();
-  await handler!({
+  if (!handler) {
+    throw new Error(`expected Slack member ${key} handler`);
+  }
+  await handler({
     event: (args.event ?? makeMemberEvent()) as Record<string, unknown>,
     body: args.body ?? {},
   });

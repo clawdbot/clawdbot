@@ -99,11 +99,11 @@ describe("command-registry", () => {
     const program = createProgram();
     const found = await registerCoreCliByName(program, testProgramContext, "agents");
     expect(found).toBe(true);
-    const agentsCmd = program.commands.find((c) => c.name() === "agents");
-    expect(agentsCmd).toBeDefined();
     // The registrar also installs the singular "agent" command from the same entry.
-    const agentCmd = program.commands.find((c) => c.name() === "agent");
-    expect(agentCmd).toBeDefined();
+    expect(program.commands.map((command) => command.name()).toSorted()).toEqual([
+      "agent",
+      "agents",
+    ]);
   });
 
   it("registerCoreCliByName returns false for unknown commands", async () => {

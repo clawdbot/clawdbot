@@ -9,7 +9,7 @@ import {
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { isSecretRef } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 import type { GoogleChatAccountConfig } from "./types.config.js";
 
 type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";

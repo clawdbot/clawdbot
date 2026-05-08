@@ -51,7 +51,7 @@ describe("transcodeAudioBuffer", () => {
     if (process.platform === "darwin") {
       // macOS: a valid mp3→caf request would proceed to spawn `afconvert`,
       // which we don't want to run from a unit test. The Darwin happy path
-      // is exercised end-to-end via the BlueBubbles voice-memo flow.
+      // is exercised end-to-end via the native voice-memo flow.
       return;
     }
     const result = await transcodeAudioBuffer({

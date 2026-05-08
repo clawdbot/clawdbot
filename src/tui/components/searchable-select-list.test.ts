@@ -60,7 +60,7 @@ describe("SearchableSelectList", () => {
   function expectNoMatchesForQuery(list: SearchableSelectList, query: string) {
     typeInput(list, query);
     const output = list.render(80);
-    expect(output.some((line) => line.includes("No matches"))).toBe(true);
+    expect(output).toEqual(expect.arrayContaining([expect.stringContaining("No matches")]));
   }
 
   function expectDescriptionVisibilityAtWidth(width: number, shouldContainDescription: boolean) {
@@ -169,8 +169,10 @@ describe("SearchableSelectList", () => {
     typeInput(list, "gpt m");
 
     const renderedLine = list.render(80).find((line) => stripAnsi(line).includes("gpt-model"));
-    expect(renderedLine).toBeDefined();
-    const highlightOpens = renderedLine ? renderedLine.split("\u001b[31m").length - 1 : 0;
+    if (!renderedLine) {
+      throw new Error("expected rendered gpt-model line");
+    }
+    const highlightOpens = renderedLine.split("\u001b[31m").length - 1;
     expect(highlightOpens).toBe(2);
   });
 

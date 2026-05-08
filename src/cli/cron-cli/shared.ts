@@ -29,6 +29,45 @@ export function printCronJson(value: unknown) {
   defaultRuntime.writeJson(value);
 }
 
+/**
+ * Enrich a CronJob (or list response) with a computed `status` field
+ * derived from enabled + state.runningAtMs + state.lastRunStatus.
+ * This mirrors the human-readable status shown by `cron list` / `cron show`.
+ */
+export function enrichCronJsonWithStatus(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const obj = value as Record<string, unknown>;
+
+  // Single job object (has 'state' and 'enabled')
+  if ("state" in obj && "enabled" in obj) {
+    return { ...obj, status: computeStatus(obj as unknown as CronJob) };
+  }
+
+  // List response (has 'jobs' array)
+  if ("jobs" in obj && Array.isArray(obj.jobs)) {
+    const enrichedJobs = (obj.jobs as CronJob[]).map((job) => {
+      const status = computeStatus(job);
+      return Object.assign({}, job, { status });
+    });
+    return { ...obj, jobs: enrichedJobs };
+  }
+
+  return value;
+}
+
+function computeStatus(job: CronJob): string {
+  if (!job.enabled) {
+    return "disabled";
+  }
+  const state = job.state ?? {};
+  if (state.runningAtMs) {
+    return "running";
+  }
+  return state.lastRunStatus ?? state.lastStatus ?? "idle";
+}
+
 export function handleCronCliError(err: unknown) {
   defaultRuntime.error(danger(String(err)));
   defaultRuntime.exit(1);

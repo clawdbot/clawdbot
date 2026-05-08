@@ -63,13 +63,15 @@ describe("Zalouser security audit findings", () => {
       (entry) => entry.checkId === "channels.zalouser.groups.mutable_entries",
     );
 
-    expect(finding).toBeDefined();
-    expect(finding?.severity).toBe(testCase.expectedSeverity);
+    if (!finding) {
+      throw new Error("expected mutable Zalo User group finding");
+    }
+    expect(finding.severity).toBe(testCase.expectedSeverity);
     for (const snippet of testCase.detailIncludes) {
-      expect(finding?.detail).toContain(snippet);
+      expect(finding.detail).toContain(snippet);
     }
     for (const snippet of testCase.detailExcludes ?? []) {
-      expect(finding?.detail).not.toContain(snippet);
+      expect(finding.detail).not.toContain(snippet);
     }
     if (testCase.expectFindingMatch) {
       expect(findings).toEqual(

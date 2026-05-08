@@ -84,6 +84,55 @@
   font-weight: 600;
 }
 
+.login-gate__failure {
+  margin-top: 14px;
+}
+
+.login-gate__failure-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.login-gate__failure-summary {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.login-gate__failure-steps {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.login-gate__failure-steps li + li {
+  margin-top: 4px;
+}
+
+.login-gate__failure-detail {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.login-gate__failure-detail summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.login-gate__failure-raw {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.login-gate__failure-docs {
+  display: inline-flex;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
 .login-gate__help {
   margin-top: 20px;
   padding-top: 16px;
@@ -3990,6 +4039,13 @@ td.data-table-key-col {
   white-space: pre-wrap;
   font-family: var(--mono);
   font-size: 13px;
+}
+
+.exec-approval-command-span {
+  border-radius: 3px;
+  padding: 0 2px;
+  background: color-mix(in srgb, #f97316 34%, transparent);
+  color: var(--fg);
 }
 
 .exec-approval-meta {

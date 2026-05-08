@@ -8,6 +8,14 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureCustomApiRegistered, getCustomApiRegistrySourceId } from "./custom-api-registry.js";
 
+function getRegisteredTestProvider() {
+  const provider = getApiProvider("test-custom-api");
+  if (!provider) {
+    throw new Error("expected test-custom-api provider to be registered");
+  }
+  return provider;
+}
+
 describe("ensureCustomApiRegistered", () => {
   afterEach(() => {
     unregisterApiProviders(getCustomApiRegistrySourceId("test-custom-api"));
@@ -21,8 +29,10 @@ describe("ensureCustomApiRegistered", () => {
     expect(ensureCustomApiRegistered("test-custom-api", streamFn)).toBe(true);
     expect(ensureCustomApiRegistered("test-custom-api", streamFn)).toBe(false);
 
-    const provider = getApiProvider("test-custom-api");
-    expect(provider).toBeDefined();
+    expect(getRegisteredTestProvider()).toMatchObject({
+      stream: expect.any(Function),
+      streamSimple: expect.any(Function),
+    });
   });
 
   it("delegates both stream entrypoints to the provided stream function", () => {
@@ -30,15 +40,14 @@ describe("ensureCustomApiRegistered", () => {
     const streamFn = vi.fn(() => stream);
     ensureCustomApiRegistered("test-custom-api", streamFn);
 
-    const provider = getApiProvider("test-custom-api");
-    expect(provider).toBeDefined();
+    const provider = getRegisteredTestProvider();
 
     const model = { api: "test-custom-api", provider: "custom", id: "m" };
     const context = { messages: [] };
     const options = { maxTokens: 32 };
 
-    expect(provider?.stream(model as never, context as never, options as never)).toBe(stream);
-    expect(provider?.streamSimple(model as never, context as never, options as never)).toBe(stream);
+    expect(provider.stream(model as never, context as never, options as never)).toBe(stream);
+    expect(provider.streamSimple(model as never, context as never, options as never)).toBe(stream);
     expect(streamFn).toHaveBeenCalledTimes(2);
   });
 });

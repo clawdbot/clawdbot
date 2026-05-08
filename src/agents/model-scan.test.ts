@@ -57,8 +57,7 @@ describe("scanOpenRouterModels", () => {
     ]);
 
     const [byPricing] = results;
-    expect(byPricing).toBeTruthy();
-    if (!byPricing) {
+    if (byPricing === undefined) {
       throw new Error("Expected pricing-based model result.");
     }
     expect(byPricing.supportsToolsMeta).toBe(true);

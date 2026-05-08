@@ -635,10 +635,10 @@ async function runDeepSeekV4ReplayRegression(params: {
     toolCall = first.content.find((block) => block.type === "toolCall");
   }
 
-  expect(toolCall).toBeTruthy();
   if (!toolCall || toolCall.type !== "toolCall") {
     throw new Error("expected DeepSeek V4 tool call");
   }
+  expect(toolCall.name).toBe("noop");
 
   const second = await completeSimpleWithTimeout(
     params.model,
@@ -1016,11 +1016,11 @@ describeLive("live models (profile keys)", () => {
                   .trim();
               }
 
-              expect(toolCall).toBeTruthy();
               expect(firstText.length).toBe(0);
               if (!toolCall || toolCall.type !== "toolCall") {
                 throw new Error("expected tool call");
               }
+              expect(toolCall.name).toBe("noop");
 
               const second = await completeSimpleWithTimeout(
                 model,

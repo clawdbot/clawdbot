@@ -9,7 +9,7 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
     expect(elevenLabsMediaUnderstandingProvider.id).toBe("elevenlabs");
     expect(elevenLabsMediaUnderstandingProvider.capabilities).toEqual(["audio"]);
     expect(elevenLabsMediaUnderstandingProvider.defaultModels?.audio).toBe("scribe_v2");
-    expect(elevenLabsMediaUnderstandingProvider.transcribeAudio).toBeDefined();
+    expect(elevenLabsMediaUnderstandingProvider.transcribeAudio).toBeTypeOf("function");
   });
 
   it("posts multipart audio to ElevenLabs speech-to-text", async () => {

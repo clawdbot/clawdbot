@@ -73,7 +73,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Discord](/channels/discord)
 - [Mattermost](/channels/mattermost)
 - [Signal](/channels/signal)
-- [BlueBubbles (legacy iMessage bridge)](/channels/bluebubbles)
 - [QQ Bot](/channels/qqbot)
 - [iMessage](/channels/imessage)
 - [Location parsing](/channels/location)
@@ -168,7 +167,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Plugin manifest](/plugins/manifest)
 - [Agent tools](/plugins/building-plugins#registering-agent-tools)
 - [Plugin bundles](/plugins/bundles)
-- [Community plugins](/plugins/community)
+- [ClawHub](/clawhub)
 - [Capability cookbook](/tools/capability-cookbook)
 - [Voice call plugin](/plugins/voice-call)
 - [Zalo user plugin](/plugins/zalouser)
@@ -176,7 +175,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Workspace + templates
 
 - [Skills](/tools/skills)
-- [ClawHub](/tools/clawhub)
+- [ClawHub](/clawhub)
 - [Skills config](/tools/skills-config)
 - [Default AGENTS](/reference/AGENTS.default)
 - [Templates: AGENTS](/reference/templates/AGENTS)

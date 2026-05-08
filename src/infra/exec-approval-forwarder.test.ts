@@ -8,6 +8,7 @@ import {
   buildExecApprovalRequestMessage,
   createExecApprovalForwarder,
 } from "./exec-approval-forwarder.js";
+import type { ExecApprovalRequest } from "./exec-approvals.js";
 
 const baseRequest = {
   id: "req-1",
@@ -308,7 +309,11 @@ async function expectSessionFilterRequestResult(params: {
   expect(deliver).toHaveBeenCalledTimes(params.expectedDeliveryCount);
 }
 
-async function expectForwardedApprovalText(params: { command?: string; expectedText: string }) {
+async function expectForwardedApprovalText(params: {
+  command?: string;
+  request?: Partial<ExecApprovalRequest["request"]>;
+  expectedText: string;
+}) {
   vi.useFakeTimers();
   const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
   await expect(
@@ -317,6 +322,7 @@ async function expectForwardedApprovalText(params: { command?: string; expectedT
       request: {
         ...baseRequest.request,
         ...(params.command ? { command: params.command } : {}),
+        ...params.request,
       },
     }),
   ).resolves.toBe(true);
@@ -574,7 +580,7 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
   });
 
-  it("includes command analysis warnings in fallback delivery text", async () => {
+  it("includes command analysis warnings in fallback delivery text", () => {
     const text = buildExecApprovalRequestMessage(
       {
         ...baseRequest,

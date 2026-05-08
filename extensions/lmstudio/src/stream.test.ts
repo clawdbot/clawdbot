@@ -505,7 +505,6 @@ describe("lmstudio stream wrapper", () => {
       "toolcall_delta",
       "done",
     ]);
-    expect(events.some((event) => event.type === "text_delta")).toBe(false);
     const done = events.find((event) => event.type === "done") as {
       message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
       reason?: string;

@@ -10,7 +10,7 @@ function expectSlackConfigIssue(config: unknown, path: string) {
   const res = SlackConfigSchema.safeParse(config);
   expect(res.success).toBe(false);
   if (!res.success) {
-    expect(res.error.issues.some((issue) => issue.path.join(".").includes(path))).toBe(true);
+    expect(res.error.issues.map((issue) => issue.path.join("."))).toContain(path);
   }
 }
 

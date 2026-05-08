@@ -3,6 +3,8 @@ import { buildChannelsTable } from "./channels.js";
 
 const mocks = vi.hoisted(() => ({
   resolveInspectedChannelAccount: vi.fn(),
+  listReadOnlyChannelPluginsForConfig: vi.fn(),
+  missingOfficialExternalChannels: new Set<string>(),
 }));
 
 const discordPlugin = {
@@ -18,12 +20,34 @@ vi.mock("../../channels/account-inspection.js", () => ({
 }));
 
 vi.mock("../../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: () => [discordPlugin],
+  resolveReadOnlyChannelPluginsForConfig: () => ({
+    plugins: mocks.listReadOnlyChannelPluginsForConfig(),
+    configuredChannelIds: [],
+    missingConfiguredChannelIds: [],
+  }),
+}));
+
+vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
+  resolveMissingOfficialExternalChannelPluginRepairHint: ({ channelId }: { channelId: string }) =>
+    mocks.missingOfficialExternalChannels.has(channelId)
+      ? {
+          pluginId: channelId,
+          channelId,
+          label: "Feishu",
+          installSpec: "@openclaw/feishu",
+          installCommand: "openclaw plugins install @openclaw/feishu",
+          doctorFixCommand: "openclaw doctor --fix",
+          repairHint:
+            "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+        }
+      : null,
 }));
 
 describe("buildChannelsTable", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.missingOfficialExternalChannels.clear();
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([discordPlugin]);
     mocks.resolveInspectedChannelAccount.mockResolvedValue({
       account: {
         tokenStatus: "configured_unavailable",
@@ -78,5 +102,31 @@ describe("buildChannelsTable", () => {
         detail: expect.stringContaining("unavailable"),
       }),
     );
+  });
+
+  it("shows configured official external channels when the plugin is missing", async () => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
+    mocks.missingOfficialExternalChannels.add("feishu");
+
+    const table = await buildChannelsTable({ channels: { feishu: { appId: "cli_xxx" } } });
+
+    expect(table.rows).toContainEqual({
+      id: "feishu",
+      label: "Feishu",
+      enabled: true,
+      state: "warn",
+      detail:
+        "plugin not installed - run openclaw plugins install @openclaw/feishu or openclaw doctor --fix",
+    });
+    expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
+  });
+
+  it("does not show install repair rows when an external channel owner is policy-blocked", async () => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
+
+    const table = await buildChannelsTable({ channels: { feishu: { appId: "cli_xxx" } } });
+
+    expect(table.rows).toEqual([]);
+    expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
   });
 });

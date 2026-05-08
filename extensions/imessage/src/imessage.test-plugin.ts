@@ -1,4 +1,8 @@
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+  ChannelOutboundAdapter,
+} from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import { collectStatusIssuesFromLastError } from "openclaw/plugin-sdk/status-helpers";
@@ -90,8 +94,42 @@ const defaultIMessageOutbound: ChannelOutboundAdapter = {
   },
 };
 
+const defaultIMessageActions: ChannelMessageActionAdapter = {
+  describeMessageTool: () => ({
+    actions: [
+      "react",
+      "edit",
+      "unsend",
+      "reply",
+      "sendWithEffect",
+      "upload-file",
+      "renameGroup",
+      "setGroupIcon",
+      "addParticipant",
+      "removeParticipant",
+      "leaveGroup",
+    ],
+  }),
+  supportsAction: ({ action }) =>
+    new Set<ChannelMessageActionName>([
+      "react",
+      "edit",
+      "unsend",
+      "reply",
+      "sendWithEffect",
+      "upload-file",
+      "sendAttachment",
+      "renameGroup",
+      "setGroupIcon",
+      "addParticipant",
+      "removeParticipant",
+      "leaveGroup",
+    ]).has(action),
+};
+
 export const createIMessageTestPlugin = (params?: {
   outbound?: ChannelOutboundAdapter;
+  actions?: ChannelMessageActionAdapter;
 }): ChannelPlugin => ({
   id: "imessage",
   meta: {
@@ -110,6 +148,7 @@ export const createIMessageTestPlugin = (params?: {
   status: {
     collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("imessage", accounts),
   },
+  actions: params?.actions ?? defaultIMessageActions,
   outbound: params?.outbound ?? defaultIMessageOutbound,
   messaging: {
     targetResolver: {

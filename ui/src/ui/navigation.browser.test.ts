@@ -394,7 +394,7 @@ describe("control UI routing", () => {
     expect(topShell.firstElementChild).toBe(toggle);
     expect(topShell.querySelector(".topbar-nav-toggle")).toBe(toggle);
     expect(actions.querySelector(".topbar-search")).not.toBeNull();
-    expect(toggle.getAttribute("aria-label")).toBeTruthy();
+    expect(toggle.getAttribute("aria-label")).toEqual(expect.stringMatching(/\S/u));
 
     const nav = app.querySelector<HTMLElement>(".shell-nav");
     expect(nav).not.toBeNull();

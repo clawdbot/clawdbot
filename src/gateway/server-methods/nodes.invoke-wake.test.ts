@@ -658,9 +658,16 @@ describe("node.invoke APNs wake path", () => {
 
     const queuedActionId = (pullCall?.[1] as { actions?: Array<{ id?: string }> } | undefined)
       ?.actions?.[0]?.id;
-    expect(queuedActionId).toBeTruthy();
+    expect(queuedActionId).toEqual(
+      expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+      ),
+    );
+    if (queuedActionId === undefined) {
+      throw new Error("expected queued action id");
+    }
 
-    const ackRespond = await ackPending("ios-node-queued", [queuedActionId!], ["canvas.navigate"]);
+    const ackRespond = await ackPending("ios-node-queued", [queuedActionId], ["canvas.navigate"]);
     const ackCall = ackRespond.mock.calls[0] as RespondCall | undefined;
     expect(ackCall?.[0]).toBe(true);
     expect(ackCall?.[1]).toMatchObject({

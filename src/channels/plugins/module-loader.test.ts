@@ -44,7 +44,6 @@ describe("channel plugin module loader helpers", () => {
 
   it("uses native require for eligible JavaScript modules without creating Jiti", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ ok: false })));
-    vi.resetModules();
     vi.doMock("jiti", () => ({
       createJiti,
     }));
@@ -78,7 +77,6 @@ describe("channel plugin module loader helpers", () => {
       sourceHooks.set(extension, testRequire.extensions[extension]);
       delete testRequire.extensions[extension];
     }
-    vi.resetModules();
     const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
       import.meta.url,
       "./module-loader.js?scope=source-ts-jiti-fallback",

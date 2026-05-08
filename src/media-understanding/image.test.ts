@@ -537,8 +537,10 @@ describe("describeImageWithModel", () => {
       });
       expect(completeMock).toHaveBeenCalledTimes(2);
       const [, , retryOptions] = completeMock.mock.calls[1] ?? [];
-      expect(retryOptions?.onPayload).toEqual(expect.any(Function));
-      const retryPayload = await retryOptions?.onPayload?.(
+      if (!retryOptions?.onPayload) {
+        throw new Error("expected retry payload mapper");
+      }
+      const retryPayload = await retryOptions.onPayload(
         {
           reasoning: { effort: "high", summary: "auto" },
           reasoning_effort: "high",

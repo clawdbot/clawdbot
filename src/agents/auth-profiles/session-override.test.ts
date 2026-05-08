@@ -25,13 +25,33 @@ const authStoreMocks = vi.hoisted(() => {
       state.store = { version: 1, profiles: {} };
     },
     resolveAuthProfileOrder: vi.fn(
-      ({ store, provider }: { store: AuthProfileStore; provider: string }) => {
+      ({
+        cfg,
+        store,
+        provider,
+      }: {
+        cfg?: OpenClawConfig;
+        store: AuthProfileStore;
+        provider: string;
+      }) => {
         const providerKey = normalizeProvider(provider);
         const ordered = Object.entries(store.order ?? {}).find(
           ([key]) => normalizeProvider(key) === providerKey,
         )?.[1];
         if (ordered) {
           return ordered;
+        }
+        const configured = Object.entries(cfg?.auth?.profiles ?? {})
+          .filter(([profileId, profile]) => {
+            if (normalizeProvider(profile.provider) !== providerKey) {
+              return false;
+            }
+            const stored = store.profiles[profileId];
+            return !stored || normalizeProvider(stored.provider) === providerKey;
+          })
+          .map(([profileId]) => profileId);
+        if (configured.length > 0) {
+          return configured;
         }
         return Object.entries(store.profiles)
           .filter(([, profile]) => normalizeProvider(profile.provider) === providerKey)
@@ -47,6 +67,22 @@ vi.mock("./store.js", () => ({
 }));
 
 vi.mock("./order.js", () => ({
+  isConfiguredAwsSdkAuthProfileForProvider: ({
+    cfg,
+    provider,
+    profileId,
+  }: {
+    cfg?: OpenClawConfig;
+    provider: string;
+    profileId: string;
+  }) => {
+    const normalizeProvider = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const profile = cfg?.auth?.profiles?.[profileId];
+    return (
+      profile?.mode === "aws-sdk" &&
+      normalizeProvider(profile.provider) === normalizeProvider(provider)
+    );
+  },
   resolveAuthProfileOrder: authStoreMocks.resolveAuthProfileOrder,
 }));
 
@@ -157,6 +193,115 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
+  it("keeps config-only aws-sdk user overrides", async () => {
+    await withAuthState(async (state) => {
+      const agentDir = state.agentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      authStoreMocks.state.hasSource = false;
+      authStoreMocks.state.store = { version: 1, profiles: {} };
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        authProfileOverride: "amazon-bedrock:default",
+        authProfileOverrideSource: "user",
+      };
+      const sessionStore = { "agent:main:main": sessionEntry };
+
+      const resolved = await resolveSessionAuthProfileOverride({
+        cfg: {
+          models: {
+            providers: {
+              "amazon-bedrock": {
+                auth: "aws-sdk",
+                baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+                api: "bedrock-converse-stream",
+                models: [],
+              },
+            },
+          },
+          auth: {
+            profiles: {
+              "amazon-bedrock:default": {
+                provider: "amazon-bedrock",
+                mode: "aws-sdk",
+              },
+            },
+          },
+        } as OpenClawConfig,
+        provider: "amazon-bedrock",
+        agentDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:main",
+        storePath: undefined,
+        isNewSession: false,
+      });
+
+      expect(resolved).toBe("amazon-bedrock:default");
+      expect(sessionEntry.authProfileOverride).toBe("amazon-bedrock:default");
+    });
+  });
+
+  it("clears aws-sdk config override when stored profile drifted to another provider", async () => {
+    await withAuthState(async (state) => {
+      const agentDir = state.agentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      authStoreMocks.state.hasSource = true;
+      authStoreMocks.state.store = createAuthStoreWithProfiles({
+        profiles: {
+          "amazon-bedrock:default": {
+            type: "api_key",
+            provider: "openrouter",
+            key: "sk-drifted",
+          },
+        },
+      });
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        authProfileOverride: "amazon-bedrock:default",
+        authProfileOverrideSource: "user",
+      };
+      const sessionStore = { "agent:main:main": sessionEntry };
+
+      const resolved = await resolveSessionAuthProfileOverride({
+        cfg: {
+          models: {
+            providers: {
+              "amazon-bedrock": {
+                auth: "aws-sdk",
+                baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+                api: "bedrock-converse-stream",
+                models: [],
+              },
+            },
+          },
+          auth: {
+            profiles: {
+              "amazon-bedrock:default": {
+                provider: "amazon-bedrock",
+                mode: "aws-sdk",
+              },
+            },
+          },
+        } as OpenClawConfig,
+        provider: "amazon-bedrock",
+        agentDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:main",
+        storePath: undefined,
+        isNewSession: false,
+      });
+
+      expect(resolved).toBeUndefined();
+      expect(sessionEntry.authProfileOverride).toBeUndefined();
+      expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+    });
+  });
+
   it("keeps explicit user override when stored order prefers another profile", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
@@ -234,6 +379,49 @@ describe("resolveSessionAuthProfileOverride", () => {
       const resolved = await resolveSessionAuthProfileOverride({
         cfg: {} as OpenClawConfig,
         provider: "codex-cli",
+        agentDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:main",
+        storePath: undefined,
+        isNewSession: false,
+      });
+
+      expect(resolved).toBe(TEST_PRIMARY_PROFILE_ID);
+      expect(sessionEntry.authProfileOverride).toBe(TEST_PRIMARY_PROFILE_ID);
+    });
+  });
+
+  it("keeps a session override from an accepted runtime auth provider", async () => {
+    await withAuthState(async (state) => {
+      const agentDir = state.agentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      authStoreMocks.state.hasSource = true;
+      authStoreMocks.state.store = createAuthStoreWithProfiles({
+        profiles: {
+          [TEST_PRIMARY_PROFILE_ID]: {
+            type: "api_key",
+            provider: "openai-codex",
+            key: "sk-codex",
+          },
+        },
+        order: {
+          "openai-codex": [TEST_PRIMARY_PROFILE_ID],
+        },
+      });
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+        authProfileOverrideSource: "user",
+      };
+      const sessionStore = { "agent:main:main": sessionEntry };
+
+      const resolved = await resolveSessionAuthProfileOverride({
+        cfg: {} as OpenClawConfig,
+        provider: "openai",
+        acceptedProviderIds: ["openai-codex"],
         agentDir,
         sessionEntry,
         sessionStore,

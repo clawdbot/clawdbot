@@ -234,13 +234,15 @@ describe("Discord security audit findings", () => {
     if (testCase.expectNoNameBasedFinding) {
       expect(nameBasedFinding).toBeUndefined();
     } else {
-      expect(nameBasedFinding).toBeDefined();
-      expect(nameBasedFinding?.severity).toBe(testCase.expectNameBasedSeverity);
+      if (!nameBasedFinding) {
+        throw new Error(`expected name-based finding for ${testCase.name}`);
+      }
+      expect(nameBasedFinding.severity).toBe(testCase.expectNameBasedSeverity);
       for (const snippet of testCase.detailIncludes ?? []) {
-        expect(nameBasedFinding?.detail).toContain(snippet);
+        expect(nameBasedFinding.detail).toContain(snippet);
       }
       for (const snippet of testCase.detailExcludes ?? []) {
-        expect(nameBasedFinding?.detail).not.toContain(snippet);
+        expect(nameBasedFinding.detail).not.toContain(snippet);
       }
     }
   });

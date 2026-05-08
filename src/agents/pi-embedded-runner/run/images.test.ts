@@ -298,7 +298,19 @@ describe("detectAndLoadPromptImages", () => {
     expectNoPromptImages(result);
   });
 
-  it("preserves attachment order when offloaded refs and inline images are mixed", async () => {
+  it("sanitizes existing images even when prompt has no image references", async () => {
+    const result = await detectAndLoadPromptImages({
+      prompt: "describe the attached image",
+      workspaceDir: "/tmp",
+      model: { input: ["text", "image"] },
+      existingImages: [{ type: "image", data: "not-valid-base64", mimeType: "image/png" }],
+    });
+
+    expect(result.images).toHaveLength(0);
+    expect(result.detectedRefs).toHaveLength(0);
+  });
+
+  it("preserves attachment order when offloaded refs and inline images are mixed", () => {
     const merged = mergePromptAttachmentImages({
       imageOrder: ["offloaded", "inline"],
       existingImages: [{ type: "image", data: "small-b", mimeType: "image/png" }],

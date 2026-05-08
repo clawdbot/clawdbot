@@ -46,6 +46,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | --- | --- |
     | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
     | `plugin-sdk/config-schema` | Root `openclaw.json` Zod schema export (`OpenClawSchema`) |
+    | `plugin-sdk/json-schema-runtime` | Cached JSON Schema validation helper for plugin-owned schemas |
     | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
     | `plugin-sdk/setup` | Shared setup wizard helpers, allowlist prompts, setup status builders |
     | `plugin-sdk/setup-runtime` | `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
@@ -264,6 +265,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | Subpath | Key exports |
     | --- | --- |
     | `plugin-sdk/media-runtime` | Shared media fetch/transform/store helpers, ffprobe-backed video dimension probing, and media payload builders |
+    | `plugin-sdk/media-mime` | Narrow MIME normalization, file-extension mapping, MIME detection, and media-kind helpers |
     | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer` |
     | `plugin-sdk/media-generation-runtime` | Shared media-generation failover helpers, candidate selection, and missing-model messaging |
     | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio helper exports |

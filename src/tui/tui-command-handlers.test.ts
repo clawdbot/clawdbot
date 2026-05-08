@@ -179,7 +179,7 @@ describe("tui command handlers", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("sending");
     const sendingOrder = setActivityStatus.mock.invocationCallOrder[0] ?? 0;
     const renderOrders = requestRender.mock.invocationCallOrder;
-    expect(renderOrders.some((order) => order > sendingOrder)).toBe(true);
+    expect(renderOrders.filter((order) => order > sendingOrder)).not.toEqual([]);
 
     resolveSend({ runId: "r1" });
     await pending;

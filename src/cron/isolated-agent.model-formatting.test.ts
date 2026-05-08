@@ -232,7 +232,7 @@ describe("cron model formatting and precedence edge cases", () => {
       ).resolves.toEqual({
         ok: false,
         error:
-          "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6",
+          "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6 is not in [(none configured)]",
       });
     });
 

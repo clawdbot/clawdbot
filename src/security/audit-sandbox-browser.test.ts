@@ -115,8 +115,8 @@ describe("security audit sandbox browser findings", () => {
         },
       },
     } satisfies OpenClawConfig);
-    expect(findings.some((f) => f.checkId === "sandbox.browser_cdp_bridge_unrestricted")).toBe(
-      false,
+    expect(findings.map((finding) => finding.checkId)).not.toContain(
+      "sandbox.browser_cdp_bridge_unrestricted",
     );
   });
 });

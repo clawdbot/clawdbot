@@ -190,8 +190,10 @@ describe("google provider plugin hooks", () => {
       name: "Google Provider",
     });
     const provider = requireRegisteredProvider(providers, "google");
-    expect(provider.resolveThinkingProfile).toBeDefined();
-    const resolveThinkingProfile = provider.resolveThinkingProfile!;
+    if (!provider.resolveThinkingProfile) {
+      throw new Error("expected Google provider thinking profile resolver");
+    }
+    const resolveThinkingProfile = provider.resolveThinkingProfile;
     const gemini3Profile = resolveThinkingProfile({
       provider: "google",
       modelId: "gemini-3.1-pro-preview",
@@ -246,9 +248,11 @@ describe("google provider plugin hooks", () => {
       onClearAudio() {},
     });
 
-    expect(bridge).toBeDefined();
-    expect(() => bridge?.sendAudio(Buffer.alloc(160))).not.toThrow();
-    expect(() => bridge?.setMediaTimestamp(20)).not.toThrow();
-    expect(() => bridge?.sendUserMessage?.("hello")).not.toThrow();
+    if (!bridge) {
+      throw new Error("expected Google realtime bridge");
+    }
+    expect(() => bridge.sendAudio(Buffer.alloc(160))).not.toThrow();
+    expect(() => bridge.setMediaTimestamp(20)).not.toThrow();
+    expect(() => bridge.sendUserMessage?.("hello")).not.toThrow();
   });
 });

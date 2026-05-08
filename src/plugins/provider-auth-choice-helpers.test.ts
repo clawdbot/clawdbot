@@ -142,6 +142,22 @@ describe("applyDefaultModel", () => {
     });
   });
 
+  it("normalizes a preserved retired Google Gemini primary", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "google/gemini-3-pro-preview" },
+        },
+      },
+    } as OpenClawConfig;
+    const next = applyDefaultModel(config, "openrouter/auto", {
+      preserveExistingPrimary: true,
+    });
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+    });
+  });
+
   it("preserves an existing primary and keeps fallbacks", () => {
     const config = {
       agents: {
@@ -170,6 +186,38 @@ describe("applyDefaultModel", () => {
     expect(next.agents?.defaults?.models).toEqual({
       "anthropic/claude-sonnet-4-6": {},
       "openrouter/auto": {},
+    });
+  });
+
+  it("normalizes retired Google Gemini default models before writing config", () => {
+    const config = {
+      agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": {} } } },
+    } as OpenClawConfig;
+    const next = applyDefaultModel(config, "google/gemini-3-pro-preview");
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+    });
+    expect(next.agents?.defaults?.models).toEqual({
+      "anthropic/claude-sonnet-4-6": {},
+      "google/gemini-3.1-pro-preview": {},
+    });
+  });
+
+  it("normalizes retired Google Gemini fallbacks when writing config", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["google/gemini-3-pro-preview"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const next = applyDefaultModel(config, "openrouter/auto");
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "openrouter/auto",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
     });
   });
 });

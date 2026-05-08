@@ -38,6 +38,17 @@ function createBackgroundSession(id: string, pid?: number) {
   });
 }
 
+function expectSessionState(sessionId: string, expected: { exited?: boolean }) {
+  expect(getSession(sessionId)).toMatchObject(expected);
+}
+
+function expectFinishedSessionState(
+  sessionId: string,
+  expected: { status?: string; exitSignal?: string | null },
+) {
+  expect(getFinishedSession(sessionId)).toMatchObject(expected);
+}
+
 describe("process tool supervisor cancellation", () => {
   beforeAll(async () => {
     ({ addSession, getFinishedSession, getSession, resetProcessRegistryForTests } =
@@ -73,8 +84,7 @@ describe("process tool supervisor cancellation", () => {
     });
 
     expect(supervisorMock.cancel).toHaveBeenCalledWith("sess", "manual-cancel");
-    expect(getSession("sess")).toBeDefined();
-    expect(getSession("sess")?.exited).toBe(false);
+    expectSessionState("sess", { exited: false });
     expect(result.content[0]).toMatchObject({
       type: "text",
       text: "Termination requested for session sess.",
@@ -115,7 +125,7 @@ describe("process tool supervisor cancellation", () => {
 
     expect(killProcessTreeMock).toHaveBeenCalledWith(4242);
     expect(getSession("sess-fallback")).toBeUndefined();
-    expect(getFinishedSession("sess-fallback")).toBeDefined();
+    expectFinishedSessionState("sess-fallback", { status: "failed", exitSignal: "SIGKILL" });
     expect(result.content[0]).toMatchObject({
       type: "text",
       text: "Killed session sess-fallback.",
@@ -133,7 +143,7 @@ describe("process tool supervisor cancellation", () => {
     });
 
     expect(killProcessTreeMock).not.toHaveBeenCalled();
-    expect(getSession("sess-no-pid")).toBeDefined();
+    expectSessionState("sess-no-pid", { exited: false });
     expect(result.details).toMatchObject({ status: "failed" });
     expect(result.content[0]).toMatchObject({
       type: "text",

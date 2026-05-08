@@ -53,7 +53,7 @@ describe("telegram audit", () => {
     resolveTelegramApiBaseMock.mockClear();
   });
 
-  it("collects unmentioned numeric group ids and flags wildcard", async () => {
+  it("collects unmentioned numeric group ids and flags wildcard", () => {
     const res = collectTelegramUnmentionedGroupIds({
       "*": { requireMention: false },
       "-1001": { requireMention: false },

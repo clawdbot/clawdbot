@@ -7,7 +7,6 @@ import {
   parseModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import { modelSelectionRequiresCodexRuntime } from "../../agents/openai-codex-routing.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   type OpenClawConfig,
@@ -15,7 +14,7 @@ import {
   replaceConfigFile,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { toAgentModelListLike } from "../../config/model-input.js";
+import { normalizeAgentModelRefForConfig, toAgentModelListLike } from "../../config/model-input.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -198,10 +197,12 @@ export function mergePrimaryFallbackConfig(
   const base = existing && typeof existing === "object" ? existing : undefined;
   const next: PrimaryFallbackConfig = { ...base };
   if (patch.primary !== undefined) {
-    next.primary = patch.primary;
+    next.primary = normalizeAgentModelRefForConfig(patch.primary);
   }
   if (patch.fallbacks !== undefined) {
-    next.fallbacks = patch.fallbacks;
+    next.fallbacks = patch.fallbacks.map((fallback) => normalizeAgentModelRefForConfig(fallback));
+  } else if (next.fallbacks !== undefined) {
+    next.fallbacks = next.fallbacks.map((fallback) => normalizeAgentModelRefForConfig(fallback));
   }
   return next;
 }
@@ -221,9 +222,6 @@ export function applyDefaultModelPrimaryUpdate(params: {
   const existing = toAgentModelListLike(
     (defaults as Record<string, unknown>)[params.field] as AgentModelConfig | undefined,
   );
-  const shouldUseCodexRuntime =
-    params.field === "model" &&
-    modelSelectionRequiresCodexRuntime({ model: key, config: params.cfg });
 
   return {
     ...params.cfg,
@@ -231,7 +229,6 @@ export function applyDefaultModelPrimaryUpdate(params: {
       ...params.cfg.agents,
       defaults: {
         ...defaults,
-        ...(shouldUseCodexRuntime ? { agentRuntime: { id: "codex" } } : {}),
         [params.field]: mergePrimaryFallbackConfig(existing, { primary: key }),
         models: nextModels,
       },

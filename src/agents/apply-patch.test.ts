@@ -84,7 +84,7 @@ async function expectOutsideWriteRejected(params: {
 }) {
   const patch = buildAddFilePatch(params.patchTargetPath);
   await expect(applyPatch(patch, { cwd: params.dir })).rejects.toThrow(/Path escapes sandbox root/);
-  await expect(fs.readFile(params.outsidePath, "utf8")).rejects.toBeDefined();
+  await expect(fs.readFile(params.outsidePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 describe("applyPatch", () => {
@@ -232,7 +232,7 @@ describe("applyPatch", () => {
         await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
           /Symlink escapes sandbox root/,
         );
-        await expect(fs.readFile(outsideFile, "utf8")).rejects.toBeDefined();
+        await expect(fs.readFile(outsideFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
         await fs.rm(outsideDir, { recursive: true, force: true });
       }
@@ -376,7 +376,7 @@ describe("applyPatch", () => {
 
         const result = await applyPatch(patch, { cwd: dir });
         expect(result.summary.deleted).toEqual(["link"]);
-        await expect(fs.lstat(linkDir)).rejects.toBeDefined();
+        await expect(fs.lstat(linkDir)).rejects.toMatchObject({ code: "ENOENT" });
         const outsideContents = await fs.readFile(outsideTarget, "utf8");
         expect(outsideContents).toBe("keep\n");
       } finally {

@@ -10,7 +10,7 @@ import {
 import { telegramSetupWizard } from "./setup-surface.js";
 
 describe("ensureTelegramDefaultGroupMentionGate", () => {
-  it('adds groups["*"].requireMention=true for fresh setups', async () => {
+  it('adds groups["*"].requireMention=true for fresh setups', () => {
     const cfg = ensureTelegramDefaultGroupMentionGate(
       {
         channels: {
@@ -27,7 +27,7 @@ describe("ensureTelegramDefaultGroupMentionGate", () => {
     });
   });
 
-  it("preserves an explicit wildcard group mention setting", async () => {
+  it("preserves an explicit wildcard group mention setting", () => {
     const cfg = ensureTelegramDefaultGroupMentionGate(
       {
         channels: {

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  EXTENSION_MIME,
   IMAGE_MIME_INLINE_SET,
   TEXT_INLINE_MAX_BYTES,
   TEXT_INLINE_MIME_SET,
@@ -13,6 +12,8 @@ describe("mimeFromExtension", () => {
     expect(mimeFromExtension("/abs/path/bar.JPG")).toBe("image/jpeg");
     expect(mimeFromExtension("doc.pdf")).toBe("application/pdf");
     expect(mimeFromExtension("notes.md")).toBe("text/markdown");
+    expect(mimeFromExtension("trace.log")).toBe("text/plain");
+    expect(mimeFromExtension("bitmap.bmp")).toBe("image/bmp");
   });
 
   it("falls back to application/octet-stream for unknown extensions", () => {
@@ -28,11 +29,11 @@ describe("mimeFromExtension", () => {
 
 describe("MIME constants", () => {
   it("EXTENSION_MIME includes the v1 image set", () => {
-    expect(EXTENSION_MIME[".png"]).toBe("image/png");
-    expect(EXTENSION_MIME[".jpg"]).toBe("image/jpeg");
-    expect(EXTENSION_MIME[".jpeg"]).toBe("image/jpeg");
-    expect(EXTENSION_MIME[".webp"]).toBe("image/webp");
-    expect(EXTENSION_MIME[".gif"]).toBe("image/gif");
+    expect(mimeFromExtension("image.png")).toBe("image/png");
+    expect(mimeFromExtension("image.jpg")).toBe("image/jpeg");
+    expect(mimeFromExtension("image.jpeg")).toBe("image/jpeg");
+    expect(mimeFromExtension("image.webp")).toBe("image/webp");
+    expect(mimeFromExtension("image.gif")).toBe("image/gif");
   });
 
   it("IMAGE_MIME_INLINE_SET is the inline-renderable image set", () => {
@@ -50,6 +51,7 @@ describe("MIME constants", () => {
     expect(TEXT_INLINE_MIME_SET.has("text/markdown")).toBe(true);
     expect(TEXT_INLINE_MIME_SET.has("application/json")).toBe(true);
     expect(TEXT_INLINE_MIME_SET.has("text/csv")).toBe(true);
+    expect(TEXT_INLINE_MIME_SET.has("text/xml")).toBe(true);
   });
 
   it("TEXT_INLINE_MAX_BYTES is the documented 8KB cap", () => {

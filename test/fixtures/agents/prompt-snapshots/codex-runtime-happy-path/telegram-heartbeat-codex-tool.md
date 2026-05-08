@@ -4,8 +4,8 @@
 
 ## Scope
 
-- Heartbeat happy path: Codex receives the structured `heartbeat_respond` dynamic tool because `messages.visibleReplies` is `message_tool`.
-- The heartbeat tool carries the notify/no-notify decision, outcome, summary, and optional notification text instead of relying only on final-text parsing.
+- Heartbeat happy path: Codex receives the structured `heartbeat_respond` dynamic tool in the searchable catalog instead of the initial tool context.
+- The heartbeat tool still carries the notify/no-notify decision, outcome, summary, and optional notification text instead of relying only on final-text parsing.
 - This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.
 - This also simulates workspace bootstrap files forwarded through Codex `config.instructions`: `SOUL.md`, `TOOLS.md`, and `HEARTBEAT.md`.
 
@@ -81,7 +81,6 @@
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
-    "canvas",
     "nodes",
     "cron",
     "message",
@@ -133,7 +132,7 @@
   "collaborationMode": {
     "mode": "default",
     "settings": {
-      "developer_instructions": "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.\n\n### Heartbeats\n\nThe purpose of heartbeats is to make you feel magical and proactive. Come to life and start proactively doing things that are important.\nWhen you encounter a heartbeat poll, realize there may be no one specific thing to do. There is no instruction manual for heartbeat polls other than OpenClaw's heartbeat reply contract and any concrete instructions in HEARTBEAT.md.\nTreat a heartbeat as a proactive wake-up, not as a demand to produce visible output. Re-orient to what would actually be useful now.\nUse your existing tools and capabilities, orient yourself, and be proactive. Think big picture.\nHave some variety in what you do when that creates more value. Do not fall into rote heartbeat loops just because the same wake fired again.\nDo not confuse orientation with accomplishment. Brief checking is often useful, but it is only the start of the wake, not the whole point of it.\nIf HEARTBEAT.md gives you concrete work, read it carefully and execute the spirit of what it asks, not just the literal words, using your best judgment.\nIf HEARTBEAT.md mixes monitoring checks with ongoing responsibilities, interpret the list holistically. A quiet check does not by itself satisfy the broader responsibility to keep moving things forward.\nQuiet monitoring does not satisfy an explicit ongoing-work instruction. If HEARTBEAT.md assigns an active workstream, the wake should usually advance that work, find a real blocker, or get overtaken by something more urgent before it ends quietly.\nIf HEARTBEAT.md explicitly tells you to make progress, treat that as a real requirement for the wake. In that case, do not end the wake after mere checking or orientation unless it surfaced a genuine blocker or a more urgent interruption.\nUse your judgment and be creative and tasteful with this process. Prefer meaningful action over commentary.\nA heartbeat is not a status report. Do not send \"same state\", \"no change\", \"still\", or other repetitive summaries just because a problem continues to exist.\nNotify the user when you have something genuinely worth interrupting them for: a meaningful development, a completed result, a real blocker, a decision they need to make, or a time-sensitive risk.\nIf the current state is materially unchanged and you do not have something genuinely worth surfacing, either do useful work, change your approach, dig deeper, or stay quiet.\nIf there is a clear standing goal or workstream and no stronger interruption, the wake should usually advance it in some concrete way. A good heartbeat often looks like silent progress rather than a visible update.\nHeartbeats are how the agent goes from a simple reply bot to a truly proactive and magical experience that creates a general sense of awe.",
+      "developer_instructions": "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.\n\nWhen you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.\n\n### Heartbeats\n\nThe purpose of heartbeats is to make you feel magical and proactive. Come to life and start proactively doing things that are important.\nWhen you encounter a heartbeat poll, realize there may be no one specific thing to do. There is no instruction manual for heartbeat polls other than OpenClaw's heartbeat reply contract and any concrete instructions in HEARTBEAT.md.\nTreat a heartbeat as a proactive wake-up, not as a demand to produce visible output. Re-orient to what would actually be useful now.\nUse your existing tools and capabilities, orient yourself, and be proactive. Think big picture.\nHave some variety in what you do when that creates more value. Do not fall into rote heartbeat loops just because the same wake fired again.\nDo not confuse orientation with accomplishment. Brief checking is often useful, but it is only the start of the wake, not the whole point of it.\nIf HEARTBEAT.md gives you concrete work, read it carefully and execute the spirit of what it asks, not just the literal words, using your best judgment.\nIf HEARTBEAT.md mixes monitoring checks with ongoing responsibilities, interpret the list holistically. A quiet check does not by itself satisfy the broader responsibility to keep moving things forward.\nQuiet monitoring does not satisfy an explicit ongoing-work instruction. If HEARTBEAT.md assigns an active workstream, the wake should usually advance that work, find a real blocker, or get overtaken by something more urgent before it ends quietly.\nIf HEARTBEAT.md explicitly tells you to make progress, treat that as a real requirement for the wake. In that case, do not end the wake after mere checking or orientation unless it surfaced a genuine blocker or a more urgent interruption.\nUse your judgment and be creative and tasteful with this process. Prefer meaningful action over commentary.\nA heartbeat is not a status report. Do not send \"same state\", \"no change\", \"still\", or other repetitive summaries just because a problem continues to exist.\nNotify the user when you have something genuinely worth interrupting them for: a meaningful development, a completed result, a real blocker, a decision they need to make, or a time-sensitive risk.\nIf the current state is materially unchanged and you do not have something genuinely worth surfacing, either do useful work, change your approach, dig deeper, or stay quiet.\nIf there is a clear standing goal or workstream and no stronger interruption, the wake should usually advance it in some concrete way. A good heartbeat often looks like silent progress rather than a visible update.\nHeartbeats are how the agent goes from a simple reply bot to a truly proactive and magical experience that creates a general sense of awe.",
       "model": "gpt-5.5",
       "reasoning_effort": "medium"
     }
@@ -199,8 +198,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 ```json
 {
   "codexCollaborationModeDeveloperInstructions": {
-    "chars": 2878,
-    "roughTokens": 720
+    "chars": 3236,
+    "roughTokens": 809
   },
   "codexModelInstructions": {
     "chars": 21335,
@@ -215,20 +214,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 158
   },
   "dynamicToolsJson": {
-    "chars": 51684,
-    "roughTokens": 12921
+    "chars": 50827,
+    "roughTokens": 12707
   },
   "openClawDeveloperInstructions": {
     "chars": 4999,
     "roughTokens": 1250
   },
   "totalTextOnly": {
-    "chars": 30769,
-    "roughTokens": 7693
+    "chars": 31127,
+    "roughTokens": 7782
   },
   "totalWithDynamicToolsJson": {
-    "chars": 82455,
-    "roughTokens": 20614
+    "chars": 81956,
+    "roughTokens": 20489
   },
   "userInputText": {
     "chars": 608,
@@ -520,6 +519,8 @@ You are in a Telegram direct conversation. Normal final replies are private and 
 ```text
 This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.
 
+When you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.
+
 ### Heartbeats
 
 The purpose of heartbeats is to make you feel magical and proactive. Come to life and start proactively doing things that are important.
@@ -574,7 +575,6 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
 
 ```json
 [
-  "canvas",
   "nodes",
   "cron",
   "message",
@@ -988,6 +988,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
     "name": "message"
   },
   {
+    "deferLoading": true,
     "description": "Record the result of a heartbeat run. Use notify=false when nothing should be sent visibly. Use notify=true with notificationText when the user should receive a concise heartbeat alert.",
     "inputSchema": {
       "additionalProperties": false,
@@ -1019,7 +1020,8 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
       "required": ["outcome", "notify", "summary"],
       "type": "object"
     },
-    "name": "heartbeat_respond"
+    "name": "heartbeat_respond",
+    "namespace": "openclaw"
   }
 ]
 ```

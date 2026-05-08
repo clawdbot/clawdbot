@@ -102,7 +102,7 @@ describe("bonjour-discovery", () => {
     expect(browseCalls.map((c) => c.argv[3])).toEqual(
       expect.arrayContaining(["local.", WIDE_AREA_DOMAIN]),
     );
-    expect(browseCalls.every((c) => c.timeoutMs === 1234)).toBe(true);
+    expect([...new Set(browseCalls.map((c) => c.timeoutMs))]).toEqual([1234]);
   });
 
   it("decodes dns-sd octal escapes in TXT displayName", async () => {
@@ -269,8 +269,8 @@ describe("bonjour-discovery", () => {
       }),
     ]);
 
-    expect(calls.some((c) => c.argv[0] === "tailscale" && c.argv[1] === "status")).toBe(true);
-    expect(calls.some((c) => c.argv[0] === "dig")).toBe(true);
+    expect(calls.map((c) => c.argv.slice(0, 2).join(" "))).toContain("tailscale status");
+    expect(calls.map((c) => c.argv[0])).toContain("dig");
   });
 
   it("normalizes domains and respects domains override", async () => {

@@ -1908,10 +1908,12 @@ describe("createOllamaStreamFn", () => {
       const errorEvent = events.find((e) => e.type === "error") as
         | { type: "error"; error: { errorMessage?: string } }
         | undefined;
-      expect(errorEvent).toBeDefined();
+      if (!errorEvent) {
+        throw new Error("expected Ollama stream error event");
+      }
       // The error message must start with the HTTP status code so that
       // extractLeadingHttpStatus can parse it for failover/retry logic.
-      expect(errorEvent!.error.errorMessage).toMatch(/^503\b/);
+      expect(errorEvent.error.errorMessage).toMatch(/^503\b/);
     } finally {
       fetchWithSsrFGuardMock.mockReset();
     }

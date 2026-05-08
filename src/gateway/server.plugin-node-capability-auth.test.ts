@@ -1,15 +1,11 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Socket } from "node:net";
+import type { Duplex } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import {
-  A2UI_PATH,
-  CANVAS_CAPABILITY_PATH_PREFIX,
-  CANVAS_HOST_PATH,
-  CANVAS_WS_PATH,
-  type CanvasHostHandler,
-} from "../../extensions/canvas/runtime-api.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { PLUGIN_NODE_CAPABILITY_PATH_PREFIX } from "./plugin-node-capability.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -19,6 +15,18 @@ const WS_REJECT_TIMEOUT_MS = 2_000;
 const WS_CONNECT_TIMEOUT_MS = 5_000;
 const HTTP_REQUEST_TIMEOUT_MS = 15_000;
 const SERVER_CLOSE_TIMEOUT_MS = 5_000;
+const A2UI_PATH = "/__openclaw__/a2ui";
+const CANVAS_HOST_PATH = "/__openclaw__/canvas";
+const CANVAS_WS_PATH = "/__openclaw__/ws";
+const CANVAS_CAPABILITY_PATH_PREFIX = PLUGIN_NODE_CAPABILITY_PATH_PREFIX;
+
+type CanvasHostHandler = {
+  rootDir: string;
+  basePath: string;
+  handleHttpRequest: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  handleUpgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
+  close: () => Promise<void>;
+};
 
 async function fetchCanvas(input: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
@@ -545,7 +553,7 @@ describe("gateway plugin node capability auth", () => {
             },
           );
           expect(second.status).toBe(429);
-          expect(second.headers.get("retry-after")).toBeTruthy();
+          expect(second.headers.get("retry-after")).toMatch(/^\d+$/);
 
           await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, headers, 429);
         },

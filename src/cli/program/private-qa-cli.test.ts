@@ -51,7 +51,7 @@ describe("private-qa-cli", () => {
     });
   });
 
-  it("rejects non-source package roots even when private QA is enabled", async () => {
+  it("rejects non-source package roots even when private QA is enabled", () => {
     process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-private-qa-"));
     tempDirs.push(root);
@@ -67,7 +67,7 @@ describe("private-qa-cli", () => {
     expect(importModule).not.toHaveBeenCalled();
   });
 
-  it("rejects when the private QA env flag is disabled", async () => {
+  it("rejects when the private QA env flag is disabled", () => {
     delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
     const importModule = vi.fn(async () => ({}));
 

@@ -31,7 +31,7 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
 
     expect(chunks.map((chunk) => chunk.source.text)).toEqual(["alpha ", "<<"]);
     expect(chunks.map((chunk) => chunk.source.text).join("")).toBe("alpha <<");
-    expect(chunks.every((chunk) => chunk.rendered.length <= 8)).toBe(true);
+    expect(chunks.filter((chunk) => chunk.rendered.length > 8)).toEqual([]);
   });
 
   it("preserves formatting when a rendered chunk is re-split", () => {
@@ -46,8 +46,8 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
     });
 
     expect(chunks.map((chunk) => chunk.source.text)).toEqual(["Which of ", "these"]);
-    expect(chunks.every((chunk) => chunk.rendered.startsWith("<b>"))).toBe(true);
-    expect(chunks.every((chunk) => chunk.rendered.endsWith("</b>"))).toBe(true);
+    expect(chunks.filter((chunk) => !chunk.rendered.startsWith("<b>"))).toEqual([]);
+    expect(chunks.filter((chunk) => !chunk.rendered.endsWith("</b>"))).toEqual([]);
   });
 
   it("checks exact candidates instead of assuming rendered length is monotonic", () => {

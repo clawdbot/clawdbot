@@ -6,6 +6,32 @@ import {
   wrapFileReferencesInHtml,
 } from "./format.js";
 
+type TelegramChunk = ReturnType<typeof markdownToTelegramChunks>[number];
+
+function expectHtmlChunkLengthsAtMost(chunks: TelegramChunk[], limit: number) {
+  expect(
+    chunks
+      .map((chunk, index) => ({ index, htmlLength: chunk.html.length, text: chunk.text }))
+      .filter((chunk) => chunk.htmlLength > limit),
+  ).toEqual([]);
+}
+
+function expectNonBlankTextChunks(chunks: TelegramChunk[]) {
+  expect(
+    chunks
+      .map((chunk, index) => ({ index, text: chunk.text }))
+      .filter((chunk) => chunk.text.trim().length === 0),
+  ).toEqual([]);
+}
+
+function expectHtmlChunksWrappedWith(chunks: TelegramChunk[], prefix: string, suffix: string) {
+  expect(
+    chunks
+      .map((chunk, index) => ({ index, html: chunk.html }))
+      .filter((chunk) => !chunk.html.startsWith(prefix) || !chunk.html.endsWith(suffix)),
+  ).toEqual([]);
+}
+
 describe("wrapFileReferencesInHtml", () => {
   it("wraps supported file references and paths", () => {
     const cases = [
@@ -164,7 +190,7 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
     const chunks = markdownToTelegramChunks(input, 512);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
-    expect(chunks.every((chunk) => chunk.html.length <= 512)).toBe(true);
+    expectHtmlChunkLengthsAtMost(chunks, 512);
   });
 
   it("preserves whitespace when html-limit retry splitting runs", () => {
@@ -172,7 +198,7 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
     const chunks = markdownToTelegramChunks(input, 5);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
-    expect(chunks.every((chunk) => chunk.html.length <= 5)).toBe(true);
+    expectHtmlChunkLengthsAtMost(chunks, 5);
   });
 
   it("prefers word boundaries when escaped html shrinks the retry window", () => {
@@ -180,14 +206,14 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
     const chunks = markdownToTelegramChunks(input, 8);
     expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
     expect(chunks[0]?.text).toBe("alpha ");
-    expect(chunks.every((chunk) => chunk.html.length <= 8)).toBe(true);
+    expectHtmlChunkLengthsAtMost(chunks, 8);
   });
 
   it("prefers word boundaries when html-limit retry splits formatted prose", () => {
     const input = "**Which of these**";
     const chunks = markdownToTelegramChunks(input, 16);
     expect(chunks.map((chunk) => chunk.text)).toEqual(["Which of ", "these"]);
-    expect(chunks.every((chunk) => chunk.html.length <= 16)).toBe(true);
+    expectHtmlChunkLengthsAtMost(chunks, 16);
   });
 
   it("preserves formatting while splitting at word boundaries", () => {
@@ -195,10 +221,8 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
     const chunks = markdownToTelegramChunks(input, 13);
     expect(chunks.map((chunk) => chunk.text).join("")).toBe("alpha <<");
     expect(chunks[0]?.text).toBe("alpha ");
-    expect(chunks.every((chunk) => chunk.html.length <= 13)).toBe(true);
-    expect(
-      chunks.every((chunk) => chunk.html.startsWith("<b>") && chunk.html.endsWith("</b>")),
-    ).toBe(true);
+    expectHtmlChunkLengthsAtMost(chunks, 13);
+    expectHtmlChunksWrappedWith(chunks, "<b>", "</b>");
   });
 
   it("does not rely on monotonic html length for sliced file refs", () => {
@@ -207,7 +231,7 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
     expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
     expect(chunks[0]?.text).toBe("README.md");
     expect(chunks[0]?.html).toBe("<code>README.md</code>");
-    expect(chunks.every((chunk) => chunk.html.length <= 22)).toBe(true);
+    expectHtmlChunkLengthsAtMost(chunks, 22);
   });
 
   it("gracefully returns the original chunk when tag overhead exceeds the limit", () => {
@@ -223,29 +247,29 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
     const input = "**foo (bar baz qux quux**";
     const chunks = markdownToTelegramChunks(input, 20);
     expect(chunks.map((chunk) => chunk.text)).toEqual(["foo", "(bar baz qux ", "quux"]);
-    expect(chunks.every((chunk) => chunk.html.length <= 20)).toBe(true);
+    expectHtmlChunkLengthsAtMost(chunks, 20);
   });
 
   it("falls back to hard splits when a single word exceeds the limit", () => {
     const input = "supercalifragilistic";
     const chunks = markdownToTelegramChunks(input, 8);
     expect(chunks.map((chunk) => chunk.text)).toEqual(["supercal", "ifragili", "stic"]);
-    expect(chunks.every((chunk) => chunk.html.length <= 8)).toBe(true);
+    expectHtmlChunkLengthsAtMost(chunks, 8);
   });
 
   it("does not emit whitespace-only chunks during html-limit retry splitting", () => {
     const input = "**ab  <<**";
     const chunks = markdownToTelegramChunks(input, 11);
     expect(chunks.map((chunk) => chunk.text).join("")).toBe("ab  <<");
-    expect(chunks.every((chunk) => chunk.text.trim().length > 0)).toBe(true);
-    expect(chunks.every((chunk) => chunk.html.length <= 11)).toBe(true);
+    expectNonBlankTextChunks(chunks);
+    expectHtmlChunkLengthsAtMost(chunks, 11);
   });
 
   it("preserves paragraph separators when retry chunking produces whitespace-only spans", () => {
     const input = "ab\n\n<<";
     const chunks = markdownToTelegramChunks(input, 6);
     expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
-    expect(chunks.every((chunk) => chunk.html.length <= 6)).toBe(true);
+    expectHtmlChunkLengthsAtMost(chunks, 6);
   });
 });
 

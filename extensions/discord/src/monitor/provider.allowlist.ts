@@ -5,7 +5,8 @@ import {
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
 } from "openclaw/plugin-sdk/allow-from";
-import type { DiscordGuildEntry } from "openclaw/plugin-sdk/config-types";
+import type { DiscordAccountConfig, DiscordGuildEntry } from "openclaw/plugin-sdk/config-types";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
@@ -356,6 +357,7 @@ export async function resolveDiscordAllowlistConfig(params: {
   token: string;
   guildEntries: unknown;
   allowFrom: unknown;
+  discordConfig: DiscordAccountConfig;
   fetcher: typeof fetch;
   runtime: RuntimeEnv;
 }): Promise<{ guildEntries: GuildEntries | undefined; allowFrom: string[] | undefined }> {
@@ -371,20 +373,22 @@ export async function resolveDiscordAllowlistConfig(params: {
     });
   }
 
-  allowFrom = await resolveAllowFromByUserAllowlist({
-    token: params.token,
-    allowFrom,
-    fetcher: params.fetcher,
-    runtime: params.runtime,
-  });
-
-  if (hasGuildEntries(guildEntries)) {
-    guildEntries = await resolveGuildEntriesByUserAllowlist({
+  if (isDangerousNameMatchingEnabled(params.discordConfig)) {
+    allowFrom = await resolveAllowFromByUserAllowlist({
       token: params.token,
-      guildEntries,
+      allowFrom,
       fetcher: params.fetcher,
       runtime: params.runtime,
     });
+
+    if (hasGuildEntries(guildEntries)) {
+      guildEntries = await resolveGuildEntriesByUserAllowlist({
+        token: params.token,
+        guildEntries,
+        fetcher: params.fetcher,
+        runtime: params.runtime,
+      });
+    }
   }
 
   return {

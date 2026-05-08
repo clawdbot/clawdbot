@@ -92,15 +92,31 @@ function applyRuntimeToolsAllow<T extends { name: string }>(tools: T[], toolsAll
   return tools.filter((tool) => allowSet.has(normalizeToolName(tool.name)));
 }
 
+type OpenClawCodingTool = ReturnType<typeof createOpenClawCodingTools>[number];
+
+function requireTool(tools: OpenClawCodingTool[], name: string): OpenClawCodingTool {
+  const tool = tools.find((candidate) => candidate.name === name);
+  if (!tool) {
+    throw new Error(`expected ${name} tool`);
+  }
+  return tool;
+}
+
+function requireToolExecute(tool: OpenClawCodingTool): NonNullable<OpenClawCodingTool["execute"]> {
+  if (!tool.execute) {
+    throw new Error(`expected ${tool.name} tool execute`);
+  }
+  return tool.execute;
+}
+
 describe("createOpenClawCodingTools", () => {
   const testConfig: OpenClawConfig = {};
 
   it("exposes gateway config and restart actions to owner sessions", () => {
     const tools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
-    const gateway = tools.find((tool) => tool.name === "gateway");
-    expect(gateway).toBeDefined();
+    const gateway = requireTool(tools, "gateway");
 
-    const parameters = gateway?.parameters as {
+    const parameters = gateway.parameters as {
       properties?: Record<string, unknown>;
     };
     const action = parameters.properties?.action as
@@ -814,15 +830,15 @@ describe("createOpenClawCodingTools", () => {
 
   it("returns image-aware read metadata for images and text-only blocks for text files", async () => {
     const defaultTools = createOpenClawCodingTools();
-    const readTool = defaultTools.find((tool) => tool.name === "read");
-    expect(readTool).toBeDefined();
+    const readTool = requireTool(defaultTools, "read");
+    const readExecute = requireToolExecute(readTool);
 
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-"));
     try {
       const imagePath = path.join(tmpDir, "sample.png");
       await fs.writeFile(imagePath, tinyPngBuffer);
 
-      const imageResult = await readTool?.execute("tool-1", {
+      const imageResult = await readExecute("tool-1", {
         path: imagePath,
       });
 
@@ -844,7 +860,7 @@ describe("createOpenClawCodingTools", () => {
       const contents = "Hello from openclaw read tool.";
       await fs.writeFile(textPath, contents, "utf8");
 
-      const textResult = await readTool?.execute("tool-2", {
+      const textResult = await readExecute("tool-2", {
         path: textPath,
       });
 
@@ -962,11 +978,11 @@ describe("createOpenClawCodingTools", () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-structured-write-"));
     try {
       const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
-      const writeTool = tools.find((tool) => tool.name === "write");
-      expect(writeTool).toBeDefined();
+      const writeTool = requireTool(tools, "write");
+      const writeExecute = requireToolExecute(writeTool);
 
       await expect(
-        writeTool?.execute("tool-structured-write", {
+        writeExecute("tool-structured-write", {
           path: "structured-write.js",
           content: [
             { type: "text", text: "const path = require('path');\n" },
@@ -986,11 +1002,11 @@ describe("createOpenClawCodingTools", () => {
       await fs.writeFile(filePath, "const value = 'old';\n", "utf8");
 
       const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
-      const editTool = tools.find((tool) => tool.name === "edit");
-      expect(editTool).toBeDefined();
+      const editTool = requireTool(tools, "edit");
+      const editExecute = requireToolExecute(editTool);
 
       await expect(
-        editTool?.execute("tool-structured-edit", {
+        editExecute("tool-structured-edit", {
           path: "structured-edit.js",
           edits: [
             {

@@ -13,6 +13,7 @@ import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
+import type { TelegramReplyChainEntry } from "./message-cache.js";
 
 /** Dependencies injected once when creating the message processor. */
 type TelegramMessageProcessorDeps = Omit<
@@ -60,6 +61,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     storeAllowFrom: string[],
     options?: TelegramMessageContextOptions,
     replyMedia?: TelegramMediaRef[],
+    replyChain?: TelegramReplyChainEntry[],
   ) => {
     const ingressReceivedAtMs =
       typeof options?.receivedAtMs === "number" && Number.isFinite(options.receivedAtMs)
@@ -72,6 +74,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       primaryCtx,
       allMedia,
       replyMedia,
+      replyChain,
       storeAllowFrom,
       options,
       bot,

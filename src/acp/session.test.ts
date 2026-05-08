@@ -33,6 +33,26 @@ describe("acp session manager", () => {
     expect(store.getSessionByRunId("run-1")).toBeUndefined();
   });
 
+  it("deletes sessions and aborts active runs on close", () => {
+    const session = store.createSession({
+      sessionId: "close-me",
+      sessionKey: "acp:close",
+      cwd: "/tmp",
+    });
+    const controller = new AbortController();
+    store.setActiveRun(session.sessionId, "run-close", controller);
+
+    expect(store.deleteSession(session.sessionId)).toBe(true);
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(store.hasSession(session.sessionId)).toBe(false);
+    expect(store.getSessionByRunId("run-close")).toBeUndefined();
+  });
+
+  it("reports false when deleting a missing session", () => {
+    expect(store.deleteSession("missing")).toBe(false);
+  });
+
   it("refreshes existing session IDs instead of creating duplicates", () => {
     const first = store.createSession({
       sessionId: "existing",
@@ -112,7 +132,7 @@ describe("acp session manager", () => {
 
       expect(third.sessionId).toBe("third");
       expect(boundedStore.getSession(first.sessionId)).toBeUndefined();
-      expect(boundedStore.getSession(second.sessionId)).toBeDefined();
+      expect(boundedStore.getSession(second.sessionId)).toMatchObject({ sessionId: "second" });
     } finally {
       boundedStore.clearAllSessionsForTest();
     }

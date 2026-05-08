@@ -94,8 +94,10 @@ function emitGatewayFrame(frame: GatewayFrame): void {
 
 function pumpMicrophone(samples: Float32Array): void {
   const processor = processors.at(-1);
-  expect(processor).toBeDefined();
-  processor?.onaudioprocess?.({
+  if (!processor) {
+    throw new Error("Expected microphone script processor to be created");
+  }
+  processor.onaudioprocess?.({
     inputBuffer: {
       getChannelData: () => samples,
     },

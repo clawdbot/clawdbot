@@ -46,7 +46,7 @@ describe("pruneStaleEntries", () => {
 
     expect(pruned).toBe(1);
     expect(store.old).toBeUndefined();
-    expect(store.fresh).toBeDefined();
+    expect(store).toHaveProperty("fresh");
   });
 
   it("preserves durable external conversation entries", () => {
@@ -64,11 +64,11 @@ describe("pruneStaleEntries", () => {
 
     expect(pruned).toBe(1);
     expect(store.old).toBeUndefined();
-    expect(store["agent:main:slack:channel:C123:thread:1710000000.000100"]).toBeDefined();
-    expect(store["agent:main:telegram:group:-100123:topic:77"]).toBeDefined();
-    expect(store["agent:main:slack:channel:C999"]).toBeDefined();
-    expect(store["agent:main:telegram:group:-100123"]).toBeDefined();
-    expect(store["agent:main:discord:channel:ops"]).toBeDefined();
+    expect(store).toHaveProperty("agent:main:slack:channel:C123:thread:1710000000.000100");
+    expect(store).toHaveProperty("agent:main:telegram:group:-100123:topic:77");
+    expect(store).toHaveProperty("agent:main:slack:channel:C999");
+    expect(store).toHaveProperty("agent:main:telegram:group:-100123");
+    expect(store).toHaveProperty("agent:main:discord:channel:ops");
   });
 });
 
@@ -87,9 +87,9 @@ describe("capEntryCount", () => {
 
     expect(evicted).toBe(2);
     expect(Object.keys(store)).toHaveLength(3);
-    expect(store.newest).toBeDefined();
-    expect(store.recent).toBeDefined();
-    expect(store.mid).toBeDefined();
+    expect(store).toHaveProperty("newest");
+    expect(store).toHaveProperty("recent");
+    expect(store).toHaveProperty("mid");
     expect(store.oldest).toBeUndefined();
     expect(store.old).toBeUndefined();
   });
@@ -109,9 +109,9 @@ describe("capEntryCount", () => {
 
     expect(evicted).toBe(2);
     expect(Object.keys(store)).toHaveLength(3);
-    expect(store[threadKey]).toBeDefined();
-    expect(store.newest).toBeDefined();
-    expect(store.recent).toBeDefined();
+    expect(store).toHaveProperty(threadKey);
+    expect(store).toHaveProperty("newest");
+    expect(store).toHaveProperty("recent");
     expect(store.oldest).toBeUndefined();
     expect(store.old).toBeUndefined();
   });

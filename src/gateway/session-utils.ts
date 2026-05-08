@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
   resolveAgentConfig,
@@ -1012,13 +1012,20 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   const agents = agentIds.map((id) => {
     const meta = configuredById.get(id);
     const model = resolveGatewayAgentModel(cfg, id);
+    const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
     return Object.assign(
       {
         id,
         name: meta?.name,
         identity: meta?.identity,
         workspace: resolveAgentWorkspaceDir(cfg, id),
-        agentRuntime: resolveAgentRuntimeMetadata(cfg, id),
+        agentRuntime: resolveModelAgentRuntimeMetadata({
+          cfg,
+          agentId: id,
+          provider: resolvedModel.provider,
+          model: resolvedModel.model,
+          sessionKey: resolveAgentMainSessionKey({ cfg, agentId: id }),
+        }),
       },
       model ? { model } : {},
     );
@@ -1711,7 +1718,6 @@ export function buildGatewaySessionRow(params: {
   const latestCompactionCheckpoint = buildCompactionCheckpointPreview(
     resolveLatestCompactionCheckpoint(entry),
   );
-  const agentRuntime = resolveAgentRuntimeMetadata(cfg, sessionAgentId);
   const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelProvider;
   const selectedOrRuntimeModel = selectedModel?.model ?? model;
   const rowModelIdentity = lightweight
@@ -1724,6 +1730,13 @@ export function buildGatewaySessionRow(params: {
       });
   const rowModelProvider = rowModelIdentity.provider;
   const rowModel = rowModelIdentity.model;
+  const agentRuntime = resolveModelAgentRuntimeMetadata({
+    cfg,
+    agentId: sessionAgentId,
+    provider: rowModelProvider,
+    model: rowModel,
+    sessionKey: key,
+  });
   const estimatedCostUsd = lightweight
     ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
     : (resolveEstimatedSessionCostUsd({

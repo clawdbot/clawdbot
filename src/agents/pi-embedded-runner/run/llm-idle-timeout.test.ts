@@ -243,14 +243,7 @@ describe("streamWithIdleTimeout", () => {
     };
   }
 
-  it("wraps stream function", () => {
-    const mockStream = createMockAsyncIterable([]);
-    const baseFn = vi.fn().mockReturnValue(mockStream);
-    const wrapped = streamWithIdleTimeout(baseFn, 1000);
-    expect(typeof wrapped).toBe("function");
-  });
-
-  it("passes through model, context, and options", async () => {
+  it("passes through model, context, and options", () => {
     const mockStream = createMockAsyncIterable([]);
     const baseFn = vi.fn().mockReturnValue(mockStream);
     const wrapped = streamWithIdleTimeout(baseFn, 1000);

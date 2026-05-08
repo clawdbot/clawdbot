@@ -251,7 +251,7 @@ export function parseModelsStatusRouteArgs(argv: string[]) {
 export function parseChannelsListRouteArgs(argv: string[]) {
   return {
     json: hasFlag(argv, "--json"),
-    usage: !hasFlag(argv, "--no-usage"),
+    all: hasFlag(argv, "--all"),
   };
 }
 

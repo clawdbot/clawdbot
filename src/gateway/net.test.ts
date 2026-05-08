@@ -417,7 +417,7 @@ describe("isPrivateOrLoopbackAddress", () => {
     }
   });
 
-  it("rejects public addresses", () => {
+  it("rejects public IP addresses", () => {
     const rejected = ["1.1.1.1", "8.8.8.8", "172.32.0.1", "203.0.113.10", "2001:4860:4860::8888"];
     for (const ip of rejected) {
       expect(isPrivateOrLoopbackAddress(ip)).toBe(false);
@@ -470,7 +470,7 @@ describe("isPrivateOrLoopbackHost", () => {
     expect(isPrivateOrLoopbackHost("[ff0e::1]")).toBe(false);
   });
 
-  it("rejects public addresses", () => {
+  it("rejects public host addresses", () => {
     expect(isPrivateOrLoopbackHost("1.1.1.1")).toBe(false);
     expect(isPrivateOrLoopbackHost("8.8.8.8")).toBe(false);
     expect(isPrivateOrLoopbackHost("203.0.113.10")).toBe(false);

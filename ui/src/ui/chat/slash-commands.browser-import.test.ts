@@ -27,7 +27,7 @@ describe("slash command browser import", () => {
     );
     const mod = (await import(browserImportPath)) as SlashCommandsModule;
 
-    expect(mod.SLASH_COMMANDS.some((command) => command.name === "think")).toBe(true);
+    expect(mod.SLASH_COMMANDS.map((command) => command.name)).toContain("think");
     expect(slashCommands).toContain("commands-registry.shared.js");
     expect(sharedRegistry).toContain("thinking.shared.js");
     expect(sharedRegistry).not.toContain("./thinking.js");

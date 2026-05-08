@@ -43,11 +43,54 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
   expect(reset.ok).toBe(true);
   expect(reset.payload?.key).toBe("agent:main:main");
   expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-model");
-  expect(reset.payload?.entry.sessionFile).toBeTruthy();
+  const sessionFile = reset.payload?.entry.sessionFile;
+  if (!sessionFile) {
+    throw new Error("expected reset session file");
+  }
   expect(reset.payload?.entry.modelProvider).toBe("openai");
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
-  await expect(fs.stat(reset.payload?.entry.sessionFile as string)).resolves.toBeTruthy();
+  expect((await fs.stat(sessionFile)).isFile()).toBe(true);
+});
+
+test("sessions.reset drops cached skills snapshot so /new rebuilds visible skills", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentConfig = {
+    model: {
+      primary: "openai/gpt-test-a",
+    },
+  };
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-stale-skills", {
+        skillsSnapshot: {
+          prompt: "<available_skills><skill><name>stale</name></skill></available_skills>",
+          skills: [{ name: "stale" }],
+          version: 0,
+        },
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: {
+      sessionId: string;
+      skillsSnapshot?: unknown;
+    };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-skills");
+  expect(reset.payload?.entry.skillsSnapshot).toBeUndefined();
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { skillsSnapshot?: unknown }
+  >;
+  expect(store["agent:main:main"]?.skillsSnapshot).toBeUndefined();
 });
 
 test("sessions.reset preserves legacy explicit model overrides without modelOverrideSource", async () => {

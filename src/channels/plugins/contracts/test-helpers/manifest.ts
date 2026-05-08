@@ -10,7 +10,6 @@ export const channelPluginSurfaceKeys = [
 ] as const;
 
 export const sessionBindingContractChannelIds = [
-  "bluebubbles",
   "discord",
   "feishu",
   "imessage",

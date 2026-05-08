@@ -902,7 +902,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           body: JSON.stringify(body),
         });
         expect(second.status).toBe(429);
-        expect(second.headers.get("retry-after")).toBeTruthy();
+        expect(second.headers.get("retry-after")).toMatch(/^\d+$/);
       },
       {
         serverOptions: {

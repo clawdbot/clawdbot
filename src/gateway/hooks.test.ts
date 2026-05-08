@@ -414,117 +414,134 @@ describe("gateway hooks helpers", () => {
   });
 
   test("resolveHooksConfig allows a static explicit mapping to shadow the templated gmail preset", () => {
-    expect(() =>
-      resolveHooksConfig({
-        hooks: {
-          enabled: true,
-          token: "secret",
-          allowRequestSessionKey: false,
-          presets: ["gmail"],
-          mappings: [
-            {
-              match: { path: "gmail" },
-              action: "agent",
-              messageTemplate: "Subject: {{messages[0].subject}}",
-              sessionKey: "hook:gmail:static",
-            },
-          ],
-        },
-      } as OpenClawConfig),
-    ).not.toThrow();
+    const resolved = resolveHooksConfigOrThrow({
+      hooks: {
+        enabled: true,
+        token: "secret",
+        allowRequestSessionKey: false,
+        presets: ["gmail"],
+        mappings: [
+          {
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "hook:gmail:static",
+          },
+        ],
+      },
+    } as OpenClawConfig);
+
+    expect(resolved.mappings.map((mapping) => mapping.sessionKey)).toEqual([
+      "hook:gmail:static",
+      "hook:gmail:{{messages[0].id}}",
+    ]);
+    expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
   });
 
   test("resolveHooksConfig allows a static catch-all mapping to shadow a later templated mapping", () => {
-    expect(() =>
-      resolveHooksConfig({
-        hooks: {
-          enabled: true,
-          token: "secret",
-          mappings: [
-            {
-              action: "agent",
-              messageTemplate: "catch-all",
-              sessionKey: "hook:static",
-            },
-            {
-              match: { path: "gmail" },
-              action: "agent",
-              messageTemplate: "Subject: {{messages[0].subject}}",
-              sessionKey: "hook:gmail:{{messages[0].id}}",
-            },
-          ],
-        },
-      } as OpenClawConfig),
-    ).not.toThrow();
+    const resolved = resolveHooksConfigOrThrow({
+      hooks: {
+        enabled: true,
+        token: "secret",
+        mappings: [
+          {
+            action: "agent",
+            messageTemplate: "catch-all",
+            sessionKey: "hook:static",
+          },
+          {
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "hook:gmail:{{messages[0].id}}",
+          },
+        ],
+      },
+    } as OpenClawConfig);
+
+    expect(resolved.mappings.map((mapping) => mapping.sessionKey)).toEqual([
+      "hook:static",
+      "hook:gmail:{{messages[0].id}}",
+    ]);
+    expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
   });
 
   test("resolveHooksConfig ignores templated session keys on wake mappings", () => {
-    expect(() =>
-      resolveHooksConfig({
-        hooks: {
-          enabled: true,
-          token: "secret",
-          mappings: [
-            {
-              match: { path: "wake" },
-              action: "wake",
-              textTemplate: "ping",
-              sessionKey: "hook:wake:{{payload.id}}",
-            },
-          ],
-        },
-      } as OpenClawConfig),
-    ).not.toThrow();
+    const resolved = resolveHooksConfigOrThrow({
+      hooks: {
+        enabled: true,
+        token: "secret",
+        mappings: [
+          {
+            match: { path: "wake" },
+            action: "wake",
+            textTemplate: "ping",
+            sessionKey: "hook:wake:{{payload.id}}",
+          },
+        ],
+      },
+    } as OpenClawConfig);
+
+    expect(resolved.mappings).toMatchObject([
+      {
+        action: "wake",
+        matchPath: "wake",
+        sessionKey: "hook:wake:{{payload.id}}",
+      },
+    ]);
+    expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
   });
 
   test("resolveHooksConfig treats '/' match.path as a catch-all for shadowing", () => {
-    expect(() =>
-      resolveHooksConfig({
-        hooks: {
-          enabled: true,
-          token: "secret",
-          mappings: [
-            {
-              match: { path: "/" },
-              action: "agent",
-              messageTemplate: "catch-all",
-              sessionKey: "hook:static",
-            },
-            {
-              match: { path: "gmail" },
-              action: "agent",
-              messageTemplate: "Subject: {{messages[0].subject}}",
-              sessionKey: "hook:gmail:{{messages[0].id}}",
-            },
-          ],
-        },
-      } as OpenClawConfig),
-    ).not.toThrow();
+    const resolved = resolveHooksConfigOrThrow({
+      hooks: {
+        enabled: true,
+        token: "secret",
+        mappings: [
+          {
+            match: { path: "/" },
+            action: "agent",
+            messageTemplate: "catch-all",
+            sessionKey: "hook:static",
+          },
+          {
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "hook:gmail:{{messages[0].id}}",
+          },
+        ],
+      },
+    } as OpenClawConfig);
+
+    expect(resolved.mappings.map((mapping) => mapping.matchPath)).toEqual(["", "gmail"]);
+    expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
   });
 
   test("resolveHooksConfig treats empty match.source as a wildcard for shadowing", () => {
-    expect(() =>
-      resolveHooksConfig({
-        hooks: {
-          enabled: true,
-          token: "secret",
-          mappings: [
-            {
-              match: { path: "gmail", source: "" },
-              action: "agent",
-              messageTemplate: "catch-all source",
-              sessionKey: "hook:static",
-            },
-            {
-              match: { path: "gmail", source: "gmail" },
-              action: "agent",
-              messageTemplate: "Subject: {{messages[0].subject}}",
-              sessionKey: "hook:gmail:{{messages[0].id}}",
-            },
-          ],
-        },
-      } as OpenClawConfig),
-    ).not.toThrow();
+    const resolved = resolveHooksConfigOrThrow({
+      hooks: {
+        enabled: true,
+        token: "secret",
+        mappings: [
+          {
+            match: { path: "gmail", source: "" },
+            action: "agent",
+            messageTemplate: "catch-all source",
+            sessionKey: "hook:static",
+          },
+          {
+            match: { path: "gmail", source: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "hook:gmail:{{messages[0].id}}",
+          },
+        ],
+      },
+    } as OpenClawConfig);
+
+    expect(resolved.mappings.map((mapping) => mapping.matchSource)).toEqual(["", "gmail"]);
+    expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
   });
 });
 

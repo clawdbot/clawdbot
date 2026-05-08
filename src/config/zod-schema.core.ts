@@ -305,6 +305,13 @@ const ConfiguredModelProviderRequestSchema = z
   .strict()
   .optional();
 
+const ModelAgentRuntimePolicySchema = z
+  .object({
+    id: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
 const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -343,6 +350,7 @@ const ModelDefinitionSchema = z
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
+    agentRuntime: ModelAgentRuntimePolicySchema,
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
     metadataSource: z.literal("models-add").optional(),
@@ -363,6 +371,7 @@ const ModelProviderSchema = z
     timeoutSeconds: z.number().int().positive().optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
+    agentRuntime: ModelAgentRuntimePolicySchema,
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,

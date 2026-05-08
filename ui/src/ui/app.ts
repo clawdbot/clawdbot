@@ -215,6 +215,7 @@ export class OpenClawApp extends LitElement {
   @state() chatAvatarReason: string | null = null;
   @state() chatThinkingLevel: string | null = null;
   @state() chatModelOverrides: Record<string, ChatModelOverride | null> = {};
+  @state() chatModelSwitchPromises: Record<string, Promise<boolean>> = {};
   @state() chatModelsLoading = false;
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() sessionSwitchNotice: { id: number; text: string } | null = null;
@@ -411,6 +412,7 @@ export class OpenClawApp extends LitElement {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   })();
+  @state() usageScope: "instance" | "family" = "family";
   @state() usageSelectedSessions: string[] = [];
   @state() usageSelectedDays: string[] = [];
   @state() usageSelectedHours: number[] = [];

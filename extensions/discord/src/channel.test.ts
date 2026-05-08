@@ -501,7 +501,7 @@ describe("discordPlugin outbound", () => {
         includeApplication: true,
       }),
     );
-    expect(statusPatches.some((patch) => "bot" in patch || "application" in patch)).toBe(false);
+    expect(statusPatches.filter((patch) => "bot" in patch || "application" in patch)).toEqual([]);
 
     resolveProbe({
       ok: true,

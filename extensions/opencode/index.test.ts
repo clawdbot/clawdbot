@@ -70,9 +70,9 @@ describe("opencode provider plugin", () => {
       levels: expect.arrayContaining([{ id: "adaptive" }]),
       defaultLevel: "adaptive",
     });
-    expect(opus46Profile?.levels.some((level) => level.id === "xhigh" || level.id === "max")).toBe(
-      false,
-    );
+    const opus46LevelIds = opus46Profile?.levels.map((level) => level.id) ?? [];
+    expect(opus46LevelIds).not.toContain("xhigh");
+    expect(opus46LevelIds).not.toContain("max");
     const sonnet46Profile = resolveThinkingProfile({
       provider: "opencode",
       modelId: "claude-sonnet-4-6",
@@ -81,8 +81,8 @@ describe("opencode provider plugin", () => {
       levels: expect.arrayContaining([{ id: "adaptive" }]),
       defaultLevel: "adaptive",
     });
-    expect(
-      sonnet46Profile?.levels.some((level) => level.id === "xhigh" || level.id === "max"),
-    ).toBe(false);
+    const sonnet46LevelIds = sonnet46Profile?.levels.map((level) => level.id) ?? [];
+    expect(sonnet46LevelIds).not.toContain("xhigh");
+    expect(sonnet46LevelIds).not.toContain("max");
   });
 });

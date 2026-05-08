@@ -37,6 +37,7 @@ vi.mock("./controllers/sessions.ts", () => ({
 import {
   createChatSession,
   dismissChatError,
+  handleChatManualRefresh,
   isCronSessionKey,
   parseSessionKey,
   resolveAssistantAttachmentAuthToken,
@@ -190,7 +191,7 @@ describe("parseSessionKey", () => {
   });
 
   it("identifies direct chat with known channel", () => {
-    expect(parseSessionKey("agent:main:bluebubbles:direct:+19257864429")).toEqual({
+    expect(parseSessionKey("agent:main:imessage:direct:+19257864429")).toEqual({
       prefix: "",
       fallbackName: "iMessage · +19257864429",
     });
@@ -218,7 +219,7 @@ describe("parseSessionKey", () => {
   });
 
   it("identifies channel-prefixed legacy keys", () => {
-    expect(parseSessionKey("bluebubbles:g-agent-main-bluebubbles-direct-+19257864429")).toEqual({
+    expect(parseSessionKey("imessage:g-agent-main-imessage-direct-+19257864429")).toEqual({
       prefix: "",
       fallbackName: "iMessage Session",
     });
@@ -235,7 +236,7 @@ describe("parseSessionKey", () => {
     });
   });
 
-  it("returns raw key for unknown patterns", () => {
+  it("returns raw key for unknown parse patterns", () => {
     expect(parseSessionKey("something-unknown")).toEqual({
       prefix: "",
       fallbackName: "something-unknown",
@@ -309,7 +310,7 @@ describe("resolveSessionDisplayName", () => {
   });
 
   it("parses direct chat key with channel", () => {
-    expect(resolveSessionDisplayName("agent:main:bluebubbles:direct:+19257864429")).toBe(
+    expect(resolveSessionDisplayName("agent:main:imessage:direct:+19257864429")).toBe(
       "iMessage · +19257864429",
     );
   });
@@ -318,7 +319,7 @@ describe("resolveSessionDisplayName", () => {
     expect(resolveSessionDisplayName("discord:123:456")).toBe("Discord Session");
   });
 
-  it("returns raw key for unknown patterns", () => {
+  it("returns raw key for unknown display-name patterns", () => {
     expect(resolveSessionDisplayName("something-custom")).toBe("something-custom");
   });
 
@@ -448,8 +449,8 @@ describe("resolveSessionDisplayName", () => {
   it("does not prefix non-typed sessions with labels", () => {
     expect(
       resolveSessionDisplayName(
-        "agent:main:bluebubbles:direct:+19257864429",
-        row({ key: "agent:main:bluebubbles:direct:+19257864429", label: "Tyler" }),
+        "agent:main:imessage:direct:+19257864429",
+        row({ key: "agent:main:imessage:direct:+19257864429", label: "Tyler" }),
       ),
     ).toBe("Tyler");
   });
@@ -644,6 +645,64 @@ describe("resolveSessionOptionGroups", () => {
     });
 
     expect(labels).toEqual(["Beta main"]);
+  });
+});
+
+describe("handleChatManualRefresh", () => {
+  it("waits for chat history before scrolling and clearing refresh state", async () => {
+    const animationFrame = { callback: undefined as FrameRequestCallback | undefined };
+    const previousRequestAnimationFrame = globalThis.requestAnimationFrame;
+    Object.defineProperty(globalThis, "requestAnimationFrame", {
+      configurable: true,
+      value: vi.fn((callback: FrameRequestCallback) => {
+        animationFrame.callback = callback;
+        return 1;
+      }),
+    });
+    try {
+      let resolveRefresh!: () => void;
+      refreshChatMock.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          resolveRefresh = resolve;
+        }),
+      );
+      const state = {
+        chatManualRefreshInFlight: false,
+        chatNewMessagesBelow: true,
+        updateComplete: Promise.resolve(),
+        resetToolStream: vi.fn(),
+        scrollToBottom: vi.fn(),
+      } as unknown as Parameters<typeof handleChatManualRefresh>[0];
+
+      const run = handleChatManualRefresh(state);
+      await Promise.resolve();
+
+      expect(state.scrollToBottom).not.toHaveBeenCalled();
+      resolveRefresh();
+      await run;
+
+      expect(refreshChatMock).toHaveBeenCalledWith(state, {
+        awaitHistory: true,
+        scheduleScroll: false,
+      });
+      expect(state.scrollToBottom).toHaveBeenCalledWith({ smooth: true });
+      expect(state.chatManualRefreshInFlight).toBe(true);
+      expect(animationFrame.callback).toBeTypeOf("function");
+
+      const callback = animationFrame.callback;
+      if (!callback) {
+        throw new Error("expected manual refresh to schedule a frame callback");
+      }
+      callback(0);
+
+      expect(state.chatManualRefreshInFlight).toBe(false);
+      expect(state.chatNewMessagesBelow).toBe(false);
+    } finally {
+      Object.defineProperty(globalThis, "requestAnimationFrame", {
+        configurable: true,
+        value: previousRequestAnimationFrame,
+      });
+    }
   });
 });
 
@@ -879,7 +938,7 @@ describe("switchChatSession", () => {
     ).toHaveBeenCalledWith("agent:main:test-b", "Review Session");
   });
 
-  it("restores queued messages when switching back to their session", async () => {
+  it("restores queued messages when switching back to their session", () => {
     const settings = createSettings();
     const state = {
       sessionKey: "main",

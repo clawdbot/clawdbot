@@ -79,17 +79,20 @@ function getAfterToolCallCall(index = 0) {
   };
 }
 
+function requireAfterToolCallCall(index = 0) {
+  const call = getAfterToolCallCall(index);
+  if (!call.event || !call.context) {
+    throw new Error(`missing after_tool_call payload at index ${index}`);
+  }
+  return { event: call.event, context: call.context };
+}
+
 function expectAfterToolCallPayload(params: {
   index?: number;
   expectedEvent: Record<string, unknown>;
   expectedContext: Record<string, unknown>;
 }) {
-  const { event, context } = getAfterToolCallCall(params.index);
-  expect(event).toBeDefined();
-  expect(context).toBeDefined();
-  if (!event || !context) {
-    throw new Error("missing hook call payload");
-  }
+  const { event, context } = requireAfterToolCallCall(params.index);
   expect(event).toEqual(expect.objectContaining(params.expectedEvent));
   expect(context).toEqual(expect.objectContaining(params.expectedContext));
 }
@@ -192,8 +195,9 @@ describe("after_tool_call hook wiring", () => {
     );
 
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
-    expect(getAfterToolCallCall().event?.error).toBeDefined();
-    expect(getAfterToolCallCall().context?.agentId).toBeUndefined();
+    const { event, context } = requireAfterToolCallCall();
+    expect(event.error).toBe("command failed");
+    expect(context.agentId).toBeUndefined();
   });
 
   it("does not call runAfterToolCall when no hooks registered", async () => {

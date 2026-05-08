@@ -136,7 +136,9 @@ describe("memory embedding provider registration", () => {
 
     const adapter = listRegisteredAdapters().find((entry) => entry.id === "local");
 
-    expect(adapter).toBeDefined();
+    if (!adapter) {
+      throw new Error("expected local embedding provider adapter to be registered");
+    }
     expect(adapter).toEqual(
       expect.objectContaining({
         id: "local",

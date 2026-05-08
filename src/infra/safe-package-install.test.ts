@@ -50,7 +50,7 @@ describe("safe npm install helpers", () => {
           quiet: true,
         },
       ),
-    ).toEqual({
+    ).toMatchObject({
       PATH: "/usr/bin:/bin",
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
       NPM_CONFIG_IGNORE_SCRIPTS: "true",

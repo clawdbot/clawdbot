@@ -1,17 +1,10 @@
 import { resolveLanguage } from "@pierre/diffs";
 import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { DiffViewerPayload } from "./types.js";
 
 const PASSTHROUGH_LANGUAGE_HINTS = new Set<SupportedLanguages>(["ansi", "text"]);
 type DiffPayloadFile = FileContents | FileDiffMetadata;
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 export async function normalizeSupportedLanguageHint(
   value?: string,

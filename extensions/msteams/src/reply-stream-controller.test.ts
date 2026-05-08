@@ -320,9 +320,7 @@ describe("createTeamsReplyStreamController", () => {
 
     expect(ctrl.shouldSuppressDefaultToolProgressMessages()).toBe(true);
     expect(ctrl.shouldStreamPreviewToolProgress()).toBe(true);
-    expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenLastCalledWith(
-      "Working\n- tool: exec",
-    );
+    expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenLastCalledWith("- tool: exec");
   });
 
   it("suppresses Teams default progress messages without stream lines when tool progress is disabled", async () => {

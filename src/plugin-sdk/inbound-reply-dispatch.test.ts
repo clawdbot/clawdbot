@@ -32,7 +32,6 @@ import {
   resolveChannelSourceReplyDeliveryMode,
 } from "./channel-reply-pipeline.js";
 import {
-  dispatchInboundReplyWithBase,
   hasFinalInboundReplyDispatch,
   hasVisibleInboundReplyDispatch,
   recordInboundSessionAndDispatchReply,
@@ -247,10 +246,6 @@ describe("recordInboundSessionAndDispatchReply", () => {
     expect(createChannelMessageReplyPrefixContext).toBe(createReplyPrefixContext);
     expect(createChannelMessageReplyPrefixOptions).toBe(createReplyPrefixOptions);
     expect(createChannelMessageTypingCallbacks).toBe(createTypingCallbacks);
-    expect(typeof dispatchChannelMessageReplyWithBase).toBe("function");
-    expect(typeof dispatchInboundReplyWithBase).toBe("function");
     expect(hasFinalChannelMessageReplyDispatch).toBe(hasFinalInboundReplyDispatch);
-    expect(typeof recordChannelMessageReplyDispatch).toBe("function");
-    expect(typeof recordInboundSessionAndDispatchReply).toBe("function");
   });
 });

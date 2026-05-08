@@ -111,11 +111,12 @@ describe("session store strips resolvedSkills from persistence", () => {
     const loaded = loadSessionStore(storePath, { skipCache: true });
 
     const persistedSnapshot = loaded["agent:main:test:1"]?.skillsSnapshot;
-    expect(persistedSnapshot).toBeDefined();
-    expect(persistedSnapshot?.prompt).toBe(snapshot.prompt);
-    expect(persistedSnapshot?.skills).toEqual(snapshot.skills);
-    expect(persistedSnapshot?.skillFilter).toEqual(["skill-0"]);
-    expect(persistedSnapshot?.version).toBe(1);
+    expect(persistedSnapshot).toMatchObject({
+      prompt: snapshot.prompt,
+      skills: snapshot.skills,
+      skillFilter: ["skill-0"],
+      version: 1,
+    });
     expect(persistedSnapshot?.resolvedSkills).toBeUndefined();
   });
 

@@ -292,17 +292,21 @@ describe("MatrixClient request hardening", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("injects a guarded fetchFn into matrix-js-sdk", () => {
-    const client = new MatrixClient("https://matrix.example.org", "token", {
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
+  it("injects a guarded fetchFn into matrix-js-sdk", async () => {
+    const client = new MatrixClient("https://matrix.example.org", "token");
     expect(client).toBeInstanceOf(MatrixClient);
 
     expect(lastCreateClientOpts).toMatchObject({
       baseUrl: "https://matrix.example.org",
       accessToken: "token",
     });
-    expect(lastCreateClientOpts?.fetchFn).toEqual(expect.any(Function));
+    const fetchFn = lastCreateClientOpts?.fetchFn as typeof fetch | undefined;
+    if (!fetchFn) {
+      throw new Error("expected Matrix SDK guarded fetch");
+    }
+    await expect(fetchFn("http://127.0.0.1/_matrix/client/v3/account/whoami")).rejects.toThrow(
+      /private|blocked|not allowed/i,
+    );
   });
 
   it("prefers authenticated client media downloads", async () => {
@@ -600,8 +604,10 @@ describe("MatrixClient request hardening", () => {
       });
 
       const store = lastCreateClientOpts?.store as { flush: () => Promise<void> } | undefined;
-      expect(store).toBeTruthy();
-      const flushSpy = vi.spyOn(store!, "flush").mockResolvedValue();
+      if (!store) {
+        throw new Error("expected Matrix sync store");
+      }
+      const flushSpy = vi.spyOn(store, "flush").mockResolvedValue();
 
       await client.stopAndPersist();
 
@@ -1164,11 +1170,17 @@ describe("MatrixClient event bridge", () => {
     });
 
     await vi.waitFor(() => {
-      expect(releaseSyncReady).toEqual(expect.any(Function));
+      if (!releaseSyncReady) {
+        throw new Error("expected Matrix sync ready release callback");
+      }
     });
     expect(resolved).toBe(false);
 
-    releaseSyncReady?.();
+    const release = releaseSyncReady;
+    if (!release) {
+      throw new Error("expected Matrix sync ready release callback");
+    }
+    release();
     await startPromise;
 
     expect(resolved).toBe(true);
@@ -1733,7 +1745,13 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     const status = await client.getOwnDeviceVerificationStatus();
     expect(status.verified).toBe(true);
-    expect(status.backup).toBeDefined();
+    expect(status.backup).toMatchObject({
+      serverVersion: null,
+      activeVersion: null,
+      trusted: null,
+      keyLoadAttempted: false,
+      keyLoadError: null,
+    });
     expect(status.serverDeviceKnown).toBeNull();
   });
 

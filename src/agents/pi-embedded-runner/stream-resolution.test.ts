@@ -1,5 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import { getApiProvider, streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import * as providerTransportStream from "../provider-transport-stream.js";
 import {
@@ -145,6 +145,33 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
 
     expect(streamFn).not.toBe(streamSimple);
+  });
+
+  it("routes PI native OpenAI-compatible provider streams through boundary-aware transports", async () => {
+    const nativeStreamFn = getApiProvider("openai-completions")?.streamSimple;
+    if (!nativeStreamFn) {
+      throw new Error("expected native OpenAI-compatible stream function");
+    }
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: nativeStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "llama",
+        id: "qwen36-35b-a3b",
+      } as never,
+      resolvedApiKey: "local-token",
+    });
+
+    expect(streamFn).not.toBe(nativeStreamFn);
+    await expect(
+      streamFn({ provider: "llama", id: "qwen36-35b-a3b" } as never, {} as never, {}),
+    ).resolves.toMatchObject({ apiKey: "local-token" });
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
   });
 
   it("injects the resolved run api key into provider-owned stream functions", async () => {

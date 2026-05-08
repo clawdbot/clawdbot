@@ -225,9 +225,11 @@ export async function expectMkdirpAllowsExistingDirectory(params?: {
         getDockerScript(args).includes("operation = sys.argv[1]") &&
         getDockerArg(args, 1) === "mkdirp",
     );
-    expect(mkdirCall).toBeDefined();
-    const mountRoot = mkdirCall ? getDockerArg(mkdirCall[0], 2) : "";
-    const relativePath = mkdirCall ? getDockerArg(mkdirCall[0], 3) : "";
+    if (!mkdirCall) {
+      throw new Error("expected docker mkdirp call");
+    }
+    const mountRoot = getDockerArg(mkdirCall[0], 2);
+    const relativePath = getDockerArg(mkdirCall[0], 3);
     expect(mountRoot).toBe("/workspace");
     expect(relativePath).toBe("memory/kemik");
   });

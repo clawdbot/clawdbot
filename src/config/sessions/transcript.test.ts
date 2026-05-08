@@ -216,18 +216,18 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("finds session entry using normalized (lowercased) key", async () => {
-    const storeKey = "agent:main:bluebubbles:direct:+15551234567";
+    const storeKey = "agent:main:imessage:direct:+15551234567";
     const store = {
       [storeKey]: {
         sessionId: "test-session-normalized",
         chatType: "direct",
-        channel: "bluebubbles",
+        channel: "imessage",
       },
     };
     fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
 
     const result = await appendAssistantMessageToSessionTranscript({
-      sessionKey: "agent:main:BlueBubbles:direct:+15551234567",
+      sessionKey: "agent:main:iMessage:direct:+15551234567",
       text: "Hello normalized!",
       storePath: fixture.storePath(),
     });

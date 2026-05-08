@@ -208,6 +208,58 @@ describe("createModelListAuthIndex", () => {
     expect(index.hasProviderAuth("custom-openai")).toBe(true);
   });
 
+  it("treats OpenAI Codex auth as usable for canonical OpenAI agent routes", () => {
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(index.hasProviderAuth("openai")).toBe(true);
+  });
+
+  it("does not treat OpenAI Codex auth as usable for custom OpenAI-compatible routes", () => {
+    const index = createModelListAuthIndex({
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              api: "openai-completions",
+              baseUrl: "https://custom.example/v1",
+              models: [modelConfig("custom-model")],
+            },
+          },
+        },
+      },
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(index.hasProviderAuth("openai")).toBe(false);
+  });
+
   it("records configured local custom provider markers", () => {
     const index = createModelListAuthIndex({
       cfg: {

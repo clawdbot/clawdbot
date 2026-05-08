@@ -35,11 +35,6 @@ describe("readStringOrNumberParam", () => {
     const params = { chatId: "  abc  " };
     expect(readStringOrNumberParam(params, "chatId")).toBe("abc");
   });
-
-  it("accepts snake_case aliases for camelCase keys", () => {
-    const params = { chat_id: "123" };
-    expect(readStringOrNumberParam(params, "chatId")).toBe("123");
-  });
 });
 
 describe("readNumberParam", () => {
@@ -62,10 +57,22 @@ describe("readNumberParam", () => {
     const params = { messageId: "42.9" };
     expect(readNumberParam(params, "messageId", { integer: true })).toBe(42);
   });
+});
 
-  it("accepts snake_case aliases for camelCase keys", () => {
-    const params = { message_id: "42" };
-    expect(readNumberParam(params, "messageId")).toBe(42);
+describe("snake_case aliases", () => {
+  it.each([
+    {
+      name: "string-or-number reader",
+      read: () => readStringOrNumberParam({ chat_id: "123" }, "chatId"),
+      expected: "123",
+    },
+    {
+      name: "number reader",
+      read: () => readNumberParam({ message_id: "42" }, "messageId"),
+      expected: 42,
+    },
+  ])("accepts snake_case aliases for camelCase keys in $name", ({ read, expected }) => {
+    expect(read()).toBe(expected);
   });
 });
 

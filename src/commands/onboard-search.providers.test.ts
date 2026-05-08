@@ -103,7 +103,7 @@ describe("onboard-search provider resolution", () => {
     vi.clearAllMocks();
   });
 
-  it("uses config-aware non-bundled provider hooks when resolving existing keys", async () => {
+  it("uses config-aware non-bundled provider hooks when resolving existing keys", () => {
     const customEntry = createCustomProviderEntry();
     mocks.resolvePluginWebSearchProviders.mockImplementation((params) =>
       params?.config ? [customEntry] : [],
@@ -193,7 +193,7 @@ describe("onboard-search provider resolution", () => {
     expect(notes.some((note) => note.message.includes("CUSTOM_SEARCH_API_KEY"))).toBe(true);
   });
 
-  it("does not treat hard-disabled bundled providers as selectable credentials", async () => {
+  it("does not treat hard-disabled bundled providers as selectable credentials", () => {
     mocks.resolvePluginWebSearchProviders.mockReturnValue([]);
 
     const cfg: OpenClawConfig = {
@@ -252,7 +252,7 @@ describe("onboard-search provider resolution", () => {
     expect(notes.some((message) => message.includes("works without an API key"))).toBe(true);
   });
 
-  it("uses the runtime onboarding search surface when no config is present", async () => {
+  it("uses the runtime onboarding search surface when no config is present", () => {
     const firecrawlEntry = createBundledFirecrawlEntry();
     const duckduckgoEntry = createBundledDuckDuckGoEntry();
     const tavilyEntry: PluginWebSearchProviderEntry = {

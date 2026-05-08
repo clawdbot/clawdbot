@@ -221,7 +221,10 @@ describe("session.message websocket events", () => {
         storePath,
       });
       expect(appended.ok).toBe(true);
-      await expect(subscribedEvent).resolves.toBeTruthy();
+      await expect(subscribedEvent).resolves.toMatchObject({
+        type: "event",
+        event: "session.message",
+      });
       await expectNoMessageWithin({
         watch: () =>
           onceMessage(

@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   callGatewayTool,
@@ -15,6 +14,7 @@ import {
   stringEnum,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { AnyAgentTool, OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { Type } from "typebox";
 
 const CANVAS_ACTIONS = [
@@ -73,7 +73,7 @@ function parseCanvasSnapshotPayload(value: unknown): CanvasSnapshotPayload {
 }
 
 async function writeBase64ToTempFile(params: { base64: string; ext: string }): Promise<string> {
-  const dir = path.join(os.tmpdir(), "openclaw");
+  const dir = resolvePreferredOpenClawTmpDir();
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const ext = params.ext.startsWith(".") ? params.ext : `.${params.ext}`;
   const filePath = path.join(dir, `openclaw-canvas-snapshot-${randomUUID()}${ext}`);

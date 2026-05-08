@@ -36,6 +36,17 @@ type EmptySchema = {
       };
 };
 
+function requirePropertyDescriptor(
+  target: Record<string, unknown>,
+  propertyName: string,
+): PropertyDescriptor {
+  const descriptor = Object.getOwnPropertyDescriptor(target, propertyName);
+  if (!descriptor) {
+    throw new Error(`expected ${propertyName} property descriptor`);
+  }
+  return descriptor;
+}
+
 function loadRootAliasWithStubs(options?: {
   distExists?: boolean;
   distEntries?: string[];
@@ -218,9 +229,8 @@ function collectRuntimeExports(filePath: string, seen = new Set<string>()): Set<
 describe("plugin-sdk root alias", () => {
   it("exposes the fast empty config schema helper", () => {
     const factory = rootSdk.emptyPluginConfigSchema as (() => EmptySchema) | undefined;
-    expect(typeof factory).toBe("function");
     if (!factory) {
-      return;
+      throw new Error("expected empty config schema factory");
     }
     const schema = factory();
     expect(schema.safeParse(undefined)).toEqual({ success: true, data: undefined });
@@ -236,8 +246,10 @@ describe("plugin-sdk root alias", () => {
 
     expect(lazyModule.createJitiCalls).toBe(0);
     expect(lazyModule.jitiLoadCalls).toBe(0);
-    expect(typeof factory).toBe("function");
-    expect(factory?.().safeParse({})).toEqual({ success: true, data: {} });
+    if (!factory) {
+      throw new Error("expected lazy empty config schema factory");
+    }
+    expect(factory().safeParse({})).toEqual({ success: true, data: {} });
     expect(lazyModule.createJitiCalls).toBe(0);
     expect(lazyModule.jitiLoadCalls).toBe(0);
   });
@@ -268,7 +280,10 @@ describe("plugin-sdk root alias", () => {
     expect(lazyModule.createJitiOptions.at(-1)?.tryNative).toBe(false);
     expect((lazyRootSdk.slowHelper as () => string)()).toBe("loaded");
     expect(Object.keys(lazyRootSdk)).toContain("slowHelper");
-    expect(Object.getOwnPropertyDescriptor(lazyRootSdk, "slowHelper")).toBeDefined();
+    expect(requirePropertyDescriptor(lazyRootSdk, "slowHelper")).toMatchObject({
+      configurable: true,
+      enumerable: true,
+    });
   });
 
   it.each([
@@ -488,7 +503,9 @@ describe("plugin-sdk root alias", () => {
       exportValue: () => "delegated",
       expectIdentity: true,
       assertForwarded: (value: unknown) => {
-        expect(typeof value).toBe("function");
+        if (typeof value !== "function") {
+          throw new Error("expected delegateCompactionToRuntime export");
+        }
         expect((value as () => string)()).toBe("delegated");
       },
     },
@@ -498,10 +515,11 @@ describe("plugin-sdk root alias", () => {
       exportValue: () => () => undefined,
       expectIdentity: false,
       assertForwarded: (value: unknown) => {
-        expect(typeof value).toBe("function");
-        expect(typeof (value as (listener: () => void) => () => void)(() => undefined)).toBe(
-          "function",
-        );
+        if (typeof value !== "function") {
+          throw new Error("expected onDiagnosticEvent export");
+        }
+        const unsubscribe = (value as (listener: () => void) => () => void)(() => undefined);
+        unsubscribe();
       },
     },
   ])("$name", ({ exportName, exportValue, expectIdentity, assertForwarded }) => {
@@ -525,12 +543,16 @@ describe("plugin-sdk root alias", () => {
     );
     const lazyModule = loadRootAliasWithStubs({ monolithicExports });
 
-    expect(typeof rootSdk.emptyPluginConfigSchema).toBe("function");
-    expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
-    expect(typeof rootSdk.onDiagnosticEvent).toBe("function");
+    expect(rootSdk).toEqual(
+      expect.objectContaining({
+        emptyPluginConfigSchema: expect.any(Function),
+        resolveControlCommandGate: expect.any(Function),
+        onDiagnosticEvent: expect.any(Function),
+      }),
+    );
 
     for (const name of legacyRootExportNames) {
-      expect(typeof lazyModule.moduleExports[name]).toBe("function");
+      expect(lazyModule.moduleExports[name]).toBe(monolithicExports[name]);
     }
     expect(lazyModule.jitiLoadCalls).toBe(1);
     expect(Object.keys(lazyModule.moduleExports)).toEqual(
@@ -571,8 +593,10 @@ describe("plugin-sdk root alias", () => {
     const keys = Object.keys(rootSdk);
     expect(keys).toContain("resolveControlCommandGate");
     expect(keys).toContain("onDiagnosticEvent");
-    const descriptor = Object.getOwnPropertyDescriptor(rootSdk, "resolveControlCommandGate");
-    expect(descriptor).toBeDefined();
-    expect(Object.getOwnPropertyDescriptor(rootSdk, "onDiagnosticEvent")).toBeDefined();
+    expect(requirePropertyDescriptor(rootSdk, "resolveControlCommandGate")).toMatchObject({
+      configurable: true,
+      enumerable: true,
+    });
+    expect(typeof requirePropertyDescriptor(rootSdk, "onDiagnosticEvent").value).toBe("function");
   });
 });

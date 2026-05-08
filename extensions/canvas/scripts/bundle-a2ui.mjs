@@ -7,7 +7,7 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { resolvePnpmRunner } from "../../../scripts/pnpm-runner.mjs";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const pluginDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootDir = path.resolve(pluginDir, "../..");

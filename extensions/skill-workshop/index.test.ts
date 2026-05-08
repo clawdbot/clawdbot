@@ -651,7 +651,9 @@ describe("skill-workshop", () => {
     expect(result?.details).toMatchObject({ status: "pending" });
     const proposalId =
       (result?.details as { proposal?: { id?: string } } | undefined)?.proposal?.id ?? "";
-    expect(proposalId).toBeTruthy();
+    expect(proposalId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
     await expect(
       fs.access(path.join(workspaceDir, "skills", "screenshot-asset-workflow", "SKILL.md")),
     ).rejects.toMatchObject({ code: "ENOENT" });

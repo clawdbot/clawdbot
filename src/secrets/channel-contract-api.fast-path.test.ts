@@ -8,14 +8,14 @@ const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
 const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(
     ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-      if (dirName === "bluebubbles" && artifactBasename === "secret-contract-api.js") {
+      if (dirName === "discord" && artifactBasename === "secret-contract-api.js") {
         return {
           collectRuntimeConfigAssignments: () => undefined,
           secretTargetRegistryEntries: [
             {
-              id: "channels.bluebubbles.accounts.*.password",
+              id: "channels.discord.accounts.*.token",
               type: "channel",
-              path: "channels.bluebubbles.accounts.*.password",
+              path: "channels.discord.accounts.*.token",
             },
           ],
         };
@@ -52,17 +52,17 @@ describe("channel contract api explicit fast path", () => {
   });
 
   it("resolves bundled channel secret contracts by explicit channel id without manifest scans", () => {
-    const api = loadBundledChannelSecretContractApi("bluebubbles");
+    const api = loadBundledChannelSecretContractApi("discord");
 
     expect(api?.collectRuntimeConfigAssignments).toBeTypeOf("function");
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
-      dirName: "bluebubbles",
+      dirName: "discord",
       artifactBasename: "secret-contract-api.js",
     });
     expect(api?.secretTargetRegistryEntries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "channels.bluebubbles.accounts.*.password",
+          id: "channels.discord.accounts.*.token",
         }),
       ]),
     );

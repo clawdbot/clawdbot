@@ -20,14 +20,27 @@ describe("qa scenario catalog", () => {
     expect(listQaScenarioMarkdownPaths()).toContain(
       "qa/scenarios/media/image-generation-roundtrip.md",
     );
-    expect(pack.scenarios.some((scenario) => scenario.id === "image-generation-roundtrip")).toBe(
-      true,
+    const scenarioIds = pack.scenarios.map((scenario) => scenario.id);
+    expect(scenarioIds).toEqual(
+      expect.arrayContaining([
+        "image-generation-roundtrip",
+        "character-vibes-gollum",
+        "character-vibes-c3po",
+      ]),
     );
-    expect(pack.scenarios.some((scenario) => scenario.id === "character-vibes-gollum")).toBe(true);
-    expect(pack.scenarios.some((scenario) => scenario.id === "character-vibes-c3po")).toBe(true);
-    expect(pack.scenarios.every((scenario) => scenario.execution?.kind === "flow")).toBe(true);
-    expect(pack.scenarios.some((scenario) => scenario.execution.flow?.steps.length)).toBe(true);
-    expect(pack.scenarios.every((scenario) => scenario.coverage?.primary.length)).toBe(true);
+    expect(
+      pack.scenarios
+        .filter((scenario) => scenario.execution?.kind !== "flow")
+        .map((scenario) => scenario.id),
+    ).toEqual([]);
+    expect(
+      pack.scenarios.filter((scenario) => (scenario.execution.flow?.steps.length ?? 0) > 0),
+    ).not.toEqual([]);
+    expect(
+      pack.scenarios
+        .filter((scenario) => !(scenario.coverage?.primary.length ?? 0))
+        .map((scenario) => scenario.id),
+    ).toEqual([]);
     expect(readQaScenarioById("memory-recall").coverage?.primary).toContain("memory.recall");
   });
 
@@ -36,14 +49,11 @@ describe("qa scenario catalog", () => {
 
     expect(catalog.agentIdentityMarkdown).toContain("protocol-minded");
     expect(catalog.kickoffTask).toContain("Track what worked");
-    expect(catalog.scenarios.some((scenario) => scenario.id === "subagent-fanout-synthesis")).toBe(
-      true,
-    );
+    const scenarioIds = catalog.scenarios.map((scenario) => scenario.id);
+    expect(scenarioIds).toContain("subagent-fanout-synthesis");
     expect(
-      QA_AGENTIC_PARITY_SCENARIO_IDS.every((scenarioId) =>
-        catalog.scenarios.some((scenario) => scenario.id === scenarioId),
-      ),
-    ).toBe(true);
+      QA_AGENTIC_PARITY_SCENARIO_IDS.filter((scenarioId) => !scenarioIds.includes(scenarioId)),
+    ).toEqual([]);
   });
 
   it("loads scenario-specific execution config from per-scenario markdown", () => {

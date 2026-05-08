@@ -378,7 +378,7 @@ describe("googlechat google auth runtime", () => {
     expect(second.interceptors.response.add).toHaveBeenCalledOnce();
   });
 
-  it("normalizes Google auth request headers before upstream interceptors run", async () => {
+  it("normalizes Google auth request headers before upstream interceptors run", () => {
     const config = {
       headers: { "x-test": "1" },
       url: new URL("https://www.googleapis.com/oauth2/v1/certs"),

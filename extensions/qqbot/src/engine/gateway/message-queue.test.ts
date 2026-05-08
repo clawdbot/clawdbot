@@ -253,8 +253,10 @@ describe("engine/gateway/message-queue", () => {
       expect(seen.length).toBeGreaterThanOrEqual(1);
       expect(seen.length).toBeLessThan(3);
       const mergedCall = seen.find((m) => (m.merge?.count ?? 0) > 1);
-      expect(mergedCall).toBeDefined();
-      expect(mergedCall?.content).toContain("[Alice]:");
+      expect(mergedCall).toMatchObject({
+        content: expect.stringContaining("[Alice]:"),
+        merge: { count: expect.any(Number) },
+      });
     });
 
     it("processes slash commands independently from regular messages", async () => {
@@ -275,8 +277,8 @@ describe("engine/gateway/message-queue", () => {
       aborted = true;
       // Command should appear as its own call (not merged with the others).
       const cmdCall = seen.find((m) => m.content === "/stop");
-      expect(cmdCall).toBeDefined();
-      expect(cmdCall?.merge).toBeUndefined();
+      expect(cmdCall).toEqual(expect.objectContaining({ content: "/stop" }));
+      expect(cmdCall).not.toHaveProperty("merge");
     });
   });
 });

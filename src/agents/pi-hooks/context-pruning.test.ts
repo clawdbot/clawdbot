@@ -310,7 +310,7 @@ describe("context-pruning", () => {
     expect(toolText(findToolResult(next, "t1"))).toBe("[cleared]");
   });
 
-  it("reads per-session settings from registry", async () => {
+  it("reads per-session settings from registry", () => {
     const sessionManager = {};
 
     setContextPruningRuntime(sessionManager, {

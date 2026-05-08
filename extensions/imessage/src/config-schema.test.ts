@@ -71,6 +71,27 @@ describe("imessage config schema", () => {
     }
   });
 
+  it("accepts private API action gates", () => {
+    const res = IMessageConfigSchema.safeParse({
+      cliPath: "imsg",
+      actions: {
+        reactions: false,
+        edit: true,
+        sendAttachment: true,
+      },
+      accounts: {
+        work: {
+          actions: {
+            reply: false,
+            sendWithEffect: true,
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
   it("accepts safe remoteHost", () => {
     const res = IMessageConfigSchema.safeParse({
       remoteHost: "bot@gateway-host",

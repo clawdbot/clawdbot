@@ -717,7 +717,7 @@ describe("handleChatEvent", () => {
   });
 });
 
-describe("loadChatHistory", () => {
+describe("loadChatHistory filtering", () => {
   it("filters legacy silent assistant messages from history", async () => {
     const messages = [
       { role: "user", content: [{ type: "text", text: "Hello" }] },
@@ -1017,7 +1017,7 @@ describe("abortChatRun", () => {
   });
 });
 
-describe("loadChatHistory", () => {
+describe("loadChatHistory retry handling", () => {
   it("retries retryable startup unavailability before showing history", async () => {
     vi.useFakeTimers();
     try {

@@ -673,7 +673,7 @@ describe("config cli", () => {
         properties?: Record<string, unknown>;
       };
       expect(payload.properties?.$schema).toEqual({ type: "string" });
-      expect(payload.properties?.channels).toBeTruthy();
+      expect(payload.properties?.channels).toEqual(expect.any(Object));
       expect(payload.properties?.plugins).toBeUndefined();
       expect(mockError).not.toHaveBeenCalled();
     });
@@ -735,7 +735,7 @@ describe("config cli", () => {
       expect(written.gateway?.auth).toEqual({ mode: "token" });
     });
 
-    it("shows --strict-json and keeps --json as a legacy alias in help", async () => {
+    it("shows --strict-json and keeps --json as a legacy alias in help", () => {
       const program = new Command();
       registerConfigCli(program);
 

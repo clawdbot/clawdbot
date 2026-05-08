@@ -435,9 +435,8 @@ describe("installPluginFromNpmSpec", () => {
     const stagedArchivePath = dependencySpec
       ? resolveManagedFileDependency(npmRoot, dependencySpec)
       : null;
-    expect(stagedArchivePath).toBeTruthy();
-    if (!stagedArchivePath) {
-      return;
+    if (stagedArchivePath === null) {
+      throw new Error("expected staged archive path");
     }
     await expect(fs.promises.readFile(stagedArchivePath, "utf8")).resolves.toBe(
       "fixture pack contents",

@@ -79,7 +79,7 @@ describe("mantis desktop browser smoke runtime", () => {
       ["rsync", "-az"],
       ["/tmp/crabbox", "stop"],
     ]);
-    expect(commands.every((entry) => entry.env === runtimeEnv)).toBe(true);
+    expect(commands.map((entry) => entry.env)).toEqual(commands.map(() => runtimeEnv));
     const rsyncArgs = commands.find((entry) => entry.command === "rsync")?.args ?? [];
     expect(rsyncArgs).not.toContain("--delete");
     expect(rsyncArgs).toEqual(expect.arrayContaining(["--exclude", "chrome-profile/**"]));

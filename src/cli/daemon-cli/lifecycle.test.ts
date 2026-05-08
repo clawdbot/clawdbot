@@ -123,7 +123,7 @@ describe("runDaemonRestart health checks", () => {
     safe?: boolean;
     force?: boolean;
   }) => Promise<boolean>;
-  let runDaemonStop: (opts?: { json?: boolean }) => Promise<void>;
+  let runDaemonStop: (opts?: { json?: boolean; disable?: boolean }) => Promise<void>;
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   function mockUnmanagedRestart({
@@ -445,6 +445,19 @@ describe("runDaemonRestart health checks", () => {
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGTERM");
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4300, "SIGTERM");
+  });
+
+  it("routes macOS disable stops through the service manager when not loaded", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+
+    await runDaemonStop({ json: true, disable: true });
+
+    expect(runServiceStop).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: { json: true, disable: true },
+        stopWhenNotLoaded: true,
+      }),
+    );
   });
 
   it("skips gateway port resolution on stop when the service manager handles the stop", async () => {

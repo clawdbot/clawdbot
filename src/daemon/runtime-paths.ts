@@ -187,7 +187,7 @@ export function renderSystemNodeWarning(
   }
   const versionLabel = systemNode.version ?? "unknown";
   const selectedLabel = selectedNodePath ? ` Using ${selectedNodePath} for the daemon.` : "";
-  return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22.14+.${selectedLabel} Install Node 24 (recommended) or Node 22 LTS from nodejs.org or Homebrew.`;
+  return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22.16+.${selectedLabel} Install Node 24 (recommended) or Node 22 LTS from nodejs.org or Homebrew.`;
 }
 export { resolveStableNodePath };
 

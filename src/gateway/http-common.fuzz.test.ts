@@ -409,7 +409,6 @@ describe("fuzz: watchClientDisconnect", () => {
 
       const { req, res } = buildReqRes(reqSocket, resSocket);
       const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
-      expect(typeof cleanup).toBe("function");
 
       const uniqueSockets = new Set<EventEmitter>();
       if (reqSocket) {

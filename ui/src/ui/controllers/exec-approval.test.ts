@@ -96,3 +96,52 @@ describe("parsePluginApprovalRequested", () => {
     expect(result!.request.sessionKey).toBeNull();
   });
 });
+
+describe("parseExecApprovalRequested command spans", () => {
+  it("preserves command text spacing for span offsets", () => {
+    const parsed = parseExecApprovalRequested({
+      id: "approval-spaces-1",
+      request: { command: "  python -c 'print(1)'" },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    });
+
+    expect(parsed?.request.command).toBe("  python -c 'print(1)'");
+  });
+
+  it("rejects whitespace-only command text", () => {
+    expect(
+      parseExecApprovalRequested({
+        id: "approval-blank-1",
+        request: { command: "   " },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      }),
+    ).toBeNull();
+  });
+
+  it("preserves valid command spans from exec approval events", () => {
+    const parsed = parseExecApprovalRequested({
+      id: "approval-explain-1",
+      request: {
+        command: "ls | grep stuff",
+        commandSpans: [
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 5, endIndex: 9 },
+          { startIndex: 10, endIndex: 15 },
+          { startIndex: 16, endIndex: 20 },
+          { startIndex: -1, endIndex: 2 },
+          { startIndex: 8, endIndex: 8 },
+        ],
+      },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    });
+
+    expect(parsed?.request.commandSpans).toEqual([
+      { startIndex: 0, endIndex: 2 },
+      { startIndex: 5, endIndex: 9 },
+      { startIndex: 10, endIndex: 15 },
+    ]);
+  });
+});

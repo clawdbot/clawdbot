@@ -207,8 +207,14 @@ describe("agentCommand runtime config", () => {
       const resolved = resolveSession({ cfg, to: "+1555" });
 
       expect(resolved.storePath).toBe(store);
-      expect(resolved.sessionKey).toBeTruthy();
-      expect(resolved.sessionId).toBeTruthy();
+      expect(resolved.sessionKey).toEqual(expect.any(String));
+      const sessionKey = resolved.sessionKey;
+      if (!sessionKey) {
+        throw new Error("expected session key");
+      }
+      expect(sessionKey.length).toBeGreaterThan(0);
+      expect(resolved.sessionId).toEqual(expect.any(String));
+      expect(resolved.sessionId.length).toBeGreaterThan(0);
       expect(resolved.isNewSession).toBe(true);
     });
   });

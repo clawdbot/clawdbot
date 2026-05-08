@@ -102,6 +102,41 @@ describe("outbound", () => {
     }));
   }
 
+  const abortedSendCases = [
+    {
+      name: "sendText",
+      invoke: (signal: AbortSignal) =>
+        twitchOutbound.sendText!({
+          cfg: mockConfig,
+          to: "#testchannel",
+          text: "Hello!",
+          accountId: "default",
+          signal,
+        } as Parameters<NonNullable<typeof twitchOutbound.sendText>>[0]),
+    },
+    {
+      name: "sendMedia",
+      invoke: (signal: AbortSignal) =>
+        twitchOutbound.sendMedia!({
+          cfg: mockConfig,
+          to: "#testchannel",
+          text: "Check this:",
+          mediaUrl: "https://example.com/image.png",
+          accountId: "default",
+          signal,
+        } as Parameters<NonNullable<typeof twitchOutbound.sendMedia>>[0]),
+    },
+  ];
+
+  describe("abort handling", () => {
+    it.each(abortedSendCases)("$name should handle abort signal", async ({ invoke }) => {
+      const abortController = new AbortController();
+      abortController.abort();
+
+      await expect(invoke(abortController.signal)).rejects.toThrow("Outbound delivery aborted");
+    });
+  });
+
   describe("metadata", () => {
     it("should have direct delivery mode", () => {
       expect(twitchOutbound.deliveryMode).toBe("direct");
@@ -435,21 +470,6 @@ describe("outbound", () => {
       );
     });
 
-    it("should handle abort signal", async () => {
-      const abortController = new AbortController();
-      abortController.abort();
-
-      await expect(
-        twitchOutbound.sendText!({
-          cfg: mockConfig,
-          to: "#testchannel",
-          text: "Hello!",
-          accountId: "default",
-          signal: abortController.signal,
-        } as Parameters<NonNullable<typeof twitchOutbound.sendText>>[0]),
-      ).rejects.toThrow("Outbound delivery aborted");
-    });
-
     it("should throw on send failure", async () => {
       const { sendMessageTwitchInternal } = await import("./send.js");
 
@@ -530,22 +550,6 @@ describe("outbound", () => {
         expect.anything(),
         expect.anything(),
       );
-    });
-
-    it("should handle abort signal", async () => {
-      const abortController = new AbortController();
-      abortController.abort();
-
-      await expect(
-        twitchOutbound.sendMedia!({
-          cfg: mockConfig,
-          to: "#testchannel",
-          text: "Check this:",
-          mediaUrl: "https://example.com/image.png",
-          accountId: "default",
-          signal: abortController.signal,
-        } as Parameters<NonNullable<typeof twitchOutbound.sendMedia>>[0]),
-      ).rejects.toThrow("Outbound delivery aborted");
     });
   });
 });

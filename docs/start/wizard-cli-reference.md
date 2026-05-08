@@ -17,7 +17,7 @@ Local mode (default) walks you through:
 - Model and auth setup (OpenAI Code subscription OAuth, Anthropic Claude CLI or API key, plus MiniMax, GLM, Ollama, Moonshot, StepFun, and AI Gateway options)
 - Workspace location and bootstrap files
 - Gateway settings (port, bind, auth, tailscale)
-- Channels and providers (Telegram, WhatsApp, Discord, Google Chat, Mattermost, Signal, BlueBubbles, and other bundled channel plugins)
+- Channels and providers (Telegram, WhatsApp, Discord, Google Chat, Mattermost, Signal, iMessage, and other bundled channel plugins)
 - Daemon install (LaunchAgent, systemd user unit, or native Windows Scheduled Task with Startup-folder fallback)
 - Health check
 - Skills setup
@@ -70,8 +70,7 @@ It does not install or modify anything on the remote host.
     - [Google Chat](/channels/googlechat): service account JSON + webhook audience
     - [Mattermost](/channels/mattermost): bot token + base URL
     - [Signal](/channels/signal): optional `signal-cli` install + account config
-    - [BlueBubbles](/channels/bluebubbles): recommended for iMessage; server URL + password + webhook
-    - [iMessage](/channels/imessage): legacy `imsg` CLI path + DB access
+    - [iMessage](/channels/imessage): `imsg` CLI path + Messages DB access; use an SSH wrapper when the Gateway runs off-Mac
     - DM security: default is pairing. First DM sends a code; approve via
       `openclaw pairing approve <channel> <code>` or use allowlists.
   </Step>

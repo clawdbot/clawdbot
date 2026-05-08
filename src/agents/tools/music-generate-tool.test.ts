@@ -217,7 +217,13 @@ describe("createMusicGenerateTool", () => {
         prompt: "night-drive synthwave",
         instrumental: true,
       }),
-    ).resolves.toBeTruthy();
+    ).resolves.toMatchObject({
+      details: {
+        instrumental: true,
+        provider: "google",
+        paths: ["/tmp/generated-night-drive.mp3"],
+      },
+    });
     expect(listProviders).not.toHaveBeenCalled();
     expect(musicGenerationRuntime.generateMusic).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -450,8 +456,10 @@ describe("createMusicGenerateTool", () => {
         minimum: 10_000,
       },
     });
-    expect(typeof scheduledWork).toBe("function");
-    await scheduledWork?.();
+    if (!scheduledWork) {
+      throw new Error("expected scheduled music generation work");
+    }
+    await scheduledWork();
     expect(musicGenerationRuntime.generateMusic).toHaveBeenCalledWith(
       expect.objectContaining({
         autoProviderFallback: false,

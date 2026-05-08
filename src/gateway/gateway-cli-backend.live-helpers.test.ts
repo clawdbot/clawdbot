@@ -88,7 +88,7 @@ describe("gateway cli backend live helpers", () => {
       token: "gateway-token",
     });
 
-    expect(client).toBeTruthy();
+    expect(client).toEqual(expect.any(Object));
     expect(gatewayClientState.lastOptions).toMatchObject({
       url: "ws://127.0.0.1:18789",
       token: "gateway-token",

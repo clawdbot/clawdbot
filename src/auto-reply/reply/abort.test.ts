@@ -777,7 +777,7 @@ describe("abort detection", () => {
     );
   });
 
-  it("stopSubagentsForRequester does not traverse a child that moved to a newer parent", async () => {
+  it("stopSubagentsForRequester does not traverse a child that moved to a newer parent", () => {
     subagentRegistryMocks.listSubagentRunsForRequester.mockClear();
     subagentRegistryMocks.markSubagentRunTerminated.mockClear();
     const oldParentKey = "agent:main:subagent:old-parent";

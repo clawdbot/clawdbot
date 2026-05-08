@@ -115,7 +115,6 @@ describe("loadEnabledBundleMcpConfig", () => {
         expectNoDiagnostics(loaded.diagnostics);
         expect(isRecord(loadedServer) ? loadedServer.command : undefined).toBe("node");
         expect(loadedArgs).toHaveLength(1);
-        expect(loadedServerPath).toBeDefined();
         if (!loadedServerPath) {
           throw new Error("expected bundled MCP args to include the server path");
         }
@@ -171,7 +170,12 @@ describe("loadEnabledBundleMcpConfig", () => {
           },
         });
 
-        expect(loaded.config.mcpServers.enabledProbe).toBeDefined();
+        expect(loaded.config.mcpServers.enabledProbe).toEqual(
+          expect.objectContaining({
+            command: "node",
+            args: [expect.stringContaining("enabled.mjs")],
+          }),
+        );
         expect(loaded.config.mcpServers.disabledProbe).toBeUndefined();
       },
     );

@@ -60,9 +60,10 @@ describe("computeFilteredUsage", () => {
       makePoint({ timestamp: 3000, totalTokens: 300, cost: 0.3 }),
     ];
     const result = computeFilteredUsage(baseUsage, points, 1000, 2000);
-    expect(result).toBeDefined();
-    expect(result!.totalTokens).toBe(300); // 100 + 200
-    expect(result!.totalCost).toBeCloseTo(0.3); // 0.1 + 0.2
+    expect(result).toMatchObject({
+      totalTokens: 300, // 100 + 200
+    });
+    expect(result?.totalCost).toBeCloseTo(0.3); // 0.1 + 0.2
   });
 
   it("handles reversed range (end < start)", () => {
@@ -71,8 +72,7 @@ describe("computeFilteredUsage", () => {
       makePoint({ timestamp: 2000, totalTokens: 75 }),
     ];
     const result = computeFilteredUsage(baseUsage, points, 2000, 1000);
-    expect(result).toBeDefined();
-    expect(result!.totalTokens).toBe(125);
+    expect(result).toMatchObject({ totalTokens: 125 });
   });
 
   it("counts message types based on input/output presence", () => {

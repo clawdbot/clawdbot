@@ -13,7 +13,7 @@ agent harnesses, tools, skills, speech, realtime transcription, realtime
 voice, media-understanding, image generation, video generation, web fetch, web
 search, and more. Some plugins are **core** (shipped with OpenClaw), others
 are **external**. Most external plugins are published and discovered through
-[ClawHub](/tools/clawhub). Npm remains supported for direct installs and for a
+[ClawHub](/clawhub). Npm remains supported for direct installs and for a
 temporary set of OpenClaw-owned plugin packages while that migration finishes.
 
 ## Quick start
@@ -235,7 +235,6 @@ current OpenClaw or a local checkout until a newer npm package is published.
 
 | Plugin          | Package                    | Docs                                       |
 | --------------- | -------------------------- | ------------------------------------------ |
-| BlueBubbles     | `@openclaw/bluebubbles`    | [BlueBubbles](/channels/bluebubbles)       |
 | Discord         | `@openclaw/discord`        | [Discord](/channels/discord)               |
 | Feishu          | `@openclaw/feishu`         | [Feishu](/channels/feishu)                 |
 | Matrix          | `@openclaw/matrix`         | [Matrix](/channels/matrix)                 |
@@ -280,7 +279,7 @@ current OpenClaw or a local checkout until a newer npm package is published.
   </Accordion>
 </AccordionGroup>
 
-Looking for third-party plugins? See [Community Plugins](/plugins/community).
+Looking for third-party plugins? See [ClawHub](/clawhub).
 
 ## Configuration
 
@@ -392,8 +391,8 @@ even when source overlay mounts are present.
   re-enable plugins before running doctor cleanup if you want stale ids removed
 - OpenAI-family Codex routes keep separate plugin boundaries:
   `openai-codex/*` belongs to the OpenAI plugin, while the bundled Codex
-  app-server plugin is selected by `agentRuntime.id: "codex"` or legacy
-  `codex/*` model refs
+  app-server plugin is selected by canonical `openai/*` agent refs, explicit
+  provider/model `agentRuntime.id: "codex"`, or legacy `codex/*` model refs
 
 ## Troubleshooting runtime hooks
 
@@ -729,4 +728,4 @@ For full typed hook behavior, see [SDK overview](/plugins/sdk-overview#hook-deci
 - [Plugin manifest](/plugins/manifest) - manifest schema
 - [Registering tools](/plugins/building-plugins#registering-agent-tools) - add agent tools in a plugin
 - [Plugin internals](/plugins/architecture) - capability model and load pipeline
-- [Community plugins](/plugins/community) - third-party listings
+- [ClawHub](/clawhub) - third-party plugin discovery

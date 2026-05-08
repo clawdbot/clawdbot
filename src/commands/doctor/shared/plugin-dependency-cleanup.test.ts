@@ -87,7 +87,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
     await expect(fs.stat(legacyExtensionNodeModules)).rejects.toThrow();
     await expect(fs.stat(legacyExtensionStamp)).rejects.toThrow();
     await expect(fs.stat(legacyManifest)).rejects.toThrow();
-    await expect(fs.stat(thirdPartyNodeModules)).resolves.toBeDefined();
+    expect((await fs.stat(thirdPartyNodeModules)).isDirectory()).toBe(true);
     await expect(fs.stat(explicitStageDir)).rejects.toThrow();
     await expect(fs.stat(path.join(stateDirectory, "plugin-runtime-deps"))).rejects.toThrow();
   });
@@ -126,6 +126,6 @@ describe("cleanupLegacyPluginDependencyState", () => {
     expect(result.warnings).toEqual([]);
     expect(result.changes).toContain(`Removed stale plugin-runtime symlink: ${slackLink}`);
     await expect(fs.lstat(slackLink)).rejects.toThrow();
-    await expect(fs.lstat(liveLink)).resolves.toBeDefined();
+    expect((await fs.lstat(liveLink)).isSymbolicLink()).toBe(true);
   });
 });

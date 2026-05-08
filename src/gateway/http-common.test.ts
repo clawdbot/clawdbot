@@ -312,7 +312,6 @@ describe("watchClientDisconnect", () => {
     const { req, res } = buildReqRes(null, null);
     const controller = new AbortController();
     const cleanup = watchClientDisconnect(req, res, controller);
-    expect(typeof cleanup).toBe("function");
     expect(() => cleanup()).not.toThrow();
     expect(controller.signal.aborted).toBe(false);
   });

@@ -87,8 +87,7 @@ function expectNoAccountFieldInPassedOptions() {
   const passedOpts = (
     messageCommandMock.mock.calls as unknown as Array<[Record<string, unknown>]>
   )?.[0]?.[0];
-  expect(passedOpts).toBeTruthy();
-  if (!passedOpts) {
+  if (passedOpts === undefined) {
     throw new Error("expected message command call");
   }
   expect(passedOpts).not.toHaveProperty("account");

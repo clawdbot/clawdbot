@@ -40,7 +40,7 @@ describe("runway video generation provider", () => {
       })
       .mockResolvedValueOnce({
         arrayBuffer: async () => Buffer.from("mp4-bytes"),
-        headers: new Headers({ "content-type": "video/mp4" }),
+        headers: new Headers({ "content-type": "video/webm" }),
       });
 
     const provider = buildRunwayVideoGenerationProvider();
@@ -72,6 +72,7 @@ describe("runway video generation provider", () => {
       fetch,
     );
     expect(result.videos).toHaveLength(1);
+    expect(result.videos[0]?.fileName).toBe("video-1.webm");
     expect(result.metadata).toEqual(
       expect.objectContaining({
         taskId: "task-1",

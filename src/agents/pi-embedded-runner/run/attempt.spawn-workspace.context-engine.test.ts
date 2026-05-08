@@ -621,7 +621,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(sessionPrompt).not.toHaveBeenCalled();
     expect(result.finalPromptText).toBeUndefined();
-    expect(result.promptError).toBeFalsy();
+    expect(result.promptError).toBeNull();
     expect(result.messagesSnapshot).toEqual([
       expect.objectContaining({ role: "user", content: "seed" }),
     ]);
@@ -966,7 +966,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     ).toBe(true);
   });
 
-  it("forwards silentExpected to the embedded subscription", async () => {
+  it("forwards silentExpected to the embedded subscription", () => {
     const params = buildEmbeddedSubscriptionParams({
       session: {} as never,
       runId: "run-context-engine-forwarding",

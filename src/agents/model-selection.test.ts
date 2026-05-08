@@ -41,7 +41,7 @@ const manifestNormalizationSnapshot = vi.hoisted(() => ({
           },
           google: {
             aliases: {
-              "gemini-3-pro": "gemini-3-pro-preview",
+              "gemini-3-pro": "gemini-3.1-pro-preview",
               "gemini-3-flash": "gemini-3-flash-preview",
               "gemini-3.1-pro": "gemini-3.1-pro-preview",
               "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
@@ -51,7 +51,7 @@ const manifestNormalizationSnapshot = vi.hoisted(() => ({
           },
           "google-vertex": {
             aliases: {
-              "gemini-3-pro": "gemini-3-pro-preview",
+              "gemini-3-pro": "gemini-3.1-pro-preview",
               "gemini-3-flash": "gemini-3-flash-preview",
               "gemini-3.1-pro": "gemini-3.1-pro-preview",
               "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
@@ -312,6 +312,18 @@ describe("model-selection", () => {
         expected: { provider: "google", model: "gemini-3-flash-preview" },
       },
       {
+        name: "normalizes retired google gemini 3 pro preview ids",
+        variants: ["google/gemini-3-pro-preview", "gemini-3-pro-preview"],
+        defaultProvider: "google",
+        expected: { provider: "google", model: "gemini-3.1-pro-preview" },
+      },
+      {
+        name: "normalizes retired gemini cli 3 pro preview ids",
+        variants: ["google-gemini-cli/gemini-3-pro-preview"],
+        defaultProvider: "google",
+        expected: { provider: "google-gemini-cli", model: "gemini-3.1-pro-preview" },
+      },
+      {
         name: "normalizes gemini 3.1 flash-lite ids",
         variants: ["google/gemini-3.1-flash-lite", "gemini-3.1-flash-lite"],
         defaultProvider: "google",
@@ -413,6 +425,17 @@ describe("model-selection", () => {
         provider: "anthropic",
         model: "claude-opus-4-7",
         runtime: "claude-cli",
+        cli: true,
+      });
+    });
+
+    it("normalizes retired Gemini ids while migrating legacy Gemini CLI refs", () => {
+      expect(migrateLegacyRuntimeModelRef("google-gemini-cli/gemini-3-pro-preview")).toEqual({
+        ref: "google/gemini-3.1-pro-preview",
+        legacyProvider: "google-gemini-cli",
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        runtime: "google-gemini-cli",
         cli: true,
       });
     });
@@ -922,7 +945,7 @@ describe("model-selection", () => {
 
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
-      expect(result.allowedKeys.has("google/gemini-3-pro-preview")).toBe(true);
+      expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(true);
       expect(result.allowAny).toBe(false);
     });
 
@@ -956,7 +979,7 @@ describe("model-selection", () => {
 
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
-      expect(result.allowedKeys.has("google/gemini-3-pro-preview")).toBe(false);
+      expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(false);
       expect(result.allowAny).toBe(false);
     });
   });

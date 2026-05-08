@@ -207,6 +207,20 @@ async function closeCliMemoryManagers(): Promise<void> {
   }
 }
 
+async function disposeCliAgentHarnesses(): Promise<void> {
+  try {
+    const { listAgentHarnessIds, disposeRegisteredAgentHarnesses } =
+      await import("../agents/harness/registry.js");
+    if (listAgentHarnessIds().length === 0) {
+      return;
+    }
+    await disposeRegisteredAgentHarnesses();
+  } catch {
+    // Best-effort teardown for short-lived CLI commands. Harness plugins may
+    // own subprocesses, but cleanup must not hide the command's real outcome.
+  }
+}
+
 function pauseNonTtyStdinForCliExit(): void {
   const stdin = process.stdin;
   if (stdin.isTTY) {
@@ -691,6 +705,7 @@ export async function runCli(argv: string[] = process.argv) {
       process.off("exit", onExit);
     }
     await stopStartedProxy();
+    await disposeCliAgentHarnesses();
     await closeCliMemoryManagers();
     pauseNonTtyStdinForCliExit();
   }

@@ -141,6 +141,27 @@ describe("approval and confirmation modals", () => {
     );
   });
 
+  it("renders command spans in exec approvals", async () => {
+    const request = createExecRequest();
+    request.request.command = 'ls | grep "stuff" | python -c \'print("hi")\'';
+    request.request.commandSpans = [
+      { startIndex: 0, endIndex: 2 },
+      { startIndex: 5, endIndex: 5 },
+      { startIndex: 8.5, endIndex: 10 },
+      { startIndex: 20, endIndex: 29 },
+      { startIndex: 30, endIndex: 200 },
+    ];
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    const spans = [...container.querySelectorAll(".exec-approval-command-span")].map(
+      (span) => span.textContent,
+    );
+    expect(spans).toEqual(["ls", "python -c"]);
+  });
+
   it("maps Escape to exec denial when approval is idle", async () => {
     const handleExecApprovalDecision = vi.fn(async () => undefined);
     render(renderExecApprovalPrompt(createExecState({ handleExecApprovalDecision })), container);

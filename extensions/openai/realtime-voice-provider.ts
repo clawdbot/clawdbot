@@ -76,7 +76,7 @@ type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   azureApiVersion?: string;
 };
 
-const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-1.5";
+const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2";
 
 type RealtimeEvent = {
   type: string;
@@ -95,25 +95,60 @@ type RealtimeEvent = {
 
 type RealtimeSessionUpdate = {
   type: "session.update";
-  session: {
-    modalities: string[];
-    instructions?: string;
-    voice: OpenAIRealtimeVoice;
-    input_audio_format: string;
-    output_audio_format: string;
-    turn_detection: {
-      type: "server_vad";
-      threshold: number;
-      prefix_padding_ms: number;
-      silence_duration_ms: number;
-      create_response: boolean;
-    };
-    temperature: number;
-    input_audio_transcription?: { model: string };
-    tools?: RealtimeVoiceTool[];
-    tool_choice?: string;
-  };
+  session: RealtimeSessionUpdatePayload;
 };
+
+type RealtimeSessionUpdatePayload =
+  | RealtimeSessionUpdateGaPayload
+  | RealtimeSessionUpdateBetaPayload;
+
+type RealtimeSessionUpdateGaPayload = {
+  type: "realtime";
+  model: string;
+  instructions?: string;
+  output_modalities: ["audio"];
+  audio: {
+    input: {
+      format: RealtimeAudioFormatConfig;
+      transcription: { model: string };
+      turn_detection: {
+        type: "server_vad";
+        threshold: number;
+        prefix_padding_ms: number;
+        silence_duration_ms: number;
+        create_response: boolean;
+        interrupt_response: boolean;
+      };
+    };
+    output: {
+      format: RealtimeAudioFormatConfig;
+      voice: OpenAIRealtimeVoice;
+    };
+  };
+  tools?: RealtimeVoiceTool[];
+  tool_choice?: string;
+};
+
+type RealtimeSessionUpdateBetaPayload = {
+  modalities: string[];
+  instructions?: string;
+  voice: OpenAIRealtimeVoice;
+  input_audio_format: string;
+  output_audio_format: string;
+  turn_detection: {
+    type: "server_vad";
+    threshold: number;
+    prefix_padding_ms: number;
+    silence_duration_ms: number;
+    create_response: boolean;
+  };
+  temperature: number;
+  input_audio_transcription?: { model: string };
+  tools?: RealtimeVoiceTool[];
+  tool_choice?: string;
+};
+
+type RealtimeAudioFormatConfig = { type: "audio/pcmu" } | { type: "audio/pcm"; rate: 24000 };
 
 function normalizeProviderConfig(
   config: RealtimeVoiceProviderConfig,
@@ -485,11 +520,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         transport: "websocket",
         defaultHeaders: {
           Authorization: `Bearer ${cfg.apiKey}`,
-          "OpenAI-Beta": "realtime=v1",
         },
       }) ?? {
         Authorization: `Bearer ${cfg.apiKey}`,
-        "OpenAI-Beta": "realtime=v1",
       },
     };
   }
@@ -518,35 +551,92 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private sendSessionUpdate(): void {
-    const cfg = this.config;
-    const sessionUpdate: RealtimeSessionUpdate = {
+    this.sendEvent({
       type: "session.update",
-      session: {
-        modalities: ["text", "audio"],
-        instructions: cfg.instructions,
-        voice: cfg.voice ?? "alloy",
-        input_audio_format: this.resolveRealtimeAudioFormat(),
-        output_audio_format: this.resolveRealtimeAudioFormat(),
-        input_audio_transcription: {
-          model: "whisper-1",
+      session: this.resolveSessionUpdatePayload(),
+    } satisfies RealtimeSessionUpdate);
+  }
+
+  private resolveSessionUpdatePayload(): RealtimeSessionUpdatePayload {
+    if (this.usesAzureDeploymentRealtimeApi()) {
+      return this.resolveBetaSessionUpdatePayload();
+    }
+    return this.resolveGaSessionUpdatePayload();
+  }
+
+  private usesAzureDeploymentRealtimeApi(): boolean {
+    return Boolean(this.config.azureEndpoint && this.config.azureDeployment);
+  }
+
+  private resolveGaSessionUpdatePayload(): RealtimeSessionUpdateGaPayload {
+    const cfg = this.config;
+    const autoRespondToAudio = cfg.autoRespondToAudio ?? true;
+    return {
+      type: "realtime",
+      model: cfg.model ?? OpenAIRealtimeVoiceBridge.DEFAULT_MODEL,
+      instructions: cfg.instructions,
+      output_modalities: ["audio"],
+      audio: {
+        input: {
+          format: this.resolveRealtimeAudioFormatConfig(),
+          transcription: {
+            model: "whisper-1",
+          },
+          turn_detection: {
+            type: "server_vad",
+            threshold: cfg.vadThreshold ?? 0.5,
+            prefix_padding_ms: cfg.prefixPaddingMs ?? 300,
+            silence_duration_ms: cfg.silenceDurationMs ?? 500,
+            create_response: autoRespondToAudio,
+            interrupt_response: autoRespondToAudio,
+          },
         },
-        turn_detection: {
-          type: "server_vad",
-          threshold: cfg.vadThreshold ?? 0.5,
-          prefix_padding_ms: cfg.prefixPaddingMs ?? 300,
-          silence_duration_ms: cfg.silenceDurationMs ?? 500,
-          create_response: cfg.autoRespondToAudio ?? true,
+        output: {
+          format: this.resolveRealtimeAudioFormatConfig(),
+          voice: cfg.voice ?? "alloy",
         },
-        temperature: cfg.temperature ?? 0.8,
-        ...(cfg.tools && cfg.tools.length > 0
-          ? {
-              tools: cfg.tools,
-              tool_choice: "auto",
-            }
-          : {}),
       },
+      ...(cfg.tools && cfg.tools.length > 0
+        ? {
+            tools: cfg.tools,
+            tool_choice: "auto",
+          }
+        : {}),
     };
-    this.sendEvent(sessionUpdate);
+  }
+
+  private resolveBetaSessionUpdatePayload(): RealtimeSessionUpdateBetaPayload {
+    const cfg = this.config;
+    return {
+      modalities: ["text", "audio"],
+      instructions: cfg.instructions,
+      voice: cfg.voice ?? "alloy",
+      input_audio_format: this.resolveRealtimeAudioFormat(),
+      output_audio_format: this.resolveRealtimeAudioFormat(),
+      input_audio_transcription: {
+        model: "whisper-1",
+      },
+      turn_detection: {
+        type: "server_vad",
+        threshold: cfg.vadThreshold ?? 0.5,
+        prefix_padding_ms: cfg.prefixPaddingMs ?? 300,
+        silence_duration_ms: cfg.silenceDurationMs ?? 500,
+        create_response: cfg.autoRespondToAudio ?? true,
+      },
+      temperature: cfg.temperature ?? 0.8,
+      ...(cfg.tools && cfg.tools.length > 0
+        ? {
+            tools: cfg.tools,
+            tool_choice: "auto",
+          }
+        : {}),
+    };
+  }
+
+  private resolveRealtimeAudioFormatConfig(): RealtimeAudioFormatConfig {
+    return this.audioFormat.encoding === "pcm16"
+      ? { type: "audio/pcm", rate: 24000 }
+      : { type: "audio/pcmu" };
   }
 
   private resolveRealtimeAudioFormat(): "g711_ulaw" | "pcm16" {

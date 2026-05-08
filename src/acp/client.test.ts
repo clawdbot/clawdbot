@@ -172,7 +172,7 @@ describe("resolveAcpClientSpawnEnv", () => {
     expect(env.OPENCLAW_SHELL).toBe("acp-client");
   });
 
-  it("preserves provider auth env vars for explicit custom ACP servers", () => {
+  it("preserves provider auth env vars when no strip keys are provided", () => {
     const env = resolveAcpClientSpawnEnv({
       OPENAI_API_KEY: "openai-secret", // pragma: allowlist secret
       GITHUB_TOKEN: "gh-secret", // pragma: allowlist secret

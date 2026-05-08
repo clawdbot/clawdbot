@@ -4,6 +4,7 @@ import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   createOpenAIAttributionHeadersWrapper,
+  createOpenAICompletionsToolsCompatWrapper,
   createOpenAIThinkingLevelWrapper,
 } from "./openai-stream-wrappers.js";
 
@@ -32,6 +33,67 @@ const openaiModel = {
   provider: "openai",
   id: "gpt-5.2",
 } as Model<"openai-responses">;
+
+describe("createOpenAICompletionsToolsCompatWrapper", () => {
+  it("strips tools fields when OpenAI-compatible models disable tool support", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        model: model.id,
+        tools: [{ type: "function", function: { name: "noop" } }],
+        tool_choice: "auto",
+        parallel_tool_calls: true,
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+
+    const wrapped = createOpenAICompletionsToolsCompatWrapper(baseStreamFn);
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "venice",
+        id: "chat-only-model",
+        baseUrl: "https://example.invalid/v1",
+        compat: { supportsTools: false },
+      } as unknown as Model<"openai-completions">,
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]).not.toHaveProperty("tools");
+    expect(payloads[0]).not.toHaveProperty("tool_choice");
+    expect(payloads[0]).not.toHaveProperty("parallel_tool_calls");
+  });
+
+  it("keeps tools fields for OpenAI-compatible models without an explicit opt-out", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        model: model.id,
+        tools: [{ type: "function", function: { name: "noop" } }],
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+
+    const wrapped = createOpenAICompletionsToolsCompatWrapper(baseStreamFn);
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "venice",
+        id: "tool-capable-model",
+        baseUrl: "https://example.invalid/v1",
+      } as Model<"openai-completions">,
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]).toHaveProperty("tools");
+  });
+});
 
 describe("createOpenAIThinkingLevelWrapper", () => {
   it("overrides effort on reasoning-capable model when thinkingLevel is medium", () => {

@@ -4,6 +4,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { pathExists } from "./fs-safe.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
 import { tryReadJson, writeJson } from "./json-files.js";
+import { movePathWithCopyFallback } from "./replace-file.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
 const INSTALL_BASE_CHANGED_ERROR_MESSAGE = "install base directory changed during install";
@@ -210,7 +211,11 @@ export async function installPackageDir(params: {
     if (!backupDir) {
       return;
     }
-    await fs.rename(backupDir, canonicalTargetDir).catch(() => undefined);
+    await movePathWithCopyFallback({
+      from: backupDir,
+      sourceHardlinks: "reject",
+      to: canonicalTargetDir,
+    }).catch(() => undefined);
     backupDir = null;
   };
 
@@ -293,7 +298,11 @@ export async function installPackageDir(params: {
         installBaseDir,
         expectedRealPath: installBaseRealPath,
       });
-      await fs.rename(canonicalTargetDir, backupDir);
+      await movePathWithCopyFallback({
+        from: canonicalTargetDir,
+        sourceHardlinks: "reject",
+        to: backupDir,
+      });
     } catch (err) {
       return await fail(`${params.copyErrorPrefix}: ${String(err)}`, err);
     }
@@ -304,7 +313,11 @@ export async function installPackageDir(params: {
       installBaseDir,
       expectedRealPath: installBaseRealPath,
     });
-    await fs.rename(stageDir, canonicalTargetDir);
+    await movePathWithCopyFallback({
+      from: stageDir,
+      sourceHardlinks: "reject",
+      to: canonicalTargetDir,
+    });
     stageDir = null;
   } catch (err) {
     return await fail(`${params.copyErrorPrefix}: ${String(err)}`, err);

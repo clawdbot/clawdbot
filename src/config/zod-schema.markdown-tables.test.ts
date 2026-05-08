@@ -3,7 +3,7 @@ import { MarkdownTableModeSchema } from "./zod-schema.core.js";
 
 describe("MarkdownTableModeSchema", () => {
   it("accepts block mode", () => {
-    expect(() => MarkdownTableModeSchema.parse("block")).not.toThrow();
+    expect(MarkdownTableModeSchema.parse("block")).toBe("block");
   });
 
   it("rejects unsupported values", () => {

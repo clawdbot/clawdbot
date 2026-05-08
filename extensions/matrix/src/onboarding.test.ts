@@ -447,9 +447,8 @@ describe("matrix onboarding", () => {
 
   it("reports account-scoped DM config keys for named accounts", () => {
     const resolveConfigKeys = matrixOnboardingAdapter.dmPolicy?.resolveConfigKeys;
-    expect(resolveConfigKeys).toBeDefined();
-    if (!resolveConfigKeys) {
-      return;
+    if (resolveConfigKeys === undefined) {
+      throw new Error("expected matrix DM policy config-key resolver");
     }
 
     expect(

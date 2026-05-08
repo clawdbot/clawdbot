@@ -111,6 +111,14 @@ function expectCommandMatch(
   });
 }
 
+function requirePluginCommandMatch(commandBody: string) {
+  const match = matchPluginCommand(commandBody);
+  if (!match) {
+    throw new Error(`expected plugin command match for ${commandBody}`);
+  }
+  return match;
+}
+
 function expectProviderCommandSpecs(
   provider: Parameters<typeof getPluginCommandSpecs>[0],
   expectedNames: readonly string[],
@@ -593,11 +601,10 @@ describe("registerPluginCommand", () => {
         return { text: "ok" };
       },
     });
-    const match = matchPluginCommand("/voice");
-    expect(match).toBeTruthy();
+    const match = requirePluginCommandMatch("/voice");
 
     await executePluginCommand({
-      command: match!.command,
+      command: match.command,
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: true,
@@ -620,11 +627,10 @@ describe("registerPluginCommand", () => {
       requiredScopes: ["operator.pairing"],
       handler,
     });
-    const match = matchPluginCommand("/pairlike");
-    expect(match).toBeTruthy();
+    const match = requirePluginCommandMatch("/pairlike");
 
     const result = await executePluginCommand({
-      command: match!.command,
+      command: match.command,
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: true,
@@ -645,11 +651,10 @@ describe("registerPluginCommand", () => {
       requiredScopes: ["operator.pairing"],
       handler,
     });
-    const match = matchPluginCommand("/pairlike");
-    expect(match).toBeTruthy();
+    const match = requirePluginCommandMatch("/pairlike");
 
     const result = await executePluginCommand({
-      command: match!.command,
+      command: match.command,
       channel: "webchat",
       isAuthorizedSender: true,
       senderIsOwner: true,
@@ -670,11 +675,10 @@ describe("registerPluginCommand", () => {
       requiredScopes: ["operator.pairing"],
       handler,
     });
-    const match = matchPluginCommand("/pairlike");
-    expect(match).toBeTruthy();
+    const match = requirePluginCommandMatch("/pairlike");
 
     const result = await executePluginCommand({
-      command: match!.command,
+      command: match.command,
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: false,
@@ -741,11 +745,10 @@ describe("registerPluginCommand", () => {
         return { text: "ok" };
       },
     });
-    const match = matchPluginCommand("/codex");
-    expect(match).toBeTruthy();
+    const match = requirePluginCommandMatch("/codex");
 
     await executePluginCommand({
-      command: match!.command,
+      command: match.command,
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: true,

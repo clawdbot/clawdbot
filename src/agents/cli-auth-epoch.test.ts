@@ -11,6 +11,13 @@ describe("resolveCliAuthEpoch", () => {
     resetCliAuthEpochTestDeps();
   });
 
+  function expectCliAuthEpoch(
+    epoch: Awaited<ReturnType<typeof resolveCliAuthEpoch>>,
+    label = "auth epoch",
+  ): asserts epoch is string {
+    expect(epoch, label).toEqual(expect.stringMatching(/\S/));
+  }
+
   it("returns undefined when no local or auth-profile credentials exist", async () => {
     setCliAuthEpochTestDeps({
       readClaudeCliCredentialsCached: () => null,
@@ -51,7 +58,7 @@ describe("resolveCliAuthEpoch", () => {
     expires = 2;
     const second = await resolveCliAuthEpoch({ provider: "claude-cli" });
 
-    expect(first).toBeDefined();
+    expectCliAuthEpoch(first);
     expect(second).toBe(first);
   });
 
@@ -70,8 +77,8 @@ describe("resolveCliAuthEpoch", () => {
     token = "token-b";
     const second = await resolveCliAuthEpoch({ provider: "claude-cli" });
 
-    expect(first).toBeDefined();
-    expect(second).toBeDefined();
+    expectCliAuthEpoch(first);
+    expectCliAuthEpoch(second);
     expect(second).not.toBe(first);
   });
 
@@ -99,7 +106,7 @@ describe("resolveCliAuthEpoch", () => {
     expires = 2;
     const second = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
 
-    expect(first).toBeDefined();
+    expectCliAuthEpoch(first);
     // Access and refresh rotation must not shift the epoch while the lifted
     // Google-account identity is stable.
     expect(second).toBe(first);
@@ -107,13 +114,13 @@ describe("resolveCliAuthEpoch", () => {
     email = "user-b@example.com";
     const third = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
 
-    expect(third).toBeDefined();
+    expectCliAuthEpoch(third);
     expect(third).not.toBe(second);
 
     accountId = "google-account-2";
     const fourth = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
 
-    expect(fourth).toBeDefined();
+    expectCliAuthEpoch(fourth);
     expect(fourth).not.toBe(third);
   });
 
@@ -133,7 +140,7 @@ describe("resolveCliAuthEpoch", () => {
     refresh = "gemini-refresh-b";
     const second = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
 
-    expect(first).toBeDefined();
+    expectCliAuthEpoch(first);
     // Without lifted identity, the epoch is a provider-keyed constant that
     // survives token rotation — same fallback as the Claude CLI OAuth branch.
     expect(second).toBe(first);
@@ -180,7 +187,7 @@ describe("resolveCliAuthEpoch", () => {
       authProfileId: "anthropic:work",
     });
 
-    expect(first).toBeDefined();
+    expectCliAuthEpoch(first);
     expect(second).toBe(first);
   });
 
@@ -220,7 +227,7 @@ describe("resolveCliAuthEpoch", () => {
       authProfileId: "anthropic:work-alias",
     });
 
-    expect(first).toBeDefined();
+    expectCliAuthEpoch(first);
     expect(second).toBe(first);
   });
 
@@ -258,8 +265,8 @@ describe("resolveCliAuthEpoch", () => {
       authProfileId: "anthropic:personal",
     });
 
-    expect(first).toBeDefined();
-    expect(second).toBeDefined();
+    expectCliAuthEpoch(first);
+    expectCliAuthEpoch(second);
     expect(second).not.toBe(first);
   });
 
@@ -304,8 +311,8 @@ describe("resolveCliAuthEpoch", () => {
       authProfileId: "anthropic:work",
     });
 
-    expect(first).toBeDefined();
-    expect(second).toBeDefined();
+    expectCliAuthEpoch(first);
+    expectCliAuthEpoch(second);
     expect(second).not.toBe(first);
   });
 
@@ -369,12 +376,12 @@ describe("resolveCliAuthEpoch", () => {
       authProfileId: "openai:work",
     });
 
-    expect(first).toBeDefined();
+    expectCliAuthEpoch(first);
     expect(second).toBe(first);
     expect(third).toBe(second);
     expect(fourth).toBe(third);
-    expect(fifth).toBeDefined();
-    expect(sixth).toBeDefined();
+    expectCliAuthEpoch(fifth);
+    expectCliAuthEpoch(sixth);
     expect(fifth).not.toBe(fourth);
     expect(sixth).not.toBe(fifth);
   });
@@ -431,10 +438,10 @@ describe("resolveCliAuthEpoch", () => {
       skipLocalCredential: true,
     });
 
-    expect(first).toBeDefined();
+    expectCliAuthEpoch(first);
     expect(second).toBe(first);
     expect(third).toBe(second);
-    expect(fourth).toBeDefined();
+    expectCliAuthEpoch(fourth);
     expect(fourth).not.toBe(third);
   });
 

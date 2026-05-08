@@ -301,6 +301,15 @@ function renderSessionDetailPanel(
           ×
         </button>
       </div>
+      ${session.scope === "family" && session.includedSessionIds?.length
+        ? html`
+            <div class="usage-lineage-note">
+              ${t("usage.scope.familyIncluded", {
+                count: String(session.includedSessionIds.length),
+              })}
+            </div>
+          `
+        : nothing}
       <div class="session-detail-content">
         ${renderSessionSummary(
           session,

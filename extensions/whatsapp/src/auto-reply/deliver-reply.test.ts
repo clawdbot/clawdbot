@@ -123,7 +123,9 @@ function mockFirstReplyFailureWithWrappedError(msg: WebInboundMsg, message: stri
 
 function expectFirstSendMediaPayload(msg: WebInboundMsg) {
   const payload = vi.mocked(msg.sendMedia).mock.calls[0]?.[0];
-  expect(payload).toBeDefined();
+  if (!payload) {
+    throw new Error("expected first WhatsApp sendMedia payload");
+  }
   return payload;
 }
 

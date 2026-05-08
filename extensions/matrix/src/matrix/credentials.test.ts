@@ -241,7 +241,7 @@ describe("matrix credentials storage", () => {
     }
   });
 
-  it("migrates legacy matrix credential files on read", async () => {
+  it("migrates legacy matrix credential files on read", () => {
     const { legacyPath, currentPath } = setupLegacyCredentialsFile({
       cfg: {
         channels: {

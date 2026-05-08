@@ -96,7 +96,7 @@ describe("shared Codex app-server client", () => {
     await expect(listPromise).rejects.toThrow(
       `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required`,
     );
-    expect(harness.process.kill).toHaveBeenCalledTimes(1);
+    expect(harness.process.stdin.destroyed).toBe(true);
     startSpy.mockRestore();
   });
 
@@ -111,7 +111,7 @@ describe("shared Codex app-server client", () => {
     await expect(listCodexAppServerModels({ timeoutMs: 5 })).rejects.toThrow(
       "codex app-server initialize timed out",
     );
-    expect(first.process.kill).toHaveBeenCalledTimes(1);
+    expect(first.process.stdin.destroyed).toBe(true);
 
     const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
     await sendInitializeResult(second, "openclaw/0.125.0 (macOS; test)");
@@ -128,7 +128,7 @@ describe("shared Codex app-server client", () => {
     await expect(createIsolatedCodexAppServerClient({ timeoutMs: 5 })).rejects.toThrow(
       "codex app-server initialize timed out",
     );
-    expect(harness.process.kill).toHaveBeenCalledTimes(1);
+    expect(harness.process.stdin.destroyed).toBe(true);
   });
 
   it("passes the selected auth profile through the bridge helper", async () => {
@@ -288,7 +288,7 @@ describe("shared Codex app-server client", () => {
     await expect(secondList).resolves.toEqual({ models: [] });
 
     expect(startSpy).toHaveBeenCalledTimes(2);
-    expect(first.process.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(first.process.stdin.destroyed).toBe(true);
   });
 
   it("does not let a superseded shared-client failure tear down the newer client", async () => {
@@ -347,7 +347,7 @@ describe("shared Codex app-server client", () => {
     await expect(firstList).resolves.toEqual({ models: [] });
 
     expect(clearSharedCodexAppServerClientIfCurrent(first.client)).toBe(true);
-    expect(first.process.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(first.process.stdin.destroyed).toBe(true);
 
     const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
     await sendInitializeResult(second, "openclaw/0.125.0 (macOS; test)");
@@ -357,7 +357,7 @@ describe("shared Codex app-server client", () => {
     expect(clearSharedCodexAppServerClientIfCurrent(first.client)).toBe(false);
     expect(second.process.kill).not.toHaveBeenCalled();
     expect(clearSharedCodexAppServerClientIfCurrent(second.client)).toBe(true);
-    expect(second.process.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(second.process.stdin.destroyed).toBe(true);
   });
 
   it("uses a fresh websocket Authorization header after shared-client token rotation", async () => {

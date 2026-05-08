@@ -92,7 +92,9 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
 
     const first = await syncMemoryWikiUnsafeLocalSources(config);
     const firstPagePath = first.pagePaths[0] ?? "";
-    await expect(fs.stat(path.join(vaultDir, firstPagePath))).resolves.toBeTruthy();
+    await expect(fs.readFile(path.join(vaultDir, firstPagePath), "utf8")).resolves.toContain(
+      "# private",
+    );
 
     await fs.rm(secretPath);
     const second = await syncMemoryWikiUnsafeLocalSources(config);
@@ -127,6 +129,8 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
 
     expect(result.importedCount).toBe(1);
     expect(Buffer.byteLength(path.basename(pagePath))).toBeLessThanOrEqual(255);
-    await expect(fs.stat(path.join(vaultDir, pagePath))).resolves.toBeTruthy();
+    await expect(fs.readFile(path.join(vaultDir, pagePath), "utf8")).resolves.toContain(
+      "# very private",
+    );
   });
 });

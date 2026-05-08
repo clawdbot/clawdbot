@@ -344,7 +344,9 @@ describe("createEmbeddedRunAuthController", () => {
 
       vi.advanceTimersByTime(5_000);
       await Promise.resolve();
-      expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight).toBeTruthy();
+      expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight).toEqual(
+        expect.any(Promise),
+      );
 
       await controller.advanceAuthProfile();
       expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.profileId).toBe("backup");

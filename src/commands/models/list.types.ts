@@ -28,7 +28,6 @@ export type ProviderAuthOverview = {
     oauth: number;
     token: number;
     apiKey: number;
-    awsSdk: number;
     labels: string[];
   };
   env?: { value: string; source: string };

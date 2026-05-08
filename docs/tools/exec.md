@@ -6,8 +6,9 @@ read_when:
 title: "Exec tool"
 ---
 
-Run shell commands in the workspace. Supports foreground + background execution via `process`.
-If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
+Run shell commands in the workspace. `exec` is a mutating shell surface: commands can create, edit, or delete files wherever the selected host or sandbox filesystem permits. Disabling OpenClaw filesystem tools such as `write`, `edit`, or `apply_patch` does not make `exec` read-only.
+
+Supports foreground + background execution via `process`. If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 Background sessions are scoped per agent; `process` only sees sessions from the same agent.
 
 ## Parameters

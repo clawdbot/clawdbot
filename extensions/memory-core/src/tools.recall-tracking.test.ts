@@ -82,7 +82,9 @@ describe("memory_search recall tracking", () => {
 
     expect(recallTrackingMock.recordShortTermRecalls).toHaveBeenCalledTimes(1);
     const [firstCall] = recallTrackingMock.recordShortTermRecalls.mock.calls;
-    expect(firstCall).toBeDefined();
+    if (!firstCall) {
+      throw new Error("expected short-term recall tracking call");
+    }
     const recallParams = firstCall[0];
     expect(recallParams.results).toHaveLength(1);
     expect(recallParams.results[0]?.path).toBe("memory/2026-04-03.md");

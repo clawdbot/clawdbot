@@ -54,8 +54,10 @@ describe("withTempDir", () => {
       await expect(fs.readdir(parentDir)).resolves.toHaveLength(1);
     });
 
-    expect(releaseFirst).toBeDefined();
-    releaseFirst?.();
+    if (releaseFirst === undefined) {
+      throw new Error("expected first temp-dir release callback");
+    }
+    releaseFirst();
     await first;
 
     await expect(fs.readdir(parentDir)).resolves.toEqual([]);

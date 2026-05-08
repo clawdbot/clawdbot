@@ -11,8 +11,10 @@ describe("extractToolCallLocations", () => {
 
     const locations = extractToolCallLocations(nested);
 
-    expect(locations).toBeDefined();
-    expect(locations?.length).toBeLessThan(20);
+    if (locations === undefined) {
+      throw new Error("expected bounded tool-call locations");
+    }
+    expect(locations.length).toBeLessThan(20);
     expect(locations).not.toContainEqual({ path: "/tmp/file-19.txt" });
   });
 });

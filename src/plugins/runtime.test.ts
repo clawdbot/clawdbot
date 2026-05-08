@@ -133,7 +133,7 @@ describe("plugin runtime route registry", () => {
     },
     {
       name: "prefers the pinned route registry when it already owns routes",
-      pinnedRegistry: createRegistryWithRoute("/bluebubbles-webhook"),
+      pinnedRegistry: createRegistryWithRoute("/imessage-webhook"),
       explicitRegistry: createRegistryWithRoute("/plugins/diffs"),
       expected: "pinned",
     },

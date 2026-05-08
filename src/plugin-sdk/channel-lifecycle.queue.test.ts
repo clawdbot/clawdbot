@@ -76,10 +76,11 @@ describe("createChannelRunQueue", () => {
   });
 
   it("contains reporting hook errors", async () => {
+    const onError = vi.fn(() => {
+      throw new Error("report failed");
+    });
     const queue = createChannelRunQueue({
-      onError: () => {
-        throw new Error("report failed");
-      },
+      onError,
     });
 
     queue.enqueue("key", async () => {
@@ -87,6 +88,7 @@ describe("createChannelRunQueue", () => {
     });
 
     await flushAsyncWork();
+    expect(onError).toHaveBeenCalledWith(expect.any(Error));
   });
 
   it("skips queued work after deactivation", async () => {

@@ -107,7 +107,7 @@ describe("withTempDir", () => {
     const value = await withTempDir("openclaw-install-source-utils-", async (tmpDir) => {
       observedDir = tmpDir;
       await fs.writeFile(path.join(tmpDir, markerFile), "ok", "utf-8");
-      await expect(fs.stat(path.join(tmpDir, markerFile))).resolves.toBeDefined();
+      await expect(fs.readFile(path.join(tmpDir, markerFile), "utf8")).resolves.toBe("ok");
       return "done";
     });
 

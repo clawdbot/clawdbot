@@ -54,7 +54,7 @@ describe("hash-based memory flush dedup", () => {
   it("first flush — no previous hash, should NOT skip", () => {
     const result = shouldSkipFlushByHash(transcript, undefined);
     expect(result.skip).toBe(false);
-    expect(result.hash).toBeDefined();
+    expect(result.hash).toMatch(/^[a-f0-9]{16}$/u);
   });
 
   it("same transcript — hash matches, should skip", () => {

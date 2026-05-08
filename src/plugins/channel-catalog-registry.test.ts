@@ -1,3 +1,4 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.js";
@@ -10,6 +11,7 @@ afterEach(() => {
 });
 
 const ENV: NodeJS.ProcessEnv = { HOME: "/tmp/openclaw-test-home" };
+let loadCase = 0;
 
 const RECORDS: Record<string, PluginInstallRecord> = {
   weixin: {
@@ -34,7 +36,6 @@ async function loadWithMocks(params: {
   discoverSpy: ReturnType<typeof vi.fn>;
   loadRecordsSpy: ReturnType<typeof vi.fn>;
 }> {
-  vi.resetModules();
   const discoverSpy = vi.fn(() => emptyDiscoveryResult());
   const loadRecordsSpy = vi.fn((opts: { env?: NodeJS.ProcessEnv } = {}) => {
     return params.loadRecords ? params.loadRecords(opts.env) : RECORDS;
@@ -45,7 +46,10 @@ async function loadWithMocks(params: {
     loadInstalledPluginIndexInstallRecordsSync: loadRecordsSpy,
   }));
 
-  const module = await import("./channel-catalog-registry.js");
+  const module = await importFreshModule<typeof import("./channel-catalog-registry.js")>(
+    import.meta.url,
+    `./channel-catalog-registry.js?case=${++loadCase}`,
+  );
   return { module, discoverSpy, loadRecordsSpy };
 }
 

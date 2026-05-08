@@ -222,6 +222,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
             agents: {
               defaults: {
                 model: { primary: "openai-codex/gpt-5.4", fallbacks: defaultFallbacks },
+                models: { "openai-codex/gpt-5.4": {} },
               },
             },
           },
@@ -237,7 +238,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
       expect(result.status).toBe("error");
       expect(result.error).toBe(
-        "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6",
+        "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6 is not in [openai-codex/gpt-5.4]",
       );
       expect(logWarnMock).not.toHaveBeenCalled();
       expect(runWithModelFallbackMock).not.toHaveBeenCalled();

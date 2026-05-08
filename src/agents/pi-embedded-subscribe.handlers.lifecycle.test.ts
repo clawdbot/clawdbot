@@ -594,7 +594,7 @@ describe("handleAgentEnd", () => {
     });
   });
 
-  it("emits lifecycle end when block reply flush throws", async () => {
+  it("emits lifecycle end when block reply flush throws", () => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(undefined, { onAgentEvent });
     ctx.flushBlockReplyBuffer = vi.fn(() => {

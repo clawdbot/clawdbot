@@ -96,12 +96,29 @@ function resolveFirstFromReference(dockerfile: string): string | undefined {
   return resolveFromImageRef(fromLine, argDefaults);
 }
 
+function requireFirstFromReference(dockerfile: string, dockerfilePath: string): string {
+  const imageRef = resolveFirstFromReference(dockerfile);
+  if (!imageRef) {
+    throw new Error(`${dockerfilePath} should define a FROM line`);
+  }
+  return imageRef;
+}
+
+function requireDependabotDockerUpdate(config: DependabotConfig): DependabotUpdate {
+  const dockerUpdate = config.updates?.find(
+    (update) => update["package-ecosystem"] === "docker" && update.directory === "/",
+  );
+  if (!dockerUpdate) {
+    throw new Error("expected Dependabot Docker update entry for root Dockerfiles");
+  }
+  return dockerUpdate;
+}
+
 describe("docker base image pinning", () => {
   it("pins selected Dockerfile FROM lines to immutable sha256 digests", async () => {
     for (const dockerfilePath of DIGEST_PINNED_DOCKERFILES) {
       const dockerfile = await readFile(resolve(repoRoot, dockerfilePath), "utf8");
-      const imageRef = resolveFirstFromReference(dockerfile);
-      expect(imageRef, `${dockerfilePath} should define a FROM line`).toBeDefined();
+      const imageRef = requireFirstFromReference(dockerfile, dockerfilePath);
       expect(imageRef, `${dockerfilePath} FROM must be digest-pinned`).toMatch(
         /^\S+@sha256:[a-f0-9]{64}$/,
       );
@@ -123,12 +140,9 @@ describe("docker base image pinning", () => {
   it("keeps Dependabot Docker updates enabled for root Dockerfiles", async () => {
     const raw = await readFile(resolve(repoRoot, ".github/dependabot.yml"), "utf8");
     const config = parse(raw) as DependabotConfig;
-    const dockerUpdate = config.updates?.find(
-      (update) => update["package-ecosystem"] === "docker" && update.directory === "/",
-    );
+    const dockerUpdate = requireDependabotDockerUpdate(config);
 
-    expect(dockerUpdate).toBeDefined();
-    expect(dockerUpdate?.schedule?.interval).toBe("weekly");
-    expect(dockerUpdate?.groups?.["docker-images"]?.patterns).toContain("*");
+    expect(dockerUpdate.schedule?.interval).toBe("weekly");
+    expect(dockerUpdate.groups?.["docker-images"]?.patterns).toContain("*");
   });
 });

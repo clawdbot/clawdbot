@@ -140,6 +140,7 @@ type AcpDispatchDeliveryState = {
   accumulatedBlockText: string;
   accumulatedVisibleBlockText: string;
   accumulatedBlockTtsText: string;
+  accumulatedFinalText: string;
   cleanBlockTtsDirectiveText?: ReturnType<typeof createTtsDirectiveTextStreamCleaner>;
   blockCount: number;
   deliveredFinalReply: boolean;
@@ -162,6 +163,7 @@ export type AcpDispatchDeliveryCoordinator = {
   getAccumulatedBlockText: () => string;
   getAccumulatedVisibleBlockText: () => string;
   getAccumulatedBlockTtsText: () => string;
+  getAccumulatedFinalText: () => string;
   settleVisibleText: () => Promise<void>;
   hasDeliveredFinalReply: () => boolean;
   hasDeliveredVisibleText: () => boolean;
@@ -202,6 +204,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     accumulatedBlockText: "",
     accumulatedVisibleBlockText: "",
     accumulatedBlockTtsText: "",
+    accumulatedFinalText: "",
     cleanBlockTtsDirectiveText: shouldCleanTtsDirectiveText({
       cfg: params.cfg,
       ttsAuto: params.sessionTtsAuto,
@@ -330,6 +333,13 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         state.accumulatedVisibleBlockText += visiblePayload.text;
       }
     }
+    const rawFinalText = kind === "final" ? normalizeOptionalString(payload.text) : undefined;
+    if (rawFinalText) {
+      if (state.accumulatedFinalText.length > 0) {
+        state.accumulatedFinalText += "\n";
+      }
+      state.accumulatedFinalText += rawFinalText;
+    }
 
     if (hasOutboundReplyContent(visiblePayload, { trimText: true })) {
       await startReplyLifecycleOnce();
@@ -445,6 +455,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     getAccumulatedBlockText: () => state.accumulatedBlockText,
     getAccumulatedVisibleBlockText: () => state.accumulatedVisibleBlockText,
     getAccumulatedBlockTtsText: () => state.accumulatedBlockTtsText,
+    getAccumulatedFinalText: () => state.accumulatedFinalText,
     settleVisibleText: settleDirectVisibleText,
     hasDeliveredFinalReply: () => state.deliveredFinalReply,
     hasDeliveredVisibleText: () => state.deliveredVisibleText,

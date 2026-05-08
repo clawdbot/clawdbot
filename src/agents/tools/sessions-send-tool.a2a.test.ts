@@ -54,6 +54,14 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     });
   });
 
+  function requireGatewayCall(method: string): CallGatewayOptions {
+    const call = gatewayCalls.find((entry) => entry.method === method);
+    if (!call) {
+      throw new Error(`expected gateway call ${method}`);
+    }
+    return call;
+  }
+
   afterEach(() => {
     __testing.setDepsForTest();
     vi.restoreAllMocks();
@@ -69,9 +77,8 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       roundOneReply: "Worker completed successfully",
     });
 
-    const sendCall = gatewayCalls.find((call) => call.method === "send");
-    expect(sendCall).toBeDefined();
-    const sendParams = sendCall?.params as Record<string, unknown>;
+    const sendCall = requireGatewayCall("send");
+    const sendParams = sendCall.params as Record<string, unknown>;
     expect(sendParams.to).toBe("-100123");
     expect(sendParams.channel).toBe("telegram");
     expect(sendParams.threadId).toBe("554");
@@ -87,9 +94,8 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       roundOneReply: "Worker completed successfully",
     });
 
-    const sendCall = gatewayCalls.find((call) => call.method === "send");
-    expect(sendCall).toBeDefined();
-    const sendParams = sendCall?.params as Record<string, unknown>;
+    const sendCall = requireGatewayCall("send");
+    const sendParams = sendCall.params as Record<string, unknown>;
     expect(sendParams.channel).toBe("discord");
     expect(sendParams.threadId).toBeUndefined();
   });
@@ -134,9 +140,8 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     });
 
     expect(gatewayCalls.some((call) => call.method === "sessions.list")).toBe(true);
-    const sendCall = gatewayCalls.find((call) => call.method === "send");
-    expect(sendCall).toBeDefined();
-    expect(sendCall?.params).toMatchObject({
+    const sendCall = requireGatewayCall("send");
+    expect(sendCall.params).toMatchObject({
       channel: "discord",
       to: "channel:target-room",
       accountId,

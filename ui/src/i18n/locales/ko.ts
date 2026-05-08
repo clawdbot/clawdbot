@@ -705,6 +705,16 @@ export const ko: TranslationMap = {
       today: "오늘",
       last7d: "7일",
       last30d: "30일",
+      last90d: "90일",
+      last1y: "1년",
+      all: "전체",
+    },
+    scope: {
+      instance: "현재 인스턴스",
+      instanceHint: "각 논리 세션의 활성 세션 id만 표시합니다.",
+      family: "기록 계보",
+      familyHint: "알려진 순환된 transcript 기반 세션 id를 집계합니다.",
+      familyIncluded: "기록 계보에 {count}개의 세션 인스턴스가 포함됩니다.",
     },
     filters: {
       title: "필터",
@@ -923,6 +933,93 @@ export const ko: TranslationMap = {
     showPassword: "비밀번호 표시",
     hidePassword: "비밀번호 숨기기",
     togglePasswordVisibility: "비밀번호 표시 여부 전환",
+    failure: {
+      rawError: "원시 오류",
+      docsAuth: "Control UI 인증 문서",
+      docsPairing: "장치 페어링 문서",
+      docsInsecure: "안전하지 않은 HTTP 문서",
+      authRequired: {
+        title: "인증 필요",
+        summary:
+          "Gateway에 연결할 수 있지만 이 브라우저가 연결되기 전에 일치하는 토큰 또는 비밀번호가 필요합니다.",
+        stepPaste: "openclaw dashboard --no-open의 토큰을 붙여넣거나 구성된 비밀번호를 입력하세요.",
+        stepGenerate:
+          "토큰이 구성되어 있지 않으면 Gateway 호스트에서 openclaw doctor --generate-gateway-token을 실행하세요.",
+        stepConnect: "자격 증명을 업데이트한 뒤 Connect를 다시 클릭하세요.",
+      },
+      authFailed: {
+        title: "인증이 일치하지 않음",
+        summary:
+          "제공한 자격 증명이 거부되었습니다. 가장 흔한 원인은 오래된 토큰이거나 다른 Gateway URL에서 복사한 토큰입니다.",
+        stepDashboard:
+          "openclaw dashboard --no-open을 실행하고 새 URL을 열거나 해당 토큰을 붙여넣으세요.",
+        stepReplace:
+          "오래된 토큰/비밀번호 값을 교체하세요. 다른 Gateway URL의 토큰을 재사용하지 마세요.",
+        stepMode:
+          "한 번에 하나의 일치하는 인증 모드만 사용하세요. 토큰 모드에는 gateway token, 비밀번호 모드에는 비밀번호를 사용합니다.",
+      },
+      rateLimited: {
+        title: "실패한 시도가 너무 많음",
+        summary: "Gateway가 이 클라이언트의 인증 시도를 일시적으로 제한하고 있습니다.",
+        stepStop: "이 탭에서 잠시 재시도를 중지하세요.",
+        stepWait: "인증 제한기가 식을 때까지 기다린 뒤 수정된 자격 증명으로 다시 연결하세요.",
+        stepCheckClients:
+          "공유 호스트라면 다른 클라이언트가 잘못된 재시도를 반복하는지 확인하세요.",
+      },
+      pairing: {
+        title: "장치 페어링 필요",
+        scopeTitle: "Scope 업그레이드 대기 중",
+        roleTitle: "역할 업그레이드 대기 중",
+        metadataTitle: "장치 새로 고침 대기 중",
+        summary: "이 브라우저가 Control UI를 사용하려면 Gateway 호스트의 일회성 승인이 필요합니다.",
+        upgradeSummary:
+          "이 브라우저는 이미 알려져 있지만 요청한 액세스가 변경되어 새 승인이 필요합니다.",
+        stepList: "Gateway 호스트에서 openclaw devices list를 실행하세요.",
+        stepApproveId: "이 요청을 승인하세요: openclaw devices approve {requestId}.",
+        stepApprove: "해당 목록에서 대기 중인 브라우저/장치 요청을 승인하세요.",
+        stepReconnect: "승인이 완료된 뒤 다시 연결하세요.",
+      },
+      insecure: {
+        title: "안전한 브라우저 컨텍스트 필요",
+        summary:
+          "이 페이지는 일반 HTTP에서 실행 중이므로 브라우저가 Gateway가 기대하는 장치 ID를 만들 수 없습니다.",
+        stepHttps:
+          "HTTPS/Tailscale Serve를 사용하거나 Gateway 호스트에서 http://127.0.0.1:18789를 여세요.",
+        stepLocalCompat:
+          "로컬 토큰 전용 호환성을 위해 gateway.controlUi.allowInsecureAuth: true를 설정하세요.",
+        stepAvoidDisable: "원격 HTTP 액세스를 위해 장치 인증을 비활성화하지 마세요.",
+      },
+      origin: {
+        title: "브라우저 origin이 허용되지 않음",
+        summary: "Gateway가 Control UI 연결을 수락하기 전에 이 페이지 origin을 거부했습니다.",
+        stepAllowedOrigins: "이 브라우저 origin을 gateway.controlUi.allowedOrigins에 추가하세요.",
+        stepFullOrigin:
+          "와일드카드 패턴이 아니라 http://localhost:5173 같은 전체 origin을 사용하세요.",
+        stepRestart: "허용 origin을 변경한 뒤 Gateway를 다시 시작하거나 다시 로드하세요.",
+      },
+      protocol: {
+        title: "프로토콜 불일치",
+        summary:
+          "제공된 Control UI와 실행 중인 Gateway가 지원되는 연결 프로토콜에 동의하지 않습니다.",
+        stepDashboard:
+          "UI와 Gateway가 같은 설치에서 오도록 openclaw dashboard로 제공된 dashboard를 다시 여세요.",
+        stepDevUi:
+          "pnpm ui:dev를 사용하는 경우 현재 checkout 기준으로 개발 UI를 다시 빌드하거나 다시 시작하세요.",
+        stepRestart:
+          "OpenClaw를 업데이트한 뒤 Gateway를 다시 시작하여 현재 프로토콜을 제공하게 하세요.",
+      },
+      network: {
+        title: "연결할 수 없음",
+        summary:
+          "브라우저가 Gateway 연결을 완료할 수 없습니다. 자격 증명을 다시 시도하기 전에 대상과 전송 방식을 확인하세요.",
+        stepGateway:
+          "openclaw status 또는 openclaw gateway run으로 Gateway가 실행 중인지 확인하세요.",
+        stepUrl:
+          "WebSocket URL을 확인하고 Gateway가 HTTPS/Tailscale Serve 뒤에 있으면 wss://를 사용하세요.",
+        stepDashboard:
+          "openclaw dashboard --no-open으로 dashboard를 다시 열어 현재 URL과 인증 세부 정보를 다시 복사하세요.",
+      },
+    },
   },
   chat: {
     disconnected: "Gateway와 연결이 끊어졌습니다.",

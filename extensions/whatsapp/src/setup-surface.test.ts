@@ -118,7 +118,6 @@ function createSeparatePhoneHarness(params: { selectValues: string[]; textValues
 function expectFinalizeResult(result: Awaited<ReturnType<typeof runFinalizeWithHarness>>): {
   cfg: OpenClawConfig;
 } {
-  expect(result).toBeDefined();
   if (!result || typeof result !== "object" || !("cfg" in result) || !result.cfg) {
     throw new Error("Expected WhatsApp finalize result with cfg");
   }

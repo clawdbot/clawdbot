@@ -45,4 +45,16 @@ describe("createLiveTargetMatcher", () => {
     expect(matcher.matchesProvider("openrouter")).toBe(true);
     expect(matcher.matchesModel("openrouter", "openai/gpt-5.4")).toBe(true);
   });
+
+  it("normalizes retired Google Gemini filters before matching", () => {
+    const matcher = createLiveTargetMatcher({
+      providerFilter: new Set(["google"]),
+      modelFilter: new Set(["google/gemini-3-pro-preview"]),
+      env,
+    });
+
+    expect(matcher.matchesProvider("google")).toBe(true);
+    expect(matcher.matchesModel("google", "gemini-3.1-pro-preview")).toBe(true);
+    expect(matcher.matchesModel("google", "gemini-3-flash-preview")).toBe(false);
+  });
 });

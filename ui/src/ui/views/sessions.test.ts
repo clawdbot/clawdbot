@@ -692,11 +692,11 @@ describe("sessions view", () => {
     const reasoning = selects[3] as HTMLSelectElement | undefined;
     expect(fast?.value).toBe("on");
     expect(verbose?.value).toBe("full");
-    expect(Array.from(verbose?.options ?? []).some((option) => option.value === "full")).toBe(true);
+    expect(Array.from(verbose?.options ?? []).map((option) => option.value)).toContain("full");
     expect(reasoning?.value).toBe("custom-mode");
-    expect(
-      Array.from(reasoning?.options ?? []).some((option) => option.value === "custom-mode"),
-    ).toBe(true);
+    expect(Array.from(reasoning?.options ?? []).map((option) => option.value)).toContain(
+      "custom-mode",
+    );
 
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();
@@ -760,8 +760,10 @@ describe("sessions view", () => {
     const showAll = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "Show all",
     );
-    expect(showAll).toBeTruthy();
-    showAll?.click();
+    if (!showAll) {
+      throw new Error("Expected filtered empty state to render a Show all button");
+    }
+    showAll.click();
     expect(onClearFilters).toHaveBeenCalledTimes(1);
   });
 

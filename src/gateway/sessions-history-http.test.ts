@@ -211,8 +211,10 @@ async function openSessionHistorySse(
   });
   expect(res.status).toBe(200);
   const reader = res.body?.getReader();
-  expect(reader).toBeTruthy();
-  return { reader: reader!, streamState: { buffer: "" } };
+  if (reader === undefined) {
+    throw new Error("expected session-history SSE reader");
+  }
+  return { reader, streamState: { buffer: "" } };
 }
 
 async function expectHistoryEventTexts(stream: SessionHistorySseStream, expectedTexts: string[]) {

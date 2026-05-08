@@ -130,7 +130,6 @@ describe("noteClaudeCliHealth", () => {
         {
           agents: {
             defaults: {
-              agentRuntime: { id: "codex" },
               model: { primary: "openai/gpt-5.5" },
             },
             list: [
@@ -138,13 +137,14 @@ describe("noteClaudeCliHealth", () => {
                 id: "coder",
                 default: true,
                 workspace: defaultWorkspace,
-                agentRuntime: { id: "codex" },
               },
               {
                 id: "xiaoao",
                 workspace: claudeWorkspace,
-                agentRuntime: { id: "claude-cli" },
                 model: "anthropic/claude-opus-4-7",
+                models: {
+                  "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+                },
               },
             ],
           },

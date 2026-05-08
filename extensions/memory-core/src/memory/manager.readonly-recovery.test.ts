@@ -213,7 +213,7 @@ describe("memory manager readonly recovery", () => {
     expect(harness.vector.dims).toBe(768);
   });
 
-  it("sets busy_timeout on memory sqlite connections", async () => {
+  it("sets busy_timeout on memory sqlite connections", () => {
     const db = openMemoryDatabaseAtPath(indexPath, false);
     const row = db.prepare("PRAGMA busy_timeout").get() as
       | { busy_timeout?: number; timeout?: number }

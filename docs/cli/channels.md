@@ -19,6 +19,7 @@ Related docs:
 
 ```bash
 openclaw channels list
+openclaw channels list --all
 openclaw channels status
 openclaw channels capabilities
 openclaw channels capabilities --channel discord --target channel:123
@@ -26,6 +27,8 @@ openclaw channels capabilities --channel discord --target channel:<voice-channel
 openclaw channels resolve --channel slack "#general" "@jane"
 openclaw channels logs --channel all
 ```
+
+`channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account. Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Auth providers (OAuth + API keys) and model-provider usage/quota snapshots are no longer printed here; use `openclaw models auth list` for provider auth profiles and `openclaw status` or `openclaw models list` for usage.
 
 ## Status / capabilities / resolve / logs
 
@@ -109,7 +112,7 @@ openclaw channels logout --channel whatsapp
 
 - Run `openclaw status --deep` for a broad probe.
 - Use `openclaw doctor` for guided fixes.
-- `openclaw channels list` prints `Claude: HTTP 403 ... user:profile` → usage snapshot needs the `user:profile` scope. Use `--no-usage`, or provide a claude.ai session key (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`), or re-auth via Claude CLI.
+- `openclaw channels list` no longer prints model provider usage/quota snapshots. For those, use `openclaw status` (overview) or `openclaw models list` (per-provider).
 - `openclaw channels status` falls back to config-only summaries when the gateway is unreachable. If a supported channel credential is configured via SecretRef but unavailable in the current command path, it reports that account as configured with degraded notes instead of showing it as not configured.
 
 ## Capabilities probe

@@ -82,7 +82,7 @@ describe("security audit gateway HTTP auth findings", () => {
       }
     }
     if (expectedNoFinding) {
-      expect(findings.some((entry) => entry.checkId === expectedNoFinding)).toBe(false);
+      expect(findings.map((entry) => entry.checkId)).not.toContain(expectedNoFinding);
     }
   });
 });

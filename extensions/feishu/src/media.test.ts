@@ -566,8 +566,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
     expectMediaTimeoutClientConfigured();
     expect(result.buffer).toEqual(Buffer.from("image-data"));
-    expect(capturedPath).toBeDefined();
-    expectPathIsolatedToTmpRoot(capturedPath as string, imageKey);
+    if (!capturedPath) {
+      throw new Error("expected Feishu image temp path");
+    }
+    expectPathIsolatedToTmpRoot(capturedPath, imageKey);
   });
 
   it("uses isolated temp paths for message resource downloads", async () => {
@@ -589,8 +591,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(result.buffer).toEqual(Buffer.from("resource-data"));
-    expect(capturedPath).toBeDefined();
-    expectPathIsolatedToTmpRoot(capturedPath as string, fileKey);
+    if (!capturedPath) {
+      throw new Error("expected Feishu resource temp path");
+    }
+    expectPathIsolatedToTmpRoot(capturedPath, fileKey);
   });
 
   it("rejects invalid image keys before calling feishu api", async () => {

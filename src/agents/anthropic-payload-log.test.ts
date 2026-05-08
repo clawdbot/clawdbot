@@ -58,6 +58,6 @@ describe("createAnthropicPayloadLogger", () => {
     expect(source.data).toBe("<redacted>");
     expect(source.bytes).toBe(4);
     expect(source.sha256).toBe(crypto.createHash("sha256").update("QUJDRA==").digest("hex"));
-    expect(event.payloadDigest).toBeDefined();
+    expect(event.payloadDigest).toMatch(/^[a-f0-9]{64}$/u);
   });
 });

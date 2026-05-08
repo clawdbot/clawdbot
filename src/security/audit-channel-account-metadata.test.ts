@@ -58,7 +58,9 @@ describe("security audit channel account metadata", () => {
     const dangerousMatchingFinding = findings.find(
       (entry) => entry.checkId === "channels.discord.allowFrom.dangerous_name_matching_enabled",
     );
-    expect(dangerousMatchingFinding).toBeDefined();
+    expect(dangerousMatchingFinding).toMatchObject({
+      checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
+    });
     expect(dangerousMatchingFinding?.title).not.toContain("(account: toString)");
   });
 });

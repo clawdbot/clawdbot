@@ -29,7 +29,7 @@ export default definePluginEntry({
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );
-    api.registerMigrationProvider(buildCodexMigrationProvider());
+    api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
     api.registerCommand(createCodexCommand({ pluginConfig: api.pluginConfig }));
     api.on("inbound_claim", (event, ctx) =>
       handleCodexConversationInboundClaim(event, ctx, {

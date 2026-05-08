@@ -212,8 +212,12 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       }),
     );
     expect(projected).toHaveLength(1);
-    expect(projected[0]?.text?.trim()).toBeTruthy();
-    expect(projected[0]?.text?.trim()).not.toBe("NO_REPLY");
+    const [reply] = projected;
+    if (!reply?.text) {
+      throw new Error("expected direct silent reply rewrite to produce visible text");
+    }
+    expect(reply.text.trim().length).toBeGreaterThan(0);
+    expect(reply.text.trim()).not.toBe("NO_REPLY");
   });
 
   it("drops bare silent replies for groups when policy allows silence", () => {
@@ -307,8 +311,12 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       try {
         const delivery = planSilent("agent:main:telegram:direct:789");
         expect(delivery).toHaveLength(1);
-        expect(delivery[0]?.text).toBeTruthy();
-        expect(delivery[0]?.text).not.toBe("NO_REPLY");
+        const [reply] = delivery;
+        if (!reply?.text) {
+          throw new Error("expected visible silent-reply fallback text");
+        }
+        expect(reply.text.length).toBeGreaterThan(0);
+        expect(reply.text).not.toBe("NO_REPLY");
       } finally {
         registerPendingSpawnedChildrenQuery(previousQuery);
       }
@@ -545,7 +553,7 @@ describe("normalizeOutboundPayloadsForJson", () => {
     expect(normalizeOutboundPayloadsForJson(cloneReplyPayloads(input))).toEqual(expected);
   });
 
-  it("suppresses reasoning payloads", () => {
+  it("suppresses reasoning payloads during JSON normalization", () => {
     expect(
       normalizeOutboundPayloadsForJson([
         { text: "Reasoning:\n_step_", isReasoning: true },
@@ -565,7 +573,7 @@ describe("normalizeOutboundPayloads", () => {
     ]);
   });
 
-  it("suppresses reasoning payloads", () => {
+  it("suppresses reasoning payloads during runtime normalization", () => {
     expect(
       normalizeOutboundPayloads([
         { text: "Reasoning:\n_step_", isReasoning: true },

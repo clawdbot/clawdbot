@@ -47,11 +47,6 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
     // Should only include system directories
     expect(result).toEqual(["/usr/local/bin", "/usr/bin", "/bin"]);
-
-    // Should not include any user-specific paths
-    expect(result.some((p) => p.includes(".local"))).toBe(false);
-    expect(result.some((p) => p.includes(".npm-global"))).toBe(false);
-    expect(result.some((p) => p.includes(".nvm"))).toBe(false);
   });
 
   it("places user directories before system directories on Linux", () => {
@@ -119,7 +114,6 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     });
 
     expect(result).toEqual(["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]);
-    expect(result.some((entry) => entry.startsWith("/Users/testuser/"))).toBe(false);
   });
 
   it("can include env-configured version manager dirs on macOS when requested", () => {
@@ -496,9 +490,6 @@ describe("buildMinimalServicePath", () => {
 
     // Should only have system directories
     expect(parts).toEqual(["/usr/local/bin", "/usr/bin", "/bin"]);
-
-    // No user-specific paths
-    expect(parts.some((p) => p.includes("home"))).toBe(false);
   });
 
   it("ensures user directories come before system directories on Linux", () => {
@@ -704,11 +695,11 @@ describe("buildServiceEnvironment", () => {
       env: { HOME: "/Users/user", VOLTA_HOME: "/Users/user/.volta" },
       port: 18789,
       platform: "darwin",
-      extraPathDirs: ["/opt/homebrew/Cellar/node/22.14.0/bin"],
+      extraPathDirs: ["/opt/homebrew/Cellar/node/22.16.0/bin"],
     });
 
     expect(env.PATH).toBe(
-      "/opt/homebrew/Cellar/node/22.14.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      "/opt/homebrew/Cellar/node/22.16.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
     );
   });
 });
@@ -806,7 +797,7 @@ describe("buildNodeServiceEnvironment", () => {
   });
 });
 
-describe("shared Node TLS env defaults", () => {
+describe("shared Node TLS env defaults matrix", () => {
   const builders = [
     {
       name: "gateway service env",
@@ -908,7 +899,7 @@ describe("resolveLinuxSystemCaBundle", () => {
   });
 });
 
-describe("shared Node TLS env defaults", () => {
+describe("shared Node TLS env defaults focused", () => {
   it("sets macOS TLS defaults for gateway services", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/Users/test" },

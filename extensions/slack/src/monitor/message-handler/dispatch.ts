@@ -38,7 +38,7 @@ import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runti
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, shouldLogVerbose, sleep } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
@@ -79,10 +79,6 @@ import {
 } from "../reply.runtime.js";
 import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 import type { PreparedSlackMessage } from "./types.js";
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 // Slack reactions.add/remove expect shortcode names, not raw unicode emoji.
 const UNICODE_TO_SLACK: Record<string, string> = {

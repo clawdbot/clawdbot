@@ -18,7 +18,8 @@ describe("gateway tools.catalog", () => {
       }>(ws, "tools.catalog", {});
 
       expect(res.ok).toBe(true);
-      expect(res.payload?.agentId).toBeTruthy();
+      expect(res.payload?.agentId).toEqual(expect.any(String));
+      expect(res.payload?.agentId).not.toBe("");
       const mediaGroup = res.payload?.groups?.find((group) => group.id === "media");
       expect(mediaGroup?.tools?.some((tool) => tool.id === "tts" && tool.source === "core")).toBe(
         true,

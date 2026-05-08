@@ -420,7 +420,7 @@ if [ "$provider" = "codex-cli" ] && [ "${OPENCLAW_LIVE_CLI_BACKEND_AUTH:-auto}" 
     --sandbox \
     danger-full-access \
     -c \
-    'service_tier="fast"' \
+    'service_tier="priority"' \
     --skip-git-repo-check \
     --model \
     "$codex_probe_model" \

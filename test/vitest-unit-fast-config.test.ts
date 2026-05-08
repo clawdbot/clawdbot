@@ -103,7 +103,10 @@ describe("unit-fast vitest lane", () => {
       expect(unitFastTestFiles).toContain(file);
       expect(isUnitFastTestFile(file)).toBe(true);
     }
-    expect(forcedAnalysis.every((entry) => entry.forced && entry.unitFast)).toBe(true);
+    const unroutedForcedFiles = forcedAnalysis
+      .filter((entry) => !entry.forced || !entry.unitFast)
+      .map((entry) => ({ file: entry.file, forced: entry.forced, unitFast: entry.unitFast }));
+    expect(unroutedForcedFiles).toEqual([]);
   });
 
   it("keeps broad audit candidates separate from automatically routed unit-fast tests", () => {

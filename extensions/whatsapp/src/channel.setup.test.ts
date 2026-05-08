@@ -183,10 +183,12 @@ describe("whatsapp setup wizard", () => {
     const prompt = harness.text.mock.calls[0]?.[0] as
       | { validate?: (value: string) => string | undefined }
       | undefined;
-    expect(prompt?.validate).toEqual(expect.any(Function));
-    expect(prompt?.validate?.("abc")).toBe("Invalid number: abc");
-    expect(prompt?.validate?.("whatsapp:")).toBe("Invalid number: whatsapp:");
-    expect(prompt?.validate?.("+1 (555) 555-0123")).toBeUndefined();
+    if (!prompt?.validate) {
+      throw new Error("expected owner number validator");
+    }
+    expect(prompt.validate("abc")).toBe("Invalid number: abc");
+    expect(prompt.validate("whatsapp:")).toBe("Invalid number: whatsapp:");
+    expect(prompt.validate("+1 (555) 555-0123")).toBeUndefined();
   });
 
   it("supports disabled DM policy for separate-phone setup", async () => {

@@ -9,13 +9,8 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
-import OpenAI from "openai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import {
-  getMemoryEmbeddingProvider,
-  type MemoryEmbeddingProvider,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -63,6 +58,40 @@ type AutoCaptureCursor = {
   nextIndex: number;
   lastMessageFingerprint?: string;
 };
+
+type OpenAiEmbeddingClient = {
+  post<T>(
+    path: string,
+    options: { body: unknown; timeout?: number; maxRetries?: number },
+  ): Promise<T>;
+};
+
+let openAiModulePromise: Promise<typeof import("openai")> | undefined;
+function loadOpenAiModule(): Promise<typeof import("openai")> {
+  openAiModulePromise ??= import("openai");
+  return openAiModulePromise;
+}
+
+let memoryEmbeddingProviderModulePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")>
+  | undefined;
+function loadMemoryEmbeddingProviderModule(): Promise<
+  typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")
+> {
+  memoryEmbeddingProviderModulePromise ??=
+    import("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
+  return memoryEmbeddingProviderModulePromise;
+}
+
+let memoryHostCoreModulePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/memory-host-core")>
+  | undefined;
+function loadMemoryHostCoreModule(): Promise<
+  typeof import("openclaw/plugin-sdk/memory-host-core")
+> {
+  memoryHostCoreModulePromise ??= import("openclaw/plugin-sdk/memory-host-core");
+  return memoryHostCoreModulePromise;
+}
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -314,7 +343,7 @@ type Embeddings = {
 };
 
 class OpenAiCompatibleEmbeddings implements Embeddings {
-  private client: OpenAI;
+  private clientPromise: Promise<OpenAiEmbeddingClient>;
 
   constructor(
     apiKey: string,
@@ -322,11 +351,13 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     baseUrl?: string,
     private dimensions?: number,
   ) {
-    this.client = new OpenAI({ apiKey, baseURL: baseUrl });
+    this.clientPromise = loadOpenAiModule().then(
+      ({ default: OpenAI }) => new OpenAI({ apiKey, baseURL: baseUrl }) as OpenAiEmbeddingClient,
+    );
   }
 
   async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
-    const params: OpenAI.EmbeddingCreateParams = {
+    const params: Record<string, unknown> = {
       model: this.model,
       input: text,
     };
@@ -338,7 +369,9 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     // omitted, then decodes the response. Several compatible providers either
     // reject encoding_format or always return float arrays, so use the generic
     // transport and normalize the response ourselves.
-    const response = await this.client.post<EmbeddingCreateResponse>("/embeddings", {
+    const response = await (
+      await this.clientPromise
+    ).post<EmbeddingCreateResponse>("/embeddings", {
       body: params,
       ...(options?.timeoutMs ? { timeout: options.timeoutMs, maxRetries: 0 } : {}),
     });
@@ -367,10 +400,12 @@ class ProviderAdapterEmbeddings implements Embeddings {
   private async createProvider(): Promise<MemoryEmbeddingProvider> {
     const cfg = (this.api.runtime.config?.current?.() ?? this.api.config) as OpenClawConfig;
     const providerId = this.embedding.provider;
+    const { getMemoryEmbeddingProvider } = await loadMemoryEmbeddingProviderModule();
     const adapter = getMemoryEmbeddingProvider(providerId, cfg);
     if (!adapter) {
       throw new Error(`Unknown memory embedding provider: ${providerId}`);
     }
+    const { resolveDefaultAgentId } = await loadMemoryHostCoreModule();
     const defaultAgentId = resolveDefaultAgentId(cfg);
     const agentDir = this.api.runtime.agent.resolveAgentDir(cfg, defaultAgentId);
     const remote =

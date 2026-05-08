@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 /**
  * Regression test for #18264: Gateway announcement delivery loop.
@@ -73,6 +74,14 @@ vi.mock("./subagent-orphan-recovery.js", () => ({
 describe("announce loop guard (#18264)", () => {
   let registry: typeof import("./subagent-registry.js");
 
+  function requireRunById(runs: SubagentRunRecord[], runId: string): SubagentRunRecord {
+    const entry = runs.find((run) => run.runId === runId);
+    if (!entry) {
+      throw new Error(`expected subagent run ${runId}`);
+    }
+    return entry;
+  }
+
   beforeAll(async () => {
     vi.resetModules();
     registry = await import("./subagent-registry.js");
@@ -130,10 +139,9 @@ describe("announce loop guard (#18264)", () => {
     });
 
     const runs = registry.listSubagentRunsForRequester("agent:main:main");
-    const entry = runs.find((r) => r.runId === "test-loop-guard");
-    expect(entry).toBeDefined();
-    expect(entry!.announceRetryCount).toBe(3);
-    expect(entry!.lastAnnounceRetryAt).toBeDefined();
+    const entry = requireRunById(runs, "test-loop-guard");
+    expect(entry.announceRetryCount).toBe(3);
+    expect(entry.lastAnnounceRetryAt).toBe(now - 10_000);
   });
 
   test.each([
@@ -185,7 +193,7 @@ describe("announce loop guard (#18264)", () => {
     await Promise.resolve();
 
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(entry.cleanupCompletedAt).toBeDefined();
+    expect(entry.cleanupCompletedAt).toEqual(expect.any(Number));
   });
 
   test("expired completion-message entries are still resumed for announce", async () => {

@@ -81,8 +81,8 @@ Supported keys:
       providers: {
         openai: {
           apiKey: "openai_api_key",
-          model: "gpt-realtime",
-          voice: "alloy",
+          model: "gpt-realtime-2",
+          voice: "cedar",
         },
       },
       mode: "realtime",
@@ -104,6 +104,7 @@ Defaults:
 - `providers.elevenlabs.apiKey`: falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available).
 - `realtime.provider`: selects the active browser/server realtime voice provider. Use `openai` for WebRTC, `google` for provider WebSocket, or a bridge-only provider through Gateway relay.
 - `realtime.providers.<provider>` stores provider-owned realtime config. The browser receives only ephemeral or constrained session credentials, never a standard API key.
+- `realtime.providers.openai.voice`: built-in OpenAI Realtime voice id. Current `gpt-realtime-2` voices are `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, and `cedar`; `marin` and `cedar` are recommended for best quality.
 - `realtime.brain`: `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is owner-only compatibility behavior; `none` is for transcription or external orchestration.
 - `talk.catalog` exposes each provider's valid modes, transports, brain strategies, realtime audio formats, and capability flags so first-party Talk clients can avoid unsupported combinations.
 - Streaming transcription providers are discovered through `talk.catalog.transcription`. The current Gateway relay uses the Voice Call streaming provider config until the dedicated Talk transcription config surface is added.

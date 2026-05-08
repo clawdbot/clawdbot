@@ -255,17 +255,17 @@ describe("gateway node pairing authorization", () => {
   test("requests re-pairing when a paired node reconnects with upgraded commands", async () => {
     await expectRePairingRequest({
       pairedName: "node-command-pin",
-      initialCommands: ["canvas.snapshot"],
-      reconnectCommands: ["canvas.snapshot", "system.run"],
+      initialCommands: ["screen.snapshot"],
+      reconnectCommands: ["screen.snapshot", "system.run"],
       approvalScopes: ["operator.pairing", "operator.write"],
-      expectedVisibleCommands: ["canvas.snapshot"],
+      expectedVisibleCommands: ["screen.snapshot"],
     });
   });
 
   test("requests re-pairing when a commandless paired node reconnects with system.run", async () => {
     await expectRePairingRequest({
       pairedName: "node-command-empty",
-      reconnectCommands: ["canvas.snapshot", "system.run"],
+      reconnectCommands: ["screen.snapshot", "system.run"],
       approvalScopes: ["operator.pairing"],
       expectedVisibleCommands: [],
     });

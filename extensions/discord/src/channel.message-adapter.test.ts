@@ -26,11 +26,13 @@ describe("discord channel message adapter", () => {
 
   it("backs declared durable-final capabilities with outbound send proofs", async () => {
     const adapter = discordPlugin.message;
-    expect(adapter).toBeDefined();
+    if (!adapter) {
+      throw new Error("Expected discord plugin to expose a channel message adapter");
+    }
 
     const proveText = async () => {
       resetDiscordOutboundMocks(hoisted);
-      const result = await adapter!.send!.text!({
+      const result = await adapter.send!.text!({
         cfg: {},
         to: "channel:123456",
         text: "hello",
@@ -47,7 +49,7 @@ describe("discord channel message adapter", () => {
 
     const proveMedia = async () => {
       resetDiscordOutboundMocks(hoisted);
-      const result = await adapter!.send!.media!({
+      const result = await adapter.send!.media!({
         cfg: {},
         to: "channel:123456",
         text: "caption",
@@ -67,7 +69,7 @@ describe("discord channel message adapter", () => {
 
     const provePayload = async () => {
       resetDiscordOutboundMocks(hoisted);
-      const result = await adapter!.send!.payload!({
+      const result = await adapter.send!.payload!({
         cfg: {},
         to: "channel:123456",
         text: "payload",
@@ -84,7 +86,7 @@ describe("discord channel message adapter", () => {
 
     const proveReplyThreadSilent = async () => {
       resetDiscordOutboundMocks(hoisted);
-      const result = await adapter!.send!.text!({
+      const result = await adapter.send!.text!({
         cfg: {},
         to: "channel:parent-1",
         text: "threaded",
@@ -108,7 +110,7 @@ describe("discord channel message adapter", () => {
 
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "discordMessageAdapter",
-      adapter: adapter!,
+      adapter: adapter,
       proofs: {
         text: proveText,
         media: proveMedia,
@@ -117,7 +119,7 @@ describe("discord channel message adapter", () => {
         replyTo: proveReplyThreadSilent,
         thread: proveReplyThreadSilent,
         messageSendingHooks: () => {
-          expect(adapter!.send!.text).toBeTypeOf("function");
+          expect(adapter.send!.text).toBeTypeOf("function");
         },
       },
     });

@@ -12,7 +12,7 @@ const ENVELOPE_CHANNELS = [
   "Matrix",
   "Zalo",
   "Zalo Personal",
-  "BlueBubbles",
+  "iMessage",
 ];
 
 const MESSAGE_ID_LINE = /^\s*\[message_id:\s*[^\]]+\]\s*$/i;

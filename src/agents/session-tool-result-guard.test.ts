@@ -69,7 +69,9 @@ function getToolResultText(messages: AgentMessage[]): string {
   const toolResult = messages.find((m) => m.role === "toolResult") as {
     content: Array<{ type: string; text: string }>;
   };
-  expect(toolResult).toBeDefined();
+  if (toolResult === undefined) {
+    throw new Error("expected toolResult message");
+  }
   const textBlock = toolResult.content.find((b: { type: string }) => b.type === "text") as {
     text: string;
   };

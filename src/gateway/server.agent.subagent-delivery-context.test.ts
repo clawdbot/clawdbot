@@ -75,6 +75,21 @@ type StoredEntry = {
   lastAccountId?: string;
 };
 
+function readStoredEntry(stored: Record<string, StoredEntry>, key: string): StoredEntry {
+  const entry = stored[key];
+  if (!entry) {
+    throw new Error(`expected stored entry ${key}`);
+  }
+  return entry;
+}
+
+function readDeliveryContext(entry: StoredEntry): NonNullable<StoredEntry["deliveryContext"]> {
+  if (!entry.deliveryContext) {
+    throw new Error("expected stored deliveryContext");
+  }
+  return entry.deliveryContext;
+}
+
 describe("subagent session deliveryContext from spawn request params", () => {
   test("new subagent session inherits deliveryContext from request channel/to/threadId", async () => {
     setRegistry(defaultRegistry);
@@ -97,14 +112,14 @@ describe("subagent session deliveryContext from spawn request params", () => {
       string,
       StoredEntry
     >;
-    const entry = stored["agent:main:subagent:test-delivery-ctx"];
-    expect(entry).toBeDefined();
-    expect(entry?.deliveryContext?.channel).toBe("slack");
-    expect(entry?.deliveryContext?.to).toBe("channel:C0AF8TW48UQ");
-    expect(entry?.deliveryContext?.threadId).toBe("1774374945.091819");
-    expect(entry?.deliveryContext?.accountId).toBe("default");
-    expect(entry?.lastChannel).toBe("slack");
-    expect(entry?.lastTo).toBe("channel:C0AF8TW48UQ");
+    const entry = readStoredEntry(stored, "agent:main:subagent:test-delivery-ctx");
+    const deliveryContext = readDeliveryContext(entry);
+    expect(deliveryContext.channel).toBe("slack");
+    expect(deliveryContext.to).toBe("channel:C0AF8TW48UQ");
+    expect(deliveryContext.threadId).toBe("1774374945.091819");
+    expect(deliveryContext.accountId).toBe("default");
+    expect(entry.lastChannel).toBe("slack");
+    expect(entry.lastTo).toBe("channel:C0AF8TW48UQ");
   });
 
   test("existing session deliveryContext is NOT overwritten by request params", async () => {
@@ -144,12 +159,12 @@ describe("subagent session deliveryContext from spawn request params", () => {
       string,
       StoredEntry
     >;
-    const entry = stored["agent:main:subagent:existing-ctx"];
-    expect(entry).toBeDefined();
+    const entry = readStoredEntry(stored, "agent:main:subagent:existing-ctx");
+    const deliveryContext = readDeliveryContext(entry);
     // The ORIGINAL deliveryContext should be preserved (primary wins in merge).
-    expect(entry?.deliveryContext?.to).toBe("user:U09U1LV7JDN");
-    expect(entry?.deliveryContext?.threadId).toBe("1771242986.529939");
-    expect(entry?.lastTo).toBe("user:U09U1LV7JDN");
+    expect(deliveryContext.to).toBe("user:U09U1LV7JDN");
+    expect(deliveryContext.threadId).toBe("1771242986.529939");
+    expect(entry.lastTo).toBe("user:U09U1LV7JDN");
   });
 
   test("pre-patched subagent session (via sessions.patch) inherits deliveryContext from agent request", async () => {
@@ -186,13 +201,13 @@ describe("subagent session deliveryContext from spawn request params", () => {
       string,
       StoredEntry
     >;
-    const entry = stored["agent:main:subagent:pre-patched"];
-    expect(entry).toBeDefined();
-    expect(entry?.deliveryContext?.channel).toBe("slack");
-    expect(entry?.deliveryContext?.to).toBe("user:U07FDR83W6N");
-    expect(entry?.deliveryContext?.threadId).toBe("1775577152.364109");
-    expect(entry?.deliveryContext?.accountId).toBe("default");
-    expect(entry?.lastThreadId).toBe("1775577152.364109");
+    const entry = readStoredEntry(stored, "agent:main:subagent:pre-patched");
+    const deliveryContext = readDeliveryContext(entry);
+    expect(deliveryContext.channel).toBe("slack");
+    expect(deliveryContext.to).toBe("user:U07FDR83W6N");
+    expect(deliveryContext.threadId).toBe("1775577152.364109");
+    expect(deliveryContext.accountId).toBe("default");
+    expect(entry.lastThreadId).toBe("1775577152.364109");
   });
 
   test("request without to/threadId does not inject empty values", async () => {
@@ -213,10 +228,10 @@ describe("subagent session deliveryContext from spawn request params", () => {
       string,
       StoredEntry
     >;
-    const entry = stored["agent:main:subagent:no-routing"];
-    expect(entry).toBeDefined();
-    expect(entry?.deliveryContext?.channel).toBe("slack");
-    expect(entry?.deliveryContext?.to).toBeUndefined();
-    expect(entry?.deliveryContext?.threadId).toBeUndefined();
+    const entry = readStoredEntry(stored, "agent:main:subagent:no-routing");
+    const deliveryContext = readDeliveryContext(entry);
+    expect(deliveryContext.channel).toBe("slack");
+    expect(deliveryContext.to).toBeUndefined();
+    expect(deliveryContext.threadId).toBeUndefined();
   });
 });

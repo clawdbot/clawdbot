@@ -4,7 +4,10 @@ import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
 type ThinkingLevel = "high" | "medium" | "low";
 
-function resolveThinkingPlan(input: { expected: ThinkingLevel; thinkingOverrideRaw?: string }) {
+function expectResolvedThinkingPlan(input: {
+  expected: ThinkingLevel;
+  thinkingOverrideRaw?: string;
+}) {
   const cfg = {
     session: { mainKey: "main", scope: "per-sender" },
     agents: { defaults: { subagents: { thinking: "high" } } },
@@ -24,13 +27,13 @@ function resolveThinkingPlan(input: { expected: ThinkingLevel; thinkingOverrideR
 
 describe("sessions_spawn thinking defaults", () => {
   it("applies agents.defaults.subagents.thinking when thinking is omitted", () => {
-    resolveThinkingPlan({
+    expectResolvedThinkingPlan({
       expected: "high",
     });
   });
 
   it("prefers explicit sessions_spawn.thinking over config default", () => {
-    resolveThinkingPlan({
+    expectResolvedThinkingPlan({
       thinkingOverrideRaw: "low",
       expected: "low",
     });

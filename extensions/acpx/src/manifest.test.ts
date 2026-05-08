@@ -12,7 +12,7 @@ describe("acpx package manifest", () => {
       fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
     ) as AcpxPackageManifest;
 
-    expect(packageJson.dependencies?.acpx).toBeDefined();
+    expect(packageJson.dependencies?.acpx).toEqual(expect.any(String));
     expect(packageJson.dependencies?.["@zed-industries/codex-acp"]).toBe("0.13.0");
     expect(packageJson.dependencies?.["@agentclientprotocol/claude-agent-acp"]).toBe("0.32.0");
     expect(packageJson.devDependencies?.["@agentclientprotocol/claude-agent-acp"]).toBeUndefined();

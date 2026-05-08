@@ -368,6 +368,10 @@ const TARGET_KEYS = [
   "plugins.entries.*.subagent",
   "plugins.entries.*.subagent.allowModelOverride",
   "plugins.entries.*.subagent.allowedModels",
+  "plugins.entries.*.llm",
+  "plugins.entries.*.llm.allowModelOverride",
+  "plugins.entries.*.llm.allowedModels",
+  "plugins.entries.*.llm.allowAgentIdOverride",
   "plugins.entries.*.apiKey",
   "plugins.entries.*.env",
   "plugins.entries.*.config",
@@ -570,14 +574,29 @@ const FINAL_BACKLOG_TARGET_KEYS = [
 ] as const;
 
 describe("config help copy quality", () => {
+  function requireHelp(key: string): string {
+    const help = FIELD_HELP[key];
+    if (typeof help !== "string") {
+      throw new Error(`missing help for ${key}`);
+    }
+    return help;
+  }
+
+  function requireLabel(key: string): string {
+    const label = FIELD_LABELS[key];
+    if (typeof label !== "string") {
+      throw new Error(`missing label for ${key}`);
+    }
+    return label;
+  }
+
   function expectOperationalGuidance(
     keys: readonly string[],
     guidancePattern: RegExp,
     minLength = 80,
   ) {
     for (const key of keys) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
+      const help = requireHelp(key);
       expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(minLength);
       expect(
         guidancePattern.test(help),
@@ -588,14 +607,14 @@ describe("config help copy quality", () => {
 
   it("keeps root section labels and help complete", () => {
     for (const key of ROOT_SECTIONS) {
-      expect(FIELD_LABELS[key], `missing root label for ${key}`).toBeDefined();
-      expect(FIELD_HELP[key], `missing root help for ${key}`).toBeDefined();
+      expect(requireLabel(key)).not.toHaveLength(0);
+      expect(requireHelp(key)).not.toHaveLength(0);
     }
   });
 
   it("keeps labels in parity for all help keys", () => {
     for (const key of Object.keys(FIELD_HELP)) {
-      expect(FIELD_LABELS[key], `missing label for help key ${key}`).toBeDefined();
+      expect(requireLabel(key)).not.toHaveLength(0);
     }
   });
 
@@ -629,8 +648,7 @@ describe("config help copy quality", () => {
 
   it("documents option behavior for enum-style fields", () => {
     for (const [key, options] of Object.entries(ENUM_EXPECTATIONS)) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for enum key ${key}`).toBeDefined();
+      const help = requireHelp(key);
       for (const token of options) {
         expect(help.includes(token), `missing option ${token} in ${key}`).toBe(true);
       }

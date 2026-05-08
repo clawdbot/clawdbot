@@ -4,6 +4,18 @@ import { hasLineDirectives, parseLineDirectives } from "./reply-payload-transfor
 const getLineData = (result: ReturnType<typeof parseLineDirectives>) =>
   (result.channelData?.line as Record<string, unknown> | undefined) ?? {};
 
+type TestFlexMessage = {
+  altText?: string;
+  contents?: { footer?: { contents?: unknown[] }; body?: { contents?: unknown[] } };
+};
+
+function requireFlexMessage(value: unknown, label: string): TestFlexMessage {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected flex message for ${label}`);
+  }
+  return value as TestFlexMessage;
+}
+
 describe("hasLineDirectives", () => {
   it("matches expected detection across directive patterns", () => {
     const cases: Array<{ text: string; expected: boolean }> = [
@@ -249,22 +261,18 @@ describe("parseLineDirectives", () => {
 
       for (const testCase of cases) {
         const result = parseLineDirectives({ text: testCase.text });
-        const flexMessage = getLineData(result).flexMessage as {
-          altText?: string;
-          contents?: { footer?: { contents?: unknown[] }; body?: { contents?: unknown[] } };
-        };
-        expect(flexMessage, testCase.name).toBeDefined();
+        const flexMessage = requireFlexMessage(getLineData(result).flexMessage, testCase.name);
         if (testCase.expectedAltText !== undefined) {
-          expect(flexMessage?.altText, testCase.name).toBe(testCase.expectedAltText);
+          expect(flexMessage.altText, testCase.name).toBe(testCase.expectedAltText);
         }
         if (testCase.expectedText !== undefined) {
           expect(result.text, testCase.name).toBe(testCase.expectedText);
         }
         if (testCase.expectFooter) {
-          expect(flexMessage?.contents?.footer?.contents?.length, testCase.name).toBeGreaterThan(0);
+          expect(flexMessage.contents?.footer?.contents?.length, testCase.name).toBeGreaterThan(0);
         }
         if ("expectBodyContents" in testCase && testCase.expectBodyContents) {
-          expect(flexMessage?.contents?.body?.contents, testCase.name).toBeDefined();
+          expect(flexMessage.contents?.body?.contents, testCase.name).toEqual(expect.any(Array));
         }
       }
     });
@@ -285,9 +293,8 @@ describe("parseLineDirectives", () => {
 
       for (const testCase of cases) {
         const result = parseLineDirectives({ text: testCase.text });
-        const flexMessage = getLineData(result).flexMessage as { altText?: string };
-        expect(flexMessage).toBeDefined();
-        expect(flexMessage?.altText).toBe(testCase.altText);
+        const flexMessage = requireFlexMessage(getLineData(result).flexMessage, testCase.text);
+        expect(flexMessage.altText).toBe(testCase.altText);
       }
     });
   });
@@ -307,9 +314,8 @@ describe("parseLineDirectives", () => {
 
       for (const testCase of cases) {
         const result = parseLineDirectives({ text: testCase.text });
-        const flexMessage = getLineData(result).flexMessage as { altText?: string };
-        expect(flexMessage).toBeDefined();
-        expect(flexMessage?.altText).toBe(testCase.altText);
+        const flexMessage = requireFlexMessage(getLineData(result).flexMessage, testCase.text);
+        expect(flexMessage.altText).toBe(testCase.altText);
       }
     });
   });
@@ -329,9 +335,8 @@ describe("parseLineDirectives", () => {
 
       for (const testCase of cases) {
         const result = parseLineDirectives({ text: testCase.text });
-        const flexMessage = getLineData(result).flexMessage as { altText?: string };
-        expect(flexMessage).toBeDefined();
-        expect(flexMessage?.altText).toBe(testCase.altText);
+        const flexMessage = requireFlexMessage(getLineData(result).flexMessage, testCase.text);
+        expect(flexMessage.altText).toBe(testCase.altText);
       }
     });
   });
@@ -351,10 +356,9 @@ describe("parseLineDirectives", () => {
 
       for (const testCase of cases) {
         const result = parseLineDirectives({ text: testCase.text });
-        const flexMessage = getLineData(result).flexMessage as { altText?: string };
-        expect(flexMessage).toBeDefined();
+        const flexMessage = requireFlexMessage(getLineData(result).flexMessage, testCase.text);
         if (testCase.contains) {
-          expect(flexMessage?.altText).toContain(testCase.contains);
+          expect(flexMessage.altText).toContain(testCase.contains);
         }
       }
     });

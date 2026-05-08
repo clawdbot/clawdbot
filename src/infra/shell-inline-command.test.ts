@@ -39,6 +39,20 @@ describe("resolveInlineCommandMatch", () => {
       expected: { command: "echo hi", valueTokenIndex: 1 },
     },
     {
+      name: "keeps post-c no-argument shell flags separate from the command",
+      argv: ["bash", "-cx", "echo hi"],
+      flags: POSIX_INLINE_COMMAND_FLAGS,
+      opts: { allowCombinedC: true },
+      expected: { command: "echo hi", valueTokenIndex: 2 },
+    },
+    {
+      name: "keeps post-c stdin shell flags separate from the command",
+      argv: ["bash", "-cs", "echo hi"],
+      flags: POSIX_INLINE_COMMAND_FLAGS,
+      opts: { allowCombinedC: true },
+      expected: { command: "echo hi", valueTokenIndex: 2 },
+    },
+    {
       name: "rejects combined -c forms when disabled",
       argv: ["sh", "-cecho hi"],
       flags: POSIX_INLINE_COMMAND_FLAGS,

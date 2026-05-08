@@ -33,7 +33,8 @@ describe("cli json stdout contract", () => {
         expect(result.status).toBe(0);
         const stdout = result.stdout.trim();
         expect(stdout.length).toBeGreaterThan(0);
-        expect(() => JSON.parse(stdout)).not.toThrow();
+        const parsed = JSON.parse(stdout) as unknown;
+        expect(parsed).toEqual(expect.any(Object));
         expect(stdout).not.toContain("Doctor warnings");
         expect(stdout).not.toContain("Doctor changes");
         expect(stdout).not.toContain("Config invalid");

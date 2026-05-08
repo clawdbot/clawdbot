@@ -21,9 +21,11 @@ openclaw migrate list
 openclaw migrate claude --dry-run
 openclaw migrate codex --dry-run
 openclaw migrate codex --skill gog-vault77-google-workspace
+openclaw migrate codex --plugin google-calendar --dry-run
 openclaw migrate hermes --dry-run
 openclaw migrate hermes
 openclaw migrate apply codex --yes --skill gog-vault77-google-workspace
+openclaw migrate apply codex --yes --plugin google-calendar
 openclaw migrate apply codex --yes
 openclaw migrate apply claude --yes
 openclaw migrate apply hermes --yes
@@ -53,6 +55,9 @@ openclaw onboard --import-from hermes --import-source ~/.hermes
 </ParamField>
 <ParamField path="--skill <name>" type="string">
   Select one skill copy item by skill name or item id. Repeat the flag to migrate multiple skills. When omitted, interactive Codex migrations show a checkbox selector and non-interactive migrations keep all planned skills.
+</ParamField>
+<ParamField path="--plugin <name>" type="string">
+  Select one Codex plugin install item by plugin name or item id. Repeat the flag to migrate multiple Codex plugins. This only applies to source-installed `openai-curated` Codex plugins discovered by the Codex app-server inventory.
 </ParamField>
 <ParamField path="--no-backup" type="boolean">
   Skip the pre-apply backup. Requires `--force` when local OpenClaw state exists.
@@ -129,20 +134,51 @@ openclaw migrate codex --dry-run --skill gog-vault77-google-workspace
 openclaw migrate apply codex --yes --skill gog-vault77-google-workspace
 ```
 
+Use `--plugin <name>` to limit native Codex plugin migration to one or more
+source-installed curated plugins:
+
+```bash
+openclaw migrate codex --dry-run --plugin google-calendar
+openclaw migrate apply codex --yes --plugin google-calendar
+```
+
 ### What Codex imports
 
 - Codex CLI skill directories under `$CODEX_HOME/skills`, excluding Codex's
   `.system` cache.
 - Personal AgentSkills under `$HOME/.agents/skills`, copied into the current
   OpenClaw agent workspace when you want per-agent ownership.
+- Source-installed `openai-curated` Codex plugins discovered through Codex
+  app-server `plugin/list`. Apply calls app-server `plugin/install` for each
+  selected plugin, even if the target app-server already reports that plugin as
+  installed and enabled. Migrated Codex plugins are usable only in sessions that
+  select the native Codex harness; they are not exposed to Pi, normal OpenAI
+  provider runs, ACP conversation bindings, or other harnesses.
 
 ### Manual-review Codex state
 
-Codex native plugins, `config.toml`, and native `hooks/hooks.json` are not
-activated automatically. Plugins may expose MCP servers, apps, hooks, or other
-executable behavior, so the provider reports them for review instead of loading
-them into OpenClaw. Config and hook files are copied into the migration report
-for manual review.
+Codex `config.toml`, native `hooks/hooks.json`, non-curated marketplaces, and
+cached plugin bundles that are not source-installed curated plugins are not
+activated automatically. They are copied or reported in the migration report for
+manual review.
+
+For migrated source-installed curated plugins, apply writes:
+
+- `plugins.entries.codex.enabled: true`
+- `plugins.entries.codex.config.codexPlugins.enabled: true`
+- `plugins.entries.codex.config.codexPlugins.allow_destructive_actions: false`
+- one explicit plugin entry with `marketplaceName: "openai-curated"` and
+  `pluginName` for each selected plugin
+
+Migration never writes `plugins["*"]` and never stores local marketplace cache
+paths. Auth-required installs are reported on the affected plugin item with
+`status: "skipped"`, `reason: "auth_required"`, and sanitized app identifiers.
+Their explicit config entries are written disabled until you reauthorize and
+enable them. Other install failures are item-scoped `error` results.
+
+If Codex app-server plugin inventory is unavailable during planning, migration
+falls back to cached bundle advisory items instead of failing the whole
+migration.
 
 ## Hermes provider
 

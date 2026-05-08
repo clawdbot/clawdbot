@@ -1,7 +1,7 @@
 export type AuthProfileConfig = {
   provider: string;
   /**
-   * Credential type expected in auth-profiles.json for this profile id.
+   * Auth route selected by this profile id.
    * - api_key: static provider API key
    * - oauth: refreshable OAuth credentials (access+refresh+expires)
    * - token: static bearer-style token (optionally expiring; no refresh)

@@ -92,6 +92,42 @@ function buildLocationContextPayload(ctx: TemplateContext): Record<string, unkno
   return Object.values(payload).some((value) => value !== undefined) ? payload : undefined;
 }
 
+function buildReplyChainPayload(ctx: TemplateContext): Array<Record<string, unknown>> {
+  if (!Array.isArray(ctx.ReplyChain)) {
+    return [];
+  }
+  return ctx.ReplyChain.flatMap((entry) => {
+    const body = sanitizePromptBody(entry.body);
+    const mediaType = normalizePromptMetadataString(entry.mediaType);
+    const mediaPath = normalizePromptMetadataString(entry.mediaPath);
+    const mediaRef = normalizePromptMetadataString(entry.mediaRef);
+    if (!body && !mediaType && !mediaPath && !mediaRef) {
+      return [];
+    }
+    return [
+      {
+        message_id: normalizePromptMetadataString(entry.messageId),
+        thread_id: normalizePromptMetadataString(entry.threadId),
+        sender: normalizePromptMetadataString(entry.sender),
+        sender_id: normalizePromptMetadataString(entry.senderId),
+        sender_username: normalizePromptMetadataString(entry.senderUsername),
+        timestamp_ms: typeof entry.timestamp === "number" ? entry.timestamp : undefined,
+        body,
+        is_quote: entry.isQuote === true ? true : undefined,
+        media_type: mediaType,
+        media_path: mediaPath,
+        media_ref: mediaRef,
+        reply_to_id: normalizePromptMetadataString(entry.replyToId),
+        forwarded_from: normalizePromptMetadataString(entry.forwardedFrom),
+        forwarded_from_id: normalizePromptMetadataString(entry.forwardedFromId),
+        forwarded_from_username: normalizePromptMetadataString(entry.forwardedFromUsername),
+        forwarded_date_ms:
+          typeof entry.forwardedDate === "number" ? entry.forwardedDate : undefined,
+      },
+    ];
+  });
+}
+
 function formatConversationTimestamp(
   value: unknown,
   envelope?: EnvelopeFormatOptions,
@@ -194,6 +230,7 @@ export function buildInboundUserContextPrefix(
   const timestampStr = formatConversationTimestamp(ctx.Timestamp, envelope);
   const inboundHistory = Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
   const boundedHistory = inboundHistory.slice(-MAX_UNTRUSTED_HISTORY_ENTRIES);
+  const replyChainPayload = buildReplyChainPayload(ctx);
 
   // Keep volatile conversation/message identifiers in the user-role block so the system
   // prompt stays byte-stable across task-scoped sessions and reply turns.
@@ -227,7 +264,8 @@ export function buildInboundUserContextPrefix(
     is_forum: ctx.IsForum === true ? true : undefined,
     is_group_chat: !isDirect ? true : undefined,
     was_mentioned: ctx.WasMentioned === true ? true : undefined,
-    has_reply_context: sanitizePromptBody(ctx.ReplyToBody) ? true : undefined,
+    has_reply_context:
+      replyChainPayload.length > 0 || sanitizePromptBody(ctx.ReplyToBody) ? true : undefined,
     has_forwarded_context: normalizePromptMetadataString(ctx.ForwardedFrom) ? true : undefined,
     has_thread_starter: sanitizePromptBody(ctx.ThreadStarterBody) ? true : undefined,
     history_count: boundedHistory.length > 0 ? boundedHistory.length : undefined,
@@ -267,7 +305,14 @@ export function buildInboundUserContextPrefix(
   }
 
   const replyToBody = sanitizePromptBody(ctx.ReplyToBody);
-  if (replyToBody) {
+  if (replyChainPayload.length > 0) {
+    blocks.push(
+      formatUntrustedJsonBlock(
+        "Reply chain of current user message (untrusted, nearest first):",
+        replyChainPayload,
+      ),
+    );
+  } else if (replyToBody) {
     blocks.push(
       formatUntrustedJsonBlock("Reply target of current user message (untrusted, for context):", {
         sender_label: normalizePromptMetadataString(ctx.ReplyToSender),

@@ -96,8 +96,8 @@ describe("buildAgentSystemPrompt", () => {
     const tokenA = lineA?.match(/[a-f0-9]{12}/)?.[0];
     const tokenB = lineB?.match(/[a-f0-9]{12}/)?.[0];
 
-    expect(tokenA).toBeDefined();
-    expect(tokenB).toBeDefined();
+    expect(tokenA).toMatch(/^[a-f0-9]{12}$/);
+    expect(tokenB).toMatch(/^[a-f0-9]{12}$/);
     expect(tokenA).not.toBe(tokenB);
   });
 

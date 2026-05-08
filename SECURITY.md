@@ -312,7 +312,7 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
 
 ### Node.js Version
 
-OpenClaw requires **Node.js 22.14.0 or later** (LTS). This version includes important security patches:
+OpenClaw requires **Node.js 22.16.0 or later** (LTS). This version includes important security patches:
 
 - CVE-2025-59466: async_hooks DoS vulnerability
 - CVE-2026-21636: Permission model bypass vulnerability
@@ -320,7 +320,7 @@ OpenClaw requires **Node.js 22.14.0 or later** (LTS). This version includes impo
 Verify your Node.js version:
 
 ```bash
-node --version  # Should be v22.14.0 or later
+node --version  # Should be v22.16.0 or later
 ```
 
 ### Docker Security

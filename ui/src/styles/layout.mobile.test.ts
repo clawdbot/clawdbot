@@ -1,32 +1,16 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 
 function readMobileCss(): string {
-  const cssPath = [
-    resolve(process.cwd(), "ui/src/styles/layout.mobile.css"),
-    resolve(process.cwd(), "..", "ui/src/styles/layout.mobile.css"),
-  ].find((candidate) => existsSync(candidate));
-  expect(cssPath).toBeTruthy();
-  return readFileSync(cssPath!, "utf8");
+  return readStyleSheet("ui/src/styles/layout.mobile.css");
 }
 
 function readLayoutCss(): string {
-  const cssPath = [
-    resolve(process.cwd(), "ui/src/styles/layout.css"),
-    resolve(process.cwd(), "..", "ui/src/styles/layout.css"),
-  ].find((candidate) => existsSync(candidate));
-  expect(cssPath).toBeTruthy();
-  return readFileSync(cssPath!, "utf8");
+  return readStyleSheet("ui/src/styles/layout.css");
 }
 
 function readGroupedChatCss(): string {
-  const cssPath = [
-    resolve(process.cwd(), "ui/src/styles/chat/grouped.css"),
-    resolve(process.cwd(), "..", "ui/src/styles/chat/grouped.css"),
-  ].find((candidate) => existsSync(candidate));
-  expect(cssPath).toBeTruthy();
-  return readFileSync(cssPath!, "utf8");
+  return readStyleSheet("ui/src/styles/chat/grouped.css");
 }
 
 describe("chat header responsive mobile styles", () => {

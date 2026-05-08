@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import type { Page } from "playwright-core";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { writeViaSiblingTempPath } from "./output-atomic.js";
+import { writeExternalFileWithinOutputRoot } from "./output-files.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
 import {
   ensurePageState,
@@ -88,33 +88,22 @@ type DownloadPayload = {
   saveAs?: (outPath: string) => Promise<void>;
 };
 
-async function saveDownloadPayload(download: DownloadPayload, outPath: string) {
+async function saveDownloadPayload(download: DownloadPayload, outPath: string, rootDir?: string) {
   const suggested = download.suggestedFilename?.() || "download.bin";
   const requestedPath = outPath?.trim();
   const resolvedOutPath = path.resolve(requestedPath || buildTempDownloadPath(suggested));
-
-  if (!requestedPath) {
-    await writeViaSiblingTempPath({
-      rootDir: path.dirname(resolvedOutPath),
-      targetPath: resolvedOutPath,
-      writeTemp: async (tempPath) => {
-        await download.saveAs?.(tempPath);
-      },
-    });
-  } else {
-    await writeViaSiblingTempPath({
-      rootDir: path.dirname(resolvedOutPath),
-      targetPath: resolvedOutPath,
-      writeTemp: async (tempPath) => {
-        await download.saveAs?.(tempPath);
-      },
-    });
-  }
+  const finalPath = await writeExternalFileWithinOutputRoot({
+    rootDir,
+    path: resolvedOutPath,
+    write: async (tempPath) => {
+      await download.saveAs?.(tempPath);
+    },
+  });
 
   return {
     url: download.url?.() || "",
     suggestedFilename: suggested,
-    path: resolvedOutPath,
+    path: finalPath,
   };
 }
 
@@ -123,13 +112,14 @@ async function awaitDownloadPayload(params: {
   state: ReturnType<typeof ensurePageState>;
   armId: number;
   outPath?: string;
+  rootDir?: string;
 }) {
   try {
     const download = (await params.waiter.promise) as DownloadPayload;
     if (params.state.armIdDownload !== params.armId) {
       throw new Error("Download was superseded by another waiter");
     }
-    return await saveDownloadPayload(download, params.outPath ?? "");
+    return await saveDownloadPayload(download, params.outPath ?? "", params.rootDir);
   } catch (err) {
     params.waiter.cancel();
     throw err;
@@ -233,6 +223,7 @@ export async function waitForDownloadViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   path?: string;
+  rootDir?: string;
   timeoutMs?: number;
 }): Promise<{
   url: string;
@@ -247,7 +238,13 @@ export async function waitForDownloadViaPlaywright(opts: {
   const armId = state.armIdDownload;
 
   const waiter = createPageDownloadWaiter(page, timeout);
-  return await awaitDownloadPayload({ waiter, state, armId, outPath: opts.path });
+  return await awaitDownloadPayload({
+    waiter,
+    state,
+    armId,
+    outPath: opts.path,
+    rootDir: opts.rootDir,
+  });
 }
 
 export async function downloadViaPlaywright(opts: {
@@ -255,6 +252,7 @@ export async function downloadViaPlaywright(opts: {
   targetId?: string;
   ref: string;
   path: string;
+  rootDir?: string;
   timeoutMs?: number;
 }): Promise<{
   url: string;
@@ -283,7 +281,13 @@ export async function downloadViaPlaywright(opts: {
     } catch (err) {
       throw toAIFriendlyError(err, ref);
     }
-    return await awaitDownloadPayload({ waiter, state, armId, outPath });
+    return await awaitDownloadPayload({
+      waiter,
+      state,
+      armId,
+      outPath,
+      rootDir: opts.rootDir,
+    });
   } catch (err) {
     waiter.cancel();
     throw err;

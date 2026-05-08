@@ -63,14 +63,16 @@ function startTelegramAccount(
   const cfg = createTelegramConfig(accountId, telegramOverrides);
   const account = telegramPlugin.config.resolveAccount(cfg, accountId);
   const startAccount = telegramPlugin.gateway?.startAccount;
-  expect(startAccount).toBeDefined();
+  if (!startAccount) {
+    throw new Error("expected Telegram startAccount gateway handler");
+  }
   const ctx = createStartAccountContext({
     account,
     cfg,
   });
   return {
     ctx,
-    task: startAccount!(ctx),
+    task: startAccount(ctx),
   };
 }
 

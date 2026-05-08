@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { render } from "lit";
+import { describe, expect, it, vi } from "vitest";
+import type { WhatsAppStatus } from "../types.ts";
 import {
   channelEnabled,
   resolveChannelConfigured,
   resolveChannelDisplayState,
 } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
+import { renderWhatsAppCard } from "./channels.whatsapp.ts";
 
 function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
   return {
@@ -38,6 +41,45 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
     onNostrProfileSave: () => {},
     onNostrProfileImport: () => {},
     onNostrProfileToggleAdvanced: () => {},
+  };
+}
+
+function createWhatsAppStatus(overrides: Partial<WhatsAppStatus> = {}): WhatsAppStatus {
+  return {
+    configured: true,
+    linked: false,
+    running: false,
+    connected: false,
+    reconnectAttempts: 0,
+    ...overrides,
+  };
+}
+
+function renderWhatsAppButtons(params: {
+  linked?: boolean;
+  qrDataUrl?: string | null;
+  onWhatsAppStart?: ChannelsProps["onWhatsAppStart"];
+}) {
+  const whatsapp = createWhatsAppStatus({ linked: params.linked === true });
+  const props = createProps({
+    ts: Date.now(),
+    channelOrder: ["whatsapp"],
+    channelLabels: { whatsapp: "WhatsApp" },
+    channels: { whatsapp },
+    channelAccounts: {},
+    channelDefaultAccountId: {},
+  });
+  props.whatsappQrDataUrl = params.qrDataUrl ?? null;
+  if (params.onWhatsAppStart) {
+    props.onWhatsAppStart = params.onWhatsAppStart;
+  }
+
+  const container = document.createElement("div");
+  render(renderWhatsAppCard({ props, whatsapp, accountCountLabel: null }), container);
+  const buttons = Array.from(container.querySelectorAll("button"));
+  return {
+    buttons,
+    labels: buttons.map((button) => button.textContent?.trim()),
   };
 }
 
@@ -116,5 +158,46 @@ describe("channel display selectors", () => {
     expect(displayState.running).toBeNull();
     expect(displayState.connected).toBeNull();
     expect(channelEnabled("quietchat", props)).toBe(false);
+  });
+});
+
+describe("WhatsApp card actions", () => {
+  it("shows QR as the primary action before WhatsApp is linked", () => {
+    const onWhatsAppStart = vi.fn();
+    const { buttons, labels } = renderWhatsAppButtons({
+      linked: false,
+      onWhatsAppStart,
+    });
+
+    expect(labels).toContain("Show QR");
+    expect(labels).not.toContain("Relink");
+    expect(labels).not.toContain("Wait for scan");
+
+    buttons.find((button) => button.textContent?.trim() === "Show QR")?.click();
+    expect(onWhatsAppStart).toHaveBeenCalledWith(false);
+  });
+
+  it("uses relink as the explicit action after WhatsApp is linked", () => {
+    const onWhatsAppStart = vi.fn();
+    const { buttons, labels } = renderWhatsAppButtons({
+      linked: true,
+      onWhatsAppStart,
+    });
+
+    expect(labels).toContain("Relink");
+    expect(labels).not.toContain("Show QR");
+
+    buttons.find((button) => button.textContent?.trim() === "Relink")?.click();
+    expect(onWhatsAppStart).toHaveBeenCalledWith(true);
+  });
+
+  it("shows wait for scan only while a QR is displayed", () => {
+    const { labels } = renderWhatsAppButtons({
+      linked: false,
+      qrDataUrl: "data:image/png;base64,current-qr",
+    });
+
+    expect(labels).toContain("Show QR");
+    expect(labels).toContain("Wait for scan");
   });
 });

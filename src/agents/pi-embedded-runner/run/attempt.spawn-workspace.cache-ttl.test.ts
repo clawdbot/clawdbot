@@ -5,7 +5,7 @@ import {
 } from "./attempt.thread-helpers.js";
 
 describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
-  it("skips cache-ttl append when compaction completed during the attempt", async () => {
+  it("skips cache-ttl append when compaction completed during the attempt", () => {
     const sessionManager = {
       appendCustomEntry: vi.fn(),
     };
@@ -36,7 +36,7 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
     );
   });
 
-  it("appends cache-ttl when no compaction completed during the attempt", async () => {
+  it("appends cache-ttl when no compaction completed during the attempt", () => {
     const sessionManager = {
       appendCustomEntry: vi.fn(),
     };

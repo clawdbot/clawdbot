@@ -79,7 +79,7 @@ describe("Matrix IndexedDB persistence", () => {
     expect(restoredRecords).toEqual([{ key: "room-1", value: { session: "abc123" } }]);
 
     const dbs = await indexedDB.databases();
-    expect(dbs.some((entry) => entry.name === otherCryptoDatabaseName)).toBe(false);
+    expect(dbs.map((entry) => entry.name)).not.toContain(otherCryptoDatabaseName);
   });
 
   it("returns false and logs a warning for malformed snapshots", async () => {

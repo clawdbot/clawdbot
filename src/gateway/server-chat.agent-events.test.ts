@@ -148,6 +148,13 @@ describe("agent event handler", () => {
     return nodeSendToSession.mock.calls.filter(([, event]) => event === "chat");
   }
 
+  function requireCall<T>(call: T | undefined, label: string): T {
+    if (call === undefined) {
+      throw new Error(`expected ${label}`);
+    }
+    return call;
+  }
+
   const FALLBACK_LIFECYCLE_DATA = {
     phase: "fallback",
     selectedProvider: "fireworks",
@@ -1737,9 +1744,11 @@ describe("agent event handler", () => {
       });
 
       const chatCalls = chatBroadcastCalls(broadcast);
-      const finalCall = chatCalls.find(([, p]) => p.state === "final");
-      expect(finalCall).toBeDefined();
-      expect(finalCall![1]).toMatchObject({
+      const finalCall = requireCall(
+        chatCalls.find(([, p]) => p.state === "final"),
+        "final chat call",
+      );
+      expect(finalCall[1]).toMatchObject({
         sessionKey: "agent:coder:subagent:abc",
         spawnedBy: "agent:conductor:task:parent-1",
         state: "final",
@@ -1873,9 +1882,11 @@ describe("agent event handler", () => {
       });
 
       const chatCalls = chatBroadcastCalls(broadcast);
-      const errorCall = chatCalls.find(([, p]) => p.state === "error");
-      expect(errorCall).toBeDefined();
-      expect(errorCall![1]).toMatchObject({
+      const errorCall = requireCall(
+        chatCalls.find(([, p]) => p.state === "error"),
+        "error chat call",
+      );
+      expect(errorCall[1]).toMatchObject({
         sessionKey: "agent:coder:subagent:err",
         spawnedBy: "agent:conductor:task:parent-err",
         state: "error",
@@ -1933,11 +1944,14 @@ describe("agent event handler", () => {
       });
 
       const chatCalls = chatBroadcastCalls(broadcast);
-      const flushedDelta = chatCalls.find(
-        ([, p]) => p.state === "delta" && p.message?.content?.[0]?.text === "before tool expanded",
+      const flushedDelta = requireCall(
+        chatCalls.find(
+          ([, p]) =>
+            p.state === "delta" && p.message?.content?.[0]?.text === "before tool expanded",
+        ),
+        "flushed delta chat call",
       );
-      expect(flushedDelta).toBeDefined();
-      expect(flushedDelta![1]).toMatchObject({
+      expect(flushedDelta[1]).toMatchObject({
         spawnedBy: "agent:conductor:task:parent-flush",
       });
 
@@ -1976,11 +1990,11 @@ describe("agent event handler", () => {
       });
 
       const agentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
-      const gapError = agentCalls.find(
-        ([, p]) => p.stream === "error" && p.data?.reason === "seq gap",
+      const gapError = requireCall(
+        agentCalls.find(([, p]) => p.stream === "error" && p.data?.reason === "seq gap"),
+        "seq gap error agent call",
       );
-      expect(gapError).toBeDefined();
-      expect(gapError![1]).toMatchObject({
+      expect(gapError[1]).toMatchObject({
         sessionKey: "agent:coder:subagent:gap",
         spawnedBy: "agent:conductor:task:parent-gap",
         data: { reason: "seq gap", expected: 2, received: 5 },

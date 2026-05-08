@@ -1724,6 +1724,91 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+  it("executes the matching cached plugin tool when unnamed factories share declared names", async () => {
+    const alphaFactory = vi.fn(() => ({
+      ...makeTool("implicit_alpha"),
+      async execute() {
+        return { content: [{ type: "text", text: "implicit-alpha-ok" }] };
+      },
+    }));
+    const betaFactory = vi.fn(() => ({
+      ...makeTool("implicit_beta"),
+      async execute() {
+        return { content: [{ type: "text", text: "implicit-beta-ok" }] };
+      },
+    }));
+    setRegistry([
+      {
+        pluginId: "implicit-owner",
+        optional: false,
+        source: "/tmp/implicit-owner.js",
+        names: [],
+        declaredNames: ["implicit_alpha", "implicit_beta"],
+        factory: alphaFactory,
+      },
+      {
+        pluginId: "implicit-owner",
+        optional: false,
+        source: "/tmp/implicit-owner.js",
+        names: [],
+        declaredNames: ["implicit_alpha", "implicit_beta"],
+        factory: betaFactory,
+      },
+    ]);
+
+    const first = resolvePluginTools(createResolveToolsParams());
+    const second = resolvePluginTools(createResolveToolsParams());
+    const betaTool = second.find((tool) => tool.name === "implicit_beta");
+
+    expectResolvedToolNames(first, ["implicit_alpha", "implicit_beta"]);
+    expectResolvedToolNames(second, ["implicit_alpha", "implicit_beta"]);
+    await expect(betaTool?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "implicit-beta-ok" }],
+    });
+    expect(alphaFactory).toHaveBeenCalledTimes(2);
+    expect(betaFactory).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not invoke unrelated named factories before cached unnamed tool fallback", async () => {
+    const namedFactory = vi.fn(() => makeTool("unrelated_tool"));
+    const implicitFactory = vi.fn(() => ({
+      ...makeTool("implicit_tool"),
+      async execute() {
+        return { content: [{ type: "text", text: "implicit-ok" }] };
+      },
+    }));
+    setRegistry([
+      {
+        pluginId: "implicit-owner",
+        optional: false,
+        source: "/tmp/implicit-owner.js",
+        names: ["unrelated_tool"],
+        declaredNames: ["unrelated_tool"],
+        factory: namedFactory,
+      },
+      {
+        pluginId: "implicit-owner",
+        optional: false,
+        source: "/tmp/implicit-owner.js",
+        names: [],
+        declaredNames: ["implicit_tool"],
+        factory: implicitFactory,
+      },
+    ]);
+
+    resolvePluginTools(createResolveToolsParams());
+    const cachedTools = resolvePluginTools(createResolveToolsParams());
+    namedFactory.mockClear();
+    implicitFactory.mockClear();
+
+    const implicitTool = cachedTools.find((tool) => tool.name === "implicit_tool");
+    await expect(implicitTool?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "implicit-ok" }],
+    });
+    expect(namedFactory).not.toHaveBeenCalled();
+    expect(implicitFactory).toHaveBeenCalledTimes(1);
+  });
+
   it("skips factory-returned tools outside the manifest tool contract", () => {
     const registry = setRegistry([
       {

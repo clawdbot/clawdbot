@@ -236,7 +236,9 @@ describe("withReplyDispatcher", () => {
     });
 
     const dispatcherOptions = hoisted.createReplyDispatcherMock.mock.calls[0]?.[0];
-    expect(dispatcherOptions?.beforeDeliver).toEqual(expect.any(Function));
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
 
     const payload = await dispatcherOptions.beforeDeliver(
       { text: "original reply" },

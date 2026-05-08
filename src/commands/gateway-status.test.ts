@@ -270,6 +270,23 @@ async function runGatewayStatus(
   await gatewayStatusCommand(opts, asRuntimeEnv(runtime));
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireRecordArray(value: unknown, label: string): Array<Record<string, unknown>> {
+  if (
+    !Array.isArray(value) ||
+    !value.every((entry) => typeof entry === "object" && entry !== null)
+  ) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Array<Record<string, unknown>>;
+}
+
 function findUnresolvedSecretRefWarning(runtimeLogs: string[]) {
   const parsed = JSON.parse(runtimeLogs.join("\n")) as {
     warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
@@ -279,6 +296,14 @@ function findUnresolvedSecretRefWarning(runtimeLogs: string[]) {
       warning.code === "auth_secretref_unresolved" &&
       warning.message?.includes("gateway.auth.token SecretRef is unresolved"),
   );
+}
+
+function requireUnresolvedSecretRefWarning(runtimeLogs: string[]) {
+  const warning = findUnresolvedSecretRefWarning(runtimeLogs);
+  if (!warning) {
+    throw new Error("expected unresolved gateway auth token SecretRef warning");
+  }
+  return warning;
 }
 
 describe("gateway-status command", () => {
@@ -305,11 +330,11 @@ describe("gateway-status command", () => {
     expect(runtimeErrors).toHaveLength(0);
     const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
     expect(parsed.ok).toBe(true);
-    expect(parsed.targets).toBeTruthy();
-    const targets = parsed.targets as Array<Record<string, unknown>>;
+    const targets = requireRecordArray(parsed.targets, "gateway status targets");
     expect(targets.length).toBeGreaterThanOrEqual(2);
-    expect(targets[0]?.health).toBeTruthy();
-    expect(targets[0]?.summary).toBeTruthy();
+    const firstTarget = requireRecord(targets[0], "first gateway target");
+    requireRecord(firstTarget.health, "first target health");
+    requireRecord(firstTarget.summary, "first target summary");
   });
 
   it("includes diagnostic next steps when no gateway is reachable or discoverable", async () => {
@@ -513,11 +538,10 @@ describe("gateway-status command", () => {
     }
 
     expect(runtimeErrors).toHaveLength(0);
-    const unresolvedWarning = findUnresolvedSecretRefWarning(runtimeLogs);
-    expect(unresolvedWarning).toBeTruthy();
-    expect(unresolvedWarning?.targetIds).toContain("localLoopback");
-    expect(unresolvedWarning?.message).toContain("env:default:MISSING_GATEWAY_TOKEN");
-    expect(unresolvedWarning?.message).not.toContain("missing or empty");
+    const unresolvedWarning = requireUnresolvedSecretRefWarning(runtimeLogs);
+    expect(unresolvedWarning.targetIds).toContain("localLoopback");
+    expect(unresolvedWarning.message).toContain("env:default:MISSING_GATEWAY_TOKEN");
+    expect(unresolvedWarning.message).not.toContain("missing or empty");
   });
 
   it("does not resolve local token SecretRef when OPENCLAW_GATEWAY_TOKEN is set", async () => {

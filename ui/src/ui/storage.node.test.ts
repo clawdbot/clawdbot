@@ -120,7 +120,7 @@ describe("loadSettings default gateway URL derivation", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uses configured base path and normalizes trailing slash", async () => {
+  it("uses configured base path and normalizes trailing slash", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -131,7 +131,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/openclaw"));
   });
 
-  it("infers base path from nested pathname when configured base path is not set", async () => {
+  it("infers base path from nested pathname when configured base path is not set", () => {
     setTestLocation({
       protocol: "http:",
       host: "gateway.example:18789",
@@ -141,7 +141,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/apps/openclaw"));
   });
 
-  it("skips node sessionStorage accessors that warn without a storage file", async () => {
+  it("skips node sessionStorage accessors that warn without a storage file", () => {
     vi.unstubAllGlobals();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
@@ -164,7 +164,7 @@ describe("loadSettings default gateway URL derivation", () => {
     );
   });
 
-  it("ignores and scrubs legacy persisted tokens", async () => {
+  it("ignores and scrubs legacy persisted tokens", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -208,7 +208,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("loads the current-tab token from sessionStorage", async () => {
+  it("loads the current-tab token from sessionStorage", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -239,7 +239,7 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("does not reuse a session token for a different gatewayUrl", async () => {
+  it("does not reuse a session token for a different gatewayUrl", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -288,7 +288,7 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("does not persist gateway tokens when saving settings", async () => {
+  it("does not persist gateway tokens when saving settings", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -340,7 +340,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(sessionStorage.length).toBe(1);
   });
 
-  it("clears the current-tab token when saving an empty token", async () => {
+  it("clears the current-tab token when saving an empty token", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -385,7 +385,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("persists themeMode and navWidth alongside the selected theme", async () => {
+  it("persists themeMode and navWidth alongside the selected theme", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -418,7 +418,7 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("persists the browser-local custom theme payload when present", async () => {
+  it("persists the browser-local custom theme payload when present", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -454,7 +454,7 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("falls back to claw when persisted custom theme data is invalid", async () => {
+  it("falls back to claw when persisted custom theme data is invalid", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -499,7 +499,7 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("scopes persisted session selection per gateway", async () => {
+  it("scopes persisted session selection per gateway", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway-a.example:8443",
@@ -531,7 +531,7 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("caps persisted session scopes to the most recent gateways", async () => {
+  it("caps persisted session scopes to the most recent gateways", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -571,7 +571,7 @@ describe("loadSettings default gateway URL derivation", () => {
 
     const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");
 
-    expect(persisted.sessionsByGateway).toBeDefined();
+    expect(persisted.sessionsByGateway).toEqual(expect.any(Object));
     const scopes = Object.keys(persisted.sessionsByGateway);
     expect(scopes).toHaveLength(10);
     // oldest stale entries should be evicted
@@ -586,7 +586,7 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("persists local user identity separately from gateway settings", async () => {
+  it("persists local user identity separately from gateway settings", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -605,7 +605,7 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("normalizes invalid local user identity values on load", async () => {
+  it("normalizes invalid local user identity values on load", () => {
     localStorage.setItem(
       "openclaw.control.user.v1",
       JSON.stringify({
@@ -620,7 +620,7 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("removes the persisted local user identity when cleared", async () => {
+  it("removes the persisted local user identity when cleared", () => {
     saveLocalUserIdentity({ name: "Buns", avatar: "data:image/png;base64,AAA" });
     saveLocalUserIdentity({ name: null, avatar: null });
 

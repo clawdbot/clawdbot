@@ -90,7 +90,7 @@ describe("nextcloud talk setup", () => {
     });
   });
 
-  it("sets top-level DM policy state", async () => {
+  it("sets top-level DM policy state", () => {
     const base: CoreConfig = {
       channels: {
         "nextcloud-talk": {},

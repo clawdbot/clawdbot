@@ -127,6 +127,40 @@ function requireNostrResolveDmPolicy() {
   return resolveDmPolicy;
 }
 
+function createUnresolvedNostrPrivateKeyCfg() {
+  return {
+    channels: {
+      nostr: {
+        privateKey: {
+          source: "env" as const,
+          provider: "default",
+          id: "NOSTR_PRIVATE_KEY",
+        },
+      },
+    },
+  };
+}
+
+const unresolvedSecretRefPrivateKeyCases = [
+  {
+    name: "listNostrAccountIds",
+    assert: (cfg: ReturnType<typeof createUnresolvedNostrPrivateKeyCfg>) => {
+      expect(listNostrAccountIds(cfg)).toEqual([]);
+    },
+  },
+  {
+    name: "resolveNostrAccount",
+    assert: (cfg: ReturnType<typeof createUnresolvedNostrPrivateKeyCfg>) => {
+      const account = resolveNostrAccount({ cfg });
+
+      expect(account.configured).toBe(false);
+      expect(account.privateKey).toBe("");
+      expect(account.publicKey).toBe("");
+      expect(account.config.privateKey).toEqual(cfg.channels.nostr.privateKey);
+    },
+  },
+];
+
 describe("nostrPlugin", () => {
   describe("meta", () => {
     it("has correct id", () => {
@@ -323,6 +357,15 @@ describe("nostr setup wizard", () => {
   });
 });
 
+describe("nostr unresolved SecretRef privateKey", () => {
+  it.each(unresolvedSecretRefPrivateKeyCases)(
+    "$name does not treat unresolved SecretRef privateKey as configured",
+    ({ assert }) => {
+      assert(createUnresolvedNostrPrivateKeyCfg());
+    },
+  );
+});
+
 describe("nostr account helpers", () => {
   describe("listNostrAccountIds", () => {
     it("returns empty array when not configured", () => {
@@ -343,21 +386,6 @@ describe("nostr account helpers", () => {
     it("returns configured defaultAccount when privateKey is configured", () => {
       const cfg = createConfiguredNostrCfg({ defaultAccount: "work" });
       expect(listNostrAccountIds(cfg)).toEqual(["work"]);
-    });
-
-    it("does not treat unresolved SecretRef privateKey as configured", () => {
-      const cfg = {
-        channels: {
-          nostr: {
-            privateKey: {
-              source: "env",
-              provider: "default",
-              id: "NOSTR_PRIVATE_KEY",
-            },
-          },
-        },
-      };
-      expect(listNostrAccountIds(cfg)).toEqual([]);
     });
   });
 
@@ -445,27 +473,6 @@ describe("nostr account helpers", () => {
 
       expect(account.configured).toBe(true);
       expect(account.publicKey).toBe("");
-    });
-
-    it("does not treat unresolved SecretRef privateKey as configured", () => {
-      const secretRef = {
-        source: "env" as const,
-        provider: "default",
-        id: "NOSTR_PRIVATE_KEY",
-      };
-      const cfg = {
-        channels: {
-          nostr: {
-            privateKey: secretRef,
-          },
-        },
-      };
-      const account = resolveNostrAccount({ cfg });
-
-      expect(account.configured).toBe(false);
-      expect(account.privateKey).toBe("");
-      expect(account.publicKey).toBe("");
-      expect(account.config.privateKey).toEqual(secretRef);
     });
 
     it("preserves all config options", () => {

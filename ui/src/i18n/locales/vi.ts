@@ -704,6 +704,16 @@ export const vi: TranslationMap = {
       today: "Hôm nay",
       last7d: "7 ngày",
       last30d: "30 ngày",
+      last90d: "90 ngày",
+      last1y: "1 năm",
+      all: "Tất cả",
+    },
+    scope: {
+      instance: "Phiên bản hiện tại",
+      instanceHint: "Chỉ hiển thị id phiên hoạt động cho mỗi phiên logic.",
+      family: "Dòng lịch sử",
+      familyHint: "Gộp các id phiên dựa trên bản chép lời đã biết từng được xoay vòng.",
+      familyIncluded: "Dòng lịch sử bao gồm {count} phiên bản phiên.",
     },
     filters: {
       title: "Bộ lọc",
@@ -924,6 +934,90 @@ export const vi: TranslationMap = {
     showPassword: "Hiển thị mật khẩu",
     hidePassword: "Ẩn mật khẩu",
     togglePasswordVisibility: "Bật/tắt hiển thị mật khẩu",
+    failure: {
+      rawError: "Lỗi thô",
+      docsAuth: "Tài liệu xác thực Control UI",
+      docsPairing: "Tài liệu ghép đôi thiết bị",
+      docsInsecure: "Tài liệu HTTP không an toàn",
+      authRequired: {
+        title: "Cần xác thực",
+        summary:
+          "Gateway có thể truy cập được, nhưng cần token hoặc mật khẩu khớp trước khi trình duyệt này có thể kết nối.",
+        stepPaste: "Dán token từ openclaw dashboard --no-open hoặc nhập mật khẩu đã cấu hình.",
+        stepGenerate:
+          "Nếu chưa cấu hình token, hãy chạy openclaw doctor --generate-gateway-token trên máy chủ Gateway.",
+        stepConnect: "Nhấp Connect lần nữa sau khi cập nhật thông tin xác thực.",
+      },
+      authFailed: {
+        title: "Xác thực không khớp",
+        summary:
+          "Thông tin xác thực đã cung cấp bị từ chối. Nguyên nhân phổ biến nhất là token cũ hoặc token sao chép từ một Gateway URL khác.",
+        stepDashboard: "Chạy openclaw dashboard --no-open rồi mở URL mới hoặc dán token của nó.",
+        stepReplace:
+          "Thay các giá trị token/mật khẩu cũ; không dùng lại token từ Gateway URL khác.",
+        stepMode:
+          "Mỗi lần chỉ dùng một chế độ auth khớp: gateway token cho chế độ token, mật khẩu cho chế độ password.",
+      },
+      rateLimited: {
+        title: "Quá nhiều lần thử thất bại",
+        summary: "Gateway đang tạm thời giới hạn các lần thử xác thực cho client này.",
+        stepStop: "Tạm dừng thử lại từ tab này trong giây lát.",
+        stepWait: "Chờ bộ giới hạn auth hạ nhiệt, rồi kết nối lại bằng thông tin xác thực đã sửa.",
+        stepCheckClients:
+          "Nếu đây là máy chủ dùng chung, hãy kiểm tra các client khác có thử sai lặp lại không.",
+      },
+      pairing: {
+        title: "Cần ghép đôi thiết bị",
+        scopeTitle: "Nâng cấp scope đang chờ",
+        roleTitle: "Nâng cấp vai trò đang chờ",
+        metadataTitle: "Làm mới thiết bị đang chờ",
+        summary:
+          "Trình duyệt này cần phê duyệt một lần từ máy chủ Gateway trước khi dùng Control UI.",
+        upgradeSummary:
+          "Trình duyệt này đã được biết đến, nhưng quyền truy cập yêu cầu đã thay đổi và cần phê duyệt mới.",
+        stepList: "Chạy openclaw devices list trên máy chủ Gateway.",
+        stepApproveId: "Phê duyệt yêu cầu này: openclaw devices approve {requestId}.",
+        stepApprove: "Phê duyệt yêu cầu trình duyệt/thiết bị đang chờ trong danh sách đó.",
+        stepReconnect: "Kết nối lại sau khi phê duyệt hoàn tất.",
+      },
+      insecure: {
+        title: "Cần ngữ cảnh trình duyệt an toàn",
+        summary:
+          "Trang này đang chạy qua HTTP thường, nên trình duyệt không thể tạo danh tính thiết bị mà Gateway mong đợi.",
+        stepHttps:
+          "Dùng HTTPS/Tailscale Serve, hoặc mở http://127.0.0.1:18789 trên máy chủ Gateway.",
+        stepLocalCompat:
+          "Để tương thích cục bộ chỉ dùng token, đặt gateway.controlUi.allowInsecureAuth: true.",
+        stepAvoidDisable: "Tránh tắt auth thiết bị cho truy cập HTTP từ xa.",
+      },
+      origin: {
+        title: "Origin trình duyệt không được phép",
+        summary: "Gateway đã từ chối origin của trang này trước khi chấp nhận kết nối Control UI.",
+        stepAllowedOrigins: "Thêm origin trình duyệt này vào gateway.controlUi.allowedOrigins.",
+        stepFullOrigin: "Dùng origin đầy đủ như http://localhost:5173, không dùng mẫu wildcard.",
+        stepRestart: "Khởi động lại hoặc tải lại Gateway sau khi thay đổi origin được phép.",
+      },
+      protocol: {
+        title: "Không khớp giao thức",
+        summary:
+          "Control UI được phục vụ và Gateway đang chạy không thống nhất về giao thức kết nối được hỗ trợ.",
+        stepDashboard:
+          "Mở lại dashboard được phục vụ bằng openclaw dashboard để UI và Gateway đến từ cùng một bản cài đặt.",
+        stepDevUi:
+          "Nếu dùng pnpm ui:dev, hãy build lại hoặc khởi động lại UI dev theo checkout hiện tại.",
+        stepRestart:
+          "Khởi động lại Gateway sau khi cập nhật OpenClaw để nó phục vụ giao thức hiện tại.",
+      },
+      network: {
+        title: "Không thể kết nối",
+        summary:
+          "Trình duyệt không thể hoàn tất kết nối Gateway. Kiểm tra đích và transport trước khi thử lại thông tin xác thực.",
+        stepGateway: "Xác nhận Gateway đang chạy bằng openclaw status hoặc openclaw gateway run.",
+        stepUrl: "Kiểm tra WebSocket URL và dùng wss:// khi Gateway nằm sau HTTPS/Tailscale Serve.",
+        stepDashboard:
+          "Mở lại dashboard bằng openclaw dashboard --no-open để sao chép lại URL và chi tiết auth hiện tại.",
+      },
+    },
   },
   chat: {
     disconnected: "Đã ngắt kết nối khỏi gateway.",

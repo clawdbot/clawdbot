@@ -323,8 +323,32 @@ function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessag
     historyTextChars,
     toolResultChars,
     estTokens: tokenEstimationFailed ? undefined : estTokens,
-    contributors: contributors.toSorted((a, b) => b.chars - a.chars).slice(0, 3),
+    contributors: selectTopContributors(contributors),
   };
+}
+
+function selectTopContributors(
+  contributors: CompactionMessageMetrics["contributors"],
+): CompactionMessageMetrics["contributors"] {
+  const selected: CompactionMessageMetrics["contributors"] = [];
+  for (const contributor of contributors) {
+    let insertAt = selected.length;
+    for (let index = 0; index < selected.length; index += 1) {
+      if (contributor.chars > selected[index].chars) {
+        insertAt = index;
+        break;
+      }
+    }
+    if (insertAt < 3) {
+      selected.splice(insertAt, 0, contributor);
+      if (selected.length > 3) {
+        selected.pop();
+      }
+    } else if (selected.length < 3) {
+      selected.push(contributor);
+    }
+  }
+  return selected;
 }
 
 function containsRealConversationMessages(messages: AgentMessage[]): boolean {

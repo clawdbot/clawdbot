@@ -32,9 +32,51 @@ function renderMetaRow(label: string, value?: string | null, opts?: { path?: boo
   </div>`;
 }
 
+function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
+  const commandSpans = [...(request.commandSpans ?? [])]
+    .filter(
+      (span) =>
+        Number.isSafeInteger(span.startIndex) &&
+        Number.isSafeInteger(span.endIndex) &&
+        span.startIndex >= 0 &&
+        span.endIndex > span.startIndex &&
+        span.endIndex <= request.command.length,
+    )
+    .toSorted((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex);
+  const accepted: typeof commandSpans = [];
+  let cursor = 0;
+  for (const span of commandSpans) {
+    if (span.startIndex < cursor) {
+      continue;
+    }
+    accepted.push(span);
+    cursor = span.endIndex;
+  }
+  if (accepted.length === 0) {
+    return html`<div class="exec-approval-command mono">${request.command}</div>`;
+  }
+  const parts = [];
+  cursor = 0;
+  for (const span of accepted) {
+    if (span.startIndex > cursor) {
+      parts.push(request.command.slice(cursor, span.startIndex));
+    }
+    parts.push(
+      html`<mark class="exec-approval-command-span"
+        >${request.command.slice(span.startIndex, span.endIndex)}</mark
+      >`,
+    );
+    cursor = span.endIndex;
+  }
+  if (cursor < request.command.length) {
+    parts.push(request.command.slice(cursor));
+  }
+  return html`<div class="exec-approval-command mono">${parts}</div>`;
+}
+
 function renderExecBody(request: ExecApprovalRequestPayload) {
   return html`
-    <div class="exec-approval-command mono">${request.command}</div>
+    ${renderCommandWithSpans(request)}
     <div class="exec-approval-meta">
       ${renderMetaRow(t("execApproval.labels.host"), request.host)}
       ${renderMetaRow(t("execApproval.labels.agent"), request.agentId)}

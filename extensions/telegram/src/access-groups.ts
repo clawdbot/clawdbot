@@ -1,9 +1,14 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   expandAllowFromWithAccessGroups,
   parseAccessGroupAllowFromEntry,
 } from "openclaw/plugin-sdk/security-runtime";
-import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
+import {
+  isSenderAllowed,
+  normalizeAllowFrom,
+  normalizeDmAllowFromWithStore,
+  type NormalizedAllowFrom,
+} from "./bot-access.js";
 
 export async function expandTelegramAllowFromWithAccessGroups(params: {
   cfg?: OpenClawConfig;
@@ -33,4 +38,35 @@ export async function expandTelegramAllowFromWithAccessGroups(params: {
   return matched
     ? expanded.filter((entry) => parseAccessGroupAllowFromEntry(entry) == null)
     : expanded;
+}
+
+export async function resolveTelegramDmAllow(params: {
+  cfg?: OpenClawConfig;
+  allowFrom?: Array<string | number>;
+  groupAllowOverride?: Array<string | number>;
+  storeAllowFrom?: string[];
+  dmPolicy?: DmPolicy;
+  accountId?: string;
+  senderId?: string;
+}): Promise<{
+  allowFrom?: Array<string | number>;
+  expandedAllowFrom: string[];
+  effectiveAllow: NormalizedAllowFrom;
+}> {
+  const allowFrom = params.groupAllowOverride ?? params.allowFrom;
+  const expandedAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+    cfg: params.cfg,
+    allowFrom,
+    accountId: params.accountId,
+    senderId: params.senderId,
+  });
+  return {
+    allowFrom,
+    expandedAllowFrom,
+    effectiveAllow: normalizeDmAllowFromWithStore({
+      allowFrom: expandedAllowFrom,
+      storeAllowFrom: params.storeAllowFrom,
+      dmPolicy: params.dmPolicy,
+    }),
+  };
 }

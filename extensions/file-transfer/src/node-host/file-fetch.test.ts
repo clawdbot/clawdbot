@@ -67,7 +67,10 @@ describe("handleFileFetch — fs errors", () => {
     const r = await handleFileFetch({ path: tmpRoot });
     expect(r).toMatchObject({ ok: false, code: "IS_DIRECTORY" });
     // canonical path is reported back so the caller can re-check policy
-    expect(r.ok ? null : r.canonicalPath).toBeTruthy();
+    if (r.ok) {
+      throw new Error("expected directory fetch to fail");
+    }
+    expect(r.canonicalPath).toBe(tmpRoot);
   });
 });
 
@@ -136,6 +139,49 @@ describe("handleFileFetch — happy path", () => {
     // a one-line markdown file; the extension fallback yields text/markdown.
     // Accept either.
     expect(r.mimeType).toMatch(/^text\/(plain|markdown)$/);
+  });
+
+  it("detects extensionless plain text as text/plain", async () => {
+    const target = path.join(tmpRoot, "LICENSE");
+    const contents = "Permission is hereby granted\n";
+    await fs.writeFile(target, contents);
+
+    const r = await handleFileFetch({ path: target });
+    if (!r.ok) {
+      throw new Error("expected ok");
+    }
+
+    expect(r.mimeType).toBe("text/plain");
+    expect(Buffer.from(r.base64, "base64").toString("utf-8")).toBe(contents);
+  });
+
+  it("does not classify extensionless binary content as text/plain", async () => {
+    const target = path.join(tmpRoot, "opaque");
+    await fs.writeFile(target, Buffer.from([0x00, 0x01, 0x02, 0xff]));
+
+    const r = await handleFileFetch({ path: target });
+    if (!r.ok) {
+      throw new Error("expected ok");
+    }
+
+    expect(r.mimeType).toBe("application/octet-stream");
+  });
+
+  it("sniffs binary content instead of trusting a misleading extension", async () => {
+    const target = path.join(tmpRoot, "image.txt");
+    await fs.writeFile(
+      target,
+      Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52,
+      ]),
+    );
+
+    const r = await handleFileFetch({ path: target });
+    if (!r.ok) {
+      throw new Error("expected ok");
+    }
+    expect(r.mimeType).toBe("image/png");
   });
 });
 

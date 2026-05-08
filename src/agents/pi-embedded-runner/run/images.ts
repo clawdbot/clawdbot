@@ -467,8 +467,13 @@ export async function detectAndLoadPromptImages(params: {
   const allRefs = detectImageReferences(params.prompt);
 
   if (allRefs.length === 0) {
+    const sanitizedExistingImages = await sanitizeImagesWithLog(
+      params.existingImages ?? [],
+      "prompt:images",
+      { maxDimensionPx: params.maxDimensionPx },
+    );
     return {
-      images: params.existingImages ?? [],
+      images: sanitizedExistingImages,
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,

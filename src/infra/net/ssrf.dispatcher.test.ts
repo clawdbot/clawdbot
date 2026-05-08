@@ -88,7 +88,16 @@ describe("createPinnedDispatcher", () => {
 
     const dispatcher = createPinnedDispatcher(pinned);
 
-    expect(dispatcher).toBeDefined();
+    expect(dispatcher).toMatchObject({
+      options: {
+        connect: {
+          lookup,
+          autoSelectFamily: true,
+          autoSelectFamilyAttemptTimeout: 300,
+        },
+        allowH2: false,
+      },
+    });
     expect(agentCtor).toHaveBeenCalledWith({
       connect: {
         lookup,

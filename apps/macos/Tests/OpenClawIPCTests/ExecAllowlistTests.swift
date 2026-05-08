@@ -111,7 +111,7 @@ struct ExecAllowlistTests {
     }
 
     @Test func `resolve for allowlist splits shell chains`() {
-        let command = ["/bin/sh", "-lc", "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test"]
+        let command = ["/bin/sh", "-c", "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test"]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test",
@@ -122,9 +122,109 @@ struct ExecAllowlistTests {
         #expect(resolutions[1].executableName == "touch")
     }
 
+    @Test func `resolve for allowlist splits posix combined c flag payloads`() {
+        for command in [
+            ["/bin/bash", "-xc", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-ec", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-euxc", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-cx", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-O", "extglob", "-xc", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-co", "vi", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-oc", "vi", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-cO", "extglob", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-xo", "vi", "-c", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-xO", "extglob", "-c", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "+xo", "vi", "-c", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "--rcfile", "/tmp/rc", "-c", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "--init-file=/tmp/rc", "-c", "/usr/bin/printf safe_marker"],
+        ] {
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: command,
+                rawCommand: nil,
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(resolutions.count == 1)
+            #expect(resolutions[0].resolvedPath == "/usr/bin/printf")
+            #expect(resolutions[0].executableName == "printf")
+        }
+    }
+
+    @Test func `resolve for allowlist treats c after posix shell operand as direct exec`() {
+        for command in [
+            ["/bin/bash", "./script.sh", "-c", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-x", "-C", "echo ok", "-c", "/usr/bin/printf safe_marker"],
+        ] {
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: command,
+                rawCommand: nil,
+                cwd: "/tmp",
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(resolutions.count == 1)
+            #expect(resolutions[0].resolvedPath == "/bin/bash")
+            #expect(resolutions[0].executableName == "bash")
+        }
+    }
+
+    @Test func `resolve for allowlist fails closed for interactive posix shell wrappers`() {
+        for command in [
+            ["/bin/bash", "-i", "-c", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-ic", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "--rcfile", "/tmp/payload.sh", "-i", "-c", "/usr/bin/printf safe_marker"],
+            ["/usr/bin/fish", "--interactive", "-c", "/usr/bin/printf safe_marker"],
+        ] {
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: command,
+                rawCommand: nil,
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(resolutions.isEmpty)
+        }
+    }
+
+    @Test func `resolve for allowlist fails closed for login shell wrappers`() {
+        for command in [
+            ["/bin/bash", "-l", "-c", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "--login", "-c", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-xlc", "/usr/bin/printf safe_marker"],
+            ["/bin/dash", "-lc", "/usr/bin/printf safe_marker"],
+            ["ash", "-lc", "/usr/bin/printf safe_marker"],
+            ["/usr/bin/fish", "-l", "-c", "/usr/bin/printf safe_marker"],
+            ["/usr/bin/fish", "--login", "-c", "/usr/bin/printf safe_marker"],
+            ["/bin/sh", "-lc", "/usr/bin/printf safe_marker"],
+            ["/bin/sh", "-x", "-lc", "/usr/bin/printf safe_marker"],
+            ["/usr/bin/env", "/bin/sh", "-lc", "/usr/bin/printf safe_marker"],
+        ] {
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: command,
+                rawCommand: nil,
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(resolutions.isEmpty)
+        }
+    }
+
+    @Test func `resolve for allowlist fails closed for fish init command wrappers`() {
+        for command in [
+            ["/usr/bin/fish", "--init-command=/tmp/payload.fish", "-c", "/usr/bin/printf safe_marker"],
+            ["/usr/bin/fish", "--init-command", "/tmp/payload.fish", "-c", "/usr/bin/printf safe_marker"],
+            ["/usr/bin/fish", "-C", "/tmp/payload.fish", "-c", "/usr/bin/printf safe_marker"],
+            ["/usr/bin/fish", "-C/tmp/payload.fish", "-c", "/usr/bin/printf safe_marker"],
+            ["/usr/bin/fish", "--init-command", "-c; /tmp/payload.fish", "/usr/bin/printf safe_marker"],
+            ["/usr/bin/fish", "-C", "-c", "/usr/bin/printf safe_marker"],
+            ["/usr/bin/fish", "-c/tmp/payload.fish", "/usr/bin/printf safe_marker"],
+        ] {
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: command,
+                rawCommand: nil,
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(resolutions.isEmpty)
+        }
+    }
+
     @Test func `resolve for allowlist uses wrapper argv payload even with canonical raw command`() {
-        let command = ["/bin/sh", "-lc", "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test"]
-        let canonicalRaw = "/bin/sh -lc \"echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test\""
+        let command = ["/bin/sh", "-c", "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test"]
+        let canonicalRaw = "/bin/sh -c \"echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test\""
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: canonicalRaw,
@@ -133,6 +233,25 @@ struct ExecAllowlistTests {
         #expect(resolutions.count == 2)
         #expect(resolutions[0].executableName == "echo")
         #expect(resolutions[1].executableName == "touch")
+    }
+
+    @Test func `resolve for allowlist preserves generated sh lc raw payload binding`() {
+        let command = ["/bin/sh", "-lc", "/usr/bin/printf safe_marker"]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: "/usr/bin/printf safe_marker",
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(resolutions.count == 1)
+        #expect(resolutions[0].resolvedPath == "/usr/bin/printf")
+        #expect(resolutions[0].executableName == "printf")
+
+        let rawlessResolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: nil,
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(rawlessResolutions.isEmpty)
     }
 
     @Test func `resolve for allowlist fails closed for env modified shell wrappers`() {
@@ -158,7 +277,7 @@ struct ExecAllowlistTests {
     }
 
     @Test func `resolve for allowlist keeps quoted operators in single segment`() {
-        let command = ["/bin/sh", "-lc", "echo \"a && b\""]
+        let command = ["/bin/sh", "-c", "echo \"a && b\""]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: "echo \"a && b\"",
@@ -169,7 +288,7 @@ struct ExecAllowlistTests {
     }
 
     @Test func `resolve for allowlist fails closed on command substitution`() {
-        let command = ["/bin/sh", "-lc", "echo $(/usr/bin/touch /tmp/openclaw-allowlist-test-subst)"]
+        let command = ["/bin/sh", "-c", "echo $(/usr/bin/touch /tmp/openclaw-allowlist-test-subst)"]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: "echo $(/usr/bin/touch /tmp/openclaw-allowlist-test-subst)",
@@ -179,7 +298,7 @@ struct ExecAllowlistTests {
     }
 
     @Test func `resolve for allowlist fails closed on quoted command substitution`() {
-        let command = ["/bin/sh", "-lc", "echo \"ok $(/usr/bin/touch /tmp/openclaw-allowlist-test-quoted-subst)\""]
+        let command = ["/bin/sh", "-c", "echo \"ok $(/usr/bin/touch /tmp/openclaw-allowlist-test-quoted-subst)\""]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: "echo \"ok $(/usr/bin/touch /tmp/openclaw-allowlist-test-quoted-subst)\"",
@@ -189,7 +308,7 @@ struct ExecAllowlistTests {
     }
 
     @Test func `resolve for allowlist fails closed on line-continued command substitution`() {
-        let command = ["/bin/sh", "-lc", "echo $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-line-cont-subst)"]
+        let command = ["/bin/sh", "-c", "echo $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-line-cont-subst)"]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: "echo $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-line-cont-subst)",
@@ -201,7 +320,7 @@ struct ExecAllowlistTests {
     @Test func `resolve for allowlist fails closed on chained line-continued command substitution`() {
         let command = [
             "/bin/sh",
-            "-lc",
+            "-c",
             "echo ok && $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-chained-line-cont-subst)",
         ]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
@@ -213,7 +332,7 @@ struct ExecAllowlistTests {
     }
 
     @Test func `resolve for allowlist fails closed on quoted backticks`() {
-        let command = ["/bin/sh", "-lc", "echo \"ok `/usr/bin/id`\""]
+        let command = ["/bin/sh", "-c", "echo \"ok `/usr/bin/id`\""]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: "echo \"ok `/usr/bin/id`\"",
@@ -226,7 +345,7 @@ struct ExecAllowlistTests {
         let fixtures = try Self.loadShellParserParityCases()
         for fixture in fixtures {
             let resolutions = ExecCommandResolution.resolveForAllowlist(
-                command: ["/bin/sh", "-lc", fixture.command],
+                command: ["/bin/sh", "-c", fixture.command],
                 rawCommand: fixture.command,
                 cwd: nil,
                 env: ["PATH": "/usr/bin:/bin"])
@@ -276,7 +395,7 @@ struct ExecAllowlistTests {
         let command = [
             "/usr/bin/env",
             "/bin/sh",
-            "-lc",
+            "-c",
             "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test",
         ]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
@@ -290,7 +409,7 @@ struct ExecAllowlistTests {
     }
 
     @Test func `resolve for allowlist unwraps env dispatch wrappers inside shell segments`() {
-        let command = ["/bin/sh", "-lc", "env /usr/bin/touch /tmp/openclaw-allowlist-test"]
+        let command = ["/bin/sh", "-c", "env /usr/bin/touch /tmp/openclaw-allowlist-test"]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: "env /usr/bin/touch /tmp/openclaw-allowlist-test",
@@ -302,7 +421,7 @@ struct ExecAllowlistTests {
     }
 
     @Test func `resolve for allowlist preserves env assignments inside shell segments`() {
-        let command = ["/bin/sh", "-lc", "env FOO=bar /usr/bin/touch /tmp/openclaw-allowlist-test"]
+        let command = ["/bin/sh", "-c", "env FOO=bar /usr/bin/touch /tmp/openclaw-allowlist-test"]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: "env FOO=bar /usr/bin/touch /tmp/openclaw-allowlist-test",
@@ -326,8 +445,8 @@ struct ExecAllowlistTests {
     }
 
     @Test func `approval evaluator resolves shell payload from canonical wrapper text`() async {
-        let command = ["/bin/sh", "-lc", "/usr/bin/printf ok"]
-        let rawCommand = "/bin/sh -lc \"/usr/bin/printf ok\""
+        let command = ["/bin/sh", "-c", "/usr/bin/printf ok"]
+        let rawCommand = "/bin/sh -c \"/usr/bin/printf ok\""
         let evaluation = await ExecApprovalEvaluator.evaluate(
             command: command,
             rawCommand: rawCommand,
@@ -346,6 +465,32 @@ struct ExecAllowlistTests {
             command: ["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"],
             cwd: nil,
             env: ["PATH": "/usr/bin:/bin"])
+
+        #expect(patterns == ["/usr/bin/printf"])
+    }
+
+    @Test func `allow always patterns fail closed for env modified shell wrappers`() {
+        let patterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
+            command: [
+                "/usr/bin/env",
+                "BASH_ENV=/tmp/payload.sh",
+                "/bin/sh",
+                "-lc",
+                "/usr/bin/printf ok",
+            ],
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"],
+            rawCommand: "/usr/bin/printf ok")
+
+        #expect(patterns.isEmpty)
+    }
+
+    @Test func `allow always patterns preserve generated sh lc raw payload binding`() {
+        let patterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
+            command: ["/bin/sh", "-lc", "/usr/bin/printf safe_marker"],
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"],
+            rawCommand: "/usr/bin/printf safe_marker")
 
         #expect(patterns == ["/usr/bin/printf"])
     }

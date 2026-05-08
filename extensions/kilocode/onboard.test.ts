@@ -19,6 +19,14 @@ import {
 const emptyCfg: OpenClawConfig = {};
 const KILOCODE_MODEL_IDS = ["kilo/auto"];
 
+function requireKilocodeProvider(cfg: OpenClawConfig) {
+  const provider = cfg.models?.providers?.kilocode;
+  if (!provider) {
+    throw new Error("expected Kilocode provider config");
+  }
+  return provider;
+}
+
 describe("Kilo Gateway provider config", () => {
   describe("constants", () => {
     it("KILOCODE_BASE_URL points to kilo openrouter endpoint", () => {
@@ -50,10 +58,9 @@ describe("Kilo Gateway provider config", () => {
   describe("applyKilocodeProviderConfig", () => {
     it("registers kilocode provider with correct baseUrl and api", () => {
       const result = applyKilocodeProviderConfig(emptyCfg);
-      const provider = result.models?.providers?.kilocode;
-      expect(provider).toBeDefined();
-      expect(provider?.baseUrl).toBe(KILOCODE_BASE_URL);
-      expect(provider?.api).toBe("openai-completions");
+      const provider = requireKilocodeProvider(result);
+      expect(provider.baseUrl).toBe(KILOCODE_BASE_URL);
+      expect(provider.api).toBe("openai-completions");
     });
 
     it("includes the default model in the provider model list", () => {
@@ -95,8 +102,7 @@ describe("Kilo Gateway provider config", () => {
     it("sets Kilo Gateway alias in agent default models", () => {
       const result = applyKilocodeProviderConfig(emptyCfg);
       const agentModel = result.agents?.defaults?.models?.[KILOCODE_DEFAULT_MODEL_REF];
-      expect(agentModel).toBeDefined();
-      expect(agentModel?.alias).toBe("Kilo Gateway");
+      expect(agentModel).toMatchObject({ alias: "Kilo Gateway" });
     });
 
     it("preserves existing alias if already set", () => {
@@ -133,9 +139,8 @@ describe("Kilo Gateway provider config", () => {
       expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe(
         KILOCODE_DEFAULT_MODEL_REF,
       );
-      const provider = result.models?.providers?.kilocode;
-      expect(provider).toBeDefined();
-      expect(provider?.baseUrl).toBe(KILOCODE_BASE_URL);
+      const provider = requireKilocodeProvider(result);
+      expect(provider.baseUrl).toBe(KILOCODE_BASE_URL);
     });
   });
 

@@ -1,3 +1,4 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog.js";
 import {
@@ -201,13 +202,13 @@ describe("command-path-policy", () => {
       },
     ];
 
-    vi.resetModules();
     vi.doMock("./command-catalog.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./command-catalog.js")>();
       return { ...actual, cliCommandCatalog: catalog };
     });
-    const { resolveCliCatalogCommandPath, resolveCliNetworkProxyPolicy } =
-      await import("./command-path-policy.js");
+    const { resolveCliCatalogCommandPath, resolveCliNetworkProxyPolicy } = await importFreshModule<
+      typeof import("./command-path-policy.js")
+    >(import.meta.url, "./command-path-policy.js?catalog-overrides");
 
     expect(resolveCliCatalogCommandPath(["node", "openclaw", "nodes", "camera", "snap"])).toEqual([
       "nodes",

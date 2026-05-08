@@ -8,7 +8,15 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/ma
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() =>
-  vi.fn<typeof normalizeProviderModelIdWithRuntime>(({ context }) => context.modelId),
+  vi.fn<typeof normalizeProviderModelIdWithRuntime>(({ provider, context }) => {
+    if (
+      provider === "google" &&
+      (context.modelId === "gemini-3-pro" || context.modelId === "gemini-3-pro-preview")
+    ) {
+      return "gemini-3.1-pro-preview";
+    }
+    return context.modelId;
+  }),
 );
 const pluginManifestRegistryMocks = vi.hoisted(() => ({
   manifestRegistry: undefined as PluginManifestRegistry | undefined,
@@ -56,6 +64,35 @@ import {
   refreshGatewayModelPricingCache,
   startGatewayModelPricingRefresh,
 } from "./model-pricing-cache.js";
+
+type CachedModelPricing = NonNullable<ReturnType<typeof getCachedGatewayModelPricing>>;
+
+function requirePricing(
+  pricing: ReturnType<typeof getCachedGatewayModelPricing>,
+  label: string,
+): CachedModelPricing {
+  if (!pricing) {
+    throw new Error(`expected ${label} pricing`);
+  }
+  return pricing;
+}
+
+function requireTieredPricing(
+  pricing: CachedModelPricing,
+  label: string,
+): NonNullable<CachedModelPricing["tieredPricing"]> {
+  if (!pricing.tieredPricing) {
+    throw new Error(`expected ${label} tiered pricing`);
+  }
+  return pricing.tieredPricing;
+}
+
+function requireAbortSignal(signal: RequestInit["signal"] | undefined): AbortSignal {
+  if (!signal) {
+    throw new Error("expected pricing fetch abort signal");
+  }
+  return signal;
+}
 
 describe("model-pricing-cache", () => {
   beforeEach(() => {
@@ -129,7 +166,7 @@ describe("model-pricing-cache", () => {
       expect.arrayContaining([
         "openai/gpt-5.4",
         "anthropic/claude-sonnet-4-6",
-        "google/gemini-3-pro-preview",
+        "google/gemini-3.1-pro-preview",
         "anthropic/claude-opus-4-6",
         "xai/grok-4",
         "openrouter/anthropic/claude-opus-4-6",
@@ -602,21 +639,22 @@ describe("model-pricing-cache", () => {
       provider: "volcengine",
       model: "doubao-seed-2-0-pro",
     });
+    const cached = requirePricing(pricing, "volcengine doubao-seed-2-0-pro");
+    const tiers = requireTieredPricing(cached, "volcengine doubao-seed-2-0-pro");
 
-    expect(pricing).toBeDefined();
-    expect(pricing!.input).toBeCloseTo(0.46);
-    expect(pricing!.output).toBeCloseTo(2.3);
-    expect(pricing!.cacheWrite).toBeCloseTo(0.92);
-    expect(pricing!.tieredPricing).toHaveLength(3);
-    expect(pricing!.tieredPricing![0]).toEqual({
+    expect(cached.input).toBeCloseTo(0.46);
+    expect(cached.output).toBeCloseTo(2.3);
+    expect(cached.cacheWrite).toBeCloseTo(0.92);
+    expect(tiers).toHaveLength(3);
+    expect(tiers[0]).toEqual({
       input: expect.closeTo(0.46),
       output: expect.closeTo(2.3),
       cacheRead: 0,
       cacheWrite: expect.closeTo(0.092),
       range: [0, 32000],
     });
-    expect(pricing!.tieredPricing![2].cacheWrite).toBeCloseTo(0.28);
-    expect(pricing!.tieredPricing![2].range).toEqual([128000, 256000]);
+    expect(tiers[2].cacheWrite).toBeCloseTo(0.28);
+    expect(tiers[2].range).toEqual([128000, 256000]);
   });
 
   it("normalizes LiteLLM open-ended range [start] to [start, Infinity]", async () => {
@@ -670,12 +708,15 @@ describe("model-pricing-cache", () => {
       provider: "volcengine",
       model: "doubao-open",
     });
+    const tiers = requireTieredPricing(
+      requirePricing(pricing, "volcengine doubao-open"),
+      "volcengine doubao-open",
+    );
 
-    expect(pricing).toBeDefined();
-    expect(pricing!.tieredPricing).toHaveLength(2);
-    expect(pricing!.tieredPricing![0].range).toEqual([0, 32000]);
-    expect(pricing!.tieredPricing![1].range).toEqual([32000, Infinity]);
-    expect(pricing!.tieredPricing![1].cacheWrite).toBeCloseTo(0.14);
+    expect(tiers).toHaveLength(2);
+    expect(tiers[0].range).toEqual([0, 32000]);
+    expect(tiers[1].range).toEqual([32000, Infinity]);
+    expect(tiers[1].cacheWrite).toBeCloseTo(0.14);
   });
 
   it("merges OpenRouter flat pricing with LiteLLM tiered pricing", async () => {
@@ -743,15 +784,16 @@ describe("model-pricing-cache", () => {
       provider: "dashscope",
       model: "qwen-plus",
     });
+    const cached = requirePricing(pricing, "dashscope qwen-plus");
+    const tiers = requireTieredPricing(cached, "dashscope qwen-plus");
 
-    expect(pricing).toBeDefined();
     // OpenRouter base flat pricing is used
-    expect(pricing!.input).toBeCloseTo(0.4);
-    expect(pricing!.output).toBeCloseTo(2.4);
+    expect(cached.input).toBeCloseTo(0.4);
+    expect(cached.output).toBeCloseTo(2.4);
     // LiteLLM tiered pricing is merged in
-    expect(pricing!.tieredPricing).toHaveLength(2);
-    expect(pricing!.tieredPricing![1].range).toEqual([256000, 1000000]);
-    expect(pricing!.tieredPricing![1].cacheWrite).toBeCloseTo(0.1);
+    expect(tiers).toHaveLength(2);
+    expect(tiers[1].range).toEqual([256000, 1000000]);
+    expect(tiers[1].cacheWrite).toBeCloseTo(0.1);
   });
 
   it("falls back gracefully when LiteLLM fetch fails", async () => {
@@ -850,9 +892,8 @@ describe("model-pricing-cache", () => {
           new Promise<Response>((_resolve, reject) => {
             const url =
               typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-            const signal = init?.signal;
-            expect(signal).toBeDefined();
-            signal?.addEventListener(
+            const signal = requireAbortSignal(init?.signal);
+            signal.addEventListener(
               "abort",
               () => {
                 abortedUrls.push(url);

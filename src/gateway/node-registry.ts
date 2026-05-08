@@ -24,6 +24,7 @@ export type NodeSession = {
 
 type PendingInvoke = {
   nodeId: string;
+  connId: string;
   command: string;
   resolve: (value: NodeInvokeResult) => void;
   reject: (err: Error) => void;
@@ -88,16 +89,19 @@ export class NodeRegistry {
       return null;
     }
     this.nodesByConn.delete(connId);
-    this.nodesById.delete(nodeId);
+    const unregistersCurrentNode = this.nodesById.get(nodeId)?.connId === connId;
+    if (unregistersCurrentNode) {
+      this.nodesById.delete(nodeId);
+    }
     for (const [id, pending] of this.pendingInvokes.entries()) {
-      if (pending.nodeId !== nodeId) {
+      if (pending.connId !== connId) {
         continue;
       }
       clearTimeout(pending.timer);
       pending.reject(new Error(`node disconnected (${pending.command})`));
       this.pendingInvokes.delete(id);
     }
-    return nodeId;
+    return unregistersCurrentNode ? nodeId : null;
   }
 
   listConnected(): NodeSession[] {
@@ -150,6 +154,7 @@ export class NodeRegistry {
       }, timeoutMs);
       this.pendingInvokes.set(requestId, {
         nodeId: params.nodeId,
+        connId: node.connId,
         command: params.command,
         resolve,
         reject,
@@ -161,6 +166,7 @@ export class NodeRegistry {
   handleInvokeResult(params: {
     id: string;
     nodeId: string;
+    connId: string | undefined;
     ok: boolean;
     payload?: unknown;
     payloadJSON?: string | null;
@@ -170,7 +176,7 @@ export class NodeRegistry {
     if (!pending) {
       return false;
     }
-    if (pending.nodeId !== params.nodeId) {
+    if (pending.nodeId !== params.nodeId || pending.connId !== params.connId) {
       return false;
     }
     clearTimeout(pending.timer);

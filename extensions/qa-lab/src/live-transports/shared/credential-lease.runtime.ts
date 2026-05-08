@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 import {
   isQaCredentialTruthyOptIn,
   joinQaCredentialEndpoint,

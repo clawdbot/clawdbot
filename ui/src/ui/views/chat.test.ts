@@ -581,12 +581,17 @@ describe("chat slash menu accessibility", () => {
       : null;
     const status = container.querySelector<HTMLElement>("#chat-slash-active-announcement");
 
-    expect(nextActiveId).toBeTruthy();
+    if (!nextActiveId) {
+      throw new Error("Expected command navigation to set aria-activedescendant");
+    }
     expect(nextActiveId).not.toBe(initialActiveId);
     expect(activeOption?.getAttribute("aria-selected")).toBe("true");
     expect(status?.getAttribute("aria-live")).toBe("polite");
-    expect(status?.textContent?.trim()).toBeTruthy();
-    expect(status?.textContent).toContain(activeOption?.textContent?.trim().split(/\s+/u)[0]);
+    const announcementText = status?.textContent?.trim();
+    if (!announcementText) {
+      throw new Error("Expected command navigation to update the live announcement");
+    }
+    expect(announcementText).toContain(activeOption?.textContent?.trim().split(/\s+/u)[0]);
   });
 
   it("wires fixed argument suggestions with command-and-argument option ids", () => {
@@ -617,11 +622,12 @@ describe("chat slash menu accessibility", () => {
 
     inputDraft(container, "/");
     container = renderChatView({ draft, onDraftChange });
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.getAttribute("aria-activedescendant"),
-    ).toBeTruthy();
+    const activeDescendant = container
+      .querySelector<HTMLTextAreaElement>("textarea")
+      ?.getAttribute("aria-activedescendant");
+    if (!activeDescendant) {
+      throw new Error("Expected slash suggestions to set aria-activedescendant");
+    }
 
     inputDraft(container, "plain message");
     container = renderChatView({ draft, onDraftChange });
@@ -790,7 +796,7 @@ describe("chat welcome", () => {
 });
 
 describe("chat session controls", () => {
-  it("filters chat sessions by agent and switches to that agent's recent session", async () => {
+  it("filters chat sessions by agent and switches to that agent's recent session", () => {
     const { state } = createChatHeaderState();
     const onSwitchSession = vi.fn();
     state.sessionKey = "agent:alpha:main";
@@ -838,7 +844,7 @@ describe("chat session controls", () => {
     expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:dashboard:beta-recent");
   });
 
-  it("falls back to the selected agent's main session when no sessions exist yet", async () => {
+  it("falls back to the selected agent's main session when no sessions exist yet", () => {
     const { state } = createChatHeaderState();
     const onSwitchSession = vi.fn();
     state.sessionKey = "agent:alpha:main";

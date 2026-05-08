@@ -1038,7 +1038,7 @@ describe("grouped chat rendering", () => {
     );
   });
 
-  it("does not send auth to cross-origin managed-image-looking URLs", async () => {
+  it("does not send auth to cross-origin managed-image-looking URLs", () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("cross-origin image URL should not be fetched with Control UI auth");
     });

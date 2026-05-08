@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -10,6 +11,7 @@ import {
   resolvePersistedAuthProfileOwnerAgentDir,
   saveAuthProfileStore,
   type AuthProfileCredential,
+  type AuthProfileStore,
   type OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { CodexAppServerClient } from "./client.js";
@@ -91,6 +93,94 @@ export function resolveCodexAppServerAuthProfileIdForAgent(params: {
     store,
     config: params.config,
   });
+}
+
+export async function resolveCodexAppServerAuthAccountCacheKey(params: {
+  authProfileId?: string;
+  authProfileStore?: AuthProfileStore;
+  agentDir?: string;
+  config?: AuthProfileOrderConfig;
+}): Promise<string | undefined> {
+  const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
+  const store =
+    params.authProfileStore ?? ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const profileId = resolveCodexAppServerAuthProfileId({
+    authProfileId: params.authProfileId,
+    store,
+    config: params.config,
+  });
+  if (!profileId) {
+    return undefined;
+  }
+  const credential = store.profiles[profileId];
+  if (!credential || !isCodexAppServerAuthProvider(credential.provider, params.config)) {
+    return undefined;
+  }
+  if (credential.type === "api_key") {
+    const resolved = await resolveApiKeyForProfile({
+      store,
+      profileId,
+      agentDir,
+    });
+    const apiKey = resolved?.apiKey?.trim();
+    return apiKey
+      ? `${resolveChatgptAccountId(profileId, credential)}:${fingerprintApiKeyAuthProfileCacheKey(apiKey)}`
+      : resolveChatgptAccountId(profileId, credential);
+  }
+  if (credential.type === "token") {
+    const resolved = await resolveApiKeyForProfile({
+      store,
+      profileId,
+      agentDir,
+    });
+    const accessToken = resolved?.apiKey?.trim();
+    return accessToken
+      ? `${resolveChatgptAccountId(profileId, credential)}:${fingerprintTokenAuthProfileCacheKey(accessToken)}`
+      : resolveChatgptAccountId(profileId, credential);
+  }
+  return resolveChatgptAccountId(profileId, credential);
+}
+
+export function resolveCodexAppServerEnvApiKeyCacheKey(params: {
+  startOptions: Pick<CodexAppServerStartOptions, "transport" | "env" | "clearEnv">;
+  baseEnv?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+}): string | undefined {
+  if (params.startOptions.transport !== "stdio") {
+    return undefined;
+  }
+  const env = resolveCodexAppServerSpawnEnv(
+    params.startOptions,
+    params.baseEnv ?? process.env,
+    params.platform ?? process.platform,
+  );
+  const apiKey = readFirstNonEmptyEnvEntry(env, CODEX_APP_SERVER_API_KEY_ENV_VARS);
+  if (!apiKey) {
+    return undefined;
+  }
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:app-server-env-api-key:v1");
+  hash.update("\0");
+  hash.update(apiKey.key);
+  hash.update("\0");
+  hash.update(apiKey.value);
+  return `${apiKey.key}:sha256:${hash.digest("hex")}`;
+}
+
+function fingerprintApiKeyAuthProfileCacheKey(apiKey: string): string {
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:app-server-auth-profile-api-key:v1");
+  hash.update("\0");
+  hash.update(apiKey);
+  return `api_key:sha256:${hash.digest("hex")}`;
+}
+
+function fingerprintTokenAuthProfileCacheKey(accessToken: string): string {
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:app-server-auth-profile-token:v1");
+  hash.update("\0");
+  hash.update(accessToken);
+  return `token:sha256:${hash.digest("hex")}`;
 }
 
 export function resolveCodexAppServerHomeDir(agentDir: string): string {
@@ -367,10 +457,17 @@ function withClearedEnvironmentVariables(
 }
 
 function readFirstNonEmptyEnv(env: NodeJS.ProcessEnv, keys: readonly string[]): string | undefined {
+  return readFirstNonEmptyEnvEntry(env, keys)?.value;
+}
+
+function readFirstNonEmptyEnvEntry(
+  env: NodeJS.ProcessEnv,
+  keys: readonly string[],
+): { key: string; value: string } | undefined {
   for (const key of keys) {
     const value = env[key]?.trim();
     if (value) {
-      return value;
+      return { key, value };
     }
   }
   return undefined;

@@ -203,9 +203,15 @@ describe("validateProfile", () => {
 
     const result = validateProfile(profile);
 
-    expect(result.valid).toBe(true);
-    expect(result.profile).toBeDefined();
-    expect(result.errors).toBeUndefined();
+    expect(result).toMatchObject({
+      valid: true,
+      profile: {
+        name: "validuser",
+        about: "A valid user",
+        picture: "https://example.com/pic.png",
+      },
+    });
+    expect(result).not.toHaveProperty("errors");
   });
 
   it("rejects profile with invalid URL", () => {
@@ -217,8 +223,7 @@ describe("validateProfile", () => {
     const result = validateProfile(profile);
 
     expect(result.valid).toBe(false);
-    expect(result.errors).toBeDefined();
-    expect(result.errors!.some((e) => e.includes("https://"))).toBe(true);
+    expect(result.errors).toEqual(expect.arrayContaining([expect.stringContaining("https://")]));
   });
 
   it("rejects profile with javascript: URL", () => {

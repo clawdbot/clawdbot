@@ -116,7 +116,7 @@ describe("reply run registry", () => {
     }
   });
 
-  it("queues messages only through the active running backend", async () => {
+  it("queues messages only through the active running backend", () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",

@@ -75,7 +75,7 @@ export type CodexThreadStartParams = JsonObject & {
   cwd?: string;
   model?: string;
   modelProvider?: string | null;
-  approvalPolicy?: string;
+  approvalPolicy?: string | JsonObject;
   approvalsReviewer?: string | null;
   sandbox?: CodexSandboxPolicy;
   serviceTier?: CodexServiceTier | null;
@@ -108,7 +108,7 @@ export type CodexTurnStartParams = JsonObject & {
   input?: CodexUserInput[];
   cwd?: string;
   model?: string;
-  approvalPolicy?: string;
+  approvalPolicy?: string | JsonObject;
   approvalsReviewer?: string | null;
   sandboxPolicy?: CodexSandboxPolicy;
   serviceTier?: CodexServiceTier | null;
@@ -140,6 +140,7 @@ export type CodexTurn = {
 
 export type CodexThread = {
   id: string;
+  sessionId?: string;
   name?: string | null;
   cwd?: string | null;
 };
@@ -258,30 +259,113 @@ export type CodexLoginAccountParams =
     };
 
 export type CodexPluginSummary = {
-  id?: string;
-  name?: string;
+  id: string;
+  name: string;
+  source?: JsonObject;
   installed: boolean;
   enabled: boolean;
+  installPolicy?: string;
+  authPolicy?: string;
+  availability?: string;
+  interface?: JsonValue;
+};
+
+export type CodexAppSummary = {
+  id: string;
+  name: string;
+  description?: string | null;
+  installUrl?: string | null;
+  needsAuth: boolean;
 };
 
 export type CodexPluginDetail = {
-  summary: CodexPluginSummary;
   marketplaceName?: string;
   marketplacePath?: string | null;
+  summary: CodexPluginSummary;
+  description?: string | null;
+  skills?: JsonValue[];
+  apps: CodexAppSummary[];
+  mcpServers: string[];
 };
 
 export type CodexPluginMarketplaceEntry = {
   name: string;
   path?: string | null;
+  interface?: JsonValue;
   plugins: CodexPluginSummary[];
 };
 
 export type CodexPluginListResponse = {
   marketplaces: CodexPluginMarketplaceEntry[];
+  marketplaceLoadErrors?: JsonValue[];
+  featuredPluginIds?: string[];
 };
 
 export type CodexPluginReadResponse = {
   plugin: CodexPluginDetail;
+};
+
+export type CodexPluginListParams = {
+  cwds: string[];
+};
+
+export type CodexPluginReadParams = {
+  marketplacePath?: string;
+  remoteMarketplaceName?: string;
+  pluginName: string;
+};
+
+export type CodexPluginInstallParams = CodexPluginReadParams;
+
+export type CodexPluginInstallResponse = {
+  authPolicy: string;
+  appsNeedingAuth: CodexAppSummary[];
+};
+
+export type CodexAppInfo = {
+  id: string;
+  name: string;
+  description?: string | null;
+  logoUrl?: string | null;
+  logoUrlDark?: string | null;
+  distributionChannel?: string | null;
+  branding?: JsonValue;
+  appMetadata?: JsonValue;
+  labels?: JsonValue;
+  installUrl?: string | null;
+  isAccessible: boolean;
+  isEnabled: boolean;
+  pluginDisplayNames: string[];
+};
+
+export type CodexAppsListParams = {
+  cursor?: string | null;
+  limit?: number;
+  forceRefetch?: boolean;
+};
+
+export type CodexAppsListResponse = {
+  data: CodexAppInfo[];
+  nextCursor?: string | null;
+};
+
+export type CodexSkillsListParams = {
+  cwds: string[];
+  forceReload?: boolean;
+};
+
+export type CodexSkillsListResponse = {
+  data: JsonValue[];
+  nextCursor?: string | null;
+};
+
+export type CodexHooksListParams = {
+  cwds: string[];
+};
+
+export type CodexHooksListResponse = {
+  data: JsonValue[];
+  nextCursor?: string | null;
 };
 
 export type CodexMcpServerStatus = {
@@ -296,6 +380,26 @@ export type CodexListMcpServerStatusResponse = {
 
 export type CodexRequestObject = Record<string, unknown>;
 
+export declare namespace v2 {
+  export type AppInfo = CodexAppInfo;
+  export type AppSummary = CodexAppSummary;
+  export type AppsListParams = CodexAppsListParams;
+  export type AppsListResponse = CodexAppsListResponse;
+  export type HooksListParams = CodexHooksListParams;
+  export type HooksListResponse = CodexHooksListResponse;
+  export type PluginDetail = CodexPluginDetail;
+  export type PluginInstallParams = CodexPluginInstallParams;
+  export type PluginInstallResponse = CodexPluginInstallResponse;
+  export type PluginListParams = CodexPluginListParams;
+  export type PluginListResponse = CodexPluginListResponse;
+  export type PluginMarketplaceEntry = CodexPluginMarketplaceEntry;
+  export type PluginReadParams = CodexPluginReadParams;
+  export type PluginReadResponse = CodexPluginReadResponse;
+  export type PluginSummary = CodexPluginSummary;
+  export type SkillsListParams = CodexSkillsListParams;
+  export type SkillsListResponse = CodexSkillsListResponse;
+}
+
 type CodexAppServerRequestParamsOverride = {
   "thread/start": CodexThreadStartParams;
 };
@@ -304,11 +408,19 @@ type CodexAppServerRequestResultMap = {
   initialize: CodexInitializeResponse;
   "account/rateLimits/read": JsonValue;
   "account/read": CodexGetAccountResponse;
+  "app/list": CodexAppsListResponse;
+  "config/mcpServer/reload": JsonValue;
+  "experimentalFeature/enablement/set": JsonValue;
   "feedback/upload": JsonValue;
+  "hooks/list": CodexHooksListResponse;
+  "marketplace/add": JsonValue;
   "mcpServerStatus/list": CodexListMcpServerStatusResponse;
   "model/list": CodexModelListResponse;
+  "plugin/install": CodexPluginInstallResponse;
+  "plugin/list": CodexPluginListResponse;
+  "plugin/read": CodexPluginReadResponse;
   "review/start": JsonValue;
-  "skills/list": JsonValue;
+  "skills/list": CodexSkillsListResponse;
   "thread/compact/start": JsonValue;
   "thread/list": JsonValue;
   "thread/resume": CodexThreadResumeResponse;

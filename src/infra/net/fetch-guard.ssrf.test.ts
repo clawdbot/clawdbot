@@ -73,6 +73,10 @@ function getDispatcherClassName(value: unknown): string | null {
   return typeof ctor === "function" && ctor.name ? ctor.name : null;
 }
 
+function expectDispatcherAttached(value: unknown): void {
+  expect(value).toEqual(expect.any(Object));
+}
+
 function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
   const [, secondInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
   return new Headers(secondInit.headers);
@@ -141,7 +145,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     }
   }
 
-  async function runProxyModeDispatcherTest(params: {
+  async function runProxyModeDispatcherExpectation(params: {
     mode: (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_FETCH_MODE];
     expectEnvProxy: boolean;
   }): Promise<void> {
@@ -157,9 +161,9 @@ describe("fetchWithSsrFGuard hardening", () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
       if (params.expectEnvProxy) {
-        expect(requestInit.dispatcher).toBeDefined();
+        expectDispatcherAttached(requestInit.dispatcher);
       } else {
-        expect(requestInit.dispatcher).toBeDefined();
+        expectDispatcherAttached(requestInit.dispatcher);
         expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
       }
       return okResponse();
@@ -1070,7 +1074,7 @@ describe("fetchWithSsrFGuard hardening", () => {
   });
 
   it("ignores env proxy by default to preserve DNS-pinned destination binding", async () => {
-    await runProxyModeDispatcherTest({
+    await runProxyModeDispatcherExpectation({
       mode: GUARDED_FETCH_MODE.STRICT,
       expectEnvProxy: false,
     });
@@ -1079,20 +1083,20 @@ describe("fetchWithSsrFGuard hardening", () => {
   it("uses the env proxy in strict mode when the SSRF proxy lifecycle is active", async () => {
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
 
-    await runProxyModeDispatcherTest({
+    await runProxyModeDispatcherExpectation({
       mode: GUARDED_FETCH_MODE.STRICT,
       expectEnvProxy: true,
     });
   });
 
   it("routes through env proxy when trusted proxy mode is explicitly enabled", async () => {
-    await runProxyModeDispatcherTest({
+    await runProxyModeDispatcherExpectation({
       mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
       expectEnvProxy: true,
     });
   });
 
-  it("keeps DNS pinning in trusted proxy mode when only ALL_PROXY is configured", async () => {
+  it("keeps DNS pinning in trusted proxy mode when only ALL_PROXY is configured without policy allowlist", async () => {
     clearProxyEnv();
     vi.stubEnv("ALL_PROXY", "http://127.0.0.1:7890");
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
@@ -1417,7 +1421,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(requestInit.dispatcher).toBeDefined();
+      expectDispatcherAttached(requestInit.dispatcher);
       expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
       return okResponse();
     });
@@ -1454,7 +1458,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("keeps DNS pinning in trusted proxy mode when only ALL_PROXY is configured", async () => {
+  it("keeps DNS pinning in trusted proxy mode when only ALL_PROXY is configured after allowlist checks", async () => {
     clearProxyEnv();
     vi.stubEnv("ALL_PROXY", "http://127.0.0.1:7890");
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
@@ -1466,7 +1470,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(requestInit.dispatcher).toBeDefined();
+      expectDispatcherAttached(requestInit.dispatcher);
       expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
       return okResponse();
     });
@@ -1491,7 +1495,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(requestInit.dispatcher).toBeDefined();
+      expectDispatcherAttached(requestInit.dispatcher);
       expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
       return okResponse();
     });

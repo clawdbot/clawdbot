@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { getHeader } from "./http-headers.js";
@@ -360,19 +361,6 @@ function buildTwilioVerificationUrl(
   }
 }
 
-function isLoopbackAddress(address?: string): boolean {
-  if (!address) {
-    return false;
-  }
-  if (address === "127.0.0.1" || address === "::1") {
-    return true;
-  }
-  if (address.startsWith("::ffff:127.")) {
-    return true;
-  }
-  return false;
-}
-
 function stripPortFromUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -614,7 +602,7 @@ export function verifyTwilioWebhook(
     return { ok: false, reason: "Missing X-Twilio-Signature header" };
   }
 
-  const isLoopback = isLoopbackAddress(options?.remoteIP ?? ctx.remoteAddress);
+  const isLoopback = isLoopbackHost(options?.remoteIP ?? ctx.remoteAddress ?? "");
   const allowLoopbackForwarding = options?.allowNgrokFreeTierLoopbackBypass && isLoopback;
 
   // Reconstruct the URL Twilio used

@@ -318,9 +318,6 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
       config: params.cfg,
       agentId: params.sessionAgentId,
       sessionKey: params.sessionKey,
-      agentHarnessId:
-        normalizeOptionalString(params.entry?.agentHarnessId) ??
-        normalizeOptionalString(params.entry?.agentRuntimeOverride),
     });
     return harness.deliveryDefaults?.sourceVisibleReplies;
   } catch (error) {

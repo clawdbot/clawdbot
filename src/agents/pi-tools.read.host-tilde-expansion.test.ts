@@ -52,6 +52,20 @@ const { createHostWorkspaceEditTool, createHostWorkspaceWriteTool } =
 const osHome = () => process.env.HOME ?? os.homedir();
 const toTildePath = (absolutePath: string) => absolutePath.replace(osHome(), "~");
 
+function readEditOps(): CapturedEditOperations {
+  if (!mocks.editOps) {
+    throw new Error("expected captured edit operations");
+  }
+  return mocks.editOps;
+}
+
+function readWriteOps(): CapturedWriteOperations {
+  if (!mocks.writeOps) {
+    throw new Error("expected captured write operations");
+  }
+  return mocks.writeOps;
+}
+
 describe("host tool tilde expansion (non-workspace mode)", () => {
   const tempDirs: string[] = [];
 
@@ -81,7 +95,7 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     await fs.writeFile(testFile, "hello", "utf8");
 
     createHostWorkspaceEditTool(dir, { workspaceOnly: false });
-    const content = await mocks.editOps!.readFile(toTildePath(testFile));
+    const content = await readEditOps().readFile(toTildePath(testFile));
 
     expect(content.toString("utf8")).toBe("hello");
   });
@@ -93,7 +107,7 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
 
     createHostWorkspaceEditTool(dir, { workspaceOnly: false });
 
-    await expect(mocks.editOps!.access(toTildePath(testFile))).resolves.toBeUndefined();
+    await expect(readEditOps().access(toTildePath(testFile))).resolves.toBeUndefined();
   });
 
   it("write writeFile expands ~ to the OS home directory", async () => {
@@ -101,7 +115,7 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     const testFile = path.join(dir, "tilde-write-test.txt");
 
     createHostWorkspaceWriteTool(dir, { workspaceOnly: false });
-    await mocks.writeOps!.writeFile(toTildePath(testFile), "written via tilde");
+    await readWriteOps().writeFile(toTildePath(testFile), "written via tilde");
 
     expect(await fs.readFile(testFile, "utf8")).toBe("written via tilde");
   });
@@ -111,7 +125,7 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     const newDir = path.join(dir, "subdir");
 
     createHostWorkspaceWriteTool(dir, { workspaceOnly: false });
-    await mocks.writeOps!.mkdir(toTildePath(newDir));
+    await readWriteOps().mkdir(toTildePath(newDir));
 
     expect((await fs.stat(newDir)).isDirectory()).toBe(true);
   });
@@ -123,10 +137,14 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     vi.stubEnv("OPENCLAW_HOME", openclawHome);
 
     createHostWorkspaceWriteTool(openclawHome, { workspaceOnly: false });
-    await mocks.writeOps!.writeFile(toTildePath(testFile), "written via os home");
+    await readWriteOps().writeFile(toTildePath(testFile), "written via os home");
 
     expect(await fs.readFile(testFile, "utf8")).toBe("written via os home");
-    await expect(fs.access(path.join(openclawHome, path.basename(testFile)))).rejects.toBeDefined();
+    await expect(fs.access(path.join(openclawHome, path.basename(testFile)))).rejects.toMatchObject(
+      {
+        code: "ENOENT",
+      },
+    );
   });
 
   it("ignores OPENCLAW_HOME for mkdir operations", async () => {
@@ -136,10 +154,12 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     vi.stubEnv("OPENCLAW_HOME", openclawHome);
 
     createHostWorkspaceWriteTool(openclawHome, { workspaceOnly: false });
-    await mocks.writeOps!.mkdir(toTildePath(newDir));
+    await readWriteOps().mkdir(toTildePath(newDir));
 
     expect((await fs.stat(newDir)).isDirectory()).toBe(true);
-    await expect(fs.access(path.join(openclawHome, path.basename(newDir)))).rejects.toBeDefined();
+    await expect(fs.access(path.join(openclawHome, path.basename(newDir)))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("ignores OPENCLAW_HOME for readFile operations", async () => {
@@ -150,10 +170,14 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     vi.stubEnv("OPENCLAW_HOME", openclawHome);
 
     createHostWorkspaceEditTool(openclawHome, { workspaceOnly: false });
-    const content = await mocks.editOps!.readFile(toTildePath(testFile));
+    const content = await readEditOps().readFile(toTildePath(testFile));
 
     expect(content.toString("utf8")).toBe("OS home content");
-    await expect(fs.access(path.join(openclawHome, path.basename(testFile)))).rejects.toBeDefined();
+    await expect(fs.access(path.join(openclawHome, path.basename(testFile)))).rejects.toMatchObject(
+      {
+        code: "ENOENT",
+      },
+    );
   });
 
   it("ignores OPENCLAW_HOME for access operations", async () => {
@@ -165,7 +189,11 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
 
     createHostWorkspaceEditTool(openclawHome, { workspaceOnly: false });
 
-    await expect(mocks.editOps!.access(toTildePath(testFile))).resolves.toBeUndefined();
-    await expect(fs.access(path.join(openclawHome, path.basename(testFile)))).rejects.toBeDefined();
+    await expect(readEditOps().access(toTildePath(testFile))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(openclawHome, path.basename(testFile)))).rejects.toMatchObject(
+      {
+        code: "ENOENT",
+      },
+    );
   });
 });

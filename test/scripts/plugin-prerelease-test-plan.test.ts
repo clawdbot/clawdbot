@@ -22,6 +22,14 @@ function readPluginPrereleaseWorkflow() {
   return parse(readFileSync(".github/workflows/plugin-prerelease.yml", "utf8"));
 }
 
+function getDockerLane(name: string) {
+  const lane = findLaneByName(name);
+  if (!lane) {
+    throw new Error(`Missing Docker E2E lane ${name}`);
+  }
+  return lane;
+}
+
 describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
   it("covers every pre-release plugin skill surface in the plugin prerelease plan", () => {
     const plan = assertPluginPrereleaseTestPlanComplete();
@@ -55,7 +63,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ]);
 
     for (const lane of plan.dockerLanes) {
-      expect(findLaneByName(lane), lane).toBeTruthy();
+      expect(getDockerLane(lane).name).toBe(lane);
     }
   });
 
@@ -63,7 +71,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const plan = createPluginPrereleaseTestPlan();
 
     expect(plan.dockerLanes).not.toContain("openai-web-search-minimal");
-    expect(plan.dockerLanes.some((lane) => lane.startsWith("live-"))).toBe(false);
+    expect(plan.dockerLanes.filter((lane) => lane.startsWith("live-"))).toEqual([]);
     expect(plan.staticChecks).toContainEqual({
       check: "live-ish-availability",
       checkName: "checks-plugin-prerelease-live-ish-availability",
@@ -83,7 +91,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
   });
 
   it("uses kitchen-sink npm and ClawHub scenarios as the registry install canary", () => {
-    const lane = findLaneByName("kitchen-sink-plugin");
+    const lane = getDockerLane("kitchen-sink-plugin");
     const script = readFileSync("scripts/e2e/kitchen-sink-plugin-docker.sh", "utf8");
     const sweepScript = readFileSync("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh", "utf8");
     const assertionsScript = readFileSync(
@@ -153,7 +161,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
   });
 
   it("keeps the generic plugin Docker lane as an external install contract canary", () => {
-    const lane = findLaneByName("plugins");
+    const lane = getDockerLane("plugins");
     const sweepScript = readFileSync("scripts/e2e/lib/plugins/sweep.sh", "utf8");
     const clawhubScript = readFileSync("scripts/e2e/lib/plugins/clawhub.sh", "utf8");
     const assertionsScript = readFileSync("scripts/e2e/lib/plugins/assertions.mjs", "utf8");

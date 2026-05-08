@@ -1,4 +1,4 @@
-import { modelSelectionRequiresCodexRuntime } from "../agents/openai-codex-routing.js";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { AgentModelListConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -17,9 +17,10 @@ export function applyAgentDefaultPrimaryModel(params: {
   model: string;
   legacyModels?: Set<string>;
 }): { next: OpenClawConfig; changed: boolean } {
+  const model = normalizeAgentModelRefForConfig(params.model);
   const current = resolvePrimaryModel(params.cfg.agents?.defaults?.model)?.trim();
-  const normalizedCurrent = current && params.legacyModels?.has(current) ? params.model : current;
-  if (normalizedCurrent === params.model) {
+  const normalizedCurrent = current && params.legacyModels?.has(current) ? model : current;
+  if (normalizedCurrent === model) {
     return { next: params.cfg, changed: false };
   }
 
@@ -35,9 +36,9 @@ export function applyAgentDefaultPrimaryModel(params: {
             typeof params.cfg.agents.defaults.model === "object"
               ? {
                   ...params.cfg.agents.defaults.model,
-                  primary: params.model,
+                  primary: model,
                 }
-              : { primary: params.model },
+              : { primary: model },
         },
       },
     },
@@ -46,13 +47,15 @@ export function applyAgentDefaultPrimaryModel(params: {
 }
 
 export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
+  const normalizedModel = normalizeAgentModelRefForConfig(model);
   const defaults = cfg.agents?.defaults;
   const existingModel = defaults?.model;
   const existingModels = defaults?.models;
-  const shouldUseCodexRuntime = modelSelectionRequiresCodexRuntime({ model, config: cfg });
   const fallbacks =
     typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
-      ? (existingModel as { fallbacks?: string[] }).fallbacks
+      ? (existingModel as { fallbacks?: string[] }).fallbacks?.map((fallback) =>
+          normalizeAgentModelRefForConfig(fallback),
+        )
       : undefined;
   return {
     ...cfg,
@@ -62,12 +65,11 @@ export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawC
         ...defaults,
         model: {
           ...(fallbacks ? { fallbacks } : undefined),
-          primary: model,
+          primary: normalizedModel,
         },
-        ...(shouldUseCodexRuntime ? { agentRuntime: { id: "codex" } } : undefined),
         models: {
           ...existingModels,
-          [model]: existingModels?.[model] ?? {},
+          [normalizedModel]: existingModels?.[normalizedModel] ?? {},
         },
       },
     },

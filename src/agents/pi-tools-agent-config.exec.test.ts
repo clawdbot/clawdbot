@@ -34,6 +34,14 @@ function createExecHostDefaultsConfig(
   };
 }
 
+function requireExecTool(tools: ReturnType<typeof createOpenClawCodingTools>) {
+  const execTool = tools.find((tool) => tool.name === "exec");
+  if (!execTool) {
+    throw new Error("expected exec tool");
+  }
+  return execTool;
+}
+
 describe("Agent-specific exec tool defaults", () => {
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
@@ -57,10 +65,9 @@ describe("Agent-specific exec tool defaults", () => {
       workspaceDir: "/tmp/test-main",
       agentDir: "/tmp/agent-main",
     });
-    const execTool = tools.find((tool) => tool.name === "exec");
-    expect(execTool).toBeDefined();
+    const execTool = requireExecTool(tools);
 
-    const result = await execTool?.execute("call1", {
+    const result = await execTool.execute("call1", {
       command: "echo done",
       yieldMs: 10,
     });
@@ -83,10 +90,9 @@ describe("Agent-specific exec tool defaults", () => {
       workspaceDir: "/tmp/test-main-implicit-gateway",
       agentDir: "/tmp/agent-main-implicit-gateway",
     });
-    const execTool = tools.find((tool) => tool.name === "exec");
-    expect(execTool).toBeDefined();
+    const execTool = requireExecTool(tools);
 
-    const result = await execTool!.execute("call-implicit-auto-default", {
+    const result = await execTool.execute("call-implicit-auto-default", {
       command: "echo done",
     });
     const resultDetails = result?.details as { status?: string } | undefined;
@@ -100,10 +106,9 @@ describe("Agent-specific exec tool defaults", () => {
       workspaceDir: "/tmp/test-main-fail-closed",
       agentDir: "/tmp/agent-main-fail-closed",
     });
-    const execTool = tools.find((tool) => tool.name === "exec");
-    expect(execTool).toBeDefined();
+    const execTool = requireExecTool(tools);
     await expect(
-      execTool!.execute("call-fail-closed", {
+      execTool.execute("call-fail-closed", {
         command: "echo done",
         host: "sandbox",
       }),
@@ -122,16 +127,15 @@ describe("Agent-specific exec tool defaults", () => {
       workspaceDir: "/tmp/test-main-exec-defaults",
       agentDir: "/tmp/agent-main-exec-defaults",
     });
-    const mainExecTool = mainTools.find((tool) => tool.name === "exec");
-    expect(mainExecTool).toBeDefined();
-    const mainResult = await mainExecTool!.execute("call-main-default", {
+    const mainExecTool = requireExecTool(mainTools);
+    const mainResult = await mainExecTool.execute("call-main-default", {
       command: "echo done",
       yieldMs: 1000,
     });
     const mainDetails = mainResult?.details as { status?: string } | undefined;
     expect(mainDetails?.status).toBe("completed");
     await expect(
-      mainExecTool!.execute("call-main", {
+      mainExecTool.execute("call-main", {
         command: "echo done",
         host: "sandbox",
       }),
@@ -143,16 +147,15 @@ describe("Agent-specific exec tool defaults", () => {
       workspaceDir: "/tmp/test-helper-exec-defaults",
       agentDir: "/tmp/agent-helper-exec-defaults",
     });
-    const helperExecTool = helperTools.find((tool) => tool.name === "exec");
-    expect(helperExecTool).toBeDefined();
-    const helperResult = await helperExecTool!.execute("call-helper-default", {
+    const helperExecTool = requireExecTool(helperTools);
+    const helperResult = await helperExecTool.execute("call-helper-default", {
       command: "echo done",
       yieldMs: 1000,
     });
     const helperDetails = helperResult?.details as { status?: string } | undefined;
     expect(helperDetails?.status).toBe("completed");
     await expect(
-      helperExecTool!.execute("call-helper", {
+      helperExecTool.execute("call-helper", {
         command: "echo done",
         host: "sandbox",
         yieldMs: 1000,
@@ -170,9 +173,8 @@ describe("Agent-specific exec tool defaults", () => {
       workspaceDir: "/tmp/test-main-opaque-session",
       agentDir: "/tmp/agent-main-opaque-session",
     });
-    const execTool = tools.find((tool) => tool.name === "exec");
-    expect(execTool).toBeDefined();
-    const result = await execTool!.execute("call-main-opaque-session", {
+    const execTool = requireExecTool(tools);
+    const result = await execTool.execute("call-main-opaque-session", {
       command: "echo done",
       yieldMs: 1000,
     });

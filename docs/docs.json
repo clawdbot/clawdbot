@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/channels/bluebubbles",
+      "destination": "/channels/imessage-from-bluebubbles"
+    },
+    {
       "source": "/install/migrating-matrix",
       "destination": "/channels/matrix-migration"
     },
@@ -389,16 +393,16 @@
       "destination": "/channels/pairing"
     },
     {
-      "source": "/clawhub",
-      "destination": "/tools/clawhub"
+      "source": "/clawdhub",
+      "destination": "/clawhub"
     },
     {
-      "source": "/clawdhub",
-      "destination": "/tools/clawhub"
+      "source": "/tools/clawhub",
+      "destination": "/clawhub"
     },
     {
       "source": "/tools/clawdhub",
-      "destination": "/tools/clawhub"
+      "destination": "/clawhub"
     },
     {
       "source": "/configuration",
@@ -1059,7 +1063,7 @@
                   "channels/msteams",
                   "channels/googlechat",
                   "channels/imessage",
-                  "channels/bluebubbles",
+                  "channels/imessage-from-bluebubbles",
                   "channels/matrix",
                   "channels/matrix-migration",
                   "channels/matrix-push-rules"
@@ -1239,7 +1243,6 @@
                   "tools/creating-skills",
                   "tools/skills-config",
                   "tools/slash-commands",
-                  "tools/clawhub",
                   "prose"
                 ]
               },
@@ -1318,6 +1321,36 @@
                   "tools/acp-agents",
                   "tools/acp-agents-setup",
                   "tools/multi-agent-sandbox-tools"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "ClawHub",
+            "groups": [
+              {
+                "group": "Overview",
+                "pages": ["clawhub/index", "clawhub/quickstart", "clawhub/how-it-works"]
+              },
+              {
+                "group": "Using ClawHub",
+                "pages": [
+                  "clawhub/cli",
+                  "clawhub/publishing",
+                  "clawhub/skill-format",
+                  "clawhub/soul-format",
+                  "clawhub/auth",
+                  "clawhub/telemetry",
+                  "clawhub/troubleshooting"
+                ]
+              },
+              {
+                "group": "API and trust",
+                "pages": [
+                  "clawhub/api",
+                  "clawhub/http-api",
+                  "clawhub/security",
+                  "clawhub/acceptable-usage"
                 ]
               }
             ]

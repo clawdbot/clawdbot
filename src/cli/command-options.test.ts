@@ -38,7 +38,7 @@ describe("inheritOptionFromParent", () => {
     expect(getInherited()).toBe(expected);
   });
 
-  it("does not inherit when the child option was set explicitly", async () => {
+  it("does not inherit when the child option was set explicitly", () => {
     const program = new Command().option("--token <token>", "Root token");
     const gateway = program.command("gateway").option("--token <token>", "Gateway token");
     const run = gateway.command("run").option("--token <token>", "Run token");

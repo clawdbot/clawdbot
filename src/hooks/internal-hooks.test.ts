@@ -144,9 +144,9 @@ describe("hooks", () => {
       expect(successHandler).toHaveBeenCalled();
     });
 
-    it("should not throw if no handlers are registered", async () => {
+    it("resolves when no handlers are registered", async () => {
       const event = createInternalHookEvent("command", "new", "test-session");
-      await expect(triggerInternalHook(event)).resolves.not.toThrow();
+      await expect(triggerInternalHook(event)).resolves.toBeUndefined();
     });
 
     it("skips hook execution when internal hooks are disabled", async () => {

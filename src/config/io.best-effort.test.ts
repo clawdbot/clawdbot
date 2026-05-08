@@ -24,7 +24,7 @@ describe("readBestEffortConfig", () => {
       expect(snapshot.sourceConfig).toEqual({ update: { channel: "beta" } });
       expect(await fs.readFile(configPath, "utf-8")).toBe(directEditRaw);
       const entries = await fs.readdir(`${home}/.openclaw`);
-      expect(entries.some((entry) => entry.startsWith("openclaw.json.clobbered."))).toBe(false);
+      expect(entries.filter((entry) => entry.startsWith("openclaw.json.clobbered."))).toEqual([]);
     });
   });
 

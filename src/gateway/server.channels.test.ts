@@ -121,7 +121,9 @@ describe("gateway server channels", () => {
     expect(res.ok).toBe(true);
     const telegram = res.payload?.channels?.telegram;
     const signal = res.payload?.channels?.signal;
-    expect(res.payload?.channels?.whatsapp).toBeTruthy();
+    expect(res.payload?.channels?.whatsapp).toMatchObject({
+      configured: expect.any(Boolean),
+    });
     expect(telegram?.configured).toBe(false);
     expect(telegram?.tokenSource).toBe("none");
     expect(telegram?.probe).toBeUndefined();

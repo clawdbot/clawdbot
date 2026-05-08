@@ -109,8 +109,8 @@ export function installGroupRequireMentionTestPlugins() {
         source: "test",
       },
       {
-        pluginId: "bluebubbles",
-        plugin: createChannelTestPluginBase({ id: "bluebubbles" }),
+        pluginId: "imessage",
+        plugin: createChannelTestPluginBase({ id: "imessage" }),
         source: "test",
       },
     ]),

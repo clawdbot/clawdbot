@@ -28,8 +28,10 @@ describe("usage-helpers", () => {
   it("warns on unknown keys and invalid numbers", () => {
     const session = { key: "a", usage: { totalTokens: 10, totalCost: 0 } };
     const res = filterSessionsByQuery([session], "wat:1 minTokens:wat");
-    expect(res.warnings.some((w) => w.includes("Unknown filter"))).toBe(true);
-    expect(res.warnings.some((w) => w.includes("Invalid number"))).toBe(true);
+    expect(res.warnings).toEqual([
+      expect.stringContaining("Unknown filter"),
+      expect.stringContaining("Invalid number"),
+    ]);
   });
 
   it("parses tool summaries from compact session logs", () => {

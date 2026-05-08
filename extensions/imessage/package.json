@@ -2,7 +2,7 @@
   "name": "@openclaw/imessage",
   "version": "2026.5.6",
   "private": true,
-  "description": "OpenClaw iMessage channel plugin",
+  "description": "OpenClaw iMessage channel plugin using imsg on a signed-in Mac",
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -19,7 +19,7 @@
       "detailLabel": "iMessage",
       "docsPath": "/channels/imessage",
       "docsLabel": "imessage",
-      "blurb": "this is still a work in progress.",
+      "blurb": "Local iMessage/SMS through the imsg bridge, including private API message actions when enabled.",
       "aliases": [
         "imsg"
       ],
@@ -38,6 +38,37 @@
           "description": "iMessage region (for SMS)"
         }
       ]
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.3"
+    },
+    "build": {
+      "openclawVersion": "2026.5.3"
+    }
+  },
+  "pluginInspector": {
+    "version": 1,
+    "plugin": {
+      "id": "imessage",
+      "priority": "high",
+      "seams": [
+        "channel-plugin",
+        "message-actions",
+        "conversation-bindings",
+        "outbound-media"
+      ],
+      "sourceRoot": "src",
+      "expect": {
+        "registrations": [
+          "createChatChannelPlugin"
+        ],
+        "manifestContracts": [
+          "channels"
+        ]
+      }
+    },
+    "capture": {
+      "mockSdk": true
     }
   }
 }

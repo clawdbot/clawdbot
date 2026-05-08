@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 import { getNostrRuntime } from "./runtime.js";
 
 const STORE_VERSION = 2;

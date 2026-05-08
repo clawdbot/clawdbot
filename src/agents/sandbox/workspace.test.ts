@@ -45,9 +45,9 @@ describe("ensureSandboxWorkspace", () => {
 
     await ensureSandboxWorkspace(sandbox, seed, true);
 
-    await expect(
-      fs.readFile(path.join(sandbox, DEFAULT_AGENTS_FILENAME), "utf-8"),
-    ).rejects.toBeDefined();
+    await expect(fs.readFile(path.join(sandbox, DEFAULT_AGENTS_FILENAME), "utf-8")).rejects.toThrow(
+      "no such file",
+    );
   });
 
   it.runIf(process.platform !== "win32")("skips hardlinked bootstrap seed files", async () => {
@@ -69,8 +69,8 @@ describe("ensureSandboxWorkspace", () => {
 
     await ensureSandboxWorkspace(sandbox, seed, true);
 
-    await expect(
-      fs.readFile(path.join(sandbox, DEFAULT_AGENTS_FILENAME), "utf-8"),
-    ).rejects.toBeDefined();
+    await expect(fs.readFile(path.join(sandbox, DEFAULT_AGENTS_FILENAME), "utf-8")).rejects.toThrow(
+      "no such file",
+    );
   });
 });

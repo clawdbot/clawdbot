@@ -138,6 +138,6 @@ describe("ensureAuthStoreFile (direct-import coverage attribution)", () => {
     ensureAuthStoreFile(target);
     const raw = await fs.readFile(target, "utf8");
     const parsed = JSON.parse(raw) as { profiles: Record<string, unknown> };
-    expect(parsed.profiles.canary).toBeDefined();
+    expect(parsed.profiles.canary).toEqual({ type: "api_key", provider: "x", key: "k" });
   });
 });

@@ -69,6 +69,11 @@ export function parseIMessageNotification(raw: unknown): IMessagePayload | null 
     !isOptionalString(message.reply_to_text) ||
     !isOptionalString(message.reply_to_sender) ||
     !isOptionalString(message.created_at) ||
+    !isOptionalBoolean(message.is_reaction) ||
+    !isOptionalString(message.reaction_type) ||
+    !isOptionalString(message.reaction_emoji) ||
+    !isOptionalBoolean(message.is_reaction_add) ||
+    !isOptionalString(message.reacted_to_guid) ||
     !isOptionalAttachments(message.attachments) ||
     !isOptionalString(message.chat_identifier) ||
     !isOptionalString(message.chat_guid) ||

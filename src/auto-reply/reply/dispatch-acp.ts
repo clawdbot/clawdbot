@@ -519,7 +519,7 @@ export async function tryDispatchAcpReply(params: {
         cfg: params.cfg,
         sessionKey: canonicalSessionKey,
         promptText,
-        finalText: delivery.getAccumulatedBlockText(),
+        finalText: delivery.getAccumulatedFinalText() || delivery.getAccumulatedBlockText(),
         meta: acpResolution.meta,
         threadId: params.ctx.MessageThreadId,
       });

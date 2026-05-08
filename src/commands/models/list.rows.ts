@@ -76,15 +76,19 @@ async function buildRow(params: {
   allowProviderAvailabilityFallback?: boolean;
 }): Promise<ModelRow> {
   const configured = params.context.configuredByKey.get(params.key);
+  const allowProviderAvailabilityFallback =
+    params.allowProviderAvailabilityFallback === true ||
+    (configured !== undefined &&
+      params.context.authIndex.allowsProviderAuthAvailabilityFallback(params.model.provider));
   const shouldResolveProviderAuth =
-    params.context.availableKeys === undefined || params.allowProviderAvailabilityFallback === true;
+    params.context.availableKeys === undefined || allowProviderAvailabilityFallback;
   return toModelRow({
     model: params.model,
     key: params.key,
     tags: configured ? Array.from(configured.tags) : [],
     aliases: configured?.aliases ?? [],
     availableKeys: params.context.availableKeys,
-    allowProviderAvailabilityFallback: params.allowProviderAvailabilityFallback ?? false,
+    allowProviderAvailabilityFallback,
     hasAuthForProvider: shouldResolveProviderAuth
       ? (provider) => params.context.authIndex.hasProviderAuth(provider)
       : undefined,
@@ -455,10 +459,12 @@ export async function appendConfiguredRows(params: {
     if (model && shouldSuppressListModel({ model, context: params.context })) {
       continue;
     }
-    const shouldResolveProviderAuth =
+    const allowProviderAvailabilityFallback =
       model &&
-      (params.context.availableKeys === undefined ||
-        !params.context.discoveredKeys.has(modelKey(model.provider, model.id)));
+      (!params.context.discoveredKeys.has(modelKey(model.provider, model.id)) ||
+        params.context.authIndex.allowsProviderAuthAvailabilityFallback(model.provider));
+    const shouldResolveProviderAuth =
+      model && (params.context.availableKeys === undefined || allowProviderAvailabilityFallback);
     params.rows.push(
       toModelRow({
         model,
@@ -466,9 +472,7 @@ export async function appendConfiguredRows(params: {
         tags: Array.from(entry.tags),
         aliases: entry.aliases,
         availableKeys: params.context.availableKeys,
-        allowProviderAvailabilityFallback: model
-          ? !params.context.discoveredKeys.has(modelKey(model.provider, model.id))
-          : false,
+        allowProviderAvailabilityFallback: allowProviderAvailabilityFallback === true,
         hasAuthForProvider: shouldResolveProviderAuth
           ? (provider) => params.context.authIndex.hasProviderAuth(provider)
           : undefined,

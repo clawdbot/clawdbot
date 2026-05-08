@@ -689,7 +689,7 @@ describe("message tool schema scoping", () => {
       const properties = getToolProperties(tool);
       const actionEnum = getActionEnum(properties);
 
-      expect(properties.presentation).toBeDefined();
+      expect(properties).toHaveProperty("presentation");
       expect(properties.components).toBeUndefined();
       expect(properties.blocks).toBeUndefined();
       expect(properties.buttons).toBeUndefined();
@@ -697,17 +697,17 @@ describe("message tool schema scoping", () => {
         expect(actionEnum).toContain(action);
       }
       if (expectTelegramPollExtras) {
-        expect(properties.pollDurationSeconds).toBeDefined();
-        expect(properties.pollAnonymous).toBeDefined();
-        expect(properties.pollPublic).toBeDefined();
+        expect(properties).toHaveProperty("pollDurationSeconds");
+        expect(properties).toHaveProperty("pollAnonymous");
+        expect(properties).toHaveProperty("pollPublic");
       } else {
         expect(properties.pollDurationSeconds).toBeUndefined();
         expect(properties.pollAnonymous).toBeUndefined();
         expect(properties.pollPublic).toBeUndefined();
       }
-      expect(properties.pollId).toBeDefined();
-      expect(properties.pollOptionIndex).toBeDefined();
-      expect(properties.pollOptionId).toBeDefined();
+      expect(properties).toHaveProperty("pollId");
+      expect(properties).toHaveProperty("pollOptionIndex");
+      expect(properties).toHaveProperty("pollOptionId");
     },
   );
 
@@ -806,7 +806,7 @@ describe("message tool schema scoping", () => {
       currentChannelProvider: "telegram",
     });
 
-    expect(getToolProperties(scopedTool).presentation).toBeDefined();
+    expect(getToolProperties(scopedTool)).toHaveProperty("presentation");
     expect(getToolProperties(unscopedTool).presentation).toBeUndefined();
   });
 
@@ -1001,11 +1001,11 @@ describe("message tool description", () => {
     setActivePluginRegistry(createTestRegistry([]));
   });
 
-  const bluebubblesPlugin = createChannelPlugin({
-    id: "bluebubbles",
-    label: "BlueBubbles",
-    docsPath: "/channels/bluebubbles",
-    blurb: "BlueBubbles test plugin.",
+  const imessagePlugin = createChannelPlugin({
+    id: "imessage",
+    label: "iMessage",
+    docsPath: "/channels/imessage",
+    blurb: "iMessage test plugin.",
     describeMessageTool: ({ currentChannelId }) => {
       const all: ChannelMessageActionName[] = [
         "react",
@@ -1031,7 +1031,7 @@ describe("message tool description", () => {
     },
     messaging: {
       normalizeTarget: (raw) => {
-        const trimmed = raw.trim().replace(/^bluebubbles:/i, "");
+        const trimmed = raw.trim().replace(/^imessage:/i, "");
         const lower = trimmed.toLowerCase();
         if (lower.startsWith("chat_guid:")) {
           const guid = trimmed.slice("chat_guid:".length);
@@ -1059,15 +1059,15 @@ describe("message tool description", () => {
     expect(target?.description).toContain("Telegram chat id/@username");
   });
 
-  it("hides BlueBubbles group actions for DM targets", () => {
+  it("hides iMessage group actions for DM targets", () => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
+      createTestRegistry([{ pluginId: "imessage", source: "test", plugin: imessagePlugin }]),
     );
 
     const tool = createMessageTool({
       config: {} as never,
-      currentChannelProvider: "bluebubbles",
-      currentChannelId: "bluebubbles:chat_guid:iMessage;-;+15551234567",
+      currentChannelProvider: "imessage",
+      currentChannelId: "imessage:chat_guid:iMessage;-;+15551234567",
     });
 
     expect(tool.description).not.toContain("renameGroup");
@@ -1160,8 +1160,8 @@ describe("message tool description", () => {
     const currentChannelProperties = getToolProperties(currentChannelTool);
 
     expect(getActionEnum(currentChannelProperties)).toContain("set-profile");
-    expect(currentChannelProperties.displayName).toBeDefined();
-    expect(currentChannelProperties.avatarUrl).toBeDefined();
+    expect(currentChannelProperties).toHaveProperty("displayName");
+    expect(currentChannelProperties).toHaveProperty("avatarUrl");
   });
 
   it("normalizes channel aliases before building the current channel description", () => {
@@ -1189,12 +1189,12 @@ describe("message tool description", () => {
 
   it("keeps the current-channel description stable when only one channel is configured", () => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
+      createTestRegistry([{ pluginId: "imessage", source: "test", plugin: imessagePlugin }]),
     );
 
     const tool = createMessageTool({
       config: {} as never,
-      currentChannelProvider: "bluebubbles",
+      currentChannelProvider: "imessage",
     });
 
     expect(tool.description).toContain("Supports actions:");

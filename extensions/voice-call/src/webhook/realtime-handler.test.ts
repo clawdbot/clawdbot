@@ -1206,10 +1206,16 @@ describe("RealtimeCallHandler websocket hardening", () => {
           }),
         );
         await vi.waitFor(() => {
-          expect(sendProviderAudio).toBeDefined();
+          if (!sendProviderAudio) {
+            throw new Error("expected realtime provider audio sender");
+          }
         });
 
-        sendProviderAudio?.(Buffer.alloc(8_000 * 121, 0x7f));
+        const providerAudioSender = sendProviderAudio;
+        if (!providerAudioSender) {
+          throw new Error("expected realtime provider audio sender");
+        }
+        providerAudioSender(Buffer.alloc(8_000 * 121, 0x7f));
         const closed = await waitForClose(ws);
 
         expect(closed.code).toBe(1013);

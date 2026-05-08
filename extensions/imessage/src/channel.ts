@@ -15,6 +15,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
+import { imessageMessageActions } from "./actions.js";
 import {
   chunkTextForOutbound,
   collectStatusIssuesFromLastError,
@@ -300,6 +301,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         },
       },
       message: imessageMessageAdapter,
+      actions: imessageMessageActions,
     },
     pairing: {
       text: {

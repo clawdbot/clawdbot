@@ -23,7 +23,6 @@ const BUNDLED_EXTENSION_IDS = [...bundledPluginRoots.keys()].toSorted(
   (left, right) => right.length - left.length,
 );
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
-  "bluebubbles",
   "discord",
   "feishu",
   "googlechat",
@@ -196,7 +195,6 @@ const CHANNEL_CONFIG_SCHEMA_GUARDS: GuardedSource[] = [
 
 const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "acpx",
-  "bluebubbles",
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",

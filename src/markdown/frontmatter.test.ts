@@ -30,9 +30,9 @@ metadata:
 ---
 `;
     const result = parseFrontmatterBlock(content);
-    expect(result.metadata).toBeDefined();
+    expect(result.metadata).toBe('{"openclaw":{"emoji":"disk","events":["command:new"]}}');
 
-    const parsed = JSON5.parse(result.metadata ?? "");
+    const parsed = JSON5.parse(result.metadata);
     expect(parsed.openclaw?.emoji).toBe("disk");
   });
 

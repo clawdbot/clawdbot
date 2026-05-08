@@ -83,13 +83,9 @@
       ]
     },
     "serviceTier": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/ServiceTier"
-        },
-        {
-          "type": "null"
-        }
+      "type": [
+        "string",
+        "null"
       ]
     },
     "thread": {
@@ -1273,13 +1269,6 @@
         }
       ]
     },
-    "ServiceTier": {
-      "type": "string",
-      "enum": [
-        "fast",
-        "flex"
-      ]
-    },
     "SessionSource": {
       "oneOf": [
         {
@@ -1429,6 +1418,7 @@
         "id",
         "modelProvider",
         "preview",
+        "sessionId",
         "source",
         "status",
         "turns",
@@ -1511,6 +1501,10 @@
         },
         "preview": {
           "description": "Usually the first user message in the thread, if available.",
+          "type": "string"
+        },
+        "sessionId": {
+          "description": "Session id shared by threads that belong to the same session tree.",
           "type": "string"
         },
         "source": {

@@ -3,6 +3,7 @@ import {
   deliverWithFinalizableLivePreviewAdapter,
 } from "openclaw/plugin-sdk/channel-message";
 import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-streaming";
+import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
@@ -146,10 +147,6 @@ type MattermostReaction = {
 };
 const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
-
-function isLoopbackHost(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-}
 
 function normalizeInteractionSourceIps(values?: string[]): string[] {
   return (values ?? [])

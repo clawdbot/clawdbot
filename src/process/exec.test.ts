@@ -100,7 +100,7 @@ describe("runCommandWithTimeout", () => {
     ).toBe(false);
   });
 
-  it("merges custom env with base env and drops undefined values", async () => {
+  it("merges custom env with base env and drops undefined values", () => {
     const resolved = resolveCommandEnv({
       argv: ["node", "script.js"],
       baseEnv: {
@@ -118,7 +118,7 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
   });
 
-  it("suppresses npm fund prompts for npm argv", async () => {
+  it("suppresses npm fund prompts for npm argv", () => {
     const resolved = resolveCommandEnv({
       argv: ["npm", "--version"],
       baseEnv: {},
@@ -204,13 +204,10 @@ describe("runCommandWithTimeout", () => {
     { timeout: 5_000 },
     async () => {
       await loadExecModules();
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", "process.exit(0)"],
-        {
-          timeoutMs: 3_000,
-          input: "this input will EPIPE because the child ignores stdin\n",
-        },
-      );
+      const result = await runCommandWithTimeout([process.execPath, "-e", "process.exit(0)"], {
+        timeoutMs: 3_000,
+        input: "this input will EPIPE because the child ignores stdin\n",
+      });
       expect(result.code).toBe(0);
     },
   );

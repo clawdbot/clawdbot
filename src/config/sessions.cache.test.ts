@@ -326,7 +326,7 @@ describe("Session Store Cache", () => {
     expect(loaded).toEqual({});
   });
 
-  it("should handle invalid JSON gracefully", async () => {
+  it("should handle invalid JSON gracefully", () => {
     // Write invalid JSON
     fs.writeFileSync(storePath, "not valid json {");
 
@@ -365,7 +365,8 @@ describe("Session Store Cache", () => {
 
     // The cache should detect the size change and reload from disk
     const loaded2 = loadSessionStore(storePath);
-    expect(loaded2["session:2"]).toBeDefined();
-    expect(loaded2["session:2"].displayName).toBe("Added");
+    expect(loaded2).toMatchObject({
+      "session:2": { displayName: "Added" },
+    });
   });
 });

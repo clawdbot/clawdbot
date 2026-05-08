@@ -4,9 +4,10 @@ import path from "node:path";
 import { GoogleGenAI, Modality } from "@google/genai";
 import { chromium, type Browser } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
+import { buildOpenAIRealtimeVoiceProvider } from "../../extensions/openai/realtime-voice-provider.ts";
 
 const OPENAI_REALTIME_MODEL =
-  process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-1.5";
+  process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2";
 const OPENAI_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_OPENAI_VOICE?.trim() || "alloy";
 const GOOGLE_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_GOOGLE_MODEL?.trim() ||
@@ -79,6 +80,45 @@ async function createOpenAIClientSecret(apiKey: string): Promise<string> {
     throw new Error("OpenAI Realtime client secret response did not include a value");
   }
   return secret;
+}
+
+async function smokeOpenAIBackendBridge(apiKey: string): Promise<SmokeResult> {
+  const provider = buildOpenAIRealtimeVoiceProvider();
+  const events: string[] = [];
+  const bridge = provider.createBridge({
+    providerConfig: {
+      apiKey,
+      model: OPENAI_REALTIME_MODEL,
+      voice: OPENAI_REALTIME_VOICE,
+    },
+    instructions: "OpenClaw backend realtime live smoke. Do not speak yet.",
+    onAudio: () => {},
+    onClearAudio: () => {},
+    onEvent: (event) => {
+      events.push(`${event.direction}:${event.type}`);
+    },
+  });
+
+  try {
+    await bridge.connect();
+    return {
+      name: "openai-backend-bridge",
+      ok: bridge.isConnected(),
+      details: {
+        model: OPENAI_REALTIME_MODEL,
+        connected: bridge.isConnected(),
+        events: events.slice(0, 10),
+      },
+    };
+  } catch (error) {
+    return {
+      name: "openai-backend-bridge",
+      ok: false,
+      details: { model: OPENAI_REALTIME_MODEL, error: shortError(error) },
+    };
+  } finally {
+    bridge.close();
+  }
 }
 
 async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<SmokeResult> {
@@ -331,7 +371,7 @@ const client = {
   },
   async request(method, params) {
     requests.push({ method, params });
-    if (method === "chat.send") {
+    if (method === "talk.client.toolCall") {
       const runId = params.idempotencyKey || "run-smoke";
       window.setTimeout(() => {
         emit({ event: "chat", payload: { runId, state: "final", message: { text: "relay consult ok" } } });
@@ -365,26 +405,26 @@ try {
     },
   );
   await transport.start();
-  emit({ event: "talk.realtime.relay", payload: { relaySessionId: "relay-live-smoke", type: "ready" } });
+  emit({ event: "talk.event", payload: { relaySessionId: "relay-live-smoke", type: "ready" } });
   emit({
-    event: "talk.realtime.relay",
+    event: "talk.event",
     payload: { relaySessionId: "relay-live-smoke", type: "transcript", role: "user", text: "relay user", final: true },
   });
   emit({
-    event: "talk.realtime.relay",
+    event: "talk.event",
     payload: { relaySessionId: "relay-live-smoke", type: "transcript", role: "assistant", text: "relay assistant", final: false },
   });
   emit({
-    event: "talk.realtime.relay",
+    event: "talk.event",
     payload: { relaySessionId: "relay-live-smoke", type: "audio", audioBase64: base64ZeroPcm(480) },
   });
   const processor = transport.inputProcessor;
   processor?.onaudioprocess?.({
     inputBuffer: { getChannelData: () => new Float32Array(160).fill(0.01) },
   });
-  emit({ event: "talk.realtime.relay", payload: { relaySessionId: "relay-live-smoke", type: "mark" } });
+  emit({ event: "talk.event", payload: { relaySessionId: "relay-live-smoke", type: "mark" } });
   emit({
-    event: "talk.realtime.relay",
+    event: "talk.event",
     payload: {
       relaySessionId: "relay-live-smoke",
       type: "toolCall",
@@ -436,10 +476,10 @@ try {
     const statusNames = new Set((result.statuses ?? []).map((entry) => entry.status));
     const transcriptTexts = new Set((result.transcripts ?? []).map((entry) => entry.text));
     const expectedMethods = [
-      "talk.realtime.relayAudio",
-      "talk.realtime.relayMark",
-      "talk.realtime.relayToolResult",
-      "talk.realtime.relayStop",
+      "talk.session.appendAudio",
+      "talk.client.toolCall",
+      "talk.session.submitToolResult",
+      "talk.session.close",
     ];
     const ok =
       expectedMethods.every((method) => methods.has(method)) &&
@@ -484,11 +524,17 @@ async function main(): Promise<void> {
   try {
     if (!openAIKey) {
       results.push({
+        name: "openai-backend-bridge",
+        ok: false,
+        details: { error: "OPENAI_API_KEY missing" },
+      });
+      results.push({
         name: "openai-webrtc-browser",
         ok: false,
         details: { error: "OPENAI_API_KEY missing" },
       });
     } else {
+      results.push(await smokeOpenAIBackendBridge(openAIKey));
       results.push(await smokeOpenAIWebRtc(browser, openAIKey));
     }
     if (!googleKey) {

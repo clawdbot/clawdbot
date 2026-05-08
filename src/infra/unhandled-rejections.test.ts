@@ -277,7 +277,7 @@ describe("isTransientFileWatchError", () => {
     expect(isTransientFileWatchError(error)).toBe(true);
   });
 
-  it("returns false for ENOSPC without watch indicator (general disk full)", () => {
+  it("returns false for ENOSPC without watch indicator in file-watch classifier", () => {
     const error = Object.assign(new Error("write failed: no space left on device"), {
       code: "ENOSPC",
     });
@@ -397,7 +397,7 @@ describe("isTransientUnhandledRejectionError", () => {
     expect(isTransientUnhandledRejectionError(error)).toBe(true);
   });
 
-  it("returns false for ENOSPC without watch indicator (general disk full)", () => {
+  it("returns false for ENOSPC without watch indicator in unhandled-rejection classifier", () => {
     const error = Object.assign(new Error("write failed: no space left on device"), {
       code: "ENOSPC",
     });

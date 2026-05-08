@@ -13,6 +13,7 @@ import {
   buildModelAliasIndex,
   type ModelAliasIndex,
   modelKey,
+  normalizeModelRef,
   normalizeProviderId,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
@@ -20,6 +21,7 @@ import {
 import { loadStaticManifestCatalogRowsForList } from "../commands/models/list.manifest-catalog.js";
 import { formatTokenK } from "../commands/models/shared.js";
 import {
+  normalizeAgentModelRefForConfig,
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
@@ -121,7 +123,7 @@ function normalizeModelKeys(values: string[]): string[] {
   const seen = new Set<string>();
   const next: string[] = [];
   for (const raw of values) {
-    const value = raw.trim();
+    const value = normalizeAgentModelRefForConfig(raw);
     if (!value || seen.has(value)) {
       continue;
     }
@@ -231,11 +233,12 @@ function addModelSelectOption(params: {
   hasAuth: (provider: string) => boolean;
   literalPrefixProviders: Set<string>;
 }) {
-  const key = modelKey(params.entry.provider, params.entry.id);
+  const normalizedRef = normalizeModelRef(params.entry.provider, params.entry.id);
+  const key = modelKey(normalizedRef.provider, normalizedRef.model);
   if (
     params.seen.has(key) ||
     HIDDEN_ROUTER_MODELS.has(key) ||
-    !isModelPickerVisibleProvider(params.entry.provider)
+    !isModelPickerVisibleProvider(normalizedRef.provider)
   ) {
     return;
   }
@@ -253,15 +256,15 @@ function addModelSelectOption(params: {
   if (aliases?.length) {
     hints.push(`alias: ${aliases.join(", ")}`);
   }
-  const routeHint = resolveModelRouteHint(params.entry.provider);
+  const routeHint = resolveModelRouteHint(normalizedRef.provider);
   if (routeHint) {
     hints.push(routeHint);
   }
-  if (!params.hasAuth(params.entry.provider)) {
+  if (!params.hasAuth(normalizedRef.provider)) {
     return;
   }
-  const label = params.literalPrefixProviders.has(normalizeProviderId(params.entry.provider))
-    ? `${params.entry.provider}/${params.entry.id}`
+  const label = params.literalPrefixProviders.has(normalizeProviderId(normalizedRef.provider))
+    ? formatLiteralProviderPrefixedModelRef(normalizedRef.provider, key)
     : key;
   params.options.push({
     value: key,
@@ -368,7 +371,7 @@ async function promptManualModel(params: {
   if (!model) {
     return {};
   }
-  return { model };
+  return { model: normalizeAgentModelRefForConfig(model) };
 }
 
 function buildModelProviderFilterOptions(
@@ -850,7 +853,7 @@ export async function promptDefaultModel(
     return providerPluginResult;
   }
 
-  const model = selectedValue;
+  const model = normalizeAgentModelRefForConfig(selectedValue);
   const { runProviderModelSelectedHook } = await loadResolvedModelPickerRuntime();
   await runProviderModelSelectedHook({
     config: cfg,
@@ -1224,6 +1227,8 @@ export function applyModelFallbacksFromSelection(
       : existingModel && typeof existingModel === "object"
         ? existingModel.primary
         : undefined;
+  const normalizedExistingPrimary =
+    existingPrimary != null ? normalizeAgentModelRefForConfig(existingPrimary) : undefined;
   const preservedModelFields =
     existingModel && typeof existingModel === "object"
       ? (({ fallbacks: _oldFallbacks, ...rest }) => rest)(existingModel)
@@ -1258,7 +1263,7 @@ export function applyModelFallbacksFromSelection(
   });
   const nextModel = {
     ...preservedModelFields,
-    ...(existingPrimary != null ? { primary: existingPrimary } : {}),
+    ...(normalizedExistingPrimary != null ? { primary: normalizedExistingPrimary } : {}),
     ...(fallbacks.length > 0 ? { fallbacks } : {}),
   };
   if (Object.keys(nextModel).length === 0) {

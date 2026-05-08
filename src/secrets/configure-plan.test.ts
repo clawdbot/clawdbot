@@ -208,7 +208,9 @@ describe("secrets configure plan helpers", () => {
     });
     expect(plan.targets).toHaveLength(1);
     expect(plan.targets[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
-    expect(plan.providerUpserts).toBeDefined();
+    expect(plan.providerUpserts).toEqual({
+      default: { source: "env" },
+    });
     expect(plan.options).toEqual({
       scrubEnv: true,
       scrubAuthProfilesForProviderTargets: true,

@@ -7,7 +7,6 @@ import {
   resolveCommandsLightIncludePattern,
 } from "../test/vitest/vitest.commands-light-paths.mjs";
 import { isAcpxExtensionRoot } from "../test/vitest/vitest.extension-acpx-paths.mjs";
-import { isBlueBubblesExtensionRoot } from "../test/vitest/vitest.extension-bluebubbles-paths.mjs";
 import { isBrowserExtensionRoot } from "../test/vitest/vitest.extension-browser-paths.mjs";
 import { resolveSplitChannelExtensionShard } from "../test/vitest/vitest.extension-channel-split-paths.mjs";
 import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
@@ -72,7 +71,6 @@ const CRON_VITEST_CONFIG = "test/vitest/vitest.cron.config.ts";
 const DAEMON_VITEST_CONFIG = "test/vitest/vitest.daemon.config.ts";
 const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
 const EXTENSION_ACPX_VITEST_CONFIG = "test/vitest/vitest.extension-acpx.config.ts";
-const EXTENSION_BLUEBUBBLES_VITEST_CONFIG = "test/vitest/vitest.extension-bluebubbles.config.ts";
 const EXTENSION_BROWSER_VITEST_CONFIG = "test/vitest/vitest.extension-browser.config.ts";
 const EXTENSION_CHANNELS_VITEST_CONFIG = "test/vitest/vitest.extension-channels.config.ts";
 const EXTENSION_DIFFS_VITEST_CONFIG = "test/vitest/vitest.extension-diffs.config.ts";
@@ -170,7 +168,6 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [UNIT_SECURITY_VITEST_CONFIG, 30],
   [UNIT_SUPPORT_VITEST_CONFIG, 28],
   [EXTENSION_ZALO_VITEST_CONFIG, 24],
-  [EXTENSION_BLUEBUBBLES_VITEST_CONFIG, 22],
   [EXTENSION_IRC_VITEST_CONFIG, 20],
   [EXTENSION_FEISHU_VITEST_CONFIG, 18],
   [EXTENSION_MATTERMOST_VITEST_CONFIG, 16],
@@ -252,7 +249,6 @@ const VITEST_CONFIG_BY_KIND = {
   extension: EXTENSIONS_VITEST_CONFIG,
   extensionFull: FULL_EXTENSIONS_VITEST_CONFIG,
   extensionAcpx: EXTENSION_ACPX_VITEST_CONFIG,
-  extensionBlueBubbles: EXTENSION_BLUEBUBBLES_VITEST_CONFIG,
   extensionBrowser: EXTENSION_BROWSER_VITEST_CONFIG,
   extensionChannel: EXTENSION_CHANNELS_VITEST_CONFIG,
   extensionDiffs: EXTENSION_DIFFS_VITEST_CONFIG,
@@ -376,8 +372,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/testbox-sync-sanity.mjs", ["test/scripts/testbox-sync-sanity.test.ts"]],
   ["scripts/bundled-plugin-assets.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/bundle-a2ui.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
-  ["extensions/canvas/scripts/bundle-a2ui.mjs", ["test/scripts/bundle-a2ui.test.ts"]],
-  ["extensions/canvas/scripts/copy-a2ui.mjs", ["src/scripts/canvas-a2ui-copy.test.ts"]],
+  ["extensions/canvas/scripts/bundle-a2ui.mjs", ["extensions/canvas/scripts/bundle-a2ui.test.ts"]],
+  ["extensions/canvas/scripts/copy-a2ui.mjs", ["extensions/canvas/scripts/copy-a2ui.test.ts"]],
 ]);
 const TOOLING_TEST_TARGETS = new Map([
   ["test/scripts/barnacle-auto-response.test.ts", ["test/scripts/barnacle-auto-response.test.ts"]],
@@ -1090,9 +1086,6 @@ function classifyTarget(arg, cwd) {
     if (isDiffsExtensionRoot(extensionRoot)) {
       return "extensionDiffs";
     }
-    if (isBlueBubblesExtensionRoot(extensionRoot)) {
-      return "extensionBlueBubbles";
-    }
     if (isBrowserExtensionRoot(extensionRoot)) {
       return "extensionBrowser";
     }
@@ -1398,7 +1391,6 @@ export function buildVitestRunPlans(
     "e2e",
     "extensionAcpx",
     "extensionDiffs",
-    "extensionBlueBubbles",
     "extensionBrowser",
     "extensionDiscord",
     "extensionFeishu",

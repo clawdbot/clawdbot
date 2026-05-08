@@ -19,6 +19,35 @@ import {
 } from "./monitor/utils.js";
 import { normalizeShip } from "./targets.js";
 
+const allowlistShipMatchingCases = [
+  { label: "DM allowlist", isAllowed: isDmAllowed },
+  { label: "group invite allowlist", isAllowed: isGroupInviteAllowed },
+] satisfies Array<{
+  label: string;
+  isAllowed: (ship: string, allowlist: string[] | undefined) => boolean;
+}>;
+
+describe("Security: allowlist ship matching", () => {
+  it.each(allowlistShipMatchingCases)(
+    "$label normalizes ship names with and without ~ prefix",
+    ({ isAllowed }) => {
+      const allowlist = ["~zod"];
+      expect(isAllowed("zod", allowlist)).toBe(true);
+      expect(isAllowed("~zod", allowlist)).toBe(true);
+
+      const allowlistWithoutTilde = ["zod"];
+      expect(isAllowed("~zod", allowlistWithoutTilde)).toBe(true);
+      expect(isAllowed("zod", allowlistWithoutTilde)).toBe(true);
+    },
+  );
+
+  it.each(allowlistShipMatchingCases)("$label rejects partial ship matches", ({ isAllowed }) => {
+    const allowlist = ["~zod"];
+    expect(isAllowed("~zod-extra", allowlist)).toBe(false);
+    expect(isAllowed("~extra-zod", allowlist)).toBe(false);
+  });
+});
+
 describe("Security: DM Allowlist", () => {
   describe("isDmAllowed", () => {
     it("rejects DMs when allowlist is empty", () => {
@@ -41,16 +70,6 @@ describe("Security: DM Allowlist", () => {
       expect(isDmAllowed("~nec", allowlist)).toBe(false);
       expect(isDmAllowed("~sampel-palnet", allowlist)).toBe(false);
       expect(isDmAllowed("~random-ship", allowlist)).toBe(false);
-    });
-
-    it("normalizes ship names (with/without ~ prefix)", () => {
-      const allowlist = ["~zod"];
-      expect(isDmAllowed("zod", allowlist)).toBe(true);
-      expect(isDmAllowed("~zod", allowlist)).toBe(true);
-
-      const allowlistWithoutTilde = ["zod"];
-      expect(isDmAllowed("~zod", allowlistWithoutTilde)).toBe(true);
-      expect(isDmAllowed("zod", allowlistWithoutTilde)).toBe(true);
     });
 
     it("handles galaxy, star, planet, and moon names", () => {
@@ -80,12 +99,6 @@ describe("Security: DM Allowlist", () => {
       expect(isDmAllowed("~zod", allowlist)).toBe(true);
       // Different case would NOT match with current implementation
       expect(isDmAllowed("~Zod", ["~Zod"])).toBe(true); // exact match works
-    });
-
-    it("does not allow partial matches", () => {
-      const allowlist = ["~zod"];
-      expect(isDmAllowed("~zod-extra", allowlist)).toBe(false);
-      expect(isDmAllowed("~extra-zod", allowlist)).toBe(false);
     });
 
     it("handles whitespace in ship names (normalized)", () => {
@@ -123,21 +136,6 @@ describe("Security: Group Invite Allowlist", () => {
       expect(isGroupInviteAllowed("~random-attacker", allowlist)).toBe(false);
       expect(isGroupInviteAllowed("~malicious-ship", allowlist)).toBe(false);
       expect(isGroupInviteAllowed("~zod", allowlist)).toBe(false);
-    });
-
-    it("normalizes ship names (with/without ~ prefix)", () => {
-      const allowlist = ["~nocsyx-lassul"];
-      expect(isGroupInviteAllowed("nocsyx-lassul", allowlist)).toBe(true);
-      expect(isGroupInviteAllowed("~nocsyx-lassul", allowlist)).toBe(true);
-
-      const allowlistWithoutTilde = ["nocsyx-lassul"];
-      expect(isGroupInviteAllowed("~nocsyx-lassul", allowlistWithoutTilde)).toBe(true);
-    });
-
-    it("does not allow partial matches", () => {
-      const allowlist = ["~zod"];
-      expect(isGroupInviteAllowed("~zod-moon", allowlist)).toBe(false);
-      expect(isGroupInviteAllowed("~pinser-botter-zod", allowlist)).toBe(false);
     });
 
     it("handles whitespace in allowlist entries", () => {

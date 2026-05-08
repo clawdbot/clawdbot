@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -52,6 +53,7 @@ type DefineBundledChannelEntryOptions<TPlugin = ChannelPlugin> = {
   description: string;
   importMetaUrl: string;
   plugin: BundledEntryModuleRef;
+  outbound?: BundledEntryModuleRef;
   secrets?: BundledEntryModuleRef;
   configSchema?: ChannelEntryConfigSchema<TPlugin> | (() => ChannelEntryConfigSchema<TPlugin>);
   runtime?: BundledEntryModuleRef;
@@ -108,6 +110,9 @@ export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   features?: BundledChannelEntryFeatures;
   register: (api: OpenClawPluginApi) => void;
   loadChannelPlugin: (options?: BundledEntryModuleLoadOptions) => TPlugin;
+  loadChannelOutbound?: (
+    options?: BundledEntryModuleLoadOptions,
+  ) => ChannelOutboundAdapter | undefined;
   loadChannelSecrets?: (
     options?: BundledEntryModuleLoadOptions,
   ) => ChannelPlugin["secrets"] | undefined;
@@ -435,6 +440,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   description,
   importMetaUrl,
   plugin,
+  outbound,
   secrets,
   configSchema,
   runtime,
@@ -449,6 +455,14 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
       : ((configSchema ?? emptyChannelConfigSchema()) as ChannelEntryConfigSchema<TPlugin>);
   const loadChannelPlugin = (options?: BundledEntryModuleLoadOptions) =>
     loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin, options);
+  const loadChannelOutbound = outbound
+    ? (options?: BundledEntryModuleLoadOptions) =>
+        loadBundledEntryExportSync<ChannelOutboundAdapter | undefined>(
+          importMetaUrl,
+          outbound,
+          options,
+        )
+    : undefined;
   const loadChannelSecrets = secrets
     ? (options?: BundledEntryModuleLoadOptions) =>
         loadBundledEntryExportSync<ChannelPlugin["secrets"] | undefined>(
@@ -511,6 +525,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
       profile("bundled-register:registerFull", () => registerFull?.(api));
     },
     loadChannelPlugin,
+    ...(loadChannelOutbound ? { loadChannelOutbound } : {}),
     ...(loadChannelSecrets ? { loadChannelSecrets } : {}),
     ...(loadChannelAccountInspector ? { loadChannelAccountInspector } : {}),
     ...(setChannelRuntime ? { setChannelRuntime } : {}),

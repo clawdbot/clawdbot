@@ -235,7 +235,8 @@ describe("secrets audit", () => {
 
     const report = await runSecretsAudit({ env: fixture.env });
     expect(hasFinding(report, (entry) => entry.code === "LEGACY_RESIDUE")).toBe(true);
-    await expect(fs.stat(fixture.authJsonPath)).resolves.toBeTruthy();
+    const authJsonStat = await fs.stat(fixture.authJsonPath);
+    expect(authJsonStat.isFile()).toBe(true);
     await expect(fs.stat(fixture.authStorePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 

@@ -65,6 +65,43 @@ const FORCED_EXDEV_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
   "        raise OSError(errno.EXDEV, 'forced EXDEV for test')\n        os.rename(src_basename, dst_basename, src_dir_fd=src_parent_fd, dst_dir_fd=dst_parent_fd)",
 );
 
+const FORCED_EXDEV_WITH_LATE_SOURCE_WRITE_MUTATION_PYTHON = FORCED_EXDEV_MUTATION_PYTHON.replace(
+  "        remove_copied_entry(src_parent_fd, src_basename, ('dir', entry_identity(src_stat), copied_children))",
+  [
+    "        late_parent_fd = open_dir(src_basename, dir_fd=src_parent_fd)",
+    "        late_fd = None",
+    "        try:",
+    "            late_fd = os.open('late.txt', WRITE_FLAGS, 0o600, dir_fd=late_parent_fd)",
+    "            os.write(late_fd, b'late')",
+    "        finally:",
+    "            if late_fd is not None:",
+    "                os.close(late_fd)",
+    "            os.close(late_parent_fd)",
+    "        remove_copied_entry(src_parent_fd, src_basename, ('dir', entry_identity(src_stat), copied_children))",
+  ].join("\n"),
+);
+
+const FORCED_EXDEV_WITH_SOURCE_REPLACEMENT_MUTATION_PYTHON = FORCED_EXDEV_MUTATION_PYTHON.replace(
+  "        remove_copied_entry(src_parent_fd, src_basename, ('dir', entry_identity(src_stat), copied_children))",
+  [
+    "        replacement_parent_fd = open_dir(src_basename, dir_fd=src_parent_fd)",
+    "        replacement_dir_fd = None",
+    "        replacement_fd = None",
+    "        try:",
+    "            replacement_dir_fd = open_dir('nested', dir_fd=replacement_parent_fd)",
+    "            os.unlink('file.txt', dir_fd=replacement_dir_fd)",
+    "            replacement_fd = os.open('file.txt', WRITE_FLAGS, 0o600, dir_fd=replacement_dir_fd)",
+    "            os.write(replacement_fd, b'replacement')",
+    "        finally:",
+    "            if replacement_fd is not None:",
+    "                os.close(replacement_fd)",
+    "            if replacement_dir_fd is not None:",
+    "                os.close(replacement_dir_fd)",
+    "            os.close(replacement_parent_fd)",
+    "        remove_copied_entry(src_parent_fd, src_basename, ('dir', entry_identity(src_stat), copied_children))",
+  ].join("\n"),
+);
+
 describe("sandbox pinned mutation helper", () => {
   it("writes through a pinned directory fd", async () => {
     await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
@@ -270,7 +307,16 @@ describe("sandbox pinned mutation helper", () => {
         await fs.mkdir(destRoot, { recursive: true });
         await fs.writeFile(path.join(sourceRoot, "dir", "nested", "file.txt"), "payload", "utf8");
 
-        const result = runMutation(["rename", sourceRoot, "", "dir", destRoot, "", "moved", "1"]);
+        const result = runMutationWithSource(FORCED_EXDEV_MUTATION_PYTHON, [
+          "rename",
+          sourceRoot,
+          "",
+          "dir",
+          destRoot,
+          "",
+          "moved",
+          "1",
+        ]);
 
         expect(result.status).toBe(0);
         await expect(
@@ -311,6 +357,116 @@ describe("sandbox pinned mutation helper", () => {
         await expect(fs.readFile(path.join(outsideRoot, "secret.txt"), "utf8")).resolves.toBe(
           "classified",
         );
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps source intact and cleans temp directories when directory rename fallback fails",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+        const sourceRoot = path.join(root, "source");
+        const destRoot = path.join(root, "dest");
+        const outsideRoot = path.join(root, "outside");
+        await fs.mkdir(path.join(sourceRoot, "dir", "nested"), { recursive: true });
+        await fs.mkdir(destRoot, { recursive: true });
+        await fs.mkdir(outsideRoot, { recursive: true });
+        await fs.writeFile(path.join(sourceRoot, "dir", "nested", "file.txt"), "payload", "utf8");
+        await fs.writeFile(path.join(outsideRoot, "secret.txt"), "classified", "utf8");
+        await fs.link(
+          path.join(outsideRoot, "secret.txt"),
+          path.join(sourceRoot, "dir", "nested", "linked.txt"),
+        );
+
+        const result = runMutationWithSource(FORCED_EXDEV_MUTATION_PYTHON, [
+          "rename",
+          sourceRoot,
+          "",
+          "dir",
+          destRoot,
+          "",
+          "moved",
+          "1",
+        ]);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toMatch(/hardlinked file/i);
+        await expect(
+          fs.readFile(path.join(sourceRoot, "dir", "nested", "file.txt"), "utf8"),
+        ).resolves.toBe("payload");
+        await expect(
+          fs.readFile(path.join(sourceRoot, "dir", "nested", "linked.txt"), "utf8"),
+        ).resolves.toBe("classified");
+        await expect(fs.stat(path.join(destRoot, "moved"))).rejects.toThrow();
+        await expect(fs.readdir(destRoot)).resolves.toEqual([]);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves source entries created after the directory rename fallback copy phase",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+        const sourceRoot = path.join(root, "source");
+        const destRoot = path.join(root, "dest");
+        await fs.mkdir(path.join(sourceRoot, "dir", "nested"), { recursive: true });
+        await fs.mkdir(destRoot, { recursive: true });
+        await fs.writeFile(path.join(sourceRoot, "dir", "nested", "file.txt"), "payload", "utf8");
+
+        const result = runMutationWithSource(FORCED_EXDEV_WITH_LATE_SOURCE_WRITE_MUTATION_PYTHON, [
+          "rename",
+          sourceRoot,
+          "",
+          "dir",
+          destRoot,
+          "",
+          "moved",
+          "1",
+        ]);
+
+        expect(result.status).not.toBe(0);
+        await expect(
+          fs.readFile(path.join(destRoot, "moved", "nested", "file.txt"), "utf8"),
+        ).resolves.toBe("payload");
+        await expect(fs.readFile(path.join(sourceRoot, "dir", "late.txt"), "utf8")).resolves.toBe(
+          "late",
+        );
+        await expect(
+          fs.readFile(path.join(sourceRoot, "dir", "nested", "file.txt"), "utf8"),
+        ).resolves.toBe("payload");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves source entries replaced after the directory rename fallback copy phase",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+        const sourceRoot = path.join(root, "source");
+        const destRoot = path.join(root, "dest");
+        await fs.mkdir(path.join(sourceRoot, "dir", "nested"), { recursive: true });
+        await fs.mkdir(destRoot, { recursive: true });
+        await fs.writeFile(path.join(sourceRoot, "dir", "nested", "file.txt"), "payload", "utf8");
+
+        const result = runMutationWithSource(FORCED_EXDEV_WITH_SOURCE_REPLACEMENT_MUTATION_PYTHON, [
+          "rename",
+          sourceRoot,
+          "",
+          "dir",
+          destRoot,
+          "",
+          "moved",
+          "1",
+        ]);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toMatch(/source changed during move fallback cleanup/i);
+        await expect(
+          fs.readFile(path.join(destRoot, "moved", "nested", "file.txt"), "utf8"),
+        ).resolves.toBe("payload");
+        await expect(
+          fs.readFile(path.join(sourceRoot, "dir", "nested", "file.txt"), "utf8"),
+        ).resolves.toBe("replacement");
       });
     },
   );

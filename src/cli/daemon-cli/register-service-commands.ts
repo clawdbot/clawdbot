@@ -114,6 +114,11 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .command("stop")
     .description("Stop the Gateway service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
+    .option(
+      "--disable",
+      "Persistently suppress KeepAlive/RunAtLoad so the gateway does not respawn until next start (launchd only)",
+      false,
+    )
     .action(async (cmdOpts) => {
       const { runDaemonStop } = await loadDaemonLifecycleModule();
       await runDaemonStop(cmdOpts);

@@ -451,6 +451,64 @@ describe("handshake auth helpers", () => {
     ).toBe(false);
   });
 
+  it("skips backend self-pairing when auth mode is none (scoped, sharedAuthOk-independent)", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+    } as ConnectParams;
+    // auth:none on local backend skips regardless of sharedAuthOk
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "none",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "shared_secret_loopback_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "none",
+      }),
+    ).toBe(true);
+    // sharedAuthOk=false is fine for auth:none on local backend
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "none",
+      }),
+    ).toBe(true);
+    // Remote connections with auth:none should NOT skip
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "none",
+      }),
+    ).toBe(false);
+    // Browser origin with auth:none should NOT skip
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "direct_local",
+        hasBrowserOriginHeader: true,
+        sharedAuthOk: false,
+        authMethod: "none",
+      }),
+    ).toBe(false);
+  });
+
   it("classifies non-CLI loopback + shared-secret clients as shared_secret_loopback_local", () => {
     const connectParams = {
       client: {

@@ -709,6 +709,16 @@ export const pl: TranslationMap = {
       today: "Dzisiaj",
       last7d: "7d",
       last30d: "30d",
+      last90d: "90d",
+      last1y: "1y",
+      all: "Wszystkie",
+    },
+    scope: {
+      instance: "Bieżąca instancja",
+      instanceHint: "Pokaż tylko identyfikator aktywnej sesji dla każdej sesji logicznej.",
+      family: "Linia historyczna",
+      familyHint: "Agreguj znane rotowane identyfikatory sesji oparte na transkrypcjach.",
+      familyIncluded: "Linia historyczna obejmuje {count} instancji sesji.",
     },
     filters: {
       title: "Filtry",
@@ -933,6 +943,94 @@ export const pl: TranslationMap = {
     showPassword: "Pokaż hasło",
     hidePassword: "Ukryj hasło",
     togglePasswordVisibility: "Przełącz widoczność hasła",
+    failure: {
+      rawError: "Surowy błąd",
+      docsAuth: "Dokumentacja uwierzytelniania Control UI",
+      docsPairing: "Dokumentacja parowania urządzeń",
+      docsInsecure: "Dokumentacja niebezpiecznego HTTP",
+      authRequired: {
+        title: "Wymagane uwierzytelnienie",
+        summary:
+          "Gateway jest osiągalny, ale wymaga pasującego tokenu lub hasła, zanim ta przeglądarka będzie mogła się połączyć.",
+        stepPaste: "Wklej token z openclaw dashboard --no-open albo wpisz skonfigurowane hasło.",
+        stepGenerate:
+          "Jeśli token nie jest skonfigurowany, uruchom openclaw doctor --generate-gateway-token na hoście Gateway.",
+        stepConnect: "Kliknij ponownie Connect po zaktualizowaniu poświadczeń.",
+      },
+      authFailed: {
+        title: "Uwierzytelnienie nie pasuje",
+        summary:
+          "Podane poświadczenia zostały odrzucone. Najczęstsza przyczyna to nieaktualny token lub token skopiowany z innego URL Gateway.",
+        stepDashboard:
+          "Uruchom openclaw dashboard --no-open i otwórz świeży URL albo wklej jego token.",
+        stepReplace:
+          "Zastąp nieaktualne wartości tokenu/hasła; nie używaj ponownie tokenu z innego URL Gateway.",
+        stepMode:
+          "Używaj naraz jednego pasującego trybu auth: token gateway dla trybu tokenu, hasło dla trybu hasła.",
+      },
+      rateLimited: {
+        title: "Zbyt wiele nieudanych prób",
+        summary: "Gateway tymczasowo ogranicza próby uwierzytelniania dla tego klienta.",
+        stepStop: "Przestań na chwilę ponawiać próby z tej karty.",
+        stepWait:
+          "Poczekaj, aż limiter auth ostygnie, a potem połącz się ponownie z poprawionymi poświadczeniami.",
+        stepCheckClients:
+          "Jeśli to współdzielony host, sprawdź inne klienty pod kątem powtarzanych błędnych prób.",
+      },
+      pairing: {
+        title: "Wymagane parowanie urządzenia",
+        scopeTitle: "Oczekuje podniesienie scope",
+        roleTitle: "Oczekuje podniesienie roli",
+        metadataTitle: "Oczekuje odświeżenie urządzenia",
+        summary:
+          "Ta przeglądarka wymaga jednorazowej zgody z hosta Gateway, zanim będzie mogła używać Control UI.",
+        upgradeSummary:
+          "Ta przeglądarka jest już znana, ale żądany dostęp się zmienił i wymaga nowej zgody.",
+        stepList: "Uruchom openclaw devices list na hoście Gateway.",
+        stepApproveId: "Zatwierdź to żądanie: openclaw devices approve {requestId}.",
+        stepApprove: "Zatwierdź oczekujące żądanie przeglądarki/urządzenia z tej listy.",
+        stepReconnect: "Po zakończeniu zatwierdzania połącz się ponownie.",
+      },
+      insecure: {
+        title: "Wymagany bezpieczny kontekst przeglądarki",
+        summary:
+          "Ta strona działa przez zwykły HTTP, więc przeglądarka nie może utworzyć tożsamości urządzenia oczekiwanej przez Gateway.",
+        stepHttps:
+          "Użyj HTTPS/Tailscale Serve albo otwórz http://127.0.0.1:18789 na hoście Gateway.",
+        stepLocalCompat:
+          "Dla lokalnej zgodności tylko z tokenem ustaw gateway.controlUi.allowInsecureAuth: true.",
+        stepAvoidDisable: "Unikaj wyłączania auth urządzenia dla zdalnego dostępu HTTP.",
+      },
+      origin: {
+        title: "Origin przeglądarki niedozwolony",
+        summary: "Gateway odrzucił origin tej strony przed zaakceptowaniem połączenia Control UI.",
+        stepAllowedOrigins: "Dodaj ten origin przeglądarki do gateway.controlUi.allowedOrigins.",
+        stepFullOrigin:
+          "Używaj pełnych originów, takich jak http://localhost:5173, nie wzorców wildcard.",
+        stepRestart: "Po zmianie dozwolonych originów zrestartuj lub przeładuj Gateway.",
+      },
+      protocol: {
+        title: "Niezgodność protokołu",
+        summary:
+          "Udostępniana Control UI i działający Gateway nie zgadzają się co do obsługiwanego protokołu połączenia.",
+        stepDashboard:
+          "Otwórz ponownie udostępniany dashboard poleceniem openclaw dashboard, aby UI i Gateway pochodziły z tej samej instalacji.",
+        stepDevUi:
+          "Jeśli używasz pnpm ui:dev, przebuduj lub uruchom ponownie UI dev względem bieżącego checkoutu.",
+        stepRestart:
+          "Zrestartuj Gateway po aktualizacji OpenClaw, aby udostępniał bieżący protokół.",
+      },
+      network: {
+        title: "Nie udało się połączyć",
+        summary:
+          "Przeglądarka nie mogła dokończyć połączenia z Gateway. Sprawdź cel i transport przed ponowną próbą z poświadczeniami.",
+        stepGateway:
+          "Potwierdź, że Gateway działa, używając openclaw status lub openclaw gateway run.",
+        stepUrl: "Sprawdź URL WebSocket i użyj wss://, gdy Gateway jest za HTTPS/Tailscale Serve.",
+        stepDashboard:
+          "Otwórz ponownie dashboard przez openclaw dashboard --no-open, aby skopiować bieżący URL i szczegóły auth.",
+      },
+    },
   },
   chat: {
     disconnected: "Rozłączono z Gateway.",

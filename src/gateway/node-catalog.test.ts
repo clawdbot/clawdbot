@@ -289,4 +289,30 @@ describe("gateway/node-catalog", () => {
       }),
     );
   });
+
+  it("ignores malformed node capability entries instead of throwing", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [],
+      pairedNodes: [],
+      connectedNodes: [
+        {
+          nodeId: "bad-node",
+          connId: "conn-1",
+          client: {} as never,
+          displayName: "Bad Node",
+          caps: ["camera", undefined],
+          commands: ["system.run", null],
+          connectedAtMs: 1,
+        } as never,
+      ],
+    });
+
+    expect(listKnownNodes(catalog)).toEqual([
+      expect.objectContaining({
+        nodeId: "bad-node",
+        caps: ["camera"],
+        commands: ["system.run"],
+      }),
+    ]);
+  });
 });

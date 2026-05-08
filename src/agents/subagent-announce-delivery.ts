@@ -201,6 +201,9 @@ const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /gateway not connected/i,
   /gateway closed \(1006/i,
   /gateway timeout/i,
+  /\ball models failed\b/i,
+  /\ball profiles unavailable\b/i,
+  /\boverloaded\b/i,
   /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
 ];
 

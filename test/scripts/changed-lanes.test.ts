@@ -888,7 +888,7 @@ describe("scripts/changed-lanes", () => {
   it("does not route generated plugin bundle artifacts as direct Vitest targets", () => {
     const result = detectChangedLanes([
       "extensions/demo/src/host/assets/.bundle.hash",
-      "test/scripts/bundle-a2ui.test.ts",
+      "extensions/canvas/scripts/bundle-a2ui.test.ts",
     ]);
     const plan = createChangedCheckPlan(result);
 

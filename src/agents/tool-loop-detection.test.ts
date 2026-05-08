@@ -199,10 +199,16 @@ describe("tool-loop-detection", () => {
       expect(hash1).not.toBe(hash2);
     });
 
-    it("handles non-object params", () => {
-      expect(() => hashToolCall("tool", "string-param")).not.toThrow();
-      expect(() => hashToolCall("tool", 123)).not.toThrow();
-      expect(() => hashToolCall("tool", null)).not.toThrow();
+    it("hashes non-object params with the same digest shape", () => {
+      expect([
+        hashToolCall("tool", "string-param"),
+        hashToolCall("tool", 123),
+        hashToolCall("tool", null),
+      ]).toEqual([
+        expect.stringMatching(/^tool:[a-f0-9]{64}$/),
+        expect.stringMatching(/^tool:[a-f0-9]{64}$/),
+        expect.stringMatching(/^tool:[a-f0-9]{64}$/),
+      ]);
     });
 
     it("produces deterministic hashes regardless of key order", () => {

@@ -113,14 +113,25 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     );
   });
 
-  it("exposes only send methods backed by outbound handlers", () => {
+  it("exposes only send methods backed by outbound handlers", async () => {
     const adapter = createChannelMessageAdapterFromOutbound({
       outbound: {
         sendText: vi.fn(async () => ({ messageId: "msg-1" })),
       },
     });
 
-    expect(adapter.send?.text).toEqual(expect.any(Function));
+    const sendText = adapter.send?.text;
+    if (!sendText) {
+      throw new Error("expected text send adapter");
+    }
+
+    await expect(sendText({ cfg, to: "room-1", text: "hello" })).resolves.toEqual({
+      messageId: "msg-1",
+      receipt: expect.objectContaining({
+        primaryPlatformMessageId: "msg-1",
+        platformMessageIds: ["msg-1"],
+      }),
+    });
     expect(adapter.send?.media).toBeUndefined();
     expect(adapter.send?.payload).toBeUndefined();
   });

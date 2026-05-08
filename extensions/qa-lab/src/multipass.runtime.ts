@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { QaProviderMode } from "./model-selection.js";
@@ -112,10 +113,6 @@ function createOutputStamp() {
 
 function createVmSuffix() {
   return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function execFileAsync(file: string, args: string[], options: ExecFileOptions = {}) {

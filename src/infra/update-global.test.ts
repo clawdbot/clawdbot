@@ -668,8 +668,10 @@ describe("update global helpers", () => {
       ).resolves.toEqual({
         removed: [".openclaw-123", ".openclaw-456"],
       });
-      await expect(fs.stat(path.join(root, "openclaw"))).resolves.toBeDefined();
-      await expect(fs.stat(path.join(root, ".openclaw-file"))).resolves.toBeDefined();
+      const packageDirStat = await fs.stat(path.join(root, "openclaw"));
+      const markerFileStat = await fs.stat(path.join(root, ".openclaw-file"));
+      expect(packageDirStat.isDirectory()).toBe(true);
+      expect(markerFileStat.isFile()).toBe(true);
     });
   });
 

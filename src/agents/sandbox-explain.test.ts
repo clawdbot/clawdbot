@@ -107,7 +107,6 @@ describe("sandbox explain helpers", () => {
       sessionKey: "agent:main:mobilechat:group:g1",
       toolName: "browser",
     });
-    expect(msg).toBeTruthy();
     expect(msg).toContain('Tool "browser" blocked by sandbox tool policy');
     expect(msg).toContain("mode=non-main");
     expect(msg).toContain("tools.sandbox.tools.deny");

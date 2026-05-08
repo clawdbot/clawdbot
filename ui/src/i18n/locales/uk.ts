@@ -711,6 +711,16 @@ export const uk: TranslationMap = {
       today: "Сьогодні",
       last7d: "7 дн.",
       last30d: "30 дн.",
+      last90d: "90 д",
+      last1y: "1 р",
+      all: "Усі",
+    },
+    scope: {
+      instance: "Поточний екземпляр",
+      instanceHint: "Показувати лише ідентифікатор активного сеансу для кожного логічного сеансу.",
+      family: "Історична лінія",
+      familyHint: "Об’єднати відомі ротовані ідентифікатори сеансів на основі транскриптів.",
+      familyIncluded: "Історична лінія включає {count} екземплярів сеансу.",
     },
     filters: {
       title: "Фільтри",
@@ -931,6 +941,95 @@ export const uk: TranslationMap = {
     showPassword: "Показати пароль",
     hidePassword: "Приховати пароль",
     togglePasswordVisibility: "Перемкнути видимість пароля",
+    failure: {
+      rawError: "Сирий текст помилки",
+      docsAuth: "Документація автентифікації Control UI",
+      docsPairing: "Документація сполучення пристрою",
+      docsInsecure: "Документація небезпечного HTTP",
+      authRequired: {
+        title: "Потрібна автентифікація",
+        summary:
+          "Gateway доступний, але цьому браузеру потрібен відповідний токен або пароль перед підключенням.",
+        stepPaste: "Вставте токен з openclaw dashboard --no-open або введіть налаштований пароль.",
+        stepGenerate:
+          "Якщо токен не налаштовано, виконайте openclaw doctor --generate-gateway-token на хості Gateway.",
+        stepConnect: "Після оновлення облікових даних знову натисніть Connect.",
+      },
+      authFailed: {
+        title: "Автентифікація не збігається",
+        summary:
+          "Надані облікові дані відхилено. Найпоширеніша причина — застарілий токен або токен, скопійований з іншого Gateway URL.",
+        stepDashboard:
+          "Виконайте openclaw dashboard --no-open і відкрийте свіжий URL або вставте його токен.",
+        stepReplace:
+          "Замініть застарілі значення токена/пароля; не використовуйте повторно токен з іншого Gateway URL.",
+        stepMode:
+          "Використовуйте один відповідний режим auth за раз: gateway token для режиму token, пароль для режиму password.",
+      },
+      rateLimited: {
+        title: "Забагато невдалих спроб",
+        summary: "Gateway тимчасово обмежує спроби автентифікації для цього клієнта.",
+        stepStop: "На мить припиніть повторні спроби з цієї вкладки.",
+        stepWait:
+          "Зачекайте, доки auth-обмежувач охолоне, а потім підключіться з виправленими обліковими даними.",
+        stepCheckClients:
+          "Якщо це спільний хост, перевірте інші клієнти на повторювані помилкові спроби.",
+      },
+      pairing: {
+        title: "Потрібне сполучення пристрою",
+        scopeTitle: "Оновлення scope очікує",
+        roleTitle: "Оновлення ролі очікує",
+        metadataTitle: "Оновлення пристрою очікує",
+        summary:
+          "Цей браузер потребує одноразового схвалення від хоста Gateway перед використанням Control UI.",
+        upgradeSummary:
+          "Цей браузер уже відомий, але запитаний доступ змінився і потребує нового схвалення.",
+        stepList: "Виконайте openclaw devices list на хості Gateway.",
+        stepApproveId: "Схваліть цей запит: openclaw devices approve {requestId}.",
+        stepApprove: "Схваліть запит браузера/пристрою, що очікує, з цього списку.",
+        stepReconnect: "Підключіться знову після завершення схвалення.",
+      },
+      insecure: {
+        title: "Потрібен безпечний контекст браузера",
+        summary:
+          "Ця сторінка працює через звичайний HTTP, тому браузер не може створити ідентичність пристрою, яку очікує Gateway.",
+        stepHttps:
+          "Використовуйте HTTPS/Tailscale Serve або відкрийте http://127.0.0.1:18789 на хості Gateway.",
+        stepLocalCompat:
+          "Для локальної сумісності лише з токеном задайте gateway.controlUi.allowInsecureAuth: true.",
+        stepAvoidDisable: "Уникайте вимкнення auth пристрою для віддаленого HTTP-доступу.",
+      },
+      origin: {
+        title: "Origin браузера не дозволено",
+        summary: "Gateway відхилив origin цієї сторінки до прийняття з’єднання Control UI.",
+        stepAllowedOrigins: "Додайте цей origin браузера до gateway.controlUi.allowedOrigins.",
+        stepFullOrigin:
+          "Використовуйте повні origin, наприклад http://localhost:5173, а не wildcard-шаблони.",
+        stepRestart: "Перезапустіть або перезавантажте Gateway після зміни дозволених origin.",
+      },
+      protocol: {
+        title: "Невідповідність протоколу",
+        summary:
+          "Надана Control UI і запущений Gateway не узгоджуються щодо підтримуваного протоколу з’єднання.",
+        stepDashboard:
+          "Знову відкрийте наданий dashboard через openclaw dashboard, щоб UI і Gateway походили з однієї інсталяції.",
+        stepDevUi:
+          "Якщо використовуєте pnpm ui:dev, перебудуйте або перезапустіть dev UI з поточного checkout.",
+        stepRestart:
+          "Перезапустіть Gateway після оновлення OpenClaw, щоб він надавав поточний протокол.",
+      },
+      network: {
+        title: "Не вдалося підключитися",
+        summary:
+          "Браузер не зміг завершити з’єднання з Gateway. Перевірте ціль і транспорт перед повторною спробою з обліковими даними.",
+        stepGateway:
+          "Підтвердьте, що Gateway працює, через openclaw status або openclaw gateway run.",
+        stepUrl:
+          "Перевірте WebSocket URL і використовуйте wss://, коли Gateway знаходиться за HTTPS/Tailscale Serve.",
+        stepDashboard:
+          "Знову відкрийте dashboard через openclaw dashboard --no-open, щоб повторно скопіювати поточний URL і деталі auth.",
+      },
+    },
   },
   chat: {
     disconnected: "Відключено від шлюзу.",

@@ -48,7 +48,7 @@ describe("classifyControlUiRequest", () => {
       },
       {
         name: "falls through non-read requests",
-        pathname: "/bluebubbles-webhook",
+        pathname: "/imessage-webhook",
         method: "POST",
         expected: { kind: "not-control-ui" as const },
       },

@@ -1,5 +1,9 @@
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { formatSlackFileReference } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
 export { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
@@ -17,15 +21,6 @@ export {
   type SlackThreadMessage,
   type SlackThreadStarter,
 } from "./thread.js";
-
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
-function normalizeOptionalLowercaseString(value: unknown): string | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  return normalized || undefined;
-}
 
 function isSlackHostname(hostname: string): boolean {
   const normalized = normalizeHostname(hostname);

@@ -86,8 +86,10 @@ describe("doctor session transcript repair", () => {
       originalEntries: 6,
       activeEntries: 3,
     });
-    expect(result.backupPath).toBeTruthy();
-    await expect(fs.access(result.backupPath!)).resolves.toBeUndefined();
+    if (result.backupPath === undefined) {
+      throw new Error("expected transcript backup path");
+    }
+    await expect(fs.access(result.backupPath)).resolves.toBeUndefined();
     const lines = (await fs.readFile(filePath, "utf-8")).trim().split(/\r?\n/);
     expect(lines).toHaveLength(4);
     expect(

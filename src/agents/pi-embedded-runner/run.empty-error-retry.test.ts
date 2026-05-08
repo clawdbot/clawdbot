@@ -73,7 +73,7 @@ describe("runEmbeddedPiAgent silent-error retry", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(result.payloads?.[0]?.isError).toBeFalsy();
+    expect(result.payloads).toBeUndefined();
   });
 
   it("caps retries at MAX_EMPTY_ERROR_RETRIES and surfaces incomplete-turn error", async () => {
@@ -151,7 +151,7 @@ describe("runEmbeddedPiAgent silent-error retry", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(result.payloads?.[0]?.isError).toBeFalsy();
+    expect(result.payloads).toBeUndefined();
   });
 
   it("does not retry when the failed attempt recorded side effects", async () => {

@@ -4,6 +4,26 @@
     "target": "OpenClaw"
   },
   {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Coming from BlueBubbles",
+    "target": "Coming from BlueBubbles"
+  },
+  {
+    "source": "BlueBubbles",
+    "target": "BlueBubbles"
+  },
+  {
+    "source": "Pairing",
+    "target": "配对"
+  },
+  {
+    "source": "Channel Routing",
+    "target": "频道路由"
+  },
+  {
     "source": "ClawHub",
     "target": "ClawHub"
   },

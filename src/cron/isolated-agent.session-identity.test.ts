@@ -140,8 +140,8 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       const first = (await runPingTurn()).res;
       const second = (await runPingTurn()).res;
 
-      expect(first.sessionId).toBeDefined();
-      expect(second.sessionId).toBeDefined();
+      expect(first.sessionId).toEqual(expect.any(String));
+      expect(second.sessionId).toEqual(expect.any(String));
       expect(second.sessionId).not.toBe(first.sessionId);
       expect(first.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
       expect(second.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);

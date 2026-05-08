@@ -8,9 +8,11 @@ export {
   unwrapKnownDispatchWrapperInvocation,
 } from "./dispatch-wrapper-resolution.js";
 export {
+  extractBindableShellWrapperInlineCommand,
   extractShellWrapperCommand,
   extractShellWrapperInlineCommand,
   hasEnvManipulationBeforeShellWrapper,
+  isBlockedShellWrapperCommand,
   isShellWrapperExecutable,
   isShellWrapperInvocation,
   POSIX_SHELL_WRAPPERS,

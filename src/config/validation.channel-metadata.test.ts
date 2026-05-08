@@ -160,7 +160,7 @@ beforeEach(() => {
 });
 
 describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)", () => {
-  it("applies bundled channel defaults from plugin-owned schema metadata", async () => {
+  it("applies bundled channel defaults from plugin-owned schema metadata", () => {
     setupTelegramSchemaWithDefault();
 
     const result = validateConfigObjectWithPlugins({
@@ -179,10 +179,10 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
 });
 
 describe("validateConfigObjectRawWithPlugins channel metadata", () => {
-  it("still injects channel AJV defaults even in raw mode — persistence safety is handled by io.ts", async () => {
+  it("still injects channel AJV defaults even in raw mode — persistence safety is handled by io.ts", () => {
     // Channel and plugin AJV validation always runs with applyDefaults: true
     // (hardcoded) to avoid breaking schemas that mark defaulted fields as
-    // required (e.g., BlueBubbles enrichGroupParticipantsFromContacts).
+    // required.
     //
     // The actual protection against leaking these defaults to disk lives in
     // writeConfigFile (io.ts), which uses persistCandidate (the pre-validation
@@ -207,7 +207,7 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
 });
 
 describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
-  it("does not inject plugin AJV defaults in raw mode for plugin-owned config", async () => {
+  it("does not inject plugin AJV defaults in raw mode for plugin-owned config", () => {
     setupPluginSchemaWithRequiredDefault();
 
     const result = validateConfigObjectRawWithPlugins({

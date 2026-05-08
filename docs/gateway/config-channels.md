@@ -581,31 +581,13 @@ When Mattermost native commands are enabled:
 - `channels.signal.configWrites`: allow or deny Signal-initiated config writes.
 - Optional `channels.signal.defaultAccount` overrides default account selection when it matches a configured account id.
 
-### BlueBubbles
-
-BlueBubbles is the legacy iMessage bridge (plugin-backed, configured under `channels.bluebubbles`). Existing setups remain supported, but new OpenClaw iMessage deployments should prefer `channels.imessage` when `imsg` can run on the Messages host.
-
-```json5
-{
-  channels: {
-    bluebubbles: {
-      enabled: true,
-      dmPolicy: "pairing",
-      // serverUrl, password, webhookPath, group controls, and advanced actions:
-      // see /channels/bluebubbles
-    },
-  },
-}
-```
-
-- Core key paths covered here: `channels.bluebubbles`, `channels.bluebubbles.dmPolicy`.
-- Optional `channels.bluebubbles.defaultAccount` overrides default account selection when it matches a configured account id.
-- Top-level `bindings[]` entries with `type: "acp"` can bind BlueBubbles conversations to persistent ACP sessions. Use a BlueBubbles handle or target string (`chat_id:*`, `chat_guid:*`, `chat_identifier:*`) in `match.peer.id`. Shared field semantics: [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
-- Full BlueBubbles channel configuration and deprecation rationale are documented in [BlueBubbles](/channels/bluebubbles).
-
 ### iMessage
 
 OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required. This is the preferred path for new OpenClaw iMessage setups when the host can grant Messages database and Automation permissions.
+
+BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw supports iMessage through `imsg` only.
+
+If the Gateway is not running on the signed-in Messages Mac, keep `channels.imessage.enabled=true` and set `channels.imessage.cliPath` to an SSH wrapper that runs `imsg "$@"` on that Mac. The default local `imsg` path is macOS-only.
 
 ```json5
 {

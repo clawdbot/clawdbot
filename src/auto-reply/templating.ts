@@ -96,6 +96,24 @@ export type MsgContext = {
   ReplyToIdFull?: string;
   ReplyToBody?: string;
   ReplyToSender?: string;
+  ReplyChain?: Array<{
+    messageId?: string;
+    threadId?: string;
+    sender?: string;
+    senderId?: string;
+    senderUsername?: string;
+    timestamp?: number;
+    body?: string;
+    isQuote?: boolean;
+    mediaType?: string;
+    mediaPath?: string;
+    mediaRef?: string;
+    replyToId?: string;
+    forwardedFrom?: string;
+    forwardedFromId?: string;
+    forwardedFromUsername?: string;
+    forwardedDate?: number;
+  }>;
   ReplyToIsQuote?: boolean;
   /** Forward origin from the reply target (when reply_to_message is a forwarded message). */
   ReplyToForwardedFrom?: string;

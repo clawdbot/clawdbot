@@ -174,11 +174,14 @@ describe("docs-link-audit", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(invocation).toBeDefined();
-    expect(invocation?.command).toBe("pnpm");
-    expect(invocation?.args).toEqual(["dlx", "mint", "broken-links", "--check-anchors"]);
-    expect(invocation?.options.stdio).toBe("inherit");
-    expect(invocation?.options.cwd).toBe(anchorDocsDir);
+    expect(invocation).toEqual({
+      command: "pnpm",
+      args: ["dlx", "mint", "broken-links", "--check-anchors"],
+      options: expect.objectContaining({
+        stdio: "inherit",
+        cwd: anchorDocsDir,
+      }),
+    });
     expect(cleanedDir).toBe(anchorDocsDir);
   });
 

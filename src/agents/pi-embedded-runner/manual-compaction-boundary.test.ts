@@ -68,6 +68,13 @@ function messageText(message: AgentMessage): string {
     .join(" ");
 }
 
+function requireString(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 describe("hardenManualCompactionBoundary", () => {
   it("turns manual compaction into a true checkpoint for rebuilt context", async () => {
     const dir = await makeTmpDir();
@@ -75,21 +82,18 @@ describe("hardenManualCompactionBoundary", () => {
 
     session.appendMessage({ role: "user", content: "old question", timestamp: 1 });
     session.appendMessage(createAssistantTextMessage("very long old answer", 2));
-    const firstKeepId = session.getBranch().at(-1)?.id;
-    expect(firstKeepId).toBeTruthy();
-    session.appendCompaction("old summary", firstKeepId!, 100);
+    const firstKeepId = requireString(session.getBranch().at(-1)?.id, "first keep id");
+    session.appendCompaction("old summary", firstKeepId, 100);
 
     session.appendMessage({ role: "user", content: "new question", timestamp: 3 });
     session.appendMessage(
       createAssistantTextMessage("detailed new answer that should be summarized away", 4),
     );
-    const secondKeepId = session.getBranch().at(-1)?.id;
-    expect(secondKeepId).toBeTruthy();
-    const latestCompactionId = session.appendCompaction("fresh summary", secondKeepId!, 200);
-    const sessionFile = session.getSessionFile();
-    expect(sessionFile).toBeTruthy();
+    const secondKeepId = requireString(session.getBranch().at(-1)?.id, "second keep id");
+    const latestCompactionId = session.appendCompaction("fresh summary", secondKeepId, 200);
+    const sessionFile = requireString(session.getSessionFile(), "session file");
 
-    const before = SessionManager.open(sessionFile!);
+    const before = SessionManager.open(sessionFile);
     const beforeTexts = before
       .buildSessionContext()
       .messages.map((message) => messageText(message));
@@ -98,13 +102,13 @@ describe("hardenManualCompactionBoundary", () => {
     const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {
       throw new Error("SessionManager.open should not be used for boundary hardening");
     });
-    const hardened = await hardenManualCompactionBoundary({ sessionFile: sessionFile! });
+    const hardened = await hardenManualCompactionBoundary({ sessionFile });
     openSpy.mockRestore();
     expect(hardened.applied).toBe(true);
     expect(hardened.firstKeptEntryId).toBe(latestCompactionId);
     expect(hardened.messages.map((message) => message.role)).toEqual(["compactionSummary"]);
 
-    const reopened = SessionManager.open(sessionFile!);
+    const reopened = SessionManager.open(sessionFile);
     const latest = reopened.getLeafEntry();
     expect(latest?.type).toBe("compaction");
     if (!latest || latest.type !== "compaction") {
@@ -113,7 +117,7 @@ describe("hardenManualCompactionBoundary", () => {
     expect(latest.firstKeptEntryId).toBe(latestCompactionId);
 
     reopened.appendMessage({ role: "user", content: "what was happening?", timestamp: 5 });
-    const after = SessionManager.open(sessionFile!);
+    const after = SessionManager.open(sessionFile);
     const afterTexts = after.buildSessionContext().messages.map((message) => messageText(message));
     expect(after.buildSessionContext().messages.map((message) => message.role)).toEqual([
       "compactionSummary",
@@ -128,20 +132,18 @@ describe("hardenManualCompactionBoundary", () => {
 
     session.appendMessage({ role: "user", content: "old question", timestamp: 1 });
     session.appendMessage(createAssistantTextMessage("old answer", 2));
-    const keepId = session.getBranch().at(-1)?.id;
-    expect(keepId).toBeTruthy();
-    const latestCompactionId = session.appendCompaction("fresh summary", keepId!, 200);
-    const sessionFile = session.getSessionFile();
-    expect(sessionFile).toBeTruthy();
+    const keepId = requireString(session.getBranch().at(-1)?.id, "keep id");
+    const latestCompactionId = session.appendCompaction("fresh summary", keepId, 200);
+    const sessionFile = requireString(session.getSessionFile(), "session file");
 
     const hardened = await hardenManualCompactionBoundary({
-      sessionFile: sessionFile!,
+      sessionFile,
       preserveRecentTail: true,
     });
     expect(hardened.applied).toBe(false);
     expect(hardened.firstKeptEntryId).toBe(keepId);
 
-    const reopened = SessionManager.open(sessionFile!);
+    const reopened = SessionManager.open(sessionFile);
     const latest = reopened.getLeafEntry();
     expect(latest?.type).toBe("compaction");
     if (!latest || latest.type !== "compaction") {
@@ -155,15 +157,75 @@ describe("hardenManualCompactionBoundary", () => {
     ]);
   });
 
+  it("keeps the recent tail when manual compaction produced an empty summary", async () => {
+    const dir = await makeTmpDir();
+    const session = SessionManager.create(dir, dir);
+
+    session.appendMessage({ role: "user", content: "old question", timestamp: 1 });
+    session.appendMessage(createAssistantTextMessage("old answer", 2));
+    session.appendMessage({ role: "user", content: "fresh question", timestamp: 3 });
+    const keepId = requireString(session.getBranch().at(-1)?.id, "keep id");
+    session.appendMessage(createAssistantTextMessage("fresh answer", 4));
+    session.appendCompaction("", keepId, 200);
+    const sessionFile = requireString(session.getSessionFile(), "session file");
+
+    const hardened = await hardenManualCompactionBoundary({ sessionFile });
+    expect(hardened.applied).toBe(false);
+    expect(hardened.firstKeptEntryId).toBe(keepId);
+    expect(hardened.messages.map((message) => message.role)).toEqual([
+      "compactionSummary",
+      "user",
+      "assistant",
+    ]);
+    expect(hardened.messages.map((message) => messageText(message)).join("\n")).toContain(
+      "fresh question",
+    );
+
+    const reopened = SessionManager.open(sessionFile);
+    const latest = reopened.getLeafEntry();
+    expect(latest?.type).toBe("compaction");
+    if (!latest || latest.type !== "compaction") {
+      throw new Error("expected latest leaf to be a compaction entry");
+    }
+    expect(latest.firstKeptEntryId).toBe(keepId);
+  });
+
+  it("keeps the recent tail when manual compaction had no messages to summarize", async () => {
+    const dir = await makeTmpDir();
+    const session = SessionManager.create(dir, dir);
+
+    session.appendMessage({ role: "user", content: "fresh question", timestamp: 1 });
+    const keepId = requireString(session.getBranch().at(-1)?.id, "keep id");
+    session.appendMessage(createAssistantTextMessage("fresh answer", 2));
+    session.appendCompaction("No prior history.", keepId, 200);
+    const sessionFile = requireString(session.getSessionFile(), "session file");
+
+    const hardened = await hardenManualCompactionBoundary({ sessionFile });
+    expect(hardened.applied).toBe(false);
+    expect(hardened.firstKeptEntryId).toBe(keepId);
+    expect(hardened.messages.map((message) => message.role)).toEqual([
+      "compactionSummary",
+      "user",
+      "assistant",
+    ]);
+
+    const reopened = SessionManager.open(sessionFile);
+    const latest = reopened.getLeafEntry();
+    expect(latest?.type).toBe("compaction");
+    if (!latest || latest.type !== "compaction") {
+      throw new Error("expected latest leaf to be a compaction entry");
+    }
+    expect(latest.firstKeptEntryId).toBe(keepId);
+  });
+
   it("is a no-op when the latest leaf is not a compaction entry", async () => {
     const dir = await makeTmpDir();
     const session = SessionManager.create(dir, dir);
     session.appendMessage({ role: "user", content: "hello", timestamp: 1 });
     session.appendMessage(createAssistantTextMessage("hi", 2));
-    const sessionFile = session.getSessionFile();
-    expect(sessionFile).toBeTruthy();
+    const sessionFile = requireString(session.getSessionFile(), "session file");
 
-    const result = await hardenManualCompactionBoundary({ sessionFile: sessionFile! });
+    const result = await hardenManualCompactionBoundary({ sessionFile });
     expect(result.applied).toBe(false);
     expect(result.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
   });

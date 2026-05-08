@@ -375,7 +375,9 @@ function expectSingleNearLimitUpdate(params: {
   );
 }
 
-async function runNearLimitPayloadTest(mode: "single" | "random-chunked"): Promise<void> {
+async function runNearLimitPayloadTestAndExpectUpdate(
+  mode: "single" | "random-chunked",
+): Promise<void> {
   const seenUpdates: Array<{ update_id: number; message: { text: string } }> = [];
   handleUpdateSpy.mockImplementationOnce((update: unknown) => {
     seenUpdates.push(update as { update_id: number; message: { text: string } });
@@ -544,7 +546,9 @@ describe("startTelegramWebhook", () => {
         const certificate = setWebhookSpy.mock.calls[0]?.[1]?.certificate as
           | { path?: string; fileData?: string; filename?: string }
           | undefined;
-        expect(certificate).toBeDefined();
+        if (!certificate) {
+          throw new Error("expected Telegram webhook certificate payload");
+        }
         if (certificate && "path" in certificate && typeof certificate.path === "string") {
           expect(certificate.path).toBe("/path/to/cert.pem");
         } else {
@@ -967,11 +971,11 @@ describe("startTelegramWebhook", () => {
   });
 
   it("handles near-limit payload with random chunk writes and event-loop yields", async () => {
-    await runNearLimitPayloadTest("random-chunked");
+    await runNearLimitPayloadTestAndExpectUpdate("random-chunked");
   });
 
   it("handles near-limit payload written in a single request write", async () => {
-    await runNearLimitPayloadTest("single");
+    await runNearLimitPayloadTestAndExpectUpdate("single");
   });
 
   it("rejects payloads larger than 1MB before invoking webhook handler", async () => {

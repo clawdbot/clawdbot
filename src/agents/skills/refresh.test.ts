@@ -55,17 +55,18 @@ describe("ensureSkillsWatcher", () => {
     await refreshModule.resetSkillsRefreshForTest();
   });
 
-  it("watches skill roots and filters non-skill churn", async () => {
+  it("watches skill roots and filters non-skill churn", () => {
     refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
 
     expect(watchMock).toHaveBeenCalledTimes(1);
     const firstCall = (
-      watchMock.mock.calls as unknown as Array<[string[], { ignored?: unknown }]>
+      watchMock.mock.calls as unknown as Array<[string[], { depth?: number; ignored?: unknown }]>
     )[0];
     const targets = firstCall?.[0] ?? [];
     const opts = firstCall?.[1] ?? {};
 
     expect(opts.ignored).toBe(refreshModule.shouldIgnoreSkillsWatchPath);
+    expect(opts.depth).toBe(2);
     const posix = (p: string) => p.replaceAll("\\", "/");
     expect(targets).toEqual(
       expect.arrayContaining([
@@ -98,6 +99,34 @@ describe("ensureSkillsWatcher", () => {
     expect(ignored("/tmp/workspace/skills/my-skill", { isDirectory: () => true })).toBe(false);
     expect(ignored("/tmp/workspace/skills/my-skill/README.md", {})).toBe(true);
     expect(ignored("/tmp/workspace/skills/my-skill/SKILL.md", {})).toBe(false);
+  });
+
+  it("keeps grouped skill folders within the watcher traversal depth", async () => {
+    vi.useFakeTimers();
+    const seen: SkillsChangeEvent[] = [];
+    refreshModule.registerSkillsChangeListener((change) => {
+      seen.push(change);
+    });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace",
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    const firstCall = (
+      watchMock.mock.calls as unknown as Array<[string[], { depth?: number; ignored?: unknown }]>
+    )[0];
+    expect(firstCall?.[1]?.depth).toBe(2);
+
+    createdWatchers[0]?.emit("change", "/tmp/workspace/skills/group/demo/SKILL.md");
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(seen).toEqual([
+      {
+        workspaceDir: "/tmp/workspace",
+        reason: "watch",
+        changedPath: "/tmp/workspace/skills/group/demo/SKILL.md",
+      },
+    ]);
   });
 
   it.each(["add", "change", "unlink", "unlinkDir"] as const)(

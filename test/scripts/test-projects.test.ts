@@ -1227,7 +1227,6 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.auto-reply-top-level.config.ts",
       "test/vitest/vitest.auto-reply-reply.config.ts",
       "test/vitest/vitest.extension-acpx.config.ts",
-      "test/vitest/vitest.extension-bluebubbles.config.ts",
       "test/vitest/vitest.extension-diffs.config.ts",
       "test/vitest/vitest.extension-discord.config.ts",
       "test/vitest/vitest.extension-feishu.config.ts",

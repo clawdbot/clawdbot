@@ -364,6 +364,35 @@ describe("command queue", () => {
     }
   });
 
+  it("keeps work queued while a lane has zero concurrency and drains after resume", async () => {
+    const lane = `suspended-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 0);
+
+    let ran = false;
+    const task = enqueueCommandInLane(lane, async () => {
+      ran = true;
+      return "resumed";
+    });
+
+    await Promise.resolve();
+    expect(ran).toBe(false);
+    expect(getCommandLaneSnapshot(lane)).toMatchObject({
+      activeCount: 0,
+      queuedCount: 1,
+      maxConcurrent: 0,
+    });
+
+    setCommandLaneConcurrency(lane, 1);
+
+    await expect(task).resolves.toBe("resumed");
+    expect(ran).toBe(true);
+    expect(getCommandLaneSnapshot(lane)).toMatchObject({
+      activeCount: 0,
+      queuedCount: 0,
+      maxConcurrent: 1,
+    });
+  });
+
   it("getCommandLaneSnapshot reports active and queued work for one lane", async () => {
     const lane = `snapshot-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 1);

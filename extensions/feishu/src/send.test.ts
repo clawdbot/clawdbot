@@ -509,21 +509,36 @@ describe("resolveFeishuCardTemplate", () => {
   });
 });
 
-describe("buildStructuredCard", () => {
-  it("uses schema-2.0 width config instead of legacy wide screen mode", () => {
-    const card = buildStructuredCard("hello") as {
-      config: {
-        width_mode?: string;
-        enable_forward?: boolean;
-        wide_screen_mode?: boolean;
-      };
+function expectSchema2WidthConfig(card: unknown) {
+  const typedCard = card as {
+    config: {
+      width_mode?: string;
+      enable_forward?: boolean;
+      wide_screen_mode?: boolean;
     };
+  };
 
-    expect(card.config.width_mode).toBe("fill");
-    expect(card.config.enable_forward).toBeUndefined();
-    expect(card.config.wide_screen_mode).toBeUndefined();
+  expect(typedCard.config.width_mode).toBe("fill");
+  expect(typedCard.config.enable_forward).toBeUndefined();
+  expect(typedCard.config.wide_screen_mode).toBeUndefined();
+}
+
+describe("Feishu card schema config", () => {
+  it.each([
+    {
+      name: "structured card",
+      build: () => buildStructuredCard("hello"),
+    },
+    {
+      name: "markdown card",
+      build: () => buildMarkdownCard("hello"),
+    },
+  ])("$name uses schema-2.0 width config instead of legacy wide screen mode", ({ build }) => {
+    expectSchema2WidthConfig(build());
   });
+});
 
+describe("buildStructuredCard", () => {
   it("falls back to blue when the header template is unsupported", () => {
     const card = buildStructuredCard("hello", {
       header: {
@@ -540,21 +555,5 @@ describe("buildStructuredCard", () => {
         },
       }),
     );
-  });
-});
-
-describe("buildMarkdownCard", () => {
-  it("uses schema-2.0 width config instead of legacy wide screen mode", () => {
-    const card = buildMarkdownCard("hello") as {
-      config: {
-        width_mode?: string;
-        enable_forward?: boolean;
-        wide_screen_mode?: boolean;
-      };
-    };
-
-    expect(card.config.width_mode).toBe("fill");
-    expect(card.config.enable_forward).toBeUndefined();
-    expect(card.config.wide_screen_mode).toBeUndefined();
   });
 });

@@ -67,6 +67,7 @@ function threadStartResult(threadId = "thread-1") {
   return {
     thread: {
       id: threadId,
+      sessionId: "session-1",
       forkedFromId: null,
       preview: "",
       ephemeral: false,

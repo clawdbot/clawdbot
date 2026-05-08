@@ -337,6 +337,31 @@ describe("session store writer queue", () => {
     writeSpy.mockRestore();
   });
 
+  it("keeps session store writes atomic while skipping durable fsync inside the writer lock", async () => {
+    const key = "agent:main:no-fsync";
+    const { storePath } = await makeTmpStore({
+      [key]: { sessionId: "s-no-fsync", updatedAt: Date.now(), counter: 0 },
+    });
+
+    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+    await updateSessionStore(
+      storePath,
+      async (store) => {
+        const entry = store[key] as Record<string, unknown>;
+        entry.counter = 1;
+      },
+      { skipMaintenance: true },
+    );
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(writeSpy).toHaveBeenCalledWith(
+      storePath,
+      expect.any(String),
+      expect.objectContaining({ durable: false, mode: 0o600 }),
+    );
+    writeSpy.mockRestore();
+  });
+
   it("multiple consecutive errors do not permanently poison the queue", async () => {
     const key = "agent:main:multi-err";
     const { storePath } = await makeTmpStore({

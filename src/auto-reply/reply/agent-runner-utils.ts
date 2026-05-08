@@ -127,7 +127,7 @@ export function buildThreadingToolContext(params: {
     };
   }
   const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
-  // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
+  // Fallback for unrecognized/plugin channels (e.g., iMessage before plugin registry init)
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
   if (!threading?.buildToolContext) {
     return {

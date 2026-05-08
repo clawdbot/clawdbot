@@ -173,7 +173,6 @@ function createBuiltinCfg(agentId: string): OpenClawConfig {
 }
 
 function requireManager(result: SearchManagerResult): SearchManager {
-  expect(result.manager).toBeTruthy();
   if (!result.manager) {
     throw new Error("manager missing");
   }
@@ -286,7 +285,10 @@ describe("getMemorySearchManager caching", () => {
         cfg: createQmdCfg("corrupt-cache-agent"),
         agentId: "corrupt-cache-agent",
       });
-      requireManager(result);
+      expect(requireManager(result).status()).toMatchObject({
+        backend: "qmd",
+        requestedProvider: "qmd",
+      });
     } finally {
       await freshModule.closeAllMemorySearchManagers();
       delete (globalThis as Record<PropertyKey, unknown>)[cacheKey];
@@ -911,8 +913,8 @@ describe("getMemorySearchManager caching", () => {
     expect(mockCloseAllMemoryIndexManagers).toHaveBeenCalledTimes(1);
 
     const second = await getMemorySearchManager({ cfg, agentId: "teardown-agent" });
-    expect(second.manager).toBeTruthy();
-    expect(second.manager).not.toBe(firstManager);
+    const secondManager = requireManager(second);
+    expect(secondManager).not.toBe(firstManager);
     expect(createQmdManagerMock.mock.calls).toHaveLength(2);
   });
 

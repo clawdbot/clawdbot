@@ -21,7 +21,16 @@ import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 import { synthesizeVoiceReplyAudio, transcribeVoiceAudio } from "./tts.js";
 
 const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
+const VOICE_TRANSCRIPT_LOG_PREVIEW_CHARS = 500;
 const logger = createSubsystemLogger("discord/voice");
+
+function formatVoiceTranscriptLogPreview(text: string): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (oneLine.length <= VOICE_TRANSCRIPT_LOG_PREVIEW_CHARS) {
+    return oneLine;
+  }
+  return `${oneLine.slice(0, VOICE_TRANSCRIPT_LOG_PREVIEW_CHARS)}...`;
+}
 
 export async function processDiscordVoiceSegment(params: {
   entry: VoiceSessionEntry;
@@ -81,6 +90,9 @@ export async function processDiscordVoiceSegment(params: {
   }
   logVoiceVerbose(
     `transcription ok (${transcript.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
+  );
+  logVoiceVerbose(
+    `transcript from ${speaker.label} (${userId}) in guild ${entry.guildId} channel ${entry.channelId}: ${formatVoiceTranscriptLogPreview(transcript)}`,
   );
 
   const prompt = formatVoiceIngressPrompt(transcript, speaker.label);

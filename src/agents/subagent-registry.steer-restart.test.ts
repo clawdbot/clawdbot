@@ -356,7 +356,7 @@ describe("subagent registry steer restarts", () => {
     }
   });
 
-  it("clears announce retry state when replacing after steer restart", async () => {
+  it("clears announce retry state when replacing after steer restart", () => {
     {
       registerRun({
         runId: "run-retry-reset-old",
@@ -482,11 +482,13 @@ describe("subagent registry steer restarts", () => {
     expect(replaced).toBe(true);
 
     const next = listMainRuns().find((entry) => entry.runId === "run-runtime-new");
-    expect(next).toBeDefined();
+    if (next === undefined) {
+      throw new Error("expected restarted run");
+    }
     expect(mod.getSubagentSessionStartedAt(next)).toBe(1_000);
-    expect(next?.accumulatedRuntimeMs).toBe(120_000);
+    expect(next.accumulatedRuntimeMs).toBe(120_000);
 
-    if (!next?.startedAt) {
+    if (!next.startedAt) {
       throw new Error("missing next startedAt");
     }
     next.endedAt = next.startedAt + 30_000;
@@ -591,7 +593,7 @@ describe("subagent registry steer restarts", () => {
     );
   });
 
-  it("treats a child session as inactive when only a stale older row is still unended", async () => {
+  it("treats a child session as inactive when only a stale older row is still unended", () => {
     const childSessionKey = "agent:main:subagent:stale-active-older-row";
 
     mod.addSubagentRunForTests({

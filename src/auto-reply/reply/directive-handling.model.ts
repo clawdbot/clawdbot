@@ -1,4 +1,5 @@
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import {
   type ModelAliasIndex,
   modelKey,
@@ -6,6 +7,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { buildAgentRuntimeAuthPlan } from "../../agents/runtime-plan/auth.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -28,6 +30,77 @@ import {
 } from "./directive-handling.model-picker.js";
 export { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
+
+function isMissingAuthLabel(auth: { label: string; source: string }): boolean {
+  return auth.label === "missing" && auth.source === "missing";
+}
+
+function resolveStatusHarnessRuntime(params: {
+  sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
+  defaultRuntime: string;
+}): string {
+  void params.sessionEntry;
+  return params.defaultRuntime;
+}
+
+async function resolveStatusAuthLabel(params: {
+  provider: string;
+  modelId: string;
+  cfg: OpenClawConfig;
+  modelsPath: string;
+  agentDir: string;
+  activeAgentId: string;
+  authMode: ModelAuthDetailMode;
+  workspaceDir?: string;
+  sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
+}): Promise<string> {
+  const auth = await resolveAuthLabel(
+    params.provider,
+    params.cfg,
+    params.modelsPath,
+    params.agentDir,
+    params.authMode,
+    params.workspaceDir,
+  );
+  if (!isMissingAuthLabel(auth)) {
+    return formatAuthLabel(auth);
+  }
+
+  const provider = normalizeProviderId(params.provider);
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    provider,
+    modelId: params.modelId,
+    config: params.cfg,
+    agentId: params.activeAgentId,
+  });
+  const harnessRuntime = resolveStatusHarnessRuntime({
+    sessionEntry: params.sessionEntry,
+    defaultRuntime: harnessPolicy.runtime,
+  });
+  const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
+    provider,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    harnessRuntime,
+  });
+  const effectiveAuthProvider = runtimeAuthPlan.harnessAuthProvider;
+  if (!effectiveAuthProvider || effectiveAuthProvider === provider) {
+    return formatAuthLabel(auth);
+  }
+
+  const runtimeAuth = await resolveAuthLabel(
+    effectiveAuthProvider,
+    params.cfg,
+    params.modelsPath,
+    params.agentDir,
+    params.authMode,
+    params.workspaceDir,
+  );
+  if (isMissingAuthLabel(runtimeAuth)) {
+    return formatAuthLabel(auth);
+  }
+  return `via ${harnessRuntime} runtime / ${effectiveAuthProvider} ${formatAuthLabel(runtimeAuth)}`;
+}
 
 function pushUniqueCatalogEntry(params: {
   keys: Set<string>;
@@ -204,7 +277,8 @@ export async function maybeHandleModelDirectiveInfo(params: {
   resetModelOverride: boolean;
   workspaceDir?: string;
   surface?: string;
-  sessionEntry?: Pick<SessionEntry, "modelProvider" | "model">;
+  sessionEntry?: Pick<SessionEntry, "modelProvider" | "model"> &
+    Partial<Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">>;
 }): Promise<ReplyPayload | undefined> {
   if (!params.directives.hasModelDirective) {
     return undefined;
@@ -302,15 +376,18 @@ export async function maybeHandleModelDirectiveInfo(params: {
     if (authByProvider.has(provider)) {
       continue;
     }
-    const auth = await resolveAuthLabel(
+    const authLabel = await resolveStatusAuthLabel({
       provider,
-      params.cfg,
+      modelId: entry.id,
+      cfg: params.cfg,
       modelsPath,
-      params.agentDir,
+      agentDir: params.agentDir,
+      activeAgentId: params.activeAgentId,
       authMode,
-      params.workspaceDir,
-    );
-    authByProvider.set(provider, formatAuthLabel(auth));
+      workspaceDir: params.workspaceDir,
+      sessionEntry: params.sessionEntry,
+    });
+    authByProvider.set(provider, authLabel);
   }
 
   const modelRefs = resolveSelectedAndActiveModel({

@@ -318,7 +318,7 @@ describe("github-copilot token", () => {
     ({ deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } = await import("./token.js"));
   });
 
-  it("derives baseUrl from token", async () => {
+  it("derives baseUrl from token", () => {
     expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=proxy.example.com;")).toBe(
       "https://api.example.com",
     );

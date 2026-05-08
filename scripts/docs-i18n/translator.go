@@ -208,7 +208,7 @@ func runCodexExecPrompt(ctx context.Context, req codexPromptRequest) (string, er
 		"exec",
 		"--model", req.Model,
 		"-c", fmt.Sprintf("model_reasoning_effort=%q", normalizeThinking(req.Thinking)),
-		"-c", `service_tier="fast"`,
+		"-c", `service_tier="priority"`,
 		"--sandbox", "read-only",
 		"--ignore-rules",
 		"--skip-git-repo-check",

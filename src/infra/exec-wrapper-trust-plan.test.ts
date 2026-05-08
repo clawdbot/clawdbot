@@ -6,10 +6,10 @@ describe("resolveExecWrapperTrustPlan", () => {
     {
       name: "unwraps transparent caffeinate wrappers before shell policy checks",
       enabled: process.platform !== "win32",
-      argv: ["/usr/bin/caffeinate", "-d", "-w", "42", "sh", "-lc", "echo hi"],
+      argv: ["/usr/bin/caffeinate", "-d", "-w", "42", "sh", "-c", "echo hi"],
       expected: {
-        argv: ["sh", "-lc", "echo hi"],
-        policyArgv: ["sh", "-lc", "echo hi"],
+        argv: ["sh", "-c", "echo hi"],
+        policyArgv: ["sh", "-c", "echo hi"],
         wrapperChain: ["caffeinate"],
         policyBlocked: false,
         shellWrapperExecutable: true,
@@ -19,10 +19,10 @@ describe("resolveExecWrapperTrustPlan", () => {
     {
       name: "unwraps dispatch wrappers and shell multiplexers into one trust plan",
       enabled: process.platform !== "win32",
-      argv: ["/usr/bin/time", "-p", "busybox", "sh", "-lc", "echo hi"],
+      argv: ["/usr/bin/time", "-p", "busybox", "sh", "-c", "echo hi"],
       expected: {
-        argv: ["sh", "-lc", "echo hi"],
-        policyArgv: ["busybox", "sh", "-lc", "echo hi"],
+        argv: ["sh", "-c", "echo hi"],
+        policyArgv: ["busybox", "sh", "-c", "echo hi"],
         wrapperChain: ["time", "busybox"],
         policyBlocked: false,
         shellWrapperExecutable: true,
@@ -32,10 +32,10 @@ describe("resolveExecWrapperTrustPlan", () => {
     {
       name: "unwraps script wrappers before evaluating nested shell payloads",
       enabled: process.platform === "darwin" || process.platform === "freebsd",
-      argv: ["/usr/bin/script", "-q", "/dev/null", "sh", "-lc", "echo hi"],
+      argv: ["/usr/bin/script", "-q", "/dev/null", "sh", "-c", "echo hi"],
       expected: {
-        argv: ["sh", "-lc", "echo hi"],
-        policyArgv: ["sh", "-lc", "echo hi"],
+        argv: ["sh", "-c", "echo hi"],
+        policyArgv: ["sh", "-c", "echo hi"],
         wrapperChain: ["script"],
         policyBlocked: false,
         shellWrapperExecutable: true,
@@ -45,14 +45,27 @@ describe("resolveExecWrapperTrustPlan", () => {
     {
       name: "unwraps sandbox-exec wrappers before evaluating nested shell payloads",
       enabled: process.platform !== "win32",
-      argv: ["/usr/bin/sandbox-exec", "-p", "(allow default)", "sh", "-lc", "echo hi"],
+      argv: ["/usr/bin/sandbox-exec", "-p", "(allow default)", "sh", "-c", "echo hi"],
       expected: {
-        argv: ["sh", "-lc", "echo hi"],
-        policyArgv: ["sh", "-lc", "echo hi"],
+        argv: ["sh", "-c", "echo hi"],
+        policyArgv: ["sh", "-c", "echo hi"],
         wrapperChain: ["sandbox-exec"],
         policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
+      },
+    },
+    {
+      name: "omits startup shell inline payloads from trust plans",
+      enabled: process.platform !== "win32",
+      argv: ["bash", "--login", "-c", "echo hi"],
+      expected: {
+        argv: ["bash", "--login", "-c", "echo hi"],
+        policyArgv: ["bash", "--login", "-c", "echo hi"],
+        wrapperChain: [],
+        policyBlocked: false,
+        shellWrapperExecutable: true,
+        shellInlineCommand: null,
       },
     },
     {

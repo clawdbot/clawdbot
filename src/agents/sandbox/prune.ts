@@ -53,11 +53,18 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
     }
     try {
       await params.removeRuntime(entry);
-    } catch {
-      // ignore prune failures
-    } finally {
       await params.remove(entry.containerName);
       await params.onRemoved?.(entry);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : JSON.stringify(error);
+      defaultRuntime.error?.(
+        `Sandbox prune failed to remove ${entry.containerName}: ${message ?? "unknown error"}`,
+      );
     }
   }
 }

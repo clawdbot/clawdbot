@@ -230,6 +230,20 @@ function resolveModelAsyncForTest(
   });
 }
 
+type ResolveModelForTestResult =
+  | ReturnType<typeof resolveModelForTest>
+  | Awaited<ReturnType<typeof resolveModelAsyncForTest>>;
+
+function expectResolvedModel(result: ResolveModelForTestResult) {
+  if (result.error !== undefined) {
+    throw new Error(`expected model resolution to succeed, got error: ${result.error}`);
+  }
+  if (!result.model) {
+    throw new Error("expected model resolution to return a model");
+  }
+  return result.model;
+}
+
 describe("resolveModel", () => {
   it("skips PI auth and model discovery during dynamic model resolution", async () => {
     const result = await resolveModelAsync(
@@ -243,8 +257,7 @@ describe("resolveModel", () => {
       },
     );
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    expect(expectResolvedModel(result)).toMatchObject({
       provider: "openrouter",
       id: "openrouter/auto",
     });
@@ -283,9 +296,7 @@ describe("resolveModel", () => {
       },
     } as unknown as OpenClawConfig);
 
-    expect(result.error).toBeUndefined();
-    expect(Array.isArray(result.model?.input)).toBe(true);
-    expect(result.model?.input).toEqual(["text"]);
+    expect(expectResolvedModel(result).input).toEqual(["text"]);
   });
 
   it("defaults missing model cost before handing models to PI", () => {
@@ -312,8 +323,7 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent", cfg);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    expect(expectResolvedModel(result)).toMatchObject({
       provider: "openai",
       id: "gpt-5.5",
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -333,11 +343,12 @@ describe("resolveModel", () => {
     } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("custom", "missing-model", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
 
-    expect(result.model?.baseUrl).toBe("http://localhost:9000");
-    expect(result.model?.provider).toBe("custom");
-    expect(result.model?.id).toBe("missing-model");
-    expect(result.model?.api).toBe("openai-completions");
+    expect(model.baseUrl).toBe("http://localhost:9000");
+    expect(model.provider).toBe("custom");
+    expect(model.id).toBe("missing-model");
+    expect(model.api).toBe("openai-completions");
   });
 
   it("defaults baseUrl-only local custom fallback models to chat completions", () => {
@@ -358,15 +369,15 @@ describe("resolveModel", () => {
     } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("local-agent-proxy", "gpt-5.2", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    expect(model).toMatchObject({
       provider: "local-agent-proxy",
       id: "gpt-5.2",
       api: "openai-completions",
       baseUrl: "http://127.0.0.1:3000/v1",
     });
-    expect(getModelProviderRequestTransport(result.model ?? {})).toBeUndefined();
+    expect(getModelProviderRequestTransport(model)).toBeUndefined();
   });
 
   it("resolves explicitly configured qwen3.6-plus before Coding Plan built-in suppression", () => {
@@ -393,8 +404,7 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("qwen", "qwen3.6-plus", "/tmp/agent", cfg);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    expect(expectResolvedModel(result)).toMatchObject({
       provider: "qwen",
       id: "qwen3.6-plus",
       api: "openai-completions",
@@ -448,8 +458,7 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("openai-codex", "gpt-5.4-mini", "/tmp/agent", cfg);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    expect(expectResolvedModel(result)).toMatchObject({
       provider: "openai-codex",
       id: "gpt-5.4-mini",
       api: "openai-codex-responses",
@@ -473,7 +482,9 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("google-paid", "missing-model", "/tmp/agent", cfg);
 
-    expect(result.model?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(expectResolvedModel(result).baseUrl).toBe(
+      "https://generativelanguage.googleapis.com/v1beta",
+    );
   });
 
   it("normalizes configured Google override baseUrls when provider api is omitted", () => {
@@ -500,10 +511,10 @@ describe("resolveModel", () => {
     } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("google", "gemini-2.5-pro", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model?.api).toBe("google-generative-ai");
-    expect(result.model?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(model.api).toBe("google-generative-ai");
+    expect(model.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 
   it("normalizes custom api.openai.com providers to responses transport", () => {
@@ -526,8 +537,7 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("custom-openai", "gpt-5.4", "/tmp/agent", cfg);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    expect(expectResolvedModel(result)).toMatchObject({
       provider: "custom-openai",
       id: "gpt-5.4",
       api: "openai-responses",
@@ -555,8 +565,7 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("custom-xai", "grok-4.1-fast", "/tmp/agent", cfg);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    expect(expectResolvedModel(result)).toMatchObject({
       provider: "custom-xai",
       id: "grok-4.1-fast",
       api: "openai-responses",
@@ -579,9 +588,9 @@ describe("resolveModel", () => {
 
     // Requesting a non-listed model forces the providerCfg fallback branch.
     const result = resolveModelForTest("custom", "missing-model", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
 
-    expect(result.error).toBeUndefined();
-    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+    expect(model.headers).toEqual({
       "X-Custom-Auth": "token-123",
     });
   });
@@ -604,9 +613,9 @@ describe("resolveModel", () => {
     } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("custom", "missing-model", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
 
-    expect(result.error).toBeUndefined();
-    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+    expect(model.headers).toEqual({
       "X-Custom-Auth": "token-123",
     });
   });
@@ -627,9 +636,9 @@ describe("resolveModel", () => {
     });
 
     const result = resolveModelForTest("custom", "listed-model", "/tmp/agent");
+    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
 
-    expect(result.error).toBeUndefined();
-    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+    expect(model.headers).toEqual({
       "X-Static": "tenant-a",
     });
   });
@@ -658,9 +667,10 @@ describe("resolveModel", () => {
     } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("custom", "model-b", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
 
-    expect(result.model?.contextWindow).toBe(262144);
-    expect(result.model?.maxTokens).toBe(32768);
+    expect(model.contextWindow).toBe(262144);
+    expect(model.maxTokens).toBe(32768);
   });
 
   it("merges configured model params with agent defaults for resolved models", () => {

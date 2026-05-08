@@ -21,7 +21,7 @@ function createSetupPlugin(params: {
 }
 
 describe("resolveChannelSetupWizardAdapterForPlugin", () => {
-  it("builds and caches adapters from the plugin setupWizard surface", () => {
+  it("builds and caches adapters from the plugin setupWizard surface", async () => {
     const setupWizard: ChannelSetupWizard = {
       channel: "demo",
       status: {
@@ -36,8 +36,29 @@ describe("resolveChannelSetupWizardAdapterForPlugin", () => {
     const adapter = resolveChannelSetupWizardAdapterForPlugin(plugin);
 
     expect(adapter?.channel).toBe("demo");
-    expect(typeof adapter?.getStatus).toBe("function");
-    expect(typeof adapter?.configure).toBe("function");
+    await expect(
+      adapter?.getStatus({
+        cfg: {} as OpenClawConfig,
+        accountOverrides: { demo: "default" },
+      }),
+    ).resolves.toMatchObject({
+      channel: "demo",
+      configured: false,
+    });
+    await expect(
+      adapter?.configure({
+        cfg: {} as OpenClawConfig,
+        runtime: {} as never,
+        prompter: {} as never,
+        options: {},
+        accountOverrides: { demo: "default" },
+        shouldPromptAccountIds: false,
+        forceAllowFrom: false,
+      }),
+    ).resolves.toMatchObject({
+      accountId: "default",
+      cfg: {},
+    });
     expect(resolveChannelSetupWizardAdapterForPlugin(plugin)).toBe(adapter);
   });
 

@@ -1520,6 +1520,55 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports model failover spans", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "model.failover",
+      sessionId: "session-1",
+      lane: "main",
+      fromProvider: "anthropic",
+      fromModel: "claude-opus-4-6",
+      toProvider: "openai",
+      toModel: "gpt-5.4",
+      reason: "overloaded",
+      suspended: true,
+      cascadeDepth: 1,
+    });
+    await flushDiagnosticEvents();
+
+    const failoverCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.failover",
+    );
+    expect(failoverCall?.[1]).toMatchObject({
+      attributes: {
+        "openclaw.provider": "anthropic",
+        "openclaw.model": "claude-opus-4-6",
+        "openclaw.failover.to_provider": "openai",
+        "openclaw.failover.to_model": "gpt-5.4",
+        "openclaw.failover.reason": "overloaded",
+        "openclaw.failover.suspended": true,
+        "openclaw.failover.cascade_depth": 1,
+        "openclaw.lane": "main",
+      },
+      startTime: expect.any(Number),
+    });
+    expect(failoverCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "openclaw.sessionId": expect.anything(),
+        "openclaw.sessionKey": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
+    const span = telemetryState.spans.find(
+      (candidate) => candidate.name === "openclaw.model.failover",
+    );
+    expect(span?.end).toHaveBeenCalledWith(expect.any(Number));
+    await service.stop?.(ctx);
+  });
+
   test("maps model call APIs to GenAI operation names and error type", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });

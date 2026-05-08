@@ -256,6 +256,49 @@ openclaw models list
 
   </Accordion>
 
+  <Accordion title="Service tier">
+    Some Bedrock models support a `service_tier` parameter to optimize for cost
+    or latency. The following tiers are available:
+
+    | Tier | Description |
+    |------|-------------|
+    | `default` | Standard Bedrock tier |
+    | `flex` | Discounted processing for workloads that can tolerate longer latency |
+    | `priority` | Prioritized processing for latency-sensitive workloads |
+    | `reserved` | Reserved capacity for steady-state workloads |
+
+    Set `serviceTier` (or `service_tier`) via `agents.defaults.params` for
+    Bedrock model requests, or per-model in
+    `agents.defaults.models["<model-key>"].params`:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          params: {
+            serviceTier: "flex", // applies to all models
+          },
+          models: {
+            "amazon-bedrock/mistral.mistral-large-3-675b-instruct": {
+              params: {
+                serviceTier: "priority", // per-model override
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Valid values are `default`, `flex`, `priority`, and `reserved`. Not all
+    models support all tiers — if an unsupported tier is requested, Bedrock will
+    return a validation error. Note: the error message is somewhat misleading;
+    it may say "The provided model identifier is invalid" rather than indicating
+    an unsupported service tier. If you see this error, check whether the model
+    supports the requested tier.
+
+  </Accordion>
+
   <Accordion title="Claude Opus 4.7 temperature">
     Bedrock rejects the `temperature` parameter for Claude Opus 4.7. OpenClaw
     omits `temperature` automatically for any Opus 4.7 Bedrock ref, including

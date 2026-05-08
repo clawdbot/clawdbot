@@ -73,6 +73,13 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async () => {
   };
 });
 
+function requireCapturedContext(): MsgContext {
+  if (!capture.ctx) {
+    throw new Error("expected inbound MsgContext");
+  }
+  return capture.ctx;
+}
+
 describe("signal createSignalEventHandler inbound context", () => {
   beforeEach(() => {
     delete capture.ctx;
@@ -100,11 +107,7 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(capture.ctx).toBeTruthy();
-    const contextWithBody = capture.ctx;
-    if (!contextWithBody) {
-      throw new Error("expected inbound MsgContext");
-    }
+    const contextWithBody = requireCapturedContext();
     expectInboundContextContract(contextWithBody);
     // Sender should appear as prefix in group messages (no redundant [from:] suffix)
     expect(contextWithBody.Body ?? "").toContain("Alice");
@@ -132,8 +135,7 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(capture.ctx).toBeTruthy();
-    const context = capture.ctx!;
+    const context = requireCapturedContext();
     expect(context.ChatType).toBe("direct");
     expect(context.To).toBe("+15550002222");
     expect(context.OriginatingTo).toBe("+15550002222");
@@ -158,8 +160,7 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(capture.ctx).toBeTruthy();
-    const context = capture.ctx!;
+    const context = requireCapturedContext();
     expect(context.BodyForAgent).toBe("summarize the release notes");
     expect(context.RawBody).toBe("summarize the release notes");
     expect(context.CommandBody).toBe("summarize the release notes");
@@ -201,8 +202,7 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(capture.ctx).toBeTruthy();
-    const context = capture.ctx!;
+    const context = requireCapturedContext();
     expect(context.BodyForAgent).toBe("current request");
     expect(context.CommandBody).toBe("current request");
     expect(context.BodyForCommands).toBe("current request");
@@ -321,9 +321,9 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(capture.ctx).toBeTruthy();
-    expect(capture.ctx?.ChatType).toBe("group");
-    expect(capture.ctx?.From).toBe("group:g1");
+    const context = requireCapturedContext();
+    expect(context.ChatType).toBe("group");
+    expect(context.From).toBe("group:g1");
   });
 
   it("keeps mention gating enabled for group-id allowlists by default", async () => {
@@ -429,8 +429,7 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(capture.ctx).toBeTruthy();
-    expect(capture.ctx?.CommandAuthorized).toBe(true);
+    expect(requireCapturedContext().CommandAuthorized).toBe(true);
   });
 
   it("allows reaction-only group events when groupAllowFrom matches the reaction group id", async () => {
@@ -542,11 +541,11 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(capture.ctx).toBeTruthy();
-    expect(capture.ctx?.BodyForAgent).toBe("quoted context");
-    expect(capture.ctx?.ReplyToBody).toBe("quoted context");
-    expect(capture.ctx?.ReplyToSender).toBe("+15550002222");
-    expect(capture.ctx?.ReplyToIsQuote).toBe(true);
+    const context = requireCapturedContext();
+    expect(context.BodyForAgent).toBe("quoted context");
+    expect(context.ReplyToBody).toBe("quoted context");
+    expect(context.ReplyToSender).toBe("+15550002222");
+    expect(context.ReplyToIsQuote).toBe(true);
   });
 
   it("forwards all fetched attachments via MediaPaths/MediaTypes", async () => {
@@ -574,12 +573,12 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(capture.ctx).toBeTruthy();
-    expect(capture.ctx?.MediaPath).toBe("/tmp/a1.dat");
-    expect(capture.ctx?.MediaType).toBe("image/jpeg");
-    expect(capture.ctx?.MediaPaths).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
-    expect(capture.ctx?.MediaUrls).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
-    expect(capture.ctx?.MediaTypes).toEqual(["image/jpeg", "application/octet-stream"]);
+    const context = requireCapturedContext();
+    expect(context.MediaPath).toBe("/tmp/a1.dat");
+    expect(context.MediaType).toBe("image/jpeg");
+    expect(context.MediaPaths).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
+    expect(context.MediaUrls).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
+    expect(context.MediaTypes).toEqual(["image/jpeg", "application/octet-stream"]);
   });
 
   it("threads resolved audio contentType for Signal voice attachments", async () => {
@@ -607,10 +606,10 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(capture.ctx).toBeTruthy();
-    expect(capture.ctx?.MediaPath).toBe("/tmp/voice1.aac");
-    expect(capture.ctx?.MediaType).toBe("audio/aac");
-    expect(capture.ctx?.MediaTypes).toEqual(["audio/aac"]);
+    const context = requireCapturedContext();
+    expect(context.MediaPath).toBe("/tmp/voice1.aac");
+    expect(context.MediaType).toBe("audio/aac");
+    expect(context.MediaTypes).toEqual(["audio/aac"]);
   });
 
   it("drops own UUID inbound messages when only accountUuid is configured", async () => {

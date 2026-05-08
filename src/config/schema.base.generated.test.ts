@@ -65,9 +65,9 @@ describe("base config schema", () => {
     ).properties?.agents?.properties?.defaults?.properties;
     const uiHints = BASE_CONFIG_SCHEMA.uiHints as Record<string, unknown>;
 
-    expect(agentDefaultsProperties?.videoGenerationModel).toBeDefined();
-    expect(uiHints["agents.defaults.videoGenerationModel.primary"]).toBeDefined();
-    expect(uiHints["agents.defaults.videoGenerationModel.fallbacks"]).toBeDefined();
-    expect(uiHints["agents.defaults.mediaGenerationAutoProviderFallback"]).toBeDefined();
+    expect(agentDefaultsProperties).toHaveProperty("videoGenerationModel");
+    expect(uiHints).toHaveProperty("agents.defaults.videoGenerationModel.primary");
+    expect(uiHints).toHaveProperty("agents.defaults.videoGenerationModel.fallbacks");
+    expect(uiHints).toHaveProperty("agents.defaults.mediaGenerationAutoProviderFallback");
   });
 });

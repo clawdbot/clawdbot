@@ -749,7 +749,31 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
 }
 
 function getProgressDraftLineText(line: string | ChannelProgressDraftLine): string {
-  return typeof line === "string" ? line : line.text;
+  if (typeof line === "string") {
+    return line;
+  }
+  const icon = line.icon?.trim();
+  const prefix = icon ? `${icon} ` : "";
+  const label = line.label.trim();
+  const detail = line.detail?.trim();
+  if (detail) {
+    if (line.kind !== "patch" && label) {
+      return `${prefix}${label}: ${detail}`;
+    }
+    return `${prefix}${detail}`;
+  }
+  const status = line.status?.trim();
+  if (status) {
+    if (label) {
+      return `${prefix}${label}: ${status}`;
+    }
+    return `${prefix}${status}`;
+  }
+  const text = line.text.trim();
+  if (!icon && text && text !== label) {
+    return text;
+  }
+  return `${prefix}${label}`.trim();
 }
 
 export function formatChannelProgressDraftText(params: {
@@ -768,17 +792,21 @@ export function formatChannelProgressDraftText(params: {
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
   const bullet = params.bullet ?? "•";
-  const lines = params.lines
-    .map((line) =>
-      compactChannelProgressDraftLine(
-        getProgressDraftLineText(line),
-        DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS,
-      ),
-    )
-    .filter((line) => line.length > 0)
+  const progressLines = params.lines
+    .map((line) => {
+      const rawText = typeof line === "string" ? line : getProgressDraftLineText(line);
+      const text = compactChannelProgressDraftLine(rawText, DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS);
+      return text ? { text, isLabelLine: false } : undefined;
+    })
+    .filter((line): line is { text: string; isLabelLine: boolean } => Boolean(line))
     .slice(-maxLines)
-    .map((line) =>
-      shouldPrefixProgressLine(line) ? `${bullet} ${formatLine(line)}` : formatLine(line),
-    );
-  return [label, ...lines].filter((line): line is string => Boolean(line)).join("\n");
+    .map(({ text }) => {
+      const formatted = formatLine(text);
+      return shouldPrefixProgressLine(text) ? `${bullet} ${formatted}` : formatted;
+    });
+  const labelLine = label
+    ? compactChannelProgressDraftLine(label, DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS)
+    : "";
+  const lines = [...(labelLine ? [labelLine] : []), ...progressLines];
+  return lines.filter((line): line is string => Boolean(line)).join("\n");
 }

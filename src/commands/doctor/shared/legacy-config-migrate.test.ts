@@ -315,7 +315,7 @@ describe("legacy migrate sandbox scope aliases", () => {
     });
   });
 
-  it("moves legacy embeddedHarness runtime policy into agentRuntime", () => {
+  it("removes ignored agent-wide runtime policy", () => {
     const res = migrateLegacyConfigForTest({
       agents: {
         defaults: {
@@ -339,20 +339,14 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     expect(res.changes).toEqual(
       expect.arrayContaining([
-        "Moved agents.defaults.embeddedHarness → agents.defaults.agentRuntime.",
-        "Moved agents.list.0.embeddedHarness → agents.list.0.agentRuntime.",
+        "Removed agents.defaults.embeddedHarness; runtime is now provider/model scoped.",
+        "Removed agents.list.0.embeddedHarness; runtime is now provider/model scoped.",
+        "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
       ]),
     );
-    expect(res.config?.agents?.defaults).toEqual({
-      agentRuntime: {
-        id: "claude-cli",
-      },
-    });
+    expect(res.config?.agents?.defaults).toEqual({});
     expect(res.config?.agents?.list?.[0]).toEqual({
       id: "reviewer",
-      agentRuntime: {
-        id: "codex",
-      },
     });
   });
 

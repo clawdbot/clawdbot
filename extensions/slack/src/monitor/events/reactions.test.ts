@@ -57,6 +57,13 @@ function createReactionHandlers(params: {
   };
 }
 
+function requireReactionHandler(handler: ReactionHandler | null, name: string): ReactionHandler {
+  if (!handler) {
+    throw new Error(`expected Slack ${name} reaction handler`);
+  }
+  return handler;
+}
+
 async function executeReactionCase(input: ReactionRunInput = {}) {
   reactionQueueMock.mockClear();
   const handlers = createReactionHandlers({
@@ -64,9 +71,9 @@ async function executeReactionCase(input: ReactionRunInput = {}) {
     trackEvent: input.trackEvent,
     shouldDropMismatchedSlackEvent: input.shouldDropMismatchedSlackEvent,
   });
-  const handler = handlers[input.handler ?? "added"];
-  expect(handler).toBeTruthy();
-  await handler!({
+  const handlerName = input.handler ?? "added";
+  const handler = requireReactionHandler(handlers[handlerName], handlerName);
+  await handler({
     event: (input.event ?? buildReactionEvent()) as Record<string, unknown>,
     body: input.body ?? {},
   });
@@ -164,10 +171,12 @@ describe("registerSlackReactionEvents", () => {
     const resolveSessionKey = vi.fn().mockReturnValue("agent:ops:main");
     harness.ctx.resolveSlackSystemEventSessionKey = resolveSessionKey;
     registerSlackReactionEvents({ ctx: harness.ctx });
-    const handler = harness.getHandler("reaction_added");
-    expect(handler).toBeTruthy();
+    const handler = requireReactionHandler(
+      harness.getHandler("reaction_added") as ReactionHandler | null,
+      "added",
+    );
 
-    await handler!({
+    await handler({
       event: buildReactionEvent({ user: "U777", channel: "D123" }),
       body: {},
     });

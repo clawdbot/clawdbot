@@ -27,6 +27,29 @@ import {
   setVoiceWakeTriggers,
 } from "./voicewake.js";
 
+const missingStoreDefaultCases = [
+  {
+    name: "voicewake store",
+    prefix: "openclaw-voicewake-",
+    assertDefaults: async (baseDir: string) => {
+      const cfg = await loadVoiceWakeConfig(baseDir);
+      expect(cfg.triggers).toEqual(defaultVoiceWakeTriggers());
+      expect(cfg.updatedAtMs).toBe(0);
+    },
+  },
+  {
+    name: "voicewake routing store",
+    prefix: "openclaw-voicewake-routing-",
+    assertDefaults: async (baseDir: string) => {
+      const cfg = await loadVoiceWakeRoutingConfig(baseDir);
+      expect(cfg.version).toBe(1);
+      expect(cfg.defaultTarget).toEqual({ mode: "current" });
+      expect(cfg.routes).toEqual([]);
+      expect(cfg.updatedAtMs).toBe(0);
+    },
+  },
+];
+
 describe("infra store", () => {
   describe("state migrations fs", () => {
     it("treats array session stores as invalid", async () => {
@@ -56,15 +79,17 @@ describe("infra store", () => {
       });
     });
   });
-  describe("voicewake store", () => {
-    it("returns defaults when missing", async () => {
-      await withTempDir("openclaw-voicewake-", async (baseDir) => {
-        const cfg = await loadVoiceWakeConfig(baseDir);
-        expect(cfg.triggers).toEqual(defaultVoiceWakeTriggers());
-        expect(cfg.updatedAtMs).toBe(0);
-      });
-    });
 
+  describe("missing store defaults", () => {
+    it.each(missingStoreDefaultCases)(
+      "$name returns defaults when missing",
+      async ({ assertDefaults, prefix }) => {
+        await withTempDir(prefix, assertDefaults);
+      },
+    );
+  });
+
+  describe("voicewake store", () => {
     it("sanitizes and persists triggers", async () => {
       await withTempDir("openclaw-voicewake-", async (baseDir) => {
         const saved = await setVoiceWakeTriggers(["  hi  ", "", "  there "], baseDir);
@@ -104,15 +129,6 @@ describe("infra store", () => {
   });
 
   describe("voicewake routing store", () => {
-    it("returns defaults when missing", async () => {
-      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voicewake-routing-"));
-      const cfg = await loadVoiceWakeRoutingConfig(baseDir);
-      expect(cfg.version).toBe(1);
-      expect(cfg.defaultTarget).toEqual({ mode: "current" });
-      expect(cfg.routes).toEqual([]);
-      expect(cfg.updatedAtMs).toBe(0);
-    });
-
     it("normalizes and persists routing config", async () => {
       const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voicewake-routing-"));
       const saved = await setVoiceWakeRoutingConfig(
@@ -148,7 +164,7 @@ describe("infra store", () => {
   });
 
   describe("diagnostic-events", () => {
-    it("emits monotonic seq", async () => {
+    it("emits monotonic seq", () => {
       resetDiagnosticEventsForTest();
       const seqs: number[] = [];
       const stop = onDiagnosticEvent((evt) => seqs.push(evt.seq));
@@ -167,7 +183,7 @@ describe("infra store", () => {
       expect(seqs).toEqual([1, 2]);
     });
 
-    it("emits message-flow events", async () => {
+    it("emits message-flow events", () => {
       resetDiagnosticEventsForTest();
       const types: string[] = [];
       const stop = onDiagnosticEvent((evt) => types.push(evt.type));

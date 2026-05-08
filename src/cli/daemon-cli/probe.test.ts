@@ -84,6 +84,32 @@ describe("probeGatewayStatus", () => {
     });
   });
 
+  it("preserves gateway server version from the connect probe", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: true,
+      auth: {
+        role: "operator",
+        scopes: ["operator.write"],
+        capability: "write_capable",
+      },
+      server: { version: "2026.5.6", connId: "conn-1" },
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      timeoutMs: 5_000,
+      json: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      server: { version: "2026.5.6", connId: "conn-1" },
+    });
+  });
+
   it("uses a real status RPC when requireRpc is enabled", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();

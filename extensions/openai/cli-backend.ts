@@ -5,13 +5,7 @@ import {
 } from "openclaw/plugin-sdk/cli-backend";
 
 const CODEX_CLI_DEFAULT_MODEL_REF = "codex-cli/gpt-5.5";
-export const OPENAI_CODEX_CLI_CLEAR_ENV = [
-  "CODEX_API_KEY",
-  "OPENAI_API_KEY",
-  "OPENAI_CODEX_API_KEY",
-  "OPENAI_BASE_URL",
-  "OPENAI_API_BASE_URL",
-] as const;
+const CODEX_CLI_NPM_PACKAGE = "@openai/codex@0.129.0";
 
 export function buildOpenAICodexCliBackend(): CliBackendPlugin {
   return {
@@ -21,7 +15,7 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
       defaultImageProbe: true,
       defaultMcpProbe: true,
       docker: {
-        npmPackage: "@openai/codex@0.128.0",
+        npmPackage: CODEX_CLI_NPM_PACKAGE,
         binaryName: "codex",
       },
     },
@@ -38,7 +32,7 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
         "--sandbox",
         "workspace-write",
         "-c",
-        'service_tier="fast"',
+        'service_tier="priority"',
         "--skip-git-repo-check",
       ],
       resumeArgs: [
@@ -48,7 +42,7 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
         "-c",
         'sandbox_mode="workspace-write"',
         "-c",
-        'service_tier="fast"',
+        'service_tier="priority"',
         "--skip-git-repo-check",
       ],
       output: "jsonl",
@@ -63,7 +57,6 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
       imageArg: "--image",
       imageMode: "repeat",
       imagePathScope: "workspace",
-      clearEnv: [...OPENAI_CODEX_CLI_CLEAR_ENV],
       reliability: {
         watchdog: {
           fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },

@@ -37,10 +37,15 @@ on:
         required: true
         default: true
         type: boolean
+      wait_for_clawhub:
+        description: Wait for ClawHub plugin publish before marking this workflow complete
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   actions: write
-  contents: read
+  contents: write
 
 concurrency:
   group: openclaw-release-publish-${{ inputs.tag }}
@@ -166,6 +171,7 @@ jobs:
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
+          WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
         run: |
           set -euo pipefail
 
@@ -203,18 +209,30 @@ jobs:
             fi
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
+            {
+              echo "- ${workflow}: dispatched (https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id})"
+            } >> "$GITHUB_STEP_SUMMARY"
             printf '%s\n' "${run_id}"
           }
 
           wait_for_run() {
             local workflow="$1"
             local run_id="$2"
-            local status conclusion url
+            local status conclusion url updated_at last_state
 
+            last_state=""
             while true; do
-              status="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status --jq '.status')"
+              run_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status,url,updatedAt)"
+              status="$(printf '%s' "$run_json" | jq -r '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
+              fi
+              url="$(printf '%s' "$run_json" | jq -r '.url')"
+              updated_at="$(printf '%s' "$run_json" | jq -r '.updatedAt')"
+              state="${status}:${updated_at}"
+              if [[ "$state" != "$last_state" ]]; then
+                echo "${workflow} still ${status} (updated ${updated_at}): ${url}"
+                last_state="$state"
               fi
               sleep 30
             done
@@ -245,6 +263,53 @@ jobs:
             wait_run_pid="$!"
           }
 
+          create_or_update_github_release() {
+            local release_version notes_version title notes_file changelog_file latest_arg prerelease_args
+            release_version="${RELEASE_TAG#v}"
+            notes_version="${release_version}"
+            if [[ "${notes_version}" =~ ^([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)-(alpha|beta)\.[1-9][0-9]*$ ]]; then
+              notes_version="${BASH_REMATCH[1]}"
+            fi
+            title="openclaw ${release_version}"
+            changelog_file="${RUNNER_TEMP}/CHANGELOG.md"
+            notes_file="${RUNNER_TEMP}/release-notes.md"
+
+            gh api --repo "$GITHUB_REPOSITORY" "repos/${GITHUB_REPOSITORY}/contents/CHANGELOG.md?ref=${TARGET_SHA}" \
+              --jq '.content' | base64 --decode > "${changelog_file}"
+            awk -v version="${notes_version}" '
+              $0 == "## " version { in_section = 1; next }
+              /^## / && in_section { exit }
+              in_section { print }
+            ' "${changelog_file}" > "${notes_file}"
+            if [[ ! -s "${notes_file}" ]]; then
+              echo "CHANGELOG.md does not contain release notes for ${notes_version}." >&2
+              exit 1
+            fi
+
+            prerelease_args=()
+            latest_arg="--latest=false"
+            if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
+              prerelease_args=(--prerelease)
+            elif [[ "${RELEASE_NPM_DIST_TAG}" == "latest" ]]; then
+              latest_arg="--latest"
+            fi
+
+            if gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
+                --title "${title}" \
+                --notes-file "${notes_file}" \
+                "${prerelease_args[@]}"
+            else
+              gh release create "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
+                --verify-tag \
+                --title "${title}" \
+                --notes-file "${notes_file}" \
+                "${prerelease_args[@]}" \
+                "${latest_arg}"
+            fi
+            echo "- GitHub release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          }
+
           {
             echo "### Publish sequence"
             echo
@@ -256,6 +321,11 @@ jobs:
               echo "- OpenClaw npm publish: starts after plugin npm succeeds; ClawHub may still be running"
             else
               echo "- OpenClaw npm publish: skipped by input"
+            fi
+            if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
+              echo "- Workflow completion waits for ClawHub"
+            else
+              echo "- Workflow completion does not wait for ClawHub; monitor the dispatched ClawHub run separately"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -286,10 +356,16 @@ jobs:
             echo "- OpenClaw npm publish: skipped by input" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          clawhub_result="$RUNNER_TEMP/clawhub-result.txt"
-          wait_run_pid=""
-          wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${clawhub_result}"
-          clawhub_pid="${wait_run_pid}"
+          clawhub_result=""
+          clawhub_pid=""
+          if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
+            clawhub_result="$RUNNER_TEMP/clawhub-result.txt"
+            wait_run_pid=""
+            wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${clawhub_result}"
+            clawhub_pid="${wait_run_pid}"
+          else
+            echo "- plugin-clawhub-release.yml: not awaited (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
           openclaw_result=""
           openclaw_pid=""
@@ -301,7 +377,7 @@ jobs:
           fi
 
           failed=0
-          if ! wait "${clawhub_pid}"; then
+          if [[ -n "${clawhub_pid}" ]] && ! wait "${clawhub_pid}"; then
             failed=1
           fi
           if [[ -n "${openclaw_pid}" ]] && ! wait "${openclaw_pid}"; then
@@ -315,4 +391,8 @@ jobs:
           fi
           if [[ "${failed}" != "0" ]]; then
             exit 1
+          fi
+
+          if [[ -n "${openclaw_npm_run_id}" ]]; then
+            create_or_update_github_release
           fi

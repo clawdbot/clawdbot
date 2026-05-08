@@ -26,6 +26,14 @@ function makeEnv(stateDir: string): NodeJS.ProcessEnv {
   return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 }
 
+async function requirePendingUpload(id: string, env: NodeJS.ProcessEnv) {
+  const upload = await getPendingUploadFs(id, { env });
+  if (!upload) {
+    throw new Error(`expected pending upload ${id}`);
+  }
+  return upload;
+}
+
 async function cleanupTempDirs(): Promise<void> {
   while (createdTempDirs.length > 0) {
     const dir = createdTempDirs.pop();
@@ -65,13 +73,12 @@ describe("msteams pending uploads (fs-backed)", () => {
       { env },
     );
 
-    const loaded = await getPendingUploadFs("upload-1", { env });
-    expect(loaded).toBeDefined();
-    expect(loaded?.id).toBe("upload-1");
-    expect(loaded?.filename).toBe("greeting.txt");
-    expect(loaded?.contentType).toBe("text/plain");
-    expect(loaded?.conversationId).toBe("19:conv@thread.v2");
-    expect(loaded?.buffer.toString("utf8")).toBe("hello world");
+    const loaded = await requirePendingUpload("upload-1", env);
+    expect(loaded.id).toBe("upload-1");
+    expect(loaded.filename).toBe("greeting.txt");
+    expect(loaded.contentType).toBe("text/plain");
+    expect(loaded.conversationId).toBe("19:conv@thread.v2");
+    expect(loaded.buffer.toString("utf8")).toBe("hello world");
   });
 
   it("returns undefined for missing and undefined ids", async () => {
@@ -129,7 +136,7 @@ describe("msteams pending uploads (fs-backed)", () => {
       },
       { env },
     );
-    expect(await getPendingUploadFs("upload-rm", { env })).toBeDefined();
+    expect(await requirePendingUpload("upload-rm", env)).toMatchObject({ id: "upload-rm" });
 
     await removePendingUploadFs("upload-rm", { env });
     expect(await getPendingUploadFs("upload-rm", { env })).toBeUndefined();
@@ -229,12 +236,11 @@ describe("prepareFileConsentActivityFs end-to-end", () => {
       expect(content.acceptContext.uploadId).toBe(result.uploadId);
 
       // Reader in (simulated) other process finds the entry under the same key
-      const loaded = await getPendingUploadFs(result.uploadId, { env });
-      expect(loaded).toBeDefined();
-      expect(loaded?.filename).toBe("cli.bin");
-      expect(loaded?.contentType).toBe("application/octet-stream");
-      expect(loaded?.conversationId).toBe("19:victim@thread.v2");
-      expect(loaded?.buffer.toString("utf8")).toBe("cli file");
+      const loaded = await requirePendingUpload(result.uploadId, env);
+      expect(loaded.filename).toBe("cli.bin");
+      expect(loaded.contentType).toBe("application/octet-stream");
+      expect(loaded.conversationId).toBe("19:victim@thread.v2");
+      expect(loaded.buffer.toString("utf8")).toBe("cli file");
     } finally {
       if (originalEnv === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;

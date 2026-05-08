@@ -64,9 +64,9 @@ describe("doctor deprecation compatibility inventory", () => {
   it("keeps every record actionable", () => {
     for (const record of listDoctorDeprecationCompatRecords()) {
       expect(record.introduced, record.code).toMatch(datePattern);
-      expect(record.source, record.code).toBeTruthy();
-      expect(record.migration, record.code).toBeTruthy();
-      expect(record.replacement, record.code).toBeTruthy();
+      expect(record.source, record.code).not.toBe("");
+      expect(record.migration, record.code).not.toBe("");
+      expect(record.replacement, record.code).not.toBe("");
       expect(record.docsPath, record.code).toMatch(/^\//u);
       expect(fs.existsSync(record.migration), `${record.code}: ${record.migration}`).toBe(true);
       expect(record.tests.length, record.code).toBeGreaterThan(0);

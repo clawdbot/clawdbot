@@ -493,7 +493,10 @@ describe("plugin interactive handlers", () => {
         inflightCallbackDedupe?: Set<string>;
       };
       expect(hydrated.interactiveHandlers).toBeInstanceOf(Map);
-      expect(hydrated.callbackDedupe?.clear).toEqual(expect.any(Function));
+      if (!hydrated.callbackDedupe) {
+        throw new Error("expected hydrated callback dedupe");
+      }
+      expect(() => hydrated.callbackDedupe?.clear()).not.toThrow();
       expect(hydrated.inflightCallbackDedupe).toBeInstanceOf(Set);
 
       const handler = vi.fn(async () => ({ handled: true }));

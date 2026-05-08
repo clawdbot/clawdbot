@@ -3,13 +3,12 @@ import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "./heartbeat-display.ts";
+import { CHAT_HISTORY_RENDER_LIMIT } from "./history-limits.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
 import { extractToolCards, extractToolPreview } from "./tool-cards.ts";
-
-const CHAT_HISTORY_RENDER_LIMIT = 200;
 
 export type BuildChatItemsProps = {
   sessionKey: string;

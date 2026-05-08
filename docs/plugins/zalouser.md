@@ -83,4 +83,4 @@ Channel message actions also support `react` for message reactions.
 ## Related
 
 - [Building plugins](/plugins/building-plugins)
-- [Community plugins](/plugins/community)
+- [ClawHub](/clawhub)

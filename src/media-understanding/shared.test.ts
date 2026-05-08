@@ -46,6 +46,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function getFirstGuardedFetchCall() {
+  const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+  if (!call) {
+    throw new Error("Expected fetchWithSsrFGuard to be called");
+  }
+  return call;
+}
+
 describe("provider operation deadlines", () => {
   it("keeps default per-call timeouts when no operation timeout is configured", () => {
     const deadline = createProviderOperationDeadline({
@@ -194,7 +202,7 @@ describe("resolveProviderHttpRequestConfig", () => {
     expect(resolved.headers.get("x-default")).toBe("1");
     expect(resolved.headers.get("user-agent")).toMatch(/^openclaw\//);
     expect(resolved.headers.get("originator")).toBe("openclaw");
-    expect(resolved.headers.get("version")).toBeTruthy();
+    expect(resolved.headers.get("version")).toEqual(expect.stringMatching(/\S/u));
   });
 
   it("uses the fallback base URL without enabling private-network access", () => {
@@ -421,8 +429,7 @@ describe("fetchWithTimeoutGuarded", () => {
 
     await fetchWithTimeoutGuarded("https://example.com", {}, undefined, fetch);
 
-    const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-    expect(call).toBeDefined();
+    const call = getFirstGuardedFetchCall();
     expect(call).not.toHaveProperty("mode");
   });
 
@@ -554,8 +561,7 @@ describe("fetchWithTimeoutGuarded", () => {
       fetchFn: fetch,
     });
 
-    const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-    expect(call).toBeDefined();
+    const call = getFirstGuardedFetchCall();
     expect(call).not.toHaveProperty("mode");
   });
 
@@ -579,8 +585,7 @@ describe("fetchWithTimeoutGuarded", () => {
       dispatcherPolicy: explicitPolicy,
     });
 
-    const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-    expect(call).toBeDefined();
+    const call = getFirstGuardedFetchCall();
     expect(call).not.toHaveProperty("mode");
     expect(call).toHaveProperty("dispatcherPolicy", explicitPolicy);
   });
@@ -604,8 +609,7 @@ describe("fetchWithTimeoutGuarded", () => {
       fetchFn: fetch,
     });
 
-    const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-    expect(call).toBeDefined();
+    const call = getFirstGuardedFetchCall();
     expect(call).not.toHaveProperty("mode");
   });
 });

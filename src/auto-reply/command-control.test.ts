@@ -44,6 +44,20 @@ describe("resolveCommandAuthorization", () => {
     });
   }
 
+  function createOwnerEnforcingAllowFromPlugin(
+    id: string,
+    resolveAllowFrom: () => Array<string | number> | undefined,
+  ) {
+    const entry = createAllowFromPlugin(id, resolveAllowFrom);
+    return {
+      ...entry,
+      plugin: {
+        ...entry.plugin,
+        commands: { enforceOwnerForCommands: true },
+      },
+    };
+  }
+
   function registerAllowFromPlugins(...plugins: ReturnType<typeof createAllowFromPlugin>[]) {
     setActivePluginRegistry(createTestRegistry(plugins));
   }
@@ -202,7 +216,7 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.isAuthorizedSender).toBe(false);
   });
 
-  it("allows channel-validated native commands when plugin owner enforcement has no owner allowlist", () => {
+  it("rejects channel-validated native commands when plugin owner enforcement has no owner allowlist", () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -242,7 +256,7 @@ describe("resolveCommandAuthorization", () => {
     });
 
     expect(auth.senderIsOwner).toBe(false);
-    expect(auth.isAuthorizedSender).toBe(true);
+    expect(auth.isAuthorizedSender).toBe(false);
   });
 
   it("uses explicit owner allowlist when allowFrom is empty", () => {
@@ -629,6 +643,62 @@ describe("resolveCommandAuthorization", () => {
         commandAuthorized: true,
       });
 
+      expect(auth.isAuthorizedSender).toBe(true);
+    });
+
+    it("requires owner identity before commands.allowFrom when the plugin enforces owner-only commands", () => {
+      registerAllowFromPlugins(createOwnerEnforcingAllowFromPlugin("telegram", () => ["*"]));
+      const cfg = {
+        commands: {
+          allowFrom: {
+            "*": ["*"],
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+      } as OpenClawConfig;
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          From: "telegram:999",
+          SenderId: "999",
+          CommandSource: "native",
+        } as MsgContext,
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(auth.senderIsOwner).toBe(false);
+      expect(auth.isAuthorizedSender).toBe(false);
+    });
+
+    it("keeps commands.allowFrom available to non-owner command users when an owner allowlist is configured", () => {
+      const cfg = {
+        commands: {
+          ownerAllowFrom: ["discord:owner"],
+          allowFrom: {
+            discord: ["helper"],
+          },
+        },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig;
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "group",
+          From: "discord:helper",
+          SenderId: "helper",
+          CommandSource: "native",
+        } as MsgContext,
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(auth.senderIsOwner).toBe(false);
       expect(auth.isAuthorizedSender).toBe(true);
     });
 

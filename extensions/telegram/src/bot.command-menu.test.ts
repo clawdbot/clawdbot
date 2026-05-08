@@ -167,7 +167,9 @@ describe("createTelegramBot command menu", () => {
       description: command.description,
     }));
     const nativeStatus = native.find((command) => command.command === "status");
-    expect(nativeStatus).toBeDefined();
+    if (!nativeStatus) {
+      throw new Error("expected native Telegram status command");
+    }
     expect(registered).toContainEqual({ command: "custom_backup", description: "Git backup" });
     expect(registered).not.toContainEqual({ command: "status", description: "Custom status" });
     expect(registered.filter((command) => command.command === "status")).toEqual([nativeStatus]);
@@ -209,6 +211,6 @@ describe("createTelegramBot command menu", () => {
       { command: "custom_generate", description: "Create an image" },
     ]);
     const reserved = new Set(listNativeCommandSpecs().map((command) => command.name));
-    expect(registered.some((command) => reserved.has(command.command))).toBe(false);
+    expect(registered.filter((command) => reserved.has(command.command))).toEqual([]);
   });
 });

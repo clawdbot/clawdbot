@@ -57,6 +57,12 @@ describe("actionHasTarget", () => {
     { action: "react", params: { chatGuid: "chat-guid" }, expected: true },
     { action: "react", params: { chatIdentifier: "chat-id" }, expected: true },
     { action: "react", params: { chatId: 42 }, expected: true },
+    {
+      action: "upload-file",
+      params: { chatIdentifier: "chat-id" },
+      ctx: { channel: "imessage" },
+      expected: true,
+    },
     { action: "read", params: { messageId: "msg_123" }, expected: false },
     {
       action: "pin",

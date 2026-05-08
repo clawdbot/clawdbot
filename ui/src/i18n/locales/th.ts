@@ -696,6 +696,16 @@ export const th: TranslationMap = {
       today: "วันนี้",
       last7d: "7 วัน",
       last30d: "30 วัน",
+      last90d: "90d",
+      last1y: "1y",
+      all: "ทั้งหมด",
+    },
+    scope: {
+      instance: "อินสแตนซ์ปัจจุบัน",
+      instanceHint: "แสดงเฉพาะ ID เซสชันที่ใช้งานอยู่สำหรับแต่ละเซสชันเชิงตรรกะ",
+      family: "ลำดับสายประวัติ",
+      familyHint: "รวม ID เซสชันที่ทราบซึ่งอิงตามทรานสคริปต์และถูกหมุนเวียน",
+      familyIncluded: "ลำดับสายประวัติมีอินสแตนซ์เซสชัน {count} รายการ",
     },
     filters: {
       title: "ตัวกรอง",
@@ -913,6 +923,79 @@ export const th: TranslationMap = {
     showPassword: "แสดงรหัสผ่าน",
     hidePassword: "ซ่อนรหัสผ่าน",
     togglePasswordVisibility: "สลับการแสดงรหัสผ่าน",
+    failure: {
+      rawError: "ข้อผิดพลาดดิบ",
+      docsAuth: "เอกสารการยืนยันตัวตนของ Control UI",
+      docsPairing: "เอกสารการจับคู่อุปกรณ์",
+      docsInsecure: "เอกสาร HTTP ที่ไม่ปลอดภัย",
+      authRequired: {
+        title: "ต้องยืนยันตัวตน",
+        summary: "เข้าถึง Gateway ได้ แต่ต้องมีโทเค็นหรือรหัสผ่านที่ตรงกันก่อนที่เบราว์เซอร์นี้จะเชื่อมต่อได้",
+        stepPaste: "วางโทเค็นจาก openclaw dashboard --no-open หรือป้อนรหัสผ่านที่ตั้งค่าไว้",
+        stepGenerate:
+          "ถ้ายังไม่ได้ตั้งค่าโทเค็น ให้รัน openclaw doctor --generate-gateway-token บนโฮสต์ Gateway",
+        stepConnect: "คลิก Connect อีกครั้งหลังจากอัปเดตข้อมูลรับรอง",
+      },
+      authFailed: {
+        title: "การยืนยันตัวตนไม่ตรงกัน",
+        summary: "ข้อมูลรับรองที่ให้มาถูกปฏิเสธ สาเหตุที่พบบ่อยคือโทเค็นเก่าหรือโทเค็นที่คัดลอกจาก Gateway URL อื่น",
+        stepDashboard: "รัน openclaw dashboard --no-open แล้วเปิด URL ใหม่หรือวางโทเค็นของ URL นั้น",
+        stepReplace: "แทนที่ค่าโทเค็น/รหัสผ่านเก่า อย่าใช้โทเค็นจาก Gateway URL อื่นซ้ำ",
+        stepMode:
+          "ใช้โหมด auth ที่ตรงกันทีละโหมด: gateway token สำหรับโหมด token, รหัสผ่านสำหรับโหมด password",
+      },
+      rateLimited: {
+        title: "พยายามล้มเหลวมากเกินไป",
+        summary: "Gateway กำลังจำกัดความพยายามยืนยันตัวตนของไคลเอนต์นี้ชั่วคราว",
+        stepStop: "หยุดลองซ้ำจากแท็บนี้สักครู่",
+        stepWait: "รอให้ตัวจำกัด auth เย็นลง แล้วเชื่อมต่อใหม่ด้วยข้อมูลรับรองที่แก้ไขแล้ว",
+        stepCheckClients: "ถ้าเป็นโฮสต์ที่ใช้ร่วมกัน ให้ตรวจสอบไคลเอนต์อื่นที่ลองผิดซ้ำๆ",
+      },
+      pairing: {
+        title: "ต้องจับคู่อุปกรณ์",
+        scopeTitle: "การอัปเกรด scope รออนุมัติ",
+        roleTitle: "การอัปเกรดบทบาทรออนุมัติ",
+        metadataTitle: "การรีเฟรชอุปกรณ์รออนุมัติ",
+        summary: "เบราว์เซอร์นี้ต้องได้รับการอนุมัติครั้งเดียวจากโฮสต์ Gateway ก่อนใช้ Control UI",
+        upgradeSummary: "เบราว์เซอร์นี้เป็นที่รู้จักแล้ว แต่สิทธิ์ที่ขอเปลี่ยนไปและต้องอนุมัติใหม่",
+        stepList: "รัน openclaw devices list บนโฮสต์ Gateway",
+        stepApproveId: "อนุมัติคำขอนี้: openclaw devices approve {requestId}.",
+        stepApprove: "อนุมัติคำขอเบราว์เซอร์/อุปกรณ์ที่รอดำเนินการจากรายการนั้น",
+        stepReconnect: "เชื่อมต่อใหม่หลังการอนุมัติเสร็จสิ้น",
+      },
+      insecure: {
+        title: "ต้องใช้บริบทเบราว์เซอร์ที่ปลอดภัย",
+        summary: "หน้านี้ทำงานผ่าน HTTP ธรรมดา เบราว์เซอร์จึงสร้างตัวตนอุปกรณ์ที่ Gateway คาดหวังไม่ได้",
+        stepHttps: "ใช้ HTTPS/Tailscale Serve หรือเปิด http://127.0.0.1:18789 บนโฮสต์ Gateway",
+        stepLocalCompat:
+          "สำหรับความเข้ากันได้เฉพาะโทเค็นในเครื่อง ให้ตั้ง gateway.controlUi.allowInsecureAuth: true",
+        stepAvoidDisable: "หลีกเลี่ยงการปิด auth อุปกรณ์สำหรับการเข้าถึง HTTP ระยะไกล",
+      },
+      origin: {
+        title: "ไม่อนุญาต origin ของเบราว์เซอร์",
+        summary: "Gateway ปฏิเสธ origin ของหน้านี้ก่อนรับการเชื่อมต่อ Control UI",
+        stepAllowedOrigins: "เพิ่ม origin ของเบราว์เซอร์นี้ใน gateway.controlUi.allowedOrigins",
+        stepFullOrigin: "ใช้ origin แบบเต็ม เช่น http://localhost:5173 ไม่ใช่รูปแบบ wildcard",
+        stepRestart: "รีสตาร์ทหรือโหลด Gateway ใหม่หลังเปลี่ยน origin ที่อนุญาต",
+      },
+      protocol: {
+        title: "โปรโตคอลไม่ตรงกัน",
+        summary: "Control UI ที่เสิร์ฟอยู่และ Gateway ที่ทำงานอยู่ไม่ตรงกันเรื่องโปรโตคอลการเชื่อมต่อที่รองรับ",
+        stepDashboard:
+          "เปิด dashboard ที่เสิร์ฟอีกครั้งด้วย openclaw dashboard เพื่อให้ UI และ Gateway มาจากการติดตั้งเดียวกัน",
+        stepDevUi: "ถ้าใช้ pnpm ui:dev ให้ build ใหม่หรือรีสตาร์ท UI dev กับ checkout ปัจจุบัน",
+        stepRestart: "รีสตาร์ท Gateway หลังอัปเดต OpenClaw เพื่อให้เสิร์ฟโปรโตคอลปัจจุบัน",
+      },
+      network: {
+        title: "เชื่อมต่อไม่ได้",
+        summary:
+          "เบราว์เซอร์ไม่สามารถเชื่อมต่อ Gateway ให้เสร็จสมบูรณ์ได้ ตรวจสอบเป้าหมายและ transport ก่อนลองข้อมูลรับรองอีกครั้ง",
+        stepGateway: "ยืนยันว่า Gateway กำลังทำงานด้วย openclaw status หรือ openclaw gateway run",
+        stepUrl: "ตรวจสอบ WebSocket URL และใช้ wss:// เมื่อ Gateway อยู่หลัง HTTPS/Tailscale Serve",
+        stepDashboard:
+          "เปิด dashboard อีกครั้งด้วย openclaw dashboard --no-open เพื่อคัดลอก URL และรายละเอียด auth ปัจจุบันใหม่",
+      },
+    },
   },
   chat: {
     disconnected: "ตัดการเชื่อมต่อจากเกตเวย์แล้ว",

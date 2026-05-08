@@ -1,6 +1,7 @@
 # QA Convex Credential Broker (v1)
 
 Standalone Convex project for shared `qa-lab` live credentials with lease locking.
+Keep private operator notes in `~/Projects/manager/docs/`, not in public docs.
 
 This broker exposes:
 
@@ -151,6 +152,17 @@ For `kind: "discord"`, broker `admin/add` validates that payload includes:
 - non-empty `driverBotToken`
 - non-empty `sutBotToken`
 - `sutApplicationId` as a Discord snowflake string
+
+For `kind: "whatsapp"`, broker `admin/add` validates that payload includes:
+
+- `driverPhoneE164` as an E.164 phone number string
+- `sutPhoneE164` as a distinct E.164 phone number string
+- non-empty `driverAuthArchiveBase64`
+- non-empty `sutAuthArchiveBase64`
+- optional `groupJid`
+
+Other kinds are currently accepted as pass-through payloads. Add broker-side
+validation before treating a new kind as a hardened shared pool.
 
 Admin list (default redacted):
 

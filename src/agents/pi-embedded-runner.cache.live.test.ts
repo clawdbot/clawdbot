@@ -457,11 +457,11 @@ async function runToolOnlyTurn(params: {
     text = extractAssistantText(response);
   }
 
-  expect(toolCall).toBeTruthy();
   expect(text.length).toBe(0);
   if (!toolCall || toolCall.type !== "toolCall") {
     throw new Error("expected tool call");
   }
+  expect(toolCall.name).toBe(params.tool.name);
 
   return {
     prompt,
@@ -917,7 +917,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
     );
 
     it(
-      "keeps high cache-read rates across repeated embedded-runner turns",
+      "keeps high OpenAI cache-read rates across repeated embedded-runner turns",
       async () => {
         const sessionId = `${OPENAI_SESSION_ID}-embedded`;
         const warmup = await runEmbeddedCacheProbe({
@@ -1008,7 +1008,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
     );
 
     it(
-      "keeps cache reuse when structured system context only changes by whitespace and line endings",
+      "keeps OpenAI cache reuse when structured system context only changes by whitespace and line endings",
       async () => {
         const sessionId = `${OPENAI_SESSION_ID}-structured-normalization`;
         const warmup = await runEmbeddedCacheProbe({
@@ -1201,7 +1201,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
     );
 
     it(
-      "keeps high cache-read rates across repeated embedded-runner turns",
+      "keeps high Anthropic cache-read rates across repeated embedded-runner turns",
       async () => {
         const sessionId = `${ANTHROPIC_SESSION_ID}-embedded`;
         const warmup = await runEmbeddedCacheProbe({
@@ -1300,7 +1300,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
     );
 
     it(
-      "keeps cache reuse when structured system context only changes by whitespace and line endings",
+      "keeps Anthropic cache reuse when structured system context only changes by whitespace and line endings",
       async () => {
         const sessionId = `${ANTHROPIC_SESSION_ID}-structured-normalization`;
         const warmup = await runEmbeddedCacheProbe({

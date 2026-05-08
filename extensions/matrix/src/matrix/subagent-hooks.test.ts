@@ -770,7 +770,14 @@ describe("handleMatrixSubagentDeliveryTarget", () => {
 
     expect(listAllBindingsMock).toHaveBeenCalled();
     expect(listBindingsForAccountMock).not.toHaveBeenCalled();
-    expect(result).toBeDefined();
+    expect(result).toEqual({
+      origin: {
+        channel: "matrix",
+        accountId: "ops",
+        to: "room:!room:example",
+        threadId: "$thread123",
+      },
+    });
   });
 });
 

@@ -66,6 +66,15 @@ export function resolveModelSelectionFromDirective(params: {
   }
 
   const raw = params.directives.rawModelDirective.trim();
+  if (/^default$/i.test(raw)) {
+    return {
+      modelSelection: {
+        provider: params.defaultProvider,
+        model: params.defaultModel,
+        isDefault: true,
+      },
+    };
+  }
   const storedNumericProfile =
     params.directives.rawModelProfile === undefined
       ? resolveStoredNumericProfileModelDirective({

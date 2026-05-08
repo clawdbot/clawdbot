@@ -126,6 +126,11 @@
       "class": "core-runtime",
       "risk": ["archive-parser", "untrusted-files"]
     },
+    "kysely": {
+      "owner": "core:sqlite-storage",
+      "class": "core-runtime",
+      "risk": ["database-query-builder"]
+    },
     "linkedom": {
       "owner": "plugin:web-readability",
       "class": "plugin-runtime",

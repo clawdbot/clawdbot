@@ -79,7 +79,9 @@ describe("vllm provider discovery contract", () => {
     expect(provider?.id).toBe("vllm");
     expect(provider?.discovery?.order).toBe("late");
     const discovery = provider?.discovery;
-    expect(discovery).toBeDefined();
+    if (!discovery) {
+      throw new Error("expected vllm provider discovery hook");
+    }
 
     buildVllmProviderMock.mockResolvedValueOnce({
       baseUrl: "http://127.0.0.1:8000/v1",
@@ -88,7 +90,7 @@ describe("vllm provider discovery contract", () => {
     });
 
     await expect(
-      discovery!.run({
+      discovery.run({
         config: {},
         env: {
           VLLM_API_KEY: "env-vllm-key",

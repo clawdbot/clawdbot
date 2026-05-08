@@ -78,7 +78,7 @@ describe("codex conversation binding", () => {
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
         requests.push({ method, params: requestParams });
         return {
-          thread: { id: "thread-new", cwd: tempDir },
+          thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
           model: "gpt-5.4-mini",
         };
       }),
@@ -138,7 +138,7 @@ describe("codex conversation binding", () => {
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
         requests.push({ method, params: requestParams });
         return {
-          thread: { id: "thread-new", cwd: tempDir },
+          thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
           model: "gpt-5.4-mini",
           modelProvider: "openai",
         };
@@ -261,7 +261,7 @@ describe("codex conversation binding", () => {
         }
         if (method === "thread/start") {
           return {
-            thread: { id: "thread-new", cwd: tempDir },
+            thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
             model: "gpt-5.4-mini",
           };
         }
@@ -340,13 +340,13 @@ describe("codex conversation binding", () => {
       model: "gpt-5.4-mini",
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
-      serviceTier: "fast",
+      serviceTier: "priority",
     });
     expect(requests[1]?.params).not.toHaveProperty("modelProvider");
     expect(requests[2]?.params).toMatchObject({
       threadId: "thread-new",
       approvalPolicy: "on-request",
-      serviceTier: "fast",
+      serviceTier: "priority",
     });
     const savedBinding = JSON.parse(
       await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
@@ -356,7 +356,7 @@ describe("codex conversation binding", () => {
       authProfileId: "work",
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
-      serviceTier: "fast",
+      serviceTier: "priority",
     });
     expect(savedBinding).not.toHaveProperty("modelProvider");
   });

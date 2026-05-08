@@ -1,1 +1,1 @@
-export const CHAT_HISTORY_RENDER_LIMIT = 200;
+export const CHAT_HISTORY_RENDER_LIMIT = 100;

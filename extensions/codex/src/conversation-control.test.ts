@@ -55,7 +55,7 @@ describe("codex conversation controls", () => {
 
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
       threadId: "thread-1",
-      serviceTier: "fast",
+      serviceTier: "priority",
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });

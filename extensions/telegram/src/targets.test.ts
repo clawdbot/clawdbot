@@ -18,6 +18,11 @@ import {
   stripTelegramInternalPrefixes,
 } from "./targets.js";
 
+const numericTelegramTargetNormalizers = [
+  { name: "normalizeTelegramChatId", normalize: normalizeTelegramChatId },
+  { name: "normalizeTelegramLookupTarget", normalize: normalizeTelegramLookupTarget },
+];
+
 describe("stripTelegramInternalPrefixes", () => {
   it("strips telegram prefix", () => {
     expect(stripTelegramInternalPrefixes("telegram:123")).toBe("123");
@@ -91,17 +96,22 @@ describe("parseTelegramTarget", () => {
   });
 });
 
+describe("telegram numeric target normalization", () => {
+  it.each(numericTelegramTargetNormalizers)(
+    "$name keeps numeric chat ids unchanged",
+    ({ normalize }) => {
+      expect(normalize("-1001234567890")).toBe("-1001234567890");
+      expect(normalize("123456789")).toBe("123456789");
+    },
+  );
+});
+
 describe("normalizeTelegramChatId", () => {
   it("rejects username and t.me forms", () => {
     expect(normalizeTelegramChatId("telegram:https://t.me/MyChannel")).toBeUndefined();
     expect(normalizeTelegramChatId("tg:t.me/mychannel")).toBeUndefined();
     expect(normalizeTelegramChatId("@MyChannel")).toBeUndefined();
     expect(normalizeTelegramChatId("MyChannel")).toBeUndefined();
-  });
-
-  it("keeps numeric chat ids unchanged", () => {
-    expect(normalizeTelegramChatId("-1001234567890")).toBe("-1001234567890");
-    expect(normalizeTelegramChatId("123456789")).toBe("123456789");
   });
 
   it("returns undefined for empty input", () => {
@@ -115,11 +125,6 @@ describe("normalizeTelegramLookupTarget", () => {
     expect(normalizeTelegramLookupTarget("tg:t.me/mychannel")).toBe("@mychannel");
     expect(normalizeTelegramLookupTarget("@MyChannel")).toBe("@MyChannel");
     expect(normalizeTelegramLookupTarget("MyChannel")).toBe("@MyChannel");
-  });
-
-  it("keeps numeric chat ids unchanged", () => {
-    expect(normalizeTelegramLookupTarget("-1001234567890")).toBe("-1001234567890");
-    expect(normalizeTelegramLookupTarget("123456789")).toBe("123456789");
   });
 
   it("rejects invalid username forms", () => {

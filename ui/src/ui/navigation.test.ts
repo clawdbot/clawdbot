@@ -15,16 +15,30 @@ import {
 /** All valid tab identifiers derived from TAB_GROUPS */
 const ALL_TABS: Tab[] = TAB_GROUPS.flatMap((group) => group.tabs) as Tab[];
 
-describe("iconForTab", () => {
-  it("returns a non-empty string for every tab", () => {
-    for (const tab of ALL_TABS) {
-      const icon = iconForTab(tab);
-      expect(icon).toBeTruthy();
-      expect(typeof icon).toBe("string");
-      expect(icon.length).toBeGreaterThan(0);
-    }
-  });
+const nonEmptyTabMetadataCases = [
+  { name: "iconForTab", resolve: iconForTab },
+  { name: "titleForTab", resolve: titleForTab },
+];
 
+const leadingSlashNormalizerCases = [
+  { name: "normalizeBasePath", normalize: normalizeBasePath, input: "ui", expected: "/ui" },
+  { name: "normalizePath", normalize: normalizePath, input: "chat", expected: "/chat" },
+];
+
+describe("tab metadata string helpers", () => {
+  it.each(nonEmptyTabMetadataCases)(
+    "$name returns a non-empty string for every tab",
+    ({ resolve }) => {
+      for (const tab of ALL_TABS) {
+        const value = resolve(tab);
+        expect(typeof value).toBe("string");
+        expect(value.length).toBeGreaterThan(0);
+      }
+    },
+  );
+});
+
+describe("iconForTab", () => {
   it("returns stable icons for known tabs", () => {
     expect(iconForTab("chat")).toBe("messageSquare");
     expect(iconForTab("overview")).toBe("barChart");
@@ -47,14 +61,6 @@ describe("iconForTab", () => {
 });
 
 describe("titleForTab", () => {
-  it("returns a non-empty string for every tab", () => {
-    for (const tab of ALL_TABS) {
-      const title = titleForTab(tab);
-      expect(title).toBeTruthy();
-      expect(typeof title).toBe("string");
-    }
-  });
-
   it("returns expected titles", () => {
     expect(titleForTab("chat")).toBe("Chat");
     expect(titleForTab("overview")).toBe("Overview");
@@ -76,13 +82,18 @@ describe("subtitleForTab", () => {
   });
 });
 
+describe("leading slash path normalizers", () => {
+  it.each(leadingSlashNormalizerCases)(
+    "$name adds leading slash if missing",
+    ({ expected, input, normalize }) => {
+      expect(normalize(input)).toBe(expected);
+    },
+  );
+});
+
 describe("normalizeBasePath", () => {
   it("returns empty string for falsy input", () => {
     expect(normalizeBasePath("")).toBe("");
-  });
-
-  it("adds leading slash if missing", () => {
-    expect(normalizeBasePath("ui")).toBe("/ui");
   });
 
   it("removes trailing slash", () => {
@@ -101,10 +112,6 @@ describe("normalizeBasePath", () => {
 describe("normalizePath", () => {
   it("returns / for falsy input", () => {
     expect(normalizePath("")).toBe("/");
-  });
-
-  it("adds leading slash if missing", () => {
-    expect(normalizePath("chat")).toBe("/chat");
   });
 
   it("removes trailing slash except for root", () => {

@@ -46,6 +46,10 @@ function normalizeComparablePath(filePath: string): string {
   return path.join(comparableParent, basename);
 }
 
+function createFsError(code: string, message = code): NodeJS.ErrnoException {
+  return Object.assign(new Error(message), { code });
+}
+
 async function rebindInstallBasePath(params: {
   installBaseDir: string;
   preservedDir: string;
@@ -207,6 +211,49 @@ describe("installPackageDir", () => {
     await expect(fs.readdir(backupRoot)).resolves.toHaveLength(0);
   });
 
+  it("publishes the staged install through the copy fallback when rename crosses devices", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
+    const sourceDir = path.join(fixtureRoot, "source");
+    const installBaseDir = path.join(fixtureRoot, "plugins");
+    const targetDir = path.join(installBaseDir, "demo");
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
+
+    const realRename = fs.rename.bind(fs);
+    let exdevMoves = 0;
+    vi.spyOn(fs, "rename").mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      const [from, to] = args;
+      const fromPath = String(from);
+      if (
+        exdevMoves === 0 &&
+        path.basename(fromPath).startsWith(".openclaw-install-stage-") &&
+        normalizeComparablePath(String(to)) === normalizeComparablePath(targetDir)
+      ) {
+        exdevMoves += 1;
+        throw createFsError("EXDEV", "cross-device link not permitted");
+      }
+      return await realRename(...args);
+    });
+
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "install",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: false,
+      depsLogMessage: "Installing deps…",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(exdevMoves).toBe(1);
+    await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("new");
+    await expect(
+      listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
+    ).resolves.toHaveLength(0);
+  });
+
   it("aborts without outside writes when the install base is rebound before publish", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
@@ -255,25 +302,36 @@ describe("installPackageDir", () => {
       await createReboundInstallFixture({ fixtureRoot, withExistingInstall: true });
 
     const warnings: string[] = [];
-    const result = await withInstallBaseReboundOnRealpathCall({
-      installBaseDir,
-      preservedDir: preservedInstallRoot,
-      outsideTarget: outsideInstallRoot,
-      rebindAtCall: 8,
-      run: async () =>
-        await installPackageDir({
-          sourceDir,
-          targetDir,
-          mode: "update",
-          timeoutMs: 1_000,
-          copyErrorPrefix: "failed to copy plugin",
-          hasDeps: false,
-          depsLogMessage: "Installing deps…",
-          logger: { warn: (message) => warnings.push(message) },
-        }),
+    const installBasePath = normalizeComparablePath(installBaseDir);
+    const realStat = fs.stat.bind(fs);
+    let installBaseStatCalls = 0;
+    vi.spyOn(fs, "stat").mockImplementation(async (...args: Parameters<typeof fs.stat>) => {
+      if (normalizeComparablePath(String(args[0])) === installBasePath) {
+        installBaseStatCalls += 1;
+        if (installBaseStatCalls === 3) {
+          await rebindInstallBasePath({
+            installBaseDir,
+            preservedDir: preservedInstallRoot,
+            outsideTarget: outsideInstallRoot,
+          });
+        }
+      }
+      return await realStat(...args);
+    });
+
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "update",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: false,
+      depsLogMessage: "Installing deps…",
+      logger: { warn: (message) => warnings.push(message) },
     });
 
     expect(result).toEqual({ ok: true });
+    expect(installBaseStatCalls).toBe(3);
     expect(warnings).toContain(
       "Install base directory changed before backup cleanup; leaving backup in place.",
     );
@@ -354,12 +412,14 @@ describe("installPackageDir", () => {
 
     vi.mocked(runCommandWithTimeout).mockImplementation(async (_argv, optionsOrTimeout) => {
       const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
-      expect(cwd).toBeTruthy();
-      await expect(fs.stat(path.join(cwd ?? "", ".npmrc"))).rejects.toMatchObject({
+      if (cwd === undefined) {
+        throw new Error("expected package install cwd");
+      }
+      await expect(fs.stat(path.join(cwd, ".npmrc"))).rejects.toMatchObject({
         code: "ENOENT",
       });
       await expect(
-        listMatchingEntries(cwd ?? "", ".openclaw-install-hidden-npmrc-"),
+        listMatchingEntries(cwd, ".openclaw-install-hidden-npmrc-"),
       ).resolves.toHaveLength(1);
       return {
         stdout: "",

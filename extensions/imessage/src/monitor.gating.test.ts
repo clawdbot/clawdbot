@@ -1,11 +1,16 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { _resetIMessageShortIdState } from "./monitor-reply-cache.js";
 import {
   buildIMessageInboundContext,
   resolveIMessageInboundDecision,
 } from "./monitor/inbound-processing.js";
 import { parseIMessageNotification } from "./monitor/parse-notification.js";
 import type { IMessagePayload } from "./monitor/types.js";
+
+beforeEach(() => {
+  _resetIMessageShortIdState();
+});
 
 function baseCfg(): OpenClawConfig {
   return {
@@ -157,6 +162,27 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(ctxPayload.Body ?? "").toContain("+15550002222:");
     expect(ctxPayload.Body ?? "").not.toContain("[from:");
     expect(ctxPayload.To).toBe("chat_id:42");
+  });
+
+  it("uses short message ids in context and keeps the full guid for actions", () => {
+    const cfg = baseCfg();
+    const message: IMessagePayload = {
+      id: 3,
+      guid: "full-message-guid",
+      chat_id: 42,
+      chat_guid: "iMessage;+;chat0000",
+      chat_identifier: "thread-42",
+      sender: "+15550002222",
+      is_from_me: false,
+      text: "@openclaw ping",
+      is_group: true,
+      chat_name: "Lobster Squad",
+      participants: ["+1555", "+1556"],
+    };
+    const ctxPayload = buildDispatchContextPayload({ cfg, message });
+
+    expect(ctxPayload.MessageSid).toBe("1");
+    expect(ctxPayload.MessageSidFull).toBe("full-message-guid");
   });
 
   it("includes reply-to context fields + suffix", () => {

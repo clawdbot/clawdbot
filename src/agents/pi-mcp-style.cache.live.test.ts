@@ -91,11 +91,11 @@ async function runToolOnlyTurn(params: ToolOnlyTurnParams) {
     text = extractAssistantText(response);
   }
 
-  expect(toolCall).toBeTruthy();
   expect(text.length).toBe(0);
   if (!toolCall || toolCall.type !== "toolCall") {
     throw new Error("expected tool call");
   }
+  expect(toolCall.name).toBe(MCP_TOOL.name);
   return {
     prompt,
     response,

@@ -84,10 +84,13 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
         cfg: {
           agents: {
             defaults: {
-              agentRuntime: { id: "claude-cli" },
               model: {
                 primary: "anthropic/claude-opus-4-6",
                 fallbacks: ["anthropic/claude-sonnet-4-6"],
+              },
+              models: {
+                "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+                "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
               },
             },
           },

@@ -1,3 +1,4 @@
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -104,13 +105,8 @@ function resolveReferenceAsset(req: VideoGenerationRequest) {
   const mimeType =
     normalizeOptionalString(asset.mimeType) ||
     ((req.inputVideos?.length ?? 0) > 0 ? "video/mp4" : "image/png");
-  const extension = mimeType.includes("video")
-    ? "mp4"
-    : mimeType.includes("jpeg")
-      ? "jpg"
-      : mimeType.includes("webp")
-        ? "webp"
-        : "png";
+  const extension =
+    extensionForMime(mimeType)?.slice(1) ?? (mimeType.startsWith("video/") ? "mp4" : "png");
   const fileName =
     normalizeOptionalString(asset.fileName) ||
     `${(req.inputVideos?.length ?? 0) > 0 ? "reference-video" : "reference-image"}.${extension}`;
@@ -173,7 +169,7 @@ async function downloadOpenAIVideo(params: {
   return {
     buffer: Buffer.from(arrayBuffer),
     mimeType,
-    fileName: `video-1.${mimeType.includes("webm") ? "webm" : "mp4"}`,
+    fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
   };
 }
 

@@ -33,7 +33,6 @@
     "!dist/extensions/acpx/**",
     "!dist/extensions/node_modules/**",
     "!dist/extensions/*/node_modules/**",
-    "!dist/extensions/bluebubbles/**",
     "!dist/extensions/brave/**",
     "!dist/extensions/codex/**",
     "!dist/extensions/diagnostics-otel/**",
@@ -233,6 +232,10 @@
     "./plugin-sdk/config-schema": {
       "types": "./dist/plugin-sdk/config-schema.d.ts",
       "default": "./dist/plugin-sdk/config-schema.js"
+    },
+    "./plugin-sdk/json-schema-runtime": {
+      "types": "./dist/plugin-sdk/json-schema-runtime.d.ts",
+      "default": "./dist/plugin-sdk/json-schema-runtime.js"
     },
     "./plugin-sdk/reply-runtime": {
       "types": "./dist/plugin-sdk/reply-runtime.d.ts",
@@ -1490,13 +1493,15 @@
     "qa:otel:smoke": "node --import tsx scripts/qa-otel-smoke.ts",
     "release-metadata:check": "node scripts/check-release-metadata-only.mjs",
     "release:beta-smoke": "node --import tsx scripts/release-beta-smoke.ts",
-    "release:check": "pnpm deps:root-ownership:check && pnpm plugins:inventory:check && pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:api:check && node --import tsx scripts/release-check.ts",
+    "release:check": "pnpm release:generated:check && node --import tsx scripts/release-check.ts",
+    "release:generated:check": "node scripts/release-preflight.mjs --check",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
     "release:plugins:clawhub:check": "node --import tsx scripts/plugin-clawhub-release-check.ts",
     "release:plugins:clawhub:plan": "node --import tsx scripts/plugin-clawhub-release-plan.ts",
     "release:plugins:npm:check": "node --import tsx scripts/plugin-npm-release-check.ts",
     "release:plugins:npm:plan": "node --import tsx scripts/plugin-npm-release-plan.ts",
+    "release:prep": "node scripts/release-preflight.mjs --fix",
     "rtt": "node --import tsx scripts/rtt.ts",
     "runtime-sidecars:check": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --write",
@@ -1697,7 +1702,7 @@
     "@mariozechner/pi-tui": "0.73.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
-    "@openclaw/fs-safe": "github:openclaw/fs-safe#ce4137f028ca4b09f26a93ffa3e0d32fbfbd516c",
+    "@openclaw/fs-safe": "github:openclaw/fs-safe#c7ccb99d3058f2acf2ad2758ad2470c7e113a53c",
     "@slack/bolt": "^4.7.2",
     "@slack/types": "^2.21.0",
     "@slack/web-api": "^7.15.2",
@@ -1716,6 +1721,7 @@
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
+    "kysely": "0.28.17",
     "linkedom": "^0.18.12",
     "markdown-it": "14.1.1",
     "minimatch": "10.2.5",
@@ -1775,7 +1781,7 @@
     "uuid": "14.0.0"
   },
   "engines": {
-    "node": ">=22.14.0"
+    "node": ">=22.16.0"
   },
   "packageManager": "pnpm@10.33.2+sha512.a90faf6feeab71ad6c6e57f94e0fe1a12f5dcc22cd754db40ae9593eb6a3e0b6b12e3540218bb37ae083404b1f2ce6db2a4121e979829b4aff94b99f49da1cf8",
   "pnpm": {

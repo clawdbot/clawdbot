@@ -437,9 +437,23 @@ function resolveApprovedTokenScopes(params: {
   approvedScopes?: string[];
   existing?: PairedDevice;
 }): string[] {
-  const requestedScopes = resolveRoleScopedDeviceTokenScopes(params.role, params.pending.scopes);
-  if (requestedScopes.length > 0) {
-    return requestedScopes;
+  const pendingScopes = resolveRoleScopedDeviceTokenScopes(params.role, params.pending.scopes);
+  if (pendingScopes.length > 0) {
+    const approvedBaseline = resolveRoleScopedDeviceTokenScopes(
+      params.role,
+      params.existing?.approvedScopes ?? params.existing?.scopes,
+    );
+    const requestedScopeDelta =
+      params.existingToken && approvedBaseline.length > 0
+        ? pendingScopes.filter((scope) => !approvedBaseline.includes(scope))
+        : pendingScopes;
+    if (requestedScopeDelta.length === 0 && params.existingToken) {
+      return resolveRoleScopedDeviceTokenScopes(params.role, params.existingToken.scopes);
+    }
+    return resolveRoleScopedDeviceTokenScopes(
+      params.role,
+      mergeScopes(params.existingToken?.scopes, requestedScopeDelta),
+    );
   }
   return resolveRoleScopedDeviceTokenScopes(
     params.role,
@@ -614,16 +628,21 @@ export async function approveDevicePairing(
       });
       nextTokenScopesByRole.set(roleForToken, nextScopes);
       if (roleForToken === OPERATOR_ROLE && nextScopes.length > 0) {
+        const callerRequiredScopes =
+          mergeScopes(
+            resolveRoleScopedDeviceTokenScopes(roleForToken, pending.scopes),
+            nextScopes,
+          ) ?? nextScopes;
         if (!options?.callerScopes) {
           return {
             status: "forbidden",
             reason: "caller-scopes-required",
-            scope: nextScopes[0],
+            scope: callerRequiredScopes[0],
           };
         }
         const missingScope = resolveMissingRequestedScope({
           role: OPERATOR_ROLE,
-          requestedScopes: nextScopes,
+          requestedScopes: callerRequiredScopes,
           allowedScopes: options.callerScopes,
         });
         if (missingScope) {

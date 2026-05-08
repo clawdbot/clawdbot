@@ -3124,7 +3124,7 @@ describe("matrix monitor handler draft streaming", () => {
 
     // The draft stream should have received "Block two", not empty string.
     const sentBody = sendSingleTextMessageMatrixMock.mock.calls[0]?.[1];
-    expect(sentBody).toBeTruthy();
+    expect(sentBody).toBe("Block two");
     await finish();
   });
 

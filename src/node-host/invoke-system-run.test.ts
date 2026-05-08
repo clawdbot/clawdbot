@@ -624,9 +624,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         const runArgs = vi.mocked(transparent.runCommand).mock.calls[0]?.[0] as
           | string[]
           | undefined;
-        expect(runArgs).toBeDefined();
-        expect(runArgs?.[0]).toMatch(/(^|[/\\])tr$/);
-        expect(runArgs?.slice(1)).toEqual(["a", "b"]);
+        expect(runArgs).toEqual([expect.stringMatching(/(^|[/\\])tr$/), "a", "b"]);
         expectInvokeOk(transparent.sendInvokeResult);
       }
 
@@ -1530,7 +1528,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
     const tempDir = createFixtureDir("openclaw-shell-wrapper-allow-");
     const prepared = buildSystemRunApprovalPlan({
-      command: ["/bin/sh", "-lc", "cd ."],
+      command: ["/bin/sh", "-c", "cd ."],
       cwd: tempDir,
     });
     expect(prepared.ok).toBe(true);

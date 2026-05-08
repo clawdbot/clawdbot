@@ -109,7 +109,53 @@ describe("config io paths", () => {
     });
   });
 
-  it("normalizes safe-bin config entries at config load time", async () => {
+  it("explains what to check when config was written by a newer OpenClaw", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            meta: { lastTouchedVersion: "9999.1.1" },
+            gateway: { mode: "local" },
+          },
+          null,
+          2,
+        ),
+      );
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+
+      const io = createConfigIO({
+        configPath,
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger,
+      });
+      io.loadConfig();
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Your OpenClaw config was written by version 9999.1.1, but this command is running",
+        ),
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Check: `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`.",
+        ),
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "If unexpected, update PATH so `openclaw` points to the version you want",
+        ),
+      );
+    });
+  });
+
+  it("normalizes safe-bin config entries at config load time", () => {
     const cfg = {
       tools: {
         exec: {

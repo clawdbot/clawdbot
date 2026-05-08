@@ -284,10 +284,16 @@ export function resolveLargestSupportedThinkingLevel(
   model?: string | null,
 ): ThinkLevel {
   const profile = resolveThinkingProfile({ provider, model });
-  return (
-    profile.levels.filter((level) => level.id !== "off").toSorted((a, b) => b.rank - a.rank)[0]
-      ?.id ?? "off"
-  );
+  let bestLevel: ResolvedThinkingProfile["levels"][number] | undefined;
+  for (const level of profile.levels) {
+    if (level.id === "off") {
+      continue;
+    }
+    if (!bestLevel || level.rank > bestLevel.rank) {
+      bestLevel = level;
+    }
+  }
+  return bestLevel?.id ?? "off";
 }
 
 export function isThinkingLevelSupported(params: {

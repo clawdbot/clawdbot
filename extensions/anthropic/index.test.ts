@@ -48,7 +48,7 @@ function createModelRegistry(models: ProviderRuntimeModel[]) {
 }
 
 describe("anthropic provider replay hooks", () => {
-  it("registers the claude-cli backend", async () => {
+  it("registers the claude-cli backend", () => {
     const captured = capturePluginRegistration({ register: anthropicPlugin.register });
 
     expect(captured.cliBackends).toContainEqual(
@@ -383,9 +383,11 @@ describe("anthropic provider replay hooks", () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
     const cliAuth = provider.auth.find((entry) => entry.id === "cli");
 
-    expect(cliAuth).toBeDefined();
+    if (!cliAuth) {
+      throw new Error("expected Anthropic CLI auth method");
+    }
 
-    const result = await cliAuth?.run({
+    const result = await cliAuth.run({
       config: {},
     } as never);
 

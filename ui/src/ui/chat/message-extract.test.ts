@@ -15,7 +15,7 @@ describe("extractTextCached", () => {
     expect(extractTextCached(message)).toBe(extractText(message));
   });
 
-  it("returns consistent output for repeated calls", () => {
+  it("returns consistent text output for repeated calls", () => {
     const message = {
       role: "user",
       content: "plain text",
@@ -109,7 +109,7 @@ describe("extractThinkingCached", () => {
     expect(extractThinkingCached(message)).toBe(extractThinking(message));
   });
 
-  it("returns consistent output for repeated calls", () => {
+  it("returns consistent thinking output for repeated calls", () => {
     const message = {
       role: "assistant",
       content: [{ type: "thinking", thinking: "Plan A" }],

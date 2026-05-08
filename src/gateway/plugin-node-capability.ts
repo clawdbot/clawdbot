@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 
 export const PLUGIN_NODE_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
 const PLUGIN_NODE_CAPABILITY_QUERY_PARAM = "oc_cap";
@@ -241,7 +240,7 @@ export function refreshClientPluginNodeCapability(params: {
 }
 
 export function hasAuthorizedPluginNodeCapability(params: {
-  clients: Set<GatewayWsClient>;
+  clients: Iterable<PluginNodeCapabilityClient>;
   surface: PluginNodeCapabilitySurface;
   capability: string;
   nowMs?: number;

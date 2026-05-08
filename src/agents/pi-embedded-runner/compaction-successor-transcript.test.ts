@@ -32,6 +32,20 @@ function makeAssistant(text: string, timestamp: number) {
   });
 }
 
+function requireString(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
+function requireValue<T>(value: T | undefined, label: string): T {
+  if (value === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 function createCompactedSession(sessionDir: string): {
   manager: SessionManager;
   sessionFile: string;
@@ -51,7 +65,12 @@ function createCompactedSession(sessionDir: string): {
   manager.appendCompaction("Summary of old user and old assistant.", firstKeptId, 5000);
   manager.appendMessage({ role: "user", content: "post user", timestamp: 5 });
   manager.appendMessage(makeAssistant("post assistant", 6));
-  return { manager, sessionFile: manager.getSessionFile()!, firstKeptId, oldUserId };
+  return {
+    manager,
+    sessionFile: requireString(manager.getSessionFile(), "compacted session file"),
+    firstKeptId,
+    oldUserId,
+  };
 }
 
 describe("rotateTranscriptAfterCompaction", () => {
@@ -69,9 +88,9 @@ describe("rotateTranscriptAfterCompaction", () => {
     openSpy.mockRestore();
 
     expect(result.rotated).toBe(true);
-    expect(result.sessionFile).toBeTruthy();
+    const successorFile = requireString(result.sessionFile, "successor session file");
 
-    const successor = SessionManager.open(result.sessionFile!);
+    const successor = SessionManager.open(successorFile);
     expect(successor.getHeader()).toMatchObject({
       parentSession: sessionFile,
       cwd: dir,
@@ -92,14 +111,14 @@ describe("rotateTranscriptAfterCompaction", () => {
     });
 
     expect(result.rotated).toBe(true);
-    expect(result.sessionId).toBeTruthy();
-    expect(result.sessionFile).toBeTruthy();
-    expect(result.sessionFile).not.toBe(sessionFile);
+    const successorSessionId = requireString(result.sessionId, "successor session id");
+    const successorFile = requireString(result.sessionFile, "successor session file");
+    expect(successorFile).not.toBe(sessionFile);
     expect(await fs.readFile(sessionFile, "utf8")).toBe(originalBytes);
 
-    const successor = SessionManager.open(result.sessionFile!);
+    const successor = SessionManager.open(successorFile);
     expect(successor.getHeader()).toMatchObject({
-      id: result.sessionId,
+      id: successorSessionId,
       parentSession: sessionFile,
       cwd: dir,
     });
@@ -148,12 +167,14 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: manager.getSessionFile()!,
+      sessionFile: requireString(manager.getSessionFile(), "source session file"),
       now: () => new Date("2026-04-27T12:05:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = SessionManager.open(result.sessionFile!);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
     const entries = successor.getEntries();
     expect(entries.find((entry) => entry.id === staleModelId)).toBeUndefined();
     expect(entries.find((entry) => entry.id === staleThinkingId)).toBeUndefined();
@@ -198,14 +219,19 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: manager.getSessionFile()!,
+      sessionFile: requireString(manager.getSessionFile(), "source session file"),
       now: () => new Date("2026-04-27T12:10:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = SessionManager.open(result.sessionFile!);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
     const entries = successor.getEntries();
-    expect(entries.find((entry) => entry.id === firstDuplicateId)).toBeDefined();
+    requireValue(
+      entries.find((entry) => entry.id === firstDuplicateId),
+      "kept duplicate entry",
+    );
     expect(entries.find((entry) => entry.id === secondDuplicateId)).toBeUndefined();
     const contextText = JSON.stringify(successor.buildSessionContext().messages);
     expect(contextText.match(/deployment status check/g)).toHaveLength(1);
@@ -219,7 +245,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: manager.getSessionFile()!,
+      sessionFile: requireString(manager.getSessionFile(), "source session file"),
     });
 
     expect(result).toMatchObject({
@@ -240,11 +266,10 @@ describe("rotateTranscriptAfterCompaction", () => {
     });
     manager.appendMessage(makeAssistant("detailed recent answer", 4));
     const compactionId = manager.appendCompaction("fresh manual summary", recentTailId, 200);
-    const sessionFile = manager.getSessionFile();
-    expect(sessionFile).toBeTruthy();
-    const staleManager = SessionManager.open(sessionFile!);
+    const sessionFile = requireString(manager.getSessionFile(), "manual compaction session file");
+    const staleManager = SessionManager.open(sessionFile);
 
-    const hardened = await hardenManualCompactionBoundary({ sessionFile: sessionFile! });
+    const hardened = await hardenManualCompactionBoundary({ sessionFile });
     expect(hardened.applied).toBe(true);
     const staleLeaf = staleManager.getLeafEntry();
     expect(staleLeaf?.type).toBe("compaction");
@@ -254,13 +279,15 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(staleLeaf.firstKeptEntryId).toBe(recentTailId);
 
     const result = await rotateTranscriptAfterCompaction({
-      sessionManager: SessionManager.open(sessionFile!),
-      sessionFile: sessionFile!,
+      sessionManager: SessionManager.open(sessionFile),
+      sessionFile,
       now: () => new Date("2026-04-27T12:30:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = SessionManager.open(result.sessionFile!);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
     const successorText = JSON.stringify(successor.buildSessionContext().messages);
     expect(successorText).toContain("fresh manual summary");
     expect(successorText).not.toContain("recent question");
@@ -297,7 +324,7 @@ describe("rotateTranscriptAfterCompaction", () => {
     manager.appendCompaction("Summary of main branch.", firstKeptId, 5000);
     manager.appendMessage({ role: "user", content: "next", timestamp: 7 });
 
-    const sessionFile = manager.getSessionFile()!;
+    const sessionFile = requireString(manager.getSessionFile(), "source session file");
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
       sessionFile,
@@ -305,7 +332,9 @@ describe("rotateTranscriptAfterCompaction", () => {
     });
 
     expect(result.rotated).toBe(true);
-    const successor = SessionManager.open(result.sessionFile!);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
     const allEntries = successor.getEntries();
     expect(allEntries.find((entry) => entry.id === branchSummaryId)).toMatchObject({
       type: "branch_summary",
@@ -352,12 +381,14 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: manager.getSessionFile()!,
+      sessionFile: requireString(manager.getSessionFile(), "source session file"),
       now: () => new Date("2026-04-27T13:00:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = SessionManager.open(result.sessionFile!);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
     const entries = successor.getEntries();
     const indexById = new Map(entries.map((entry, index) => [entry.id, index]));
     expect(indexById.get(branchFromId)).toBeLessThan(indexById.get(branchSummaryId)!);

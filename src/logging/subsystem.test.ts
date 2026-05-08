@@ -105,16 +105,14 @@ describe("createSubsystemLogger().isEnabled", () => {
   it("treats missing subsystem labels as non-matches when filters are active", () => {
     setConsoleSubsystemFilter(["gateway"]);
 
-    expect(() => shouldLogSubsystemToConsole(undefined as unknown as string)).not.toThrow();
     expect(shouldLogSubsystemToConsole(undefined as unknown as string)).toBe(false);
   });
 
-  it("does not throw when a malformed subsystem logger checks console enablement", () => {
+  it("disables console logging when a malformed subsystem logger checks enablement", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "info" });
     setConsoleSubsystemFilter(["gateway"]);
     const log = createSubsystemLogger(undefined as unknown as string);
 
-    expect(() => log.isEnabled("info", "console")).not.toThrow();
     expect(log.isEnabled("info", "console")).toBe(false);
   });
 
@@ -123,7 +121,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     const warn = installConsoleMethodSpy("warn");
     const log = createSubsystemLogger(undefined as unknown as string);
 
-    expect(() => log.warn("missing subsystem label")).not.toThrow();
+    log.warn("missing subsystem label");
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("[unknown]");
   });

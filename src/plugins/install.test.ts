@@ -301,7 +301,7 @@ function expectFailedInstallResult<
   if (params.code) {
     expect(params.result.code).toBe(params.code);
   }
-  expect(params.result.error).toBeDefined();
+  expect(params.result.error).toEqual(expect.any(String));
   params.messageIncludes.forEach((fragment) => {
     expect(params.result.error).toContain(fragment);
   });

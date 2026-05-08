@@ -76,6 +76,13 @@ vi.mock("../utils/with-timeout.js", () => ({
 
 import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
 
+function requireCapturedPrompt<T>(captured: T | undefined): T {
+  if (!captured) {
+    throw new Error("expected captured install prompt");
+  }
+  return captured;
+}
+
 describe("ensureOnboardingPluginInstalled", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -568,9 +575,9 @@ describe("ensureOnboardingPluginInstalled", () => {
         cwdSpy.mockRestore();
       }
 
-      expect(captured).toBeDefined();
-      expect(captured?.message).toBe("Install Demo Plugin plugin?");
-      expect(captured?.options).toEqual([{ value: "skip", label: "Skip for now" }]);
+      const prompt = requireCapturedPrompt(captured);
+      expect(prompt.message).toBe("Install Demo Plugin plugin?");
+      expect(prompt.options).toEqual([{ value: "skip", label: "Skip for now" }]);
       expect(result).toEqual({
         cfg: {},
         installed: false,
@@ -621,9 +628,9 @@ describe("ensureOnboardingPluginInstalled", () => {
       });
 
       const realPluginDir = await fs.realpath(pluginDir);
-      expect(captured).toBeDefined();
-      expect(captured?.message).toBe("Install Demo Plugin\\n plugin?");
-      expect(captured?.options).toEqual([
+      const prompt = requireCapturedPrompt(captured);
+      expect(prompt.message).toBe("Install Demo Plugin\\n plugin?");
+      expect(prompt.options).toEqual([
         { value: "npm", label: "Download from npm (@demo/plugin@1.2.3)" },
         {
           value: "local",
@@ -632,8 +639,8 @@ describe("ensureOnboardingPluginInstalled", () => {
         },
         { value: "skip", label: "Skip for now" },
       ]);
-      expect(captured?.message).not.toContain("\x1b");
-      expect(captured?.options[0]?.label).not.toContain("\x1b");
+      expect(prompt.message).not.toContain("\x1b");
+      expect(prompt.options[0]?.label).not.toContain("\x1b");
     });
   });
 
@@ -837,11 +844,11 @@ describe("ensureOnboardingPluginInstalled", () => {
         runtime: {} as never,
       });
 
-      expect(captured).toBeDefined();
+      const prompt = requireCapturedPrompt(captured);
       // "Download from npm (@openclaw/tlon)" must NOT appear: the bundled
       // copy is what gets enabled, so the npm hint would only confuse
       // users into thinking the plugin is missing.
-      expect(captured?.options).toEqual([
+      expect(prompt.options).toEqual([
         {
           value: "local",
           label: "Use local plugin path",
@@ -849,7 +856,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         },
         { value: "skip", label: "Skip for now" },
       ]);
-      expect(captured?.initialValue).toBe("local");
+      expect(prompt.initialValue).toBe("local");
       findBundledPluginSourceInMap.mockReset();
       resolveBundledInstallPlanForCatalogEntry.mockReset();
     });

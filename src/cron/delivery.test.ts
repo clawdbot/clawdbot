@@ -170,11 +170,11 @@ describe("resolveCronDeliveryPlan", () => {
     }
   });
 
-  it("does not treat channel-owned service prefixes as provider selection", () => {
+  it("uses iMessage target prefixes as provider selection", () => {
     setCronDeliveryTestRegistry([
       {
-        pluginId: "bluebubbles",
-        plugin: createPrefixOnlyChannelPlugin("bluebubbles", ["bluebubbles"]),
+        pluginId: "imessage",
+        plugin: createPrefixOnlyChannelPlugin("imessage", ["imessage"]),
       },
       { pluginId: "imessage", plugin: createPrefixOnlyChannelPlugin("imessage") },
     ]);
@@ -189,7 +189,7 @@ describe("resolveCronDeliveryPlan", () => {
       }),
     );
     expect(plan.mode).toBe("announce");
-    expect(plan.channel).toBe("last");
+    expect(plan.channel).toBe("imessage");
     expect(plan.to).toBe("imessage:+15551234567");
   });
 });

@@ -11,14 +11,8 @@ import {
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-import {
-  createMessageReceiptFromOutboundResults,
-  defineChannelMessageAdapter,
-  type ChannelMessageSendResult,
-  type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-message";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
-import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import {
   PAIRING_APPROVED_MESSAGE,
   buildTokenChannelStatusSummary,
@@ -62,9 +56,8 @@ import {
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import * as monitorModule from "./monitor.js";
 import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./normalize.js";
-import { sendTelegramPayloadMessages } from "./outbound-adapter.js";
-import { telegramOutboundBaseAdapter } from "./outbound-base.js";
-import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
+import { createTelegramOutboundAdapter } from "./outbound-adapter.js";
+import { parseTelegramThreadId } from "./outbound-params.js";
 import type { TelegramProbe } from "./probe.js";
 import * as probeModule from "./probe.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
@@ -107,8 +100,6 @@ async function loadTelegramUpdateOffsetRuntime() {
   telegramUpdateOffsetRuntimePromise ??= import("../update-offset-runtime-api.js");
   return await telegramUpdateOffsetRuntimePromise;
 }
-
-type TelegramSendOptions = NonNullable<Parameters<TelegramSendFn>[2]>;
 
 function resolveTelegramProbe() {
   return (
@@ -169,115 +160,39 @@ function resolveTelegramTokenHelper() {
   );
 }
 
-function buildTelegramSendOptions(params: {
-  cfg: OpenClawConfig;
-  mediaUrl?: string | null;
-  mediaLocalRoots?: readonly string[] | null;
-  mediaReadFile?: ((filePath: string) => Promise<Buffer>) | null;
-  accountId?: string | null;
-  replyToId?: string | null;
-  threadId?: string | number | null;
-  silent?: boolean | null;
-  forceDocument?: boolean | null;
-  gatewayClientScopes?: readonly string[] | null;
-}): TelegramSendOptions {
-  return {
-    verbose: false,
-    cfg: params.cfg,
-    ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
-    ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
-    ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
-    messageThreadId: parseTelegramThreadId(params.threadId),
-    replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
-    accountId: params.accountId ?? undefined,
-    silent: params.silent ?? undefined,
-    forceDocument: params.forceDocument ?? undefined,
-    ...(Array.isArray(params.gatewayClientScopes)
-      ? { gatewayClientScopes: [...params.gatewayClientScopes] }
-      : {}),
-  };
-}
-
-async function sendTelegramOutbound(params: {
-  cfg: OpenClawConfig;
-  to: string;
-  text: string;
-  mediaUrl?: string | null;
-  mediaLocalRoots?: readonly string[] | null;
-  mediaReadFile?: ((filePath: string) => Promise<Buffer>) | null;
-  accountId?: string | null;
-  deps?: OutboundSendDeps;
-  replyToId?: string | null;
-  threadId?: string | number | null;
-  silent?: boolean | null;
-  forceDocument?: boolean | null;
-  gatewayClientScopes?: readonly string[] | null;
-}) {
-  const send = await resolveTelegramSend(params.deps);
-  return await send(
-    params.to,
-    params.text,
-    buildTelegramSendOptions({
-      cfg: params.cfg,
-      mediaUrl: params.mediaUrl,
-      mediaLocalRoots: params.mediaLocalRoots,
-      mediaReadFile: params.mediaReadFile,
-      accountId: params.accountId,
-      replyToId: params.replyToId,
-      threadId: params.threadId,
-      silent: params.silent,
-      forceDocument: params.forceDocument,
-      gatewayClientScopes: params.gatewayClientScopes,
+const telegramChannelOutbound = createTelegramOutboundAdapter({
+  resolveSend: resolveTelegramSend,
+  loadSendModule: loadTelegramSendModule,
+  shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
+    shouldSuppressLocalTelegramExecApprovalPrompt({
+      cfg,
+      accountId,
+      payload,
     }),
-  );
-}
-
-type TelegramMessageSendSourceResult = {
-  messageId?: string;
-  chatId?: string;
-  receipt?: ChannelMessageSendResult["receipt"];
-};
-
-function toTelegramMessageSendResult(
-  result: TelegramMessageSendSourceResult,
-  kind: MessageReceiptPartKind,
-  replyToId?: string | null,
-): ChannelMessageSendResult {
-  const receipt =
-    result.receipt ??
-    createMessageReceiptFromOutboundResults({
-      results: result.messageId
-        ? [
-            {
-              channel: "telegram",
-              messageId: result.messageId,
-              chatId: result.chatId,
-            },
-          ]
-        : [],
-      kind,
-      ...(replyToId ? { replyToId } : {}),
-    });
-  return {
-    messageId: result.messageId || receipt.primaryPlatformMessageId,
-    receipt,
-  };
-}
-
-const telegramMessageAdapter = defineChannelMessageAdapter({
-  id: "telegram",
-  durableFinal: {
-    capabilities: {
-      text: true,
-      media: true,
-      payload: true,
-      silent: true,
-      replyTo: true,
-      thread: true,
-      messageSendingHooks: true,
-      batch: true,
-    },
+  beforeDeliverPayload: async ({ cfg, target, hint }) => {
+    if (hint?.kind !== "approval-pending" || hint.approvalKind !== "exec") {
+      return;
+    }
+    const threadId =
+      typeof target.threadId === "number"
+        ? target.threadId
+        : typeof target.threadId === "string"
+          ? Number.parseInt(target.threadId, 10)
+          : undefined;
+    const { sendTypingTelegram } = await loadTelegramSendModule();
+    await sendTypingTelegram(target.to, {
+      cfg,
+      accountId: target.accountId ?? undefined,
+      ...(Number.isFinite(threadId) ? { messageThreadId: threadId } : {}),
+    }).catch(() => {});
   },
+  shouldTreatDeliveredTextAsVisible: shouldTreatTelegramDeliveredTextAsVisible,
+  targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
+  preferFinalAssistantVisibleText: true,
+});
+
+const telegramMessageAdapter = createChannelMessageAdapterFromOutbound<OpenClawConfig>({
+  id: "telegram",
   live: {
     capabilities: {
       draftPreview: true,
@@ -297,70 +212,7 @@ const telegramMessageAdapter = defineChannelMessageAdapter({
     defaultAckPolicy: "after_agent_dispatch",
     supportedAckPolicies: ["after_receive_record", "after_agent_dispatch"],
   },
-  send: {
-    text: async (ctx) =>
-      toTelegramMessageSendResult(
-        await sendTelegramOutbound({
-          cfg: ctx.cfg,
-          to: ctx.to,
-          text: ctx.text,
-          accountId: ctx.accountId,
-          deps: ctx.deps,
-          replyToId: ctx.replyToId,
-          threadId: ctx.threadId,
-          silent: ctx.silent,
-          gatewayClientScopes: ctx.gatewayClientScopes,
-        }),
-        "text",
-        ctx.replyToId,
-      ),
-    media: async (ctx) =>
-      toTelegramMessageSendResult(
-        await sendTelegramOutbound({
-          cfg: ctx.cfg,
-          to: ctx.to,
-          text: ctx.text,
-          mediaUrl: ctx.mediaUrl,
-          mediaLocalRoots: ctx.mediaLocalRoots,
-          mediaReadFile: ctx.mediaReadFile,
-          accountId: ctx.accountId,
-          deps: ctx.deps,
-          replyToId: ctx.replyToId,
-          threadId: ctx.threadId,
-          silent: ctx.silent,
-          forceDocument: ctx.forceDocument,
-          gatewayClientScopes: ctx.gatewayClientScopes,
-        }),
-        "media",
-        ctx.replyToId,
-      ),
-    payload: async (ctx) => {
-      const send = await resolveTelegramSend(ctx.deps);
-      const result = attachChannelToResult(
-        "telegram",
-        await sendTelegramPayloadMessages({
-          send,
-          to: ctx.to,
-          payload: ctx.payload,
-          baseOpts: {
-            ...buildTelegramSendOptions({
-              cfg: ctx.cfg,
-              mediaUrl: ctx.mediaUrl,
-              mediaLocalRoots: ctx.mediaLocalRoots,
-              accountId: ctx.accountId,
-              replyToId: ctx.replyToId,
-              threadId: ctx.threadId,
-              silent: ctx.silent,
-              forceDocument: ctx.forceDocument,
-              gatewayClientScopes: ctx.gatewayClientScopes,
-            }),
-            ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
-          },
-        }),
-      );
-      return toTelegramMessageSendResult(result, "unknown", ctx.replyToId);
-    },
-  },
+  outbound: telegramChannelOutbound,
 });
 
 const telegramMessageActions: ChannelMessageActionAdapter = {
@@ -1179,142 +1031,5 @@ export const telegramPlugin = createChatChannelPlugin({
       return to.includes(":topic:") ? to : `${to}:topic:${threadId}`;
     },
   },
-  outbound: {
-    base: {
-      ...telegramOutboundBaseAdapter,
-      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
-        shouldSuppressLocalTelegramExecApprovalPrompt({
-          cfg,
-          accountId,
-          payload,
-        }),
-      beforeDeliverPayload: async ({ cfg, target, hint }) => {
-        if (hint?.kind !== "approval-pending" || hint.approvalKind !== "exec") {
-          return;
-        }
-        const threadId =
-          typeof target.threadId === "number"
-            ? target.threadId
-            : typeof target.threadId === "string"
-              ? Number.parseInt(target.threadId, 10)
-              : undefined;
-        const { sendTypingTelegram } = await loadTelegramSendModule();
-        await sendTypingTelegram(target.to, {
-          cfg,
-          accountId: target.accountId ?? undefined,
-          ...(Number.isFinite(threadId) ? { messageThreadId: threadId } : {}),
-        }).catch(() => {});
-      },
-      shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
-      shouldTreatDeliveredTextAsVisible: shouldTreatTelegramDeliveredTextAsVisible,
-      preferFinalAssistantVisibleText: true,
-      targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
-      resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
-        typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
-      supportsPollDurationSeconds: true,
-      supportsAnonymousPolls: true,
-      sendPayload: async ({
-        cfg,
-        to,
-        payload,
-        mediaLocalRoots,
-        accountId,
-        deps,
-        replyToId,
-        threadId,
-        silent,
-        forceDocument,
-        gatewayClientScopes,
-      }) => {
-        const send = await resolveTelegramSend(deps);
-        const result = await sendTelegramPayloadMessages({
-          send,
-          to,
-          payload,
-          baseOpts: buildTelegramSendOptions({
-            cfg,
-            mediaLocalRoots,
-            accountId,
-            replyToId,
-            threadId,
-            silent,
-            forceDocument,
-            gatewayClientScopes,
-          }),
-        });
-        return attachChannelToResult("telegram", result);
-      },
-    },
-    attachedResults: {
-      channel: "telegram",
-      sendText: async ({
-        cfg,
-        to,
-        text,
-        accountId,
-        deps,
-        replyToId,
-        threadId,
-        silent,
-        gatewayClientScopes,
-      }) =>
-        await sendTelegramOutbound({
-          cfg,
-          to,
-          text,
-          accountId,
-          deps,
-          replyToId,
-          threadId,
-          silent,
-          gatewayClientScopes,
-        }),
-      sendMedia: async ({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        mediaLocalRoots,
-        accountId,
-        deps,
-        replyToId,
-        threadId,
-        silent,
-        gatewayClientScopes,
-      }) =>
-        await sendTelegramOutbound({
-          cfg,
-          to,
-          text,
-          mediaUrl,
-          mediaLocalRoots,
-          accountId,
-          deps,
-          replyToId,
-          threadId,
-          silent,
-          gatewayClientScopes,
-        }),
-      sendPoll: async ({
-        cfg,
-        to,
-        poll,
-        accountId,
-        threadId,
-        silent,
-        isAnonymous,
-        gatewayClientScopes,
-      }) => {
-        const { sendPollTelegram } = await loadTelegramSendModule();
-        return await sendPollTelegram(to, poll, {
-          cfg,
-          accountId: accountId ?? undefined,
-          messageThreadId: parseTelegramThreadId(threadId),
-          silent: silent ?? undefined,
-          isAnonymous: isAnonymous ?? undefined,
-          gatewayClientScopes,
-        });
-      },
-    },
-  },
+  outbound: telegramChannelOutbound,
 });

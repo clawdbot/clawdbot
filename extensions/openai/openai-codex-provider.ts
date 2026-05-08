@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   ProviderAuthContext,
+  ProviderAuthResult,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -9,7 +10,6 @@ import {
   ensureAuthProfileStoreForLocalUpdate,
   listProfilesForProvider,
   type OAuthCredential,
-  type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { loginOpenAICodexOAuth } from "openclaw/plugin-sdk/provider-auth-login";
@@ -302,6 +302,18 @@ function buildCodexCredentialExtra(identity: {
   return Object.keys(extra).length > 0 ? extra : undefined;
 }
 
+function buildOpenAICodexAuthConfigPatch(): NonNullable<ProviderAuthResult["configPatch"]> {
+  return {
+    agents: {
+      defaults: {
+        models: {
+          [OPENAI_CODEX_DEFAULT_MODEL]: {},
+        },
+      },
+    },
+  };
+}
+
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   try {
     const { refreshOpenAICodexToken } = await import("./openai-codex-provider.runtime.js");
@@ -432,19 +444,6 @@ function buildOpenAICodexAuthDoctorHint(ctx: { profileId?: string }) {
     return undefined;
   }
   return "Deprecated profile. Run `openclaw models auth login --provider openai-codex` or `openclaw configure`.";
-}
-
-function buildOpenAICodexAuthConfigPatch(): NonNullable<ProviderAuthResult["configPatch"]> {
-  return {
-    agents: {
-      defaults: {
-        agentRuntime: { id: "codex" },
-        models: {
-          [OPENAI_CODEX_DEFAULT_MODEL]: {},
-        },
-      },
-    },
-  };
 }
 
 export function buildOpenAICodexProviderPlugin(): ProviderPlugin {

@@ -3,6 +3,7 @@ import type {
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
 } from "@mariozechner/pi-ai";
+import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 
@@ -109,6 +110,8 @@ export type ModelDefinitionConfig = {
   maxTokens: number;
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;
+  /** Optional agent execution runtime override for this provider/model pair. */
+  agentRuntime?: AgentRuntimePolicyConfig;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
   metadataSource?: "models-add";
@@ -126,6 +129,8 @@ export type ModelProviderConfig = {
   injectNumCtxForOpenAICompat?: boolean;
   /** Provider-specific runtime parameters interpreted by provider plugins. */
   params?: Record<string, unknown>;
+  /** Optional default agent execution runtime for models under this provider. */
+  agentRuntime?: AgentRuntimePolicyConfig;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   request?: ConfiguredModelProviderRequest;

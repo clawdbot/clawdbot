@@ -24,6 +24,45 @@ export type AuthProfileEligibility = {
   reasonCode: AuthProfileEligibilityReasonCode;
 };
 
+function resolveProviderAuthMode(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): string | undefined {
+  const providers = cfg?.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  const entry = findNormalizedProviderValue(providers, provider);
+  const auth = entry?.auth;
+  return typeof auth === "string" ? auth : undefined;
+}
+
+function providerAllowsAwsSdkAuth(cfg: OpenClawConfig | undefined, provider: string): boolean {
+  const authMode = resolveProviderAuthMode(cfg, provider);
+  return (
+    authMode === "aws-sdk" ||
+    (authMode === undefined && normalizeProviderId(provider) === "amazon-bedrock")
+  );
+}
+
+export function isConfiguredAwsSdkAuthProfileForProvider(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  profileId: string;
+}): boolean {
+  const profileConfig = params.cfg?.auth?.profiles?.[params.profileId];
+  if (!profileConfig || profileConfig.mode !== "aws-sdk") {
+    return false;
+  }
+  const providerAuthKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
+  if (
+    resolveProviderIdForAuth(profileConfig.provider, { config: params.cfg }) !== providerAuthKey
+  ) {
+    return false;
+  }
+  return providerAllowsAwsSdkAuth(params.cfg, params.provider);
+}
+
 export function resolveAuthProfileEligibility(params: {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
@@ -34,6 +73,15 @@ export function resolveAuthProfileEligibility(params: {
   const providerAuthKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
   const cred = params.store.profiles[params.profileId];
   if (!cred) {
+    if (
+      isConfiguredAwsSdkAuthProfileForProvider({
+        cfg: params.cfg,
+        provider: params.provider,
+        profileId: params.profileId,
+      })
+    ) {
+      return { eligible: true, reasonCode: "ok" };
+    }
     return { eligible: false, reasonCode: "profile_missing" };
   }
   if (resolveProviderIdForAuth(cred.provider, { config: params.cfg }) !== providerAuthKey) {

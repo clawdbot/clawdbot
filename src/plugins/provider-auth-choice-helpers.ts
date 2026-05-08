@@ -1,5 +1,5 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { modelSelectionRequiresCodexRuntime } from "../agents/openai-codex-routing.js";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -125,8 +125,9 @@ export function applyDefaultModel(
   model: string,
   opts?: { preserveExistingPrimary?: boolean },
 ): OpenClawConfig {
+  const normalizedModel = normalizeAgentModelRefForConfig(model);
   const models = { ...cfg.agents?.defaults?.models };
-  models[model] = models[model] ?? {};
+  models[normalizedModel] = models[normalizedModel] ?? {};
 
   const existingModel = cfg.agents?.defaults?.model;
   const existingPrimary =
@@ -135,24 +136,28 @@ export function applyDefaultModel(
       : existingModel && typeof existingModel === "object"
         ? (existingModel as { primary?: string }).primary
         : undefined;
-  const primary = opts?.preserveExistingPrimary === true ? (existingPrimary ?? model) : model;
-  const shouldUseCodexRuntime = modelSelectionRequiresCodexRuntime({
-    model: primary,
-    config: cfg,
-  });
+  const normalizedExistingPrimary = existingPrimary
+    ? normalizeAgentModelRefForConfig(existingPrimary)
+    : undefined;
+  const existingFallbacks =
+    existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
+      ? (existingModel as { fallbacks?: string[] }).fallbacks?.map((fallback) =>
+          normalizeAgentModelRefForConfig(fallback),
+        )
+      : undefined;
   return {
     ...cfg,
     agents: {
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        ...(shouldUseCodexRuntime ? { agentRuntime: { id: "codex" } } : {}),
         models,
         model: {
-          ...(existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
-            ? { fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks }
-            : undefined),
-          primary,
+          ...(existingFallbacks ? { fallbacks: existingFallbacks } : undefined),
+          primary:
+            opts?.preserveExistingPrimary === true
+              ? (normalizedExistingPrimary ?? normalizedModel)
+              : normalizedModel,
         },
       },
     },

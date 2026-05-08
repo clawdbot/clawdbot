@@ -214,13 +214,13 @@ describe("registerPluginHttpRoute", () => {
     setActivePluginRegistry(laterActiveRegistry);
 
     const unregister = registerPluginHttpRoute({
-      path: "/bluebubbles-webhook",
+      path: "/imessage-webhook",
       auth: "plugin",
       handler: vi.fn(),
     });
 
     expectRegisteredRouteShape(startupRegistry, {
-      path: "/bluebubbles-webhook",
+      path: "/imessage-webhook",
       auth: "plugin",
     });
     expect(laterActiveRegistry.httpRoutes).toHaveLength(0);

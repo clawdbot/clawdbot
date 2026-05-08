@@ -164,7 +164,7 @@ function emitRetryableTokenMismatch(ws: MockWebSocket, connectId: string | undef
   });
 }
 
-async function startRetriedDeviceTokenConnect(params: {
+async function expectRetriedDeviceTokenConnect(params: {
   url: string;
   token: string;
   retryNonce?: string;
@@ -423,7 +423,7 @@ describe("GatewayBrowserClient", () => {
 
   it("retries once with device token after token mismatch when shared token is explicit", async () => {
     vi.useFakeTimers();
-    const { secondWs, secondConnect } = await startRetriedDeviceTokenConnect({
+    const { secondWs, secondConnect } = await expectRetriedDeviceTokenConnect({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
     });
@@ -492,7 +492,7 @@ describe("GatewayBrowserClient", () => {
 
   it("treats IPv6 loopback as trusted for bounded device-token retry", async () => {
     vi.useFakeTimers();
-    const { client } = await startRetriedDeviceTokenConnect({
+    const { client } = await expectRetriedDeviceTokenConnect({
       url: "ws://[::1]:18789",
       token: "shared-auth-token",
     });

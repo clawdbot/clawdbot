@@ -73,8 +73,8 @@ describe("trajectory cleanup", () => {
       });
 
       expect(removed).toEqual([]);
-      await expect(fs.stat(runtimeFile)).resolves.toBeDefined();
-      await expect(fs.stat(pointerPath)).resolves.toBeDefined();
+      expect((await fs.stat(runtimeFile)).isFile()).toBe(true);
+      expect((await fs.stat(pointerPath)).isFile()).toBe(true);
     });
   });
 
@@ -112,7 +112,7 @@ describe("trajectory cleanup", () => {
         restrictToStoreDir: true,
       });
 
-      await expect(fs.stat(unsafeExternalRuntime)).resolves.toBeDefined();
+      expect((await fs.stat(unsafeExternalRuntime)).isFile()).toBe(true);
     });
   });
 });

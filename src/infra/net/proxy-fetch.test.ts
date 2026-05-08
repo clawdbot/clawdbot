@@ -83,6 +83,15 @@ let makeProxyFetch: typeof import("./proxy-fetch.js").makeProxyFetch;
 let PROXY_FETCH_PROXY_URL: typeof import("./proxy-fetch.js").PROXY_FETCH_PROXY_URL;
 let resolveProxyFetchFromEnv: typeof import("./proxy-fetch.js").resolveProxyFetchFromEnv;
 
+function requireProxyFetch(
+  fetchFn: ReturnType<typeof resolveProxyFetchFromEnv>,
+): NonNullable<ReturnType<typeof resolveProxyFetchFromEnv>> {
+  if (!fetchFn) {
+    throw new Error("expected proxy env to resolve a fetch function");
+  }
+  return fetchFn;
+}
+
 function clearProxyEnv(): void {
   for (const key of PROXY_ENV_KEYS) {
     delete process.env[key];
@@ -283,14 +292,15 @@ describe("resolveProxyFetchFromEnv", () => {
   it("returns proxy fetch using EnvHttpProxyAgent when HTTPS_PROXY is set", async () => {
     undiciFetch.mockResolvedValue({ ok: true });
 
-    const fetchFn = resolveProxyFetchFromEnv({
-      HTTP_PROXY: "",
-      HTTPS_PROXY: "http://proxy.test:8080",
-    });
-    expect(fetchFn).toBeDefined();
+    const fetchFn = requireProxyFetch(
+      resolveProxyFetchFromEnv({
+        HTTP_PROXY: "",
+        HTTPS_PROXY: "http://proxy.test:8080",
+      }),
+    );
     expect(envAgentSpy).toHaveBeenCalledWith({ httpsProxy: "http://proxy.test:8080" });
 
-    await fetchFn!("https://api.example.com");
+    await fetchFn("https://api.example.com");
     expect(undiciFetch).toHaveBeenCalledWith(
       "https://api.example.com",
       expect.objectContaining({ dispatcher: EnvHttpProxyAgent.lastCreated }),
@@ -300,17 +310,18 @@ describe("resolveProxyFetchFromEnv", () => {
   it("converts global FormData bodies when using proxy env fetch", async () => {
     undiciFetch.mockResolvedValue({ ok: true });
 
-    const fetchFn = resolveProxyFetchFromEnv({
-      HTTP_PROXY: "",
-      HTTPS_PROXY: "http://proxy.test:8080",
-    });
-    expect(fetchFn).toBeDefined();
+    const fetchFn = requireProxyFetch(
+      resolveProxyFetchFromEnv({
+        HTTP_PROXY: "",
+        HTTPS_PROXY: "http://proxy.test:8080",
+      }),
+    );
 
     const form = new globalThis.FormData();
     form.append("file", new Blob([new Uint8Array(8)], { type: "audio/wav" }), "test.wav");
     form.append("model", "test-model");
 
-    await fetchFn!("https://api.example.com/v1/audio/transcriptions", {
+    await fetchFn("https://api.example.com/v1/audio/transcriptions", {
       method: "POST",
       body: form,
     });
@@ -322,11 +333,13 @@ describe("resolveProxyFetchFromEnv", () => {
   });
 
   it("returns proxy fetch when HTTP_PROXY is set", () => {
-    const fetchFn = resolveProxyFetchFromEnv({
-      HTTPS_PROXY: "",
-      HTTP_PROXY: "http://fallback.test:3128",
-    });
-    expect(fetchFn).toBeDefined();
+    const fetchFn = requireProxyFetch(
+      resolveProxyFetchFromEnv({
+        HTTPS_PROXY: "",
+        HTTP_PROXY: "http://fallback.test:3128",
+      }),
+    );
+    expect(fetchFn).toBeTypeOf("function");
     expect(envAgentSpy).toHaveBeenCalledWith({
       httpProxy: "http://fallback.test:3128",
       httpsProxy: "http://fallback.test:3128",
@@ -334,24 +347,28 @@ describe("resolveProxyFetchFromEnv", () => {
   });
 
   it("returns proxy fetch when lowercase https_proxy is set", () => {
-    const fetchFn = resolveProxyFetchFromEnv({
-      HTTPS_PROXY: "",
-      HTTP_PROXY: "",
-      http_proxy: "",
-      https_proxy: "http://lower.test:1080",
-    });
-    expect(fetchFn).toBeDefined();
+    const fetchFn = requireProxyFetch(
+      resolveProxyFetchFromEnv({
+        HTTPS_PROXY: "",
+        HTTP_PROXY: "",
+        http_proxy: "",
+        https_proxy: "http://lower.test:1080",
+      }),
+    );
+    expect(fetchFn).toBeTypeOf("function");
     expect(envAgentSpy).toHaveBeenCalledWith({ httpsProxy: "http://lower.test:1080" });
   });
 
   it("returns proxy fetch when lowercase http_proxy is set", () => {
-    const fetchFn = resolveProxyFetchFromEnv({
-      HTTPS_PROXY: "",
-      HTTP_PROXY: "",
-      https_proxy: "",
-      http_proxy: "http://lower-http.test:1080",
-    });
-    expect(fetchFn).toBeDefined();
+    const fetchFn = requireProxyFetch(
+      resolveProxyFetchFromEnv({
+        HTTPS_PROXY: "",
+        HTTP_PROXY: "",
+        https_proxy: "",
+        http_proxy: "http://lower-http.test:1080",
+      }),
+    );
+    expect(fetchFn).toBeTypeOf("function");
     expect(envAgentSpy).toHaveBeenCalledWith({
       httpProxy: "http://lower-http.test:1080",
       httpsProxy: "http://lower-http.test:1080",
@@ -359,14 +376,16 @@ describe("resolveProxyFetchFromEnv", () => {
   });
 
   it("returns proxy fetch when ALL_PROXY is set", () => {
-    const fetchFn = resolveProxyFetchFromEnv({
-      HTTPS_PROXY: "",
-      HTTP_PROXY: "",
-      https_proxy: "",
-      http_proxy: "",
-      ALL_PROXY: "socks5://all-proxy.test:1080",
-    });
-    expect(fetchFn).toBeDefined();
+    const fetchFn = requireProxyFetch(
+      resolveProxyFetchFromEnv({
+        HTTPS_PROXY: "",
+        HTTP_PROXY: "",
+        https_proxy: "",
+        http_proxy: "",
+        ALL_PROXY: "socks5://all-proxy.test:1080",
+      }),
+    );
+    expect(fetchFn).toBeTypeOf("function");
     expect(envAgentSpy).toHaveBeenCalledWith({
       httpProxy: "socks5://all-proxy.test:1080",
       httpsProxy: "socks5://all-proxy.test:1080",

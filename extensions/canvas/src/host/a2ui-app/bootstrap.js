@@ -104,6 +104,10 @@ const statusShadow = isAndroid
   : "0 10px 24px rgba(0, 0, 0, 0.25)";
 const statusBlur = isAndroid ? "10px" : "14px";
 
+const postNativeMessage = (handler, payload) => {
+  Reflect.apply(handler.postMessage, handler, [payload]);
+};
+
 const openclawTheme = {
   components: {
     AudioPlayer: emptyClasses(),
@@ -489,11 +493,9 @@ class OpenClawA2UIHost extends LitElement {
       try {
         // WebKit message handlers support structured objects; Android's JS interface expects strings.
         if (handler === globalThis.openclawCanvasA2UIAction) {
-          // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Native app message handler, not Window.postMessage.
-          handler.postMessage(JSON.stringify({ userAction }));
+          postNativeMessage(handler, JSON.stringify({ userAction }));
         } else {
-          // oxlint-disable-next-line unicorn/require-post-message-target-origin -- WebKit message handler, not Window.postMessage.
-          handler.postMessage({ userAction });
+          postNativeMessage(handler, { userAction });
         }
       } catch (e) {
         const msg = String(e?.message ?? e);

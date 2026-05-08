@@ -8,8 +8,16 @@ import {
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
+import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { resolveStorePath } from "../../../config/sessions/paths.js";
+import {
+  loadSessionStore,
+  runQuotaSuspensionMaintenance,
+  updateSessionStoreEntry,
+} from "../../../config/sessions/store.js";
+import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
@@ -781,6 +789,7 @@ export async function runEmbeddedAttempt(
       );
     }
     const activeContextEngine = isRawModelRun ? undefined : params.contextEngine;
+    const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
     const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
     const diagnosticTrace = freezeDiagnosticTraceContext(
       createDiagnosticTraceContextFromActiveScope(),
@@ -1455,6 +1464,8 @@ export async function runEmbeddedAttempt(
           workspaceDir: effectiveWorkspace,
           agentDir,
           tokenBudget: params.contextTokenBudget,
+          activeAgentId: sessionAgentId,
+          contextEnginePluginId: activeContextEnginePluginId,
         }),
         runMaintenance: async (contextParams) =>
           await runContextEngineMaintenance({
@@ -1466,6 +1477,7 @@ export async function runEmbeddedAttempt(
             sessionManager: contextParams.sessionManager as never,
             runtimeContext: contextParams.runtimeContext,
             config: params.config,
+            agentId: sessionAgentId,
           }),
         warn: (message) => log.warn(message),
       });
@@ -2218,6 +2230,43 @@ export async function runEmbeddedAttempt(
             sessionId: params.sessionId,
             policy: transcriptPolicy,
           });
+
+          if (params.sessionKey && !isRawModelRun) {
+            const storePath = resolveStorePath(params.config?.session?.store, {
+              agentId: sessionAgentId,
+            });
+            await runQuotaSuspensionMaintenance({ storePath });
+            const store = loadSessionStore(storePath, { skipCache: true });
+            const sessionEntry = store[params.sessionKey];
+            const suspension = sessionEntry?.quotaSuspension;
+            if (suspension?.state === "resuming") {
+              const subagents = Object.values(store)
+                .filter((s) => s.spawnedBy === sessionEntry.sessionId)
+                .map((s) => ({
+                  sessionId: s.sessionId,
+                  role: s.subagentRole,
+                  lastStatus: s.status,
+                }));
+              const handoffMsg = buildHierarchyReinforcementMessage({
+                summary: suspension.summary ?? "No recovery briefing was captured.",
+                activeSubagents: subagents,
+              });
+              validated.push(handoffMsg);
+              await updateSessionStoreEntry({
+                storePath,
+                sessionKey: params.sessionKey,
+                update: async (entry) => {
+                  if (entry.quotaSuspension?.state !== "resuming") {
+                    return null;
+                  }
+                  return {
+                    quotaSuspension: { ...entry.quotaSuspension, state: "active" },
+                  };
+                },
+              });
+            }
+          }
+
           const heartbeatSummary =
             params.config && sessionAgentId
               ? resolveHeartbeatSummaryForAgent(params.config, sessionAgentId)
@@ -2296,6 +2345,10 @@ export async function runEmbeddedAttempt(
           agent: activeSession?.agent,
           sessionManager,
           clearPendingOnTimeout: true,
+          // PERF: If the run was aborted during the setup,
+          // skip the idle wait and clear pending results synchronously so we can
+          // immediately dispose the session and throw the error without blocking.
+          ...(params.abortSignal?.aborted ? { timeoutMs: 0 } : {}),
         });
         activeSession.dispose();
         throw err;
@@ -3398,6 +3451,8 @@ export async function runEmbeddedAttempt(
             tokenBudget: params.contextTokenBudget,
             lastCallUsage,
             promptCache,
+            activeAgentId: sessionAgentId,
+            contextEnginePluginId: activeContextEnginePluginId,
           });
           await finalizeAttemptContextEngineTurn({
             contextEngine: activeContextEngine,
@@ -3421,6 +3476,7 @@ export async function runEmbeddedAttempt(
                 sessionManager: contextParams.sessionManager as never,
                 runtimeContext: contextParams.runtimeContext,
                 config: params.config,
+                agentId: sessionAgentId,
               }),
             sessionManager,
             config: params.config,
@@ -3793,6 +3849,14 @@ export async function runEmbeddedAttempt(
           bundleMcpRuntime,
           bundleLspRuntime,
           sessionLock,
+          // PERF: If the run was aborted (user stop, timeout, etc.), skip the idle wait
+          // and clear pending results synchronously so we can release the session lock ASAP.
+          aborted:
+            Boolean(params.abortSignal?.aborted) ||
+            aborted ||
+            timedOut ||
+            idleTimedOut ||
+            timedOutDuringCompaction,
         });
       } catch (err) {
         cleanupError = err;

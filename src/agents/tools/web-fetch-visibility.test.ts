@@ -206,7 +206,7 @@ describe("sanitizeHtml", () => {
 
   it("handles malformed HTML gracefully", async () => {
     const html = "<p>Unclosed <div>Nested";
-    await expect(sanitizeHtml(html)).resolves.toBeDefined();
+    await expect(sanitizeHtml(html)).resolves.toContain("Unclosed");
   });
 });
 

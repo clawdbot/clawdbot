@@ -75,6 +75,13 @@ function requireToken(token: string | undefined): string {
   return token;
 }
 
+function requireValue<T>(value: T | null | undefined, message: string): T {
+  if (value == null) {
+    throw new Error(message);
+  }
+  return value;
+}
+
 function requireRotatedEntry(result: RotateDeviceTokenResult) {
   expect(result.ok).toBe(true);
   if (!result.ok) {
@@ -89,12 +96,9 @@ async function overwritePairedOperatorTokenScopes(baseDir: string, scopes: strin
     string,
     PairedDevice
   >;
-  const device = pairedByDeviceId["device-1"];
-  expect(device?.tokens?.operator).toBeDefined();
-  if (!device?.tokens?.operator) {
-    throw new Error("expected paired operator token");
-  }
-  device.tokens.operator.scopes = scopes;
+  const device = requireValue(pairedByDeviceId["device-1"], "expected paired device device-1");
+  const operatorToken = requireValue(device.tokens?.operator, "expected paired operator token");
+  operatorToken.scopes = scopes;
   await writeFile(pairedPath, JSON.stringify(pairedByDeviceId, null, 2));
 }
 
@@ -108,11 +112,7 @@ async function mutatePairedDevice(
     string,
     PairedDevice
   >;
-  const device = pairedByDeviceId[deviceId];
-  expect(device).toBeDefined();
-  if (!device) {
-    throw new Error(`expected paired device ${deviceId}`);
-  }
+  const device = requireValue(pairedByDeviceId[deviceId], `expected paired device ${deviceId}`);
   mutate(device);
   await writeFile(pairedPath, JSON.stringify(pairedByDeviceId, null, 2));
 }
@@ -217,11 +217,10 @@ describe("device pairing tokens", () => {
       string,
       { ts: number }
     >;
-    const pending = pendingById[first.request.requestId];
-    expect(pending).toBeDefined();
-    if (!pending) {
-      throw new Error("expected pending pairing request");
-    }
+    const pending = requireValue(
+      pendingById[first.request.requestId],
+      "expected pending pairing request",
+    );
     pending.ts = originalTs;
     await writeFile(paths.pendingPath, JSON.stringify(pendingById, null, 2));
 
@@ -332,6 +331,66 @@ describe("device pairing tokens", () => {
         baseDir,
       }),
     ).resolves.toEqual({ ok: true });
+  });
+
+  test("preserves existing operator token scopes when approving a scope upgrade", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+
+    const upgrade = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.write"],
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveDevicePairing(
+        upgrade.request.requestId,
+        { callerScopes: ["operator.read", "operator.write"] },
+        baseDir,
+      ),
+    ).resolves.toMatchObject({ status: "approved" });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.approvedScopes).toEqual(["operator.read", "operator.write"]);
+    expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read", "operator.write"]);
+  });
+
+  test("does not widen a down-scoped operator token when approving a scope upgrade", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read", "operator.write"]);
+    await overwritePairedOperatorTokenScopes(baseDir, ["operator.read"]);
+
+    const upgrade = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.talk.secrets"],
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveDevicePairing(
+        upgrade.request.requestId,
+        { callerScopes: ["operator.read", "operator.talk.secrets", "operator.write"] },
+        baseDir,
+      ),
+    ).resolves.toMatchObject({ status: "approved" });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.approvedScopes).toEqual([
+      "operator.read",
+      "operator.write",
+      "operator.talk.secrets",
+    ]);
+    expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read", "operator.talk.secrets"]);
+    expect(paired?.tokens?.operator?.scopes).not.toContain("operator.write");
   });
 
   test("preserves requested non-operator scopes on newly minted role tokens", async () => {
@@ -598,7 +657,7 @@ describe("device pairing tokens", () => {
     expect(paired?.roles).toEqual(["node"]);
     expect(paired?.scopes).toEqual([]);
     expect(paired?.approvedScopes).toEqual([]);
-    expect(paired?.tokens?.node).toBeTruthy();
+    expect(paired?.tokens?.node).toMatchObject({ token: expect.any(String) });
     expect(paired?.tokens?.operator).toBeUndefined();
   });
 
@@ -873,11 +932,7 @@ describe("device pairing tokens", () => {
     await setupPairedNodeDevice(baseDir);
 
     await mutatePairedDevice(baseDir, "node-1", (device) => {
-      const nodeToken = device.tokens?.node;
-      expect(nodeToken).toBeDefined();
-      if (!nodeToken) {
-        throw new Error("expected paired node token");
-      }
+      const nodeToken = requireValue(device.tokens?.node, "expected paired node token");
       nodeToken.scopes = ["operator.read"];
     });
 
@@ -1213,28 +1268,26 @@ describe("device pairing tokens", () => {
     );
     await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
 
-    let paired = await getPairedDevice("device-1", baseDir);
-    expect(paired).toBeDefined();
-    if (!paired) {
-      throw new Error("expected paired node device");
-    }
-    expect(paired?.roles).toContain("node");
+    let paired = requireValue(
+      await getPairedDevice("device-1", baseDir),
+      "expected paired node device",
+    );
+    expect(paired.roles).toContain("node");
     expect(listEffectivePairedDeviceRoles(paired)).toEqual(["node"]);
     expect(hasEffectivePairedDeviceRole(paired, "node")).toBe(true);
 
     await revokeDeviceToken({ deviceId: "device-1", role: "node", baseDir });
 
-    paired = await getPairedDevice("device-1", baseDir);
-    expect(paired).toBeDefined();
-    if (!paired) {
-      throw new Error("expected paired node device after revoke");
-    }
-    expect(paired?.roles).toContain("node");
+    paired = requireValue(
+      await getPairedDevice("device-1", baseDir),
+      "expected paired node device after revoke",
+    );
+    expect(paired.roles).toContain("node");
     expect(listEffectivePairedDeviceRoles(paired)).toEqual([]);
     expect(hasEffectivePairedDeviceRole(paired, "node")).toBe(false);
   });
 
-  test("fails closed for tokenless legacy role fields", async () => {
+  test("fails closed for tokenless legacy role fields", () => {
     const device: PairedDevice = {
       deviceId: "device-fallback",
       publicKey: "pk-fallback",
@@ -1249,7 +1302,7 @@ describe("device pairing tokens", () => {
     expect(hasEffectivePairedDeviceRole(device, "operator")).toBe(false);
   });
 
-  test("filters active token roles to the approved pairing role set", async () => {
+  test("filters active token roles to the approved pairing role set", () => {
     const now = Date.now();
     const device: PairedDevice = {
       deviceId: "device-filtered",

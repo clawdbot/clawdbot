@@ -1416,7 +1416,7 @@ describe("runWithModelFallback", () => {
     });
   });
 
-  it("uses fallbacksOverride instead of agents.defaults.model.fallbacks", async () => {
+  it("uses fallbacksOverride instead of agents.defaults.model.fallbacks", () => {
     const cfg = makeFallbacksOnlyCfg();
 
     const candidates = __testing.resolveFallbackCandidates({
@@ -1432,7 +1432,7 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
-  it("treats an empty fallbacksOverride as disabling global fallbacks", async () => {
+  it("treats an empty fallbacksOverride as disabling global fallbacks", () => {
     const cfg = makeFallbacksOnlyCfg();
 
     const candidates = __testing.resolveFallbackCandidates({
@@ -1445,7 +1445,7 @@ describe("runWithModelFallback", () => {
     expect(candidates).toEqual([{ provider: "anthropic", model: "claude-opus-4-5" }]);
   });
 
-  it("keeps explicit fallbacks reachable when models allowlist is present", async () => {
+  it("keeps explicit fallbacks reachable when models allowlist is present", () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -1472,7 +1472,7 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
-  it("defaults provider/model when missing (regression #946)", async () => {
+  it("defaults provider/model when missing (regression #946)", () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -1671,6 +1671,13 @@ describe("runWithModelFallback", () => {
       setAuthRuntimeStore(tmpDir, store);
       return { dir: tmpDir };
     }
+
+    it("maps non-quota cooldown suspensions to circuit-open session state", () => {
+      expect(__testing.resolveSessionSuspensionReason("rate_limit")).toBe("quota_exhausted");
+      expect(__testing.resolveSessionSuspensionReason("overloaded")).toBe("circuit_open");
+      expect(__testing.resolveSessionSuspensionReason("timeout")).toBe("circuit_open");
+      expect(__testing.resolveSessionSuspensionReason("billing")).toBe("manual");
+    });
 
     it("attempts same-provider fallbacks during transient cooldowns", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "timeout");

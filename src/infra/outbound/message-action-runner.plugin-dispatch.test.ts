@@ -16,6 +16,25 @@ import { extractToolPayload } from "./tool-payload.js";
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readFirstPluginCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
+  const call = mock.mock.calls[0]?.[0];
+  if (!isRecord(call)) {
+    throw new Error("expected plugin action call");
+  }
+  return call;
+}
+
+function readMediaAccess(call: Record<string, unknown>): Record<string, unknown> {
+  if (!isRecord(call.mediaAccess)) {
+    throw new Error("expected plugin mediaAccess");
+  }
+  return call.mediaAccess;
+}
+
 const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
   executeSendAction: vi.fn(),
@@ -649,9 +668,8 @@ describe("runMessageAction plugin dispatch", () => {
         dryRun: false,
       });
 
-      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
-      expect(pluginCall?.mediaAccess).toBeDefined();
-      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
+      const mediaAccess = readMediaAccess(readFirstPluginCall(handlePolicyCheckedAction));
+      expect(mediaAccess.readFile).toBeUndefined();
     });
 
     it("uses requester username policy for host-media reads", async () => {
@@ -726,9 +744,8 @@ describe("runMessageAction plugin dispatch", () => {
         dryRun: false,
       });
 
-      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
-      expect(pluginCall?.mediaAccess).toBeDefined();
-      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
+      const mediaAccess = readMediaAccess(readFirstPluginCall(handlePolicyCheckedAction));
+      expect(mediaAccess.readFile).toBeUndefined();
     });
 
     it("uses requester account policy for host-media reads when destination account differs", async () => {
@@ -820,10 +837,10 @@ describe("runMessageAction plugin dispatch", () => {
         dryRun: false,
       });
 
-      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
-      expect(pluginCall?.accountId).toBe("destination");
-      expect(pluginCall?.mediaAccess).toBeDefined();
-      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
+      const pluginCall = readFirstPluginCall(handlePolicyCheckedAction);
+      expect(pluginCall.accountId).toBe("destination");
+      const mediaAccess = readMediaAccess(pluginCall);
+      expect(mediaAccess.readFile).toBeUndefined();
     });
 
     it("falls back to the resolved account policy when requester account is unavailable", async () => {
@@ -901,10 +918,10 @@ describe("runMessageAction plugin dispatch", () => {
         dryRun: false,
       });
 
-      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
-      expect(pluginCall?.accountId).toBe("source");
-      expect(pluginCall?.mediaAccess).toBeDefined();
-      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
+      const pluginCall = readFirstPluginCall(handlePolicyCheckedAction);
+      expect(pluginCall.accountId).toBe("source");
+      const mediaAccess = readMediaAccess(pluginCall);
+      expect(mediaAccess.readFile).toBeUndefined();
     });
   });
 

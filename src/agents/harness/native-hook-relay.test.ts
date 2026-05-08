@@ -34,9 +34,9 @@ async function waitForNativeHookRelayBridgeRecord(
   let record: Record<string, unknown> | undefined;
   await vi.waitFor(() => {
     record = __testing.getNativeHookRelayBridgeRecordForTests(relayId);
-    expect(record).toBeDefined();
+    expect(record).toMatchObject({ relayId });
   });
-  return record!;
+  return record as Record<string, unknown>;
 }
 
 describe("native hook relay registry", () => {

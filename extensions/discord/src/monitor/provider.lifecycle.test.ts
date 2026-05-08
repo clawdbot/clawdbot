@@ -315,8 +315,10 @@ describe("runDiscordGatewayLifecycle", () => {
       ),
     ).toBe(true);
 
-    expect(resolveWait).toBeDefined();
-    resolveWait?.();
+    if (!resolveWait) {
+      throw new Error("expected lifecycle wait resolver");
+    }
+    resolveWait();
     await expect(lifecyclePromise).resolves.toBeUndefined();
   });
 

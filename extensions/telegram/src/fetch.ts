@@ -41,6 +41,7 @@ const TELEGRAM_DISPATCHER_KEEP_ALIVE_TIMEOUT_MS = 30_000;
 const TELEGRAM_DISPATCHER_KEEP_ALIVE_MAX_TIMEOUT_MS = 600_000;
 const TELEGRAM_DISPATCHER_CONNECTIONS_PER_ORIGIN = 10;
 const TELEGRAM_DISPATCHER_PIPELINING = 1;
+const TELEGRAM_STICKY_FALLBACK_PRIMARY_PROBE_SUCCESS_THRESHOLD = 5;
 
 type TelegramAgentPoolOptions = {
   allowH2: false;
@@ -640,6 +641,14 @@ export function resolveTelegramTransport(
   });
 
   let stickyAttemptIndex = 0;
+  let stickySuccessCount = 0;
+  let primaryProbeDue = false;
+
+  const resetStickyRecoveryProbe = (): void => {
+    stickySuccessCount = 0;
+    primaryProbeDue = false;
+  };
+
   const promoteStickyAttempt = (nextIndex: number, err: unknown, reason?: string): boolean => {
     if (nextIndex <= stickyAttemptIndex || nextIndex >= transportAttempts.length) {
       return false;
@@ -655,14 +664,48 @@ export function resolveTelegramTransport(
       }
     }
     stickyAttemptIndex = nextIndex;
+    resetStickyRecoveryProbe();
     return true;
+  };
+
+  const recordSuccessfulAttempt = (attemptIndex: number): void => {
+    if (stickyAttemptIndex === 0) {
+      resetStickyRecoveryProbe();
+      return;
+    }
+
+    if (attemptIndex < stickyAttemptIndex) {
+      log.debug(
+        `fetch fallback: recovered from attempt ${stickyAttemptIndex} to attempt ${attemptIndex}`,
+      );
+      stickyAttemptIndex = attemptIndex;
+      resetStickyRecoveryProbe();
+      return;
+    }
+
+    if (attemptIndex !== stickyAttemptIndex) {
+      return;
+    }
+
+    stickySuccessCount += 1;
+    if (stickySuccessCount >= TELEGRAM_STICKY_FALLBACK_PRIMARY_PROBE_SUCCESS_THRESHOLD) {
+      stickySuccessCount = 0;
+      primaryProbeDue = true;
+      log.debug("fetch fallback: scheduling primary dispatcher recovery probe");
+    }
   };
 
   const resolvedFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const callerProvidedDispatcher = Boolean(
       (init as RequestInitWithDispatcher | undefined)?.dispatcher,
     );
-    const startIndex = Math.min(stickyAttemptIndex, transportAttempts.length - 1);
+    const stickyStartIndex = Math.min(stickyAttemptIndex, transportAttempts.length - 1);
+    const primaryProbe = !callerProvidedDispatcher && primaryProbeDue && stickyStartIndex > 0;
+    const startIndex = primaryProbe ? 0 : stickyStartIndex;
+    if (primaryProbe) {
+      primaryProbeDue = false;
+      log.debug("fetch fallback: re-probing primary dispatcher after sticky fallback successes");
+    }
     let err: unknown;
 
     try {
@@ -679,6 +722,9 @@ export function resolveTelegramTransport(
         flowId: randomUUID(),
         meta: { subsystem: "telegram-fetch" },
       });
+      if (!callerProvidedDispatcher) {
+        recordSuccessfulAttempt(startIndex);
+      }
       return response;
     } catch (caught) {
       err = caught;
@@ -708,6 +754,7 @@ export function resolveTelegramTransport(
           flowId: randomUUID(),
           meta: { subsystem: "telegram-fetch", fallbackAttempt: nextIndex },
         });
+        recordSuccessfulAttempt(nextIndex);
         return response;
       } catch (caught) {
         err = caught;

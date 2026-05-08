@@ -102,6 +102,13 @@ function mockLoadedMedia({
   });
 }
 
+function requireMockCall<T extends unknown[]>(call: T | undefined, label: string): T {
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
+}
+
 describe("sent-message-cache", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -1925,10 +1932,8 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
-    const firstCall = sendMessage.mock.calls[0];
-    const secondCall = sendMessage.mock.calls[1];
-    expect(firstCall).toBeDefined();
-    expect(secondCall).toBeDefined();
+    const firstCall = requireMockCall(sendMessage.mock.calls[0], "first sendMessage call");
+    const secondCall = requireMockCall(sendMessage.mock.calls[1], "second sendMessage call");
     expect((firstCall[1] as string).length).toBeLessThanOrEqual(4000);
     expect((secondCall[1] as string).length).toBeLessThanOrEqual(4000);
     expect(firstCall[2]?.reply_markup).toBeUndefined();
@@ -1956,10 +1961,8 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
-    const firstCall = sendMessage.mock.calls[0];
-    const secondCall = sendMessage.mock.calls[1];
-    expect(firstCall).toBeDefined();
-    expect(secondCall).toBeDefined();
+    const firstCall = requireMockCall(sendMessage.mock.calls[0], "first sendMessage call");
+    const secondCall = requireMockCall(sendMessage.mock.calls[1], "second sendMessage call");
     expect(String(firstCall[1] ?? "").length).toBeLessThanOrEqual(4000);
     expect(String(secondCall[1] ?? "").length).toBeLessThanOrEqual(4000);
     expect(firstCall[2]?.parse_mode).toBe("HTML");

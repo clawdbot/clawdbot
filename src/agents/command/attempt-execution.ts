@@ -21,11 +21,10 @@ import { runCliAgent } from "../cli-runner.js";
 import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
 import { FailoverError } from "../failover-error.js";
 import { resolveAgentHarnessPolicy } from "../harness/selection.js";
-import { isCliRuntimeAlias, resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
+import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
-import { normalizeEmbeddedAgentRuntime } from "../pi-embedded-runner/runtime.js";
+import { resolveOpenAIRuntimeProviderForPi } from "../openai-codex-routing.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
-import { normalizeProviderId } from "../provider-id.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import {
   acquireSessionWriteLock,
@@ -409,28 +408,14 @@ export function runAgentAttempt(params: {
   );
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-  const sessionPinnedAgentHarnessId = isRawModelRun
-    ? "pi"
-    : resolveSessionPinnedAgentHarnessId({
-        cfg: params.cfg,
-        sessionAgentId: params.sessionAgentId,
-        sessionEntry: params.sessionEntry,
-        sessionHasHistory: params.sessionHasHistory,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey ?? params.sessionId,
-        provider: params.providerOverride,
-        modelId: params.modelOverride,
-      });
-  const agentRuntimeOverride = isRawModelRun
-    ? undefined
-    : params.sessionEntry?.agentRuntimeOverride?.trim();
+  const requestedAgentHarnessId = isRawModelRun ? "pi" : undefined;
   const cliExecutionProvider = isRawModelRun
     ? params.providerOverride
     : (resolveCliRuntimeExecutionProvider({
         provider: params.providerOverride,
         cfg: params.cfg,
         agentId: params.sessionAgentId,
-        runtimeOverride: agentRuntimeOverride,
+        modelId: params.modelOverride,
       }) ?? params.providerOverride);
   const agentHarnessPolicy = isRawModelRun
     ? ({ runtime: "pi" } as const)
@@ -449,7 +434,7 @@ export function runAgentAttempt(params: {
     authProfileProvider: params.authProfileProvider,
     sessionAuthProfileId: params.sessionEntry?.authProfileOverride,
     sessionAuthProfileSource: params.sessionEntry?.authProfileOverrideSource,
-    harnessId: sessionPinnedAgentHarnessId,
+    harnessId: requestedAgentHarnessId,
     harnessRuntime: agentHarnessPolicy.runtime,
     allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),
   });
@@ -459,11 +444,20 @@ export function runAgentAttempt(params: {
     sessionAuthProfileId: harnessAuthSelection.authProfileId,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
-    harnessId: sessionPinnedAgentHarnessId,
+    harnessId: requestedAgentHarnessId,
     harnessRuntime: agentHarnessPolicy.runtime,
     allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),
   });
   const authProfileId = runtimeAuthPlan.forwardedAuthProfileId;
+  const embeddedPiProvider = resolveOpenAIRuntimeProviderForPi({
+    provider: params.providerOverride,
+    harnessRuntime: agentHarnessPolicy.runtime,
+    agentHarnessId: requestedAgentHarnessId,
+    authProfileProvider: runtimeAuthPlan.authProfileProviderForAuth,
+    authProfileId,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const resolveReusableCliSessionBinding = async () => {
@@ -609,13 +603,13 @@ export function runAgentAttempt(params: {
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
-    agentHarnessId: sessionPinnedAgentHarnessId,
+    agentHarnessId: requestedAgentHarnessId,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
     images: params.isFallbackRetry ? undefined : params.opts.images,
     imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
     clientTools: params.opts.clientTools,
-    provider: params.providerOverride,
+    provider: embeddedPiProvider,
     model: params.modelOverride,
     modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
@@ -645,60 +639,6 @@ export function runAgentAttempt(params: {
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
   });
-}
-
-function resolveSessionPinnedAgentHarnessId(params: {
-  cfg: OpenClawConfig;
-  sessionAgentId: string;
-  sessionEntry?: SessionEntry;
-  sessionHasHistory?: boolean;
-  sessionId: string;
-  sessionKey: string;
-  provider: string;
-  modelId?: string;
-}): string | undefined {
-  if (params.sessionEntry?.sessionId !== params.sessionId) {
-    return resolveConfiguredAgentHarnessId(params);
-  }
-  if (params.sessionEntry.agentHarnessId) {
-    if (
-      normalizeProviderId(params.provider) === "openai-codex" &&
-      normalizeEmbeddedAgentRuntime(params.sessionEntry.agentHarnessId) === "pi"
-    ) {
-      throw new Error(
-        "OpenAI Codex agent model runs require the Codex harness. The existing session is pinned to PI; run `openclaw doctor --fix` to repair stale Codex runtime pins.",
-      );
-    }
-    return params.sessionEntry.agentHarnessId;
-  }
-  const configuredAgentHarnessId = resolveConfiguredAgentHarnessId(params);
-  if (configuredAgentHarnessId) {
-    return configuredAgentHarnessId;
-  }
-  if (!params.sessionHasHistory) {
-    return undefined;
-  }
-  return "pi";
-}
-
-function resolveConfiguredAgentHarnessId(params: {
-  cfg: OpenClawConfig;
-  sessionAgentId: string;
-  sessionKey: string;
-  provider: string;
-  modelId?: string;
-}): string | undefined {
-  const policy = resolveAgentHarnessPolicy({
-    config: params.cfg,
-    agentId: params.sessionAgentId,
-    sessionKey: params.sessionKey,
-    provider: params.provider,
-    modelId: params.modelId,
-  });
-  if (policy.runtime === "auto" || isCliRuntimeAlias(policy.runtime)) {
-    return undefined;
-  }
-  return policy.runtime;
 }
 
 export function buildAcpResult(params: {

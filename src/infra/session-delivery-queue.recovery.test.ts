@@ -134,11 +134,15 @@ describe("session-delivery queue recovery", () => {
       await failSessionDelivery(id, "transient failure", tempDir);
 
       const [failedEntry] = await loadPendingSessionDeliveries(tempDir);
-      expect(failedEntry).toBeDefined();
-      expect(failedEntry?.retryCount).toBe(1);
-      expect(failedEntry?.lastAttemptAt).toBeDefined();
+      if (!failedEntry) {
+        throw new Error("expected failed session delivery to remain pending");
+      }
+      expect(failedEntry.retryCount).toBe(1);
 
-      const lastAttemptAt = failedEntry?.lastAttemptAt ?? 0;
+      const lastAttemptAt = failedEntry.lastAttemptAt;
+      if (typeof lastAttemptAt !== "number") {
+        throw new Error("expected failed delivery attempt timestamp");
+      }
       const notReady = isSessionDeliveryEligibleForRetry(failedEntry, lastAttemptAt + 4_999);
       expect(notReady).toEqual({ eligible: false, remainingBackoffMs: 1 });
 

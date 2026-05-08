@@ -472,7 +472,9 @@ describe("scripts/docker/setup.sh", () => {
       const forceRecreateLine = log
         .split("\n")
         .find((line) => line.includes("up -d --force-recreate openclaw-gateway"));
-      expect(forceRecreateLine).toBeDefined();
+      expect(forceRecreateLine).toEqual(
+        expect.stringContaining("up -d --force-recreate openclaw-gateway"),
+      );
       expect(forceRecreateLine).not.toContain("docker-compose.sandbox.yml");
       await expect(
         stat(join(activeSandbox.rootDir, "docker-compose.sandbox.yml")),
@@ -480,7 +482,7 @@ describe("scripts/docker/setup.sh", () => {
     });
   });
 
-  it("rejects injected multiline OPENCLAW_EXTRA_MOUNTS values", async () => {
+  it("rejects injected multiline OPENCLAW_EXTRA_MOUNTS values", () => {
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {
@@ -491,7 +493,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stderr).toContain("OPENCLAW_EXTRA_MOUNTS cannot contain control characters");
   });
 
-  it("rejects invalid OPENCLAW_EXTRA_MOUNTS mount format", async () => {
+  it("rejects invalid OPENCLAW_EXTRA_MOUNTS mount format", () => {
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {
@@ -502,7 +504,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stderr).toContain("Invalid mount format");
   });
 
-  it("rejects invalid OPENCLAW_HOME_VOLUME names", async () => {
+  it("rejects invalid OPENCLAW_HOME_VOLUME names", () => {
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {
@@ -513,7 +515,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stderr).toContain("OPENCLAW_HOME_VOLUME must match");
   });
 
-  it("rejects OPENCLAW_TZ values that are not present in zoneinfo", async () => {
+  it("rejects OPENCLAW_TZ values that are not present in zoneinfo", () => {
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {

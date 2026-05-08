@@ -723,17 +723,6 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes bluebubbles extension tests to the bluebubbles config", () => {
-    expect(buildVitestRunPlans(["extensions/bluebubbles/src/monitor.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.extension-bluebubbles.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/bluebubbles/src/monitor.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
   it("routes feishu extension tests to the feishu config", () => {
     expect(buildVitestRunPlans(["extensions/feishu/src/channel.test.ts"])).toEqual([
       {

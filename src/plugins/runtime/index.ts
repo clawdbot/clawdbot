@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   generateImage as generateRuntimeImage,
@@ -12,6 +13,7 @@ import {
   createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
   createLazyRuntimeModule,
+  createLazyRuntimeSurface,
 } from "../../shared/lazy-runtime.js";
 import { VERSION } from "../../version.js";
 import {
@@ -95,6 +97,25 @@ function createRuntimeMusicGeneration(): PluginRuntime["musicGeneration"] {
   return {
     generate: (params) => generateRuntimeMusic(params),
     listProviders: (params) => listRuntimeMusicGenerationProviders(params),
+  };
+}
+
+function createRuntimeLlmFacade(): PluginRuntime["llm"] {
+  const loadLlm = createLazyRuntimeSurface(
+    () => import("./runtime-llm.runtime.js"),
+    (m) =>
+      m.createRuntimeLlm({
+        getConfig: getRuntimeConfig,
+        authority: {
+          allowComplete: true,
+        },
+      }),
+  );
+  return {
+    complete: async (params) => {
+      const llm = await loadLlm();
+      return llm.complete(params);
+    },
   };
 }
 
@@ -246,6 +267,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     | "imageGeneration"
     | "videoGeneration"
     | "musicGeneration"
+    | "llm"
   > &
     Partial<
       Pick<
@@ -257,6 +279,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
         | "imageGeneration"
         | "videoGeneration"
         | "musicGeneration"
+        | "llm"
       >
     >;
 
@@ -269,6 +292,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   defineCachedValue(runtime, "imageGeneration", createRuntimeImageGeneration);
   defineCachedValue(runtime, "videoGeneration", createRuntimeVideoGeneration);
   defineCachedValue(runtime, "musicGeneration", createRuntimeMusicGeneration);
+  defineCachedValue(runtime, "llm", createRuntimeLlmFacade);
 
   return runtime as unknown as PluginRuntime;
 }

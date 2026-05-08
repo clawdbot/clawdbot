@@ -1,8 +1,8 @@
 import type { WebSocket } from "ws";
-import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
+import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
 import type { ConnectParams } from "../protocol/index.js";
 
-export type GatewayWsClient = {
+export type GatewayWsClient = PluginNodeCapabilityClient & {
   socket: WebSocket;
   connect: ConnectParams;
   connId: string;
@@ -11,7 +11,4 @@ export type GatewayWsClient = {
   sharedGatewaySessionGeneration?: string;
   presenceKey?: string;
   clientIp?: string;
-  pluginSurfaceUrls?: Record<string, string>;
-  pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
-  pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
 };

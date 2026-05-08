@@ -183,11 +183,18 @@ function createHost(): TestGatewayHost {
   } as unknown as TestGatewayHost;
 }
 
+function requireGatewayClient(index = 0): GatewayClientMock {
+  const client = gatewayClientInstances[index];
+  if (!client) {
+    throw new Error(`Expected gateway client instance at index ${index}`);
+  }
+  return client;
+}
+
 function connectHostGateway() {
   const host = createHost();
   connectGateway(host);
-  const client = gatewayClientInstances[0];
-  expect(client).toBeDefined();
+  const client = requireGatewayClient();
   return { host, client };
 }
 
@@ -230,12 +237,10 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const firstClient = gatewayClientInstances[0];
-    expect(firstClient).toBeDefined();
+    const firstClient = requireGatewayClient();
 
     connectGateway(host);
-    const secondClient = gatewayClientInstances[1];
-    expect(secondClient).toBeDefined();
+    const secondClient = requireGatewayClient(1);
 
     firstClient.emitGap(10, 13);
     expect(host.lastError).toBeNull();
@@ -250,12 +255,10 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const firstClient = gatewayClientInstances[0];
-    expect(firstClient).toBeDefined();
+    const firstClient = requireGatewayClient();
 
     connectGateway(host);
-    const secondClient = gatewayClientInstances[1];
-    expect(secondClient).toBeDefined();
+    const secondClient = requireGatewayClient(1);
 
     firstClient.emitEvent({ event: "presence", payload: { presence: [{ host: "stale" }] } });
     expect(host.eventLogBuffer).toHaveLength(0);
@@ -269,12 +272,10 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const firstClient = gatewayClientInstances[0];
-    expect(firstClient).toBeDefined();
+    const firstClient = requireGatewayClient();
 
     connectGateway(host);
-    const secondClient = gatewayClientInstances[1];
-    expect(secondClient).toBeDefined();
+    const secondClient = requireGatewayClient(1);
 
     firstClient.emitEvent({
       event: GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -302,8 +303,7 @@ describe("connectGateway", () => {
     host.pendingUpdateExpectedVersion = "2.0.0";
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
     client.request.mockImplementation(async (method: string) => {
       if (method === "update.status") {
         return {
@@ -338,8 +338,7 @@ describe("connectGateway", () => {
     host.pendingUpdateExpectedVersion = "2.0.0";
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
     client.request.mockImplementation(async (method: string) => {
       if (method === "update.status") {
         return {
@@ -376,8 +375,7 @@ describe("connectGateway", () => {
     host.pendingUpdateExpectedVersion = "2.0.0";
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
     client.request.mockImplementation(async (method: string) => {
       if (method === "update.status") {
         return {
@@ -415,12 +413,10 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const firstClient = gatewayClientInstances[0];
-    expect(firstClient).toBeDefined();
+    const firstClient = requireGatewayClient();
 
     connectGateway(host);
-    const secondClient = gatewayClientInstances[1];
-    expect(secondClient).toBeDefined();
+    const secondClient = requireGatewayClient(1);
 
     firstClient.emitClose({ code: 1005 });
     expect(host.lastError).toBeNull();
@@ -429,6 +425,29 @@ describe("connectGateway", () => {
     secondClient.emitClose({ code: 1005 });
     expect(host.lastError).toBe("disconnected (1005): no reason");
     expect(host.lastErrorCode).toBeNull();
+  });
+
+  it("routes exec approval requested events with command spans", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "exec.approval.requested",
+      payload: {
+        id: "approval-explain-1",
+        request: {
+          command: 'ls | grep "stuff" | python -c \'print("hi")\'',
+          host: "gateway",
+          commandSpans: [{ startIndex: 20, endIndex: 26 }],
+        },
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      },
+    });
+
+    expect(host.execApprovalQueue).toHaveLength(1);
+    expect(host.execApprovalQueue[0]?.request.commandSpans).toEqual([
+      { startIndex: 20, endIndex: 26 },
+    ]);
   });
 
   it("preserves pending approval requests across reconnect", () => {
@@ -456,8 +475,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitClose({
       code: 4008,
@@ -477,8 +495,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitClose({
       code: 4008,
@@ -498,8 +515,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitClose({
       code: 4008,
@@ -519,8 +535,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitClose({
       code: 4008,
@@ -540,8 +555,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitClose({
       code: 4008,
@@ -561,8 +575,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitClose({
       code: 4008,
@@ -583,8 +596,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitClose({
       code: 4008,
@@ -608,8 +620,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitEvent({
       event: "shutdown",
@@ -630,8 +641,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitEvent({
       event: "shutdown",
@@ -655,8 +665,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitHello();
 
@@ -675,8 +684,7 @@ describe("connectGateway", () => {
     };
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
     client.request.mockImplementation(async (method: string) => {
       if (method === "agents.list") {
         return {
@@ -723,8 +731,7 @@ describe("connectGateway", () => {
     host.pendingAbort = { runId: "run-main", sessionKey: "main" };
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitHello();
     await Promise.resolve();
@@ -743,8 +750,7 @@ describe("connectGateway", () => {
     host.pendingAbort = { sessionKey: "main" };
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitHello();
     await Promise.resolve();
@@ -761,8 +767,7 @@ describe("connectGateway", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
     const error = new Error("run already finished");
     client.request.mockImplementationOnce(async () => {
       throw error;
@@ -780,8 +785,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitEvent({
       event: "shutdown",
@@ -800,8 +804,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitEvent({
       event: "shutdown",
@@ -1098,8 +1101,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const firstClient = gatewayClientInstances[0];
-    expect(firstClient).toBeDefined();
+    const firstClient = requireGatewayClient();
 
     firstClient.emitEvent({
       event: "chat.side_result",
@@ -1115,8 +1117,7 @@ describe("connectGateway", () => {
     expect(host.chatSideResultTerminalRuns.has("btw-run-reconnect")).toBe(true);
 
     connectGateway(host);
-    const reconnectClient = gatewayClientInstances[1];
-    expect(reconnectClient).toBeDefined();
+    const reconnectClient = requireGatewayClient(1);
 
     reconnectClient.emitHello();
 
@@ -1146,8 +1147,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitEvent({
       event: "plugin.approval.requested",
@@ -1175,8 +1175,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     // Add a plugin approval first
     client.emitEvent({

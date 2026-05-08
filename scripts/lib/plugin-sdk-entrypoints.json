@@ -35,6 +35,7 @@
   "config-mutation",
   "cron-store-runtime",
   "config-schema",
+  "json-schema-runtime",
   "reply-runtime",
   "reply-dedupe",
   "reply-dispatch-runtime",

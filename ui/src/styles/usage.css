@@ -1311,6 +1311,12 @@ details.usage-filter-select summary::-webkit-details-marker,
   font-size: 11px;
 }
 
+.usage-lineage-note {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: -6px;
+}
+
 .session-detail-stats {
   display: flex;
   flex-wrap: wrap;

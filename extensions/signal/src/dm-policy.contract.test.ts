@@ -21,7 +21,7 @@ const signalSenderE164 = "+15550001111";
 function createChannelSmokeCases(): ChannelSmokeCase[] {
   return [
     {
-      name: "bluebubbles",
+      name: "generic-chat",
       storeAllowFrom: ["attacker-user"],
       isSenderAllowed: (allowFrom) => allowFrom.includes("attacker-user"),
     },

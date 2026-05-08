@@ -162,7 +162,7 @@ describe("setupCommand", () => {
         gateway?: { mode?: string };
       };
 
-      expect(raw.agents?.defaults?.workspace).toBeTruthy();
+      expect(raw.agents?.defaults?.workspace).toBe(workspace);
       expect(raw.gateway?.mode).toBe("local");
     });
   });

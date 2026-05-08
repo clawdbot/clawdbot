@@ -87,7 +87,7 @@ describe("subscription CRUD", () => {
       keys,
       baseDir: tmpDir,
     });
-    expect(sub.subscriptionId).toBeTruthy();
+    expect(sub.subscriptionId).toMatch(/^[0-9a-f-]{36}$/);
     expect(sub.endpoint).toBe(endpoint);
     expect(sub.keys.p256dh).toBe("p256dh-key");
     expect(sub.keys.auth).toBe("auth-key");
@@ -222,7 +222,7 @@ describe("sending", () => {
     const results = await broadcastWebPush({ title: "Broadcast" }, tmpDir);
 
     expect(results).toHaveLength(2);
-    expect(results.every((result) => result.ok)).toBe(true);
+    expect(results.filter((result) => !result.ok)).toEqual([]);
     expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(webPush.sendNotification)).toHaveBeenCalledTimes(2);
   });

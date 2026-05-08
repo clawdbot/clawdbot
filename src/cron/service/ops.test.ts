@@ -166,13 +166,15 @@ describe("cron service ops seam coverage", () => {
       jobs: CronJob[];
     };
     const job = persisted.jobs[0];
-    expect(job).toBeDefined();
-    expect(job?.state.runningAtMs).toBeUndefined();
-    expect(job?.state.lastStatus).toBe("error");
-    expect(job?.state.lastRunStatus).toBe("error");
-    expect(job?.state.lastRunAtMs).toBe(now - 30 * 60_000);
-    expect(job?.state.lastError).toBe("cron: job interrupted by gateway restart");
-    expect((job?.state.nextRunAtMs ?? 0) > now).toBe(true);
+    if (!job) {
+      throw new Error("expected persisted cron job");
+    }
+    expect(job.state.runningAtMs).toBeUndefined();
+    expect(job.state.lastStatus).toBe("error");
+    expect(job.state.lastRunStatus).toBe("error");
+    expect(job.state.lastRunAtMs).toBe(now - 30 * 60_000);
+    expect(job.state.lastError).toBe("cron: job interrupted by gateway restart");
+    expect((job.state.nextRunAtMs ?? 0) > now).toBe(true);
 
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)

@@ -33,7 +33,7 @@ describe("resolveCliChannelOptions", () => {
     delete process.env.OPENCLAW_PLUGIN_CATALOG_PATHS;
   });
 
-  it("uses precomputed startup metadata when available", async () => {
+  it("uses precomputed startup metadata when available", () => {
     readFileSyncMock.mockReturnValue(
       JSON.stringify({ channelOptions: ["cached", "quietchat", "cached"] }),
     );
@@ -41,7 +41,7 @@ describe("resolveCliChannelOptions", () => {
     expect(resolveCliChannelOptions()).toEqual(["cached", "quietchat"]);
   });
 
-  it("falls back to core channel order when metadata is missing", async () => {
+  it("falls back to core channel order when metadata is missing", () => {
     readFileSyncMock.mockImplementation(() => {
       throw new Error("ENOENT");
     });
@@ -49,7 +49,7 @@ describe("resolveCliChannelOptions", () => {
     expect(resolveCliChannelOptions()).toEqual(["quietchat", "forum"]);
   });
 
-  it("ignores external catalog env during CLI bootstrap", async () => {
+  it("ignores external catalog env during CLI bootstrap", () => {
     process.env.OPENCLAW_PLUGIN_CATALOG_PATHS = "/tmp/plugins-catalog.json";
     readFileSyncMock.mockReturnValue(JSON.stringify({ channelOptions: ["cached", "quietchat"] }));
 

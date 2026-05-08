@@ -823,6 +823,7 @@ describe("gateway server misc", () => {
       probe.once("error", reject);
       probe.listen(releasePort, "127.0.0.1", () => resolve());
     });
+    expect(probe.listening).toBe(true);
     await new Promise<void>((resolve, reject) =>
       probe.close((err) => (err ? reject(err) : resolve())),
     );

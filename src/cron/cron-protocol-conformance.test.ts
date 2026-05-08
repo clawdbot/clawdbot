@@ -102,8 +102,10 @@ describe("cron protocol conformance", () => {
   it("cron job state schema keeps the full failover reason set", () => {
     const properties = (CronJobStateSchema as SchemaLike).properties ?? {};
     const lastErrorReason = properties.lastErrorReason as SchemaLike | undefined;
-    expect(lastErrorReason).toBeDefined();
-    expect(extractConstUnionValues(lastErrorReason ?? {})).toEqual([
+    if (lastErrorReason === undefined) {
+      throw new Error("missing lastErrorReason schema");
+    }
+    expect(extractConstUnionValues(lastErrorReason)).toEqual([
       "auth",
       "format",
       "rate_limit",

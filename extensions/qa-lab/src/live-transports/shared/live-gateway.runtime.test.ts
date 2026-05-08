@@ -106,8 +106,10 @@ describe("startQaLiveLaneGateway", () => {
     });
 
     const [{ mutateConfig }] = startQaGatewayChild.mock.calls[0] ?? [];
-    expect(typeof mutateConfig).toBe("function");
-    const cfg = mutateConfig?.({
+    if (!mutateConfig) {
+      throw new Error("expected gateway config mutator");
+    }
+    const cfg = mutateConfig({
       plugins: {
         allow: ["acpx", "memory-core", "qa-channel"],
         entries: {

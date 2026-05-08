@@ -1,5 +1,8 @@
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
-import { resolveContextEngine } from "../../context-engine/registry.js";
+import {
+  resolveContextEngine,
+  resolveContextEngineOwnerPluginId,
+} from "../../context-engine/registry.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
@@ -29,6 +32,7 @@ import {
   rotateTranscriptFileAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "./compaction-successor-transcript.js";
+import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -92,6 +96,7 @@ export async function compactEmbeddedPiSession(
     params,
     agentDir,
     contextTokenBudget,
+    contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
   });
   const harnessResult = await maybeCompactAgentHarnessSession({
     ...params,
@@ -302,8 +307,13 @@ export async function compactEmbeddedPiSession(
 function buildCompactionContextEngineRuntimeContext(params: {
   params: CompactEmbeddedPiSessionParams;
   agentDir: string;
+  contextEnginePluginId?: string;
   contextTokenBudget?: number;
 }): ContextEngineRuntimeContext {
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.params.sessionKey,
+    config: params.params.config,
+  });
   return {
     ...params.params,
     ...buildEmbeddedCompactionRuntimeContext({
@@ -330,6 +340,13 @@ function buildCompactionContextEngineRuntimeContext(params: {
       extraSystemPrompt: params.params.extraSystemPrompt,
       sourceReplyDeliveryMode: params.params.sourceReplyDeliveryMode,
       ownerNumbers: params.params.ownerNumbers,
+    }),
+    ...resolveContextEngineCapabilities({
+      config: params.params.config,
+      sessionKey: params.params.sessionKey,
+      agentId: sessionAgentId,
+      contextEnginePluginId: params.contextEnginePluginId,
+      purpose: "context-engine.compaction",
     }),
     tokenBudget: params.contextTokenBudget,
     currentTokenCount: params.params.currentTokenCount,

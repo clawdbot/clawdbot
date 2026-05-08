@@ -22,6 +22,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Checkout ClawHub docs source
+        uses: actions/checkout@v6
+        with:
+          repository: openclaw/clawhub
+          path: clawhub-source
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ secrets.OPENCLAW_DOCS_SYNC_TOKEN || github.token }}
+
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
@@ -48,12 +57,17 @@ jobs:
 
       - name: Sync docs into publish repo
         run: |
+          clawhub_sha="$(git -C "$GITHUB_WORKSPACE/clawhub-source" rev-parse HEAD)"
           node scripts/docs-sync-publish.mjs \
             --target "$GITHUB_WORKSPACE/publish" \
             --source-repo "$GITHUB_REPOSITORY" \
-            --source-sha "$GITHUB_SHA"
+            --source-sha "$GITHUB_SHA" \
+            --clawhub-repo "$GITHUB_WORKSPACE/clawhub-source" \
+            --clawhub-source-repo "openclaw/clawhub" \
+            --clawhub-source-sha "$clawhub_sha"
 
       - name: Install docs MDX checker dependency
+        working-directory: publish
         run: npm install --no-save --package-lock=false @mdx-js/mdx@3.1.1
 
       - name: Check publish docs MDX

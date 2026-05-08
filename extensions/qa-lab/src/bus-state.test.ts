@@ -24,7 +24,7 @@ describe("qa-bus state", () => {
     expect(snapshot.messages.map((message) => message.id)).toEqual([inbound.id, outbound.id]);
   });
 
-  it("creates threads and mutates message state", async () => {
+  it("creates threads and mutates message state", () => {
     const state = createQaBusState();
 
     const thread = state.createThread({
@@ -165,11 +165,11 @@ describe("qa-bus state", () => {
     const byFilename = state.searchMessages({
       query: "screenshot",
     });
-    expect(byFilename.some((message) => message.id === outbound.id)).toBe(true);
+    expect(byFilename.map((message) => message.id)).toContain(outbound.id);
 
     const byAltText = state.searchMessages({
       query: "dashboard",
     });
-    expect(byAltText.some((message) => message.id === outbound.id)).toBe(true);
+    expect(byAltText.map((message) => message.id)).toContain(outbound.id);
   });
 });

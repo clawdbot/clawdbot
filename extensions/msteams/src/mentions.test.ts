@@ -14,6 +14,32 @@ function requireOnlyEntity(result: ReturnType<typeof parseMentions>) {
   return requireFirstEntity(result);
 }
 
+const mentionFreeTextCases = [
+  {
+    name: "parseMentions",
+    assert: () => {
+      const result = parseMentions("Hello world!");
+
+      expect(result.text).toBe("Hello world!");
+      expect(result.entities).toHaveLength(0);
+    },
+  },
+  {
+    name: "formatMentionText",
+    assert: () => {
+      const mentions = [{ id: "28:xxx", name: "John" }];
+
+      expect(formatMentionText("Hello world", mentions)).toBe("Hello world");
+    },
+  },
+];
+
+describe("mention-free text contract", () => {
+  it.each(mentionFreeTextCases)("$name handles text without mentions", ({ assert }) => {
+    assert();
+  });
+});
+
 describe("parseMentions", () => {
   it("parses single mention", () => {
     const result = parseMentions("Hello @[John Doe](28:a1b2c3-d4e5f6)!");
@@ -50,13 +76,6 @@ describe("parseMentions", () => {
         name: "Bob",
       },
     });
-  });
-
-  it("handles text without mentions", () => {
-    const result = parseMentions("Hello world!");
-
-    expect(result.text).toBe("Hello world!");
-    expect(result.entities).toHaveLength(0);
   });
 
   it("handles empty text", () => {
@@ -219,15 +238,6 @@ describe("formatMentionText", () => {
     const result = formatMentionText(text, mentions);
 
     expect(result).toBe("Hey <at>Alice</at> and <at>Alice</at>");
-  });
-
-  it("handles text without mentions", () => {
-    const text = "Hello world";
-    const mentions = [{ id: "28:xxx", name: "John" }];
-
-    const result = formatMentionText(text, mentions);
-
-    expect(result).toBe("Hello world");
   });
 
   it("escapes regex metacharacters in names", () => {

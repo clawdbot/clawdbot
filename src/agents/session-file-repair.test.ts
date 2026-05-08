@@ -30,6 +30,13 @@ async function createTempSessionPath() {
   return { dir, file: path.join(dir, "session.jsonl") };
 }
 
+function requireBackupPath(result: { backupPath?: string }): string {
+  if (!result.backupPath) {
+    throw new Error("expected session repair backup path");
+  }
+  return result.backupPath;
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -45,15 +52,13 @@ describe("repairSessionFileIfNeeded", () => {
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
-    expect(result.backupPath).toBeTruthy();
+    const backupPath = requireBackupPath(result);
 
     const repaired = await fs.readFile(file, "utf-8");
     expect(repaired.trim().split("\n")).toHaveLength(2);
 
-    if (result.backupPath) {
-      const backup = await fs.readFile(result.backupPath, "utf-8");
-      expect(backup).toBe(content);
-    }
+    const backup = await fs.readFile(backupPath, "utf-8");
+    expect(backup).toBe(content);
   });
 
   it("does not drop CRLF-terminated JSONL lines", async () => {
@@ -134,7 +139,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(0);
     expect(result.rewrittenAssistantMessages).toBe(1);
-    expect(result.backupPath).toBeTruthy();
+    await expect(fs.readFile(requireBackupPath(result), "utf-8")).resolves.toBe(original);
     expect(debug).toHaveBeenCalledTimes(1);
     const debugMessage = debug.mock.calls[0]?.[0] as string;
     expect(debugMessage).toContain("rewrote 1 assistant message(s)");
@@ -620,7 +625,7 @@ describe("repairSessionFileIfNeeded", () => {
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(3);
-    expect(result.backupPath).toBeTruthy();
+    await expect(fs.readFile(requireBackupPath(result), "utf-8")).resolves.toBe(`${content}\n`);
 
     const after = await fs.readFile(file, "utf-8");
     const lines = after.trimEnd().split("\n");

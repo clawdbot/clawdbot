@@ -871,6 +871,7 @@ function hasMaterialPluginEntryConfig(entry: unknown): boolean {
     isRecord(entry.config) ||
     isRecord(entry.hooks) ||
     isRecord(entry.subagent) ||
+    isRecord(entry.llm) ||
     entry.apiKey !== undefined ||
     entry.env !== undefined
   );

@@ -72,7 +72,9 @@ describe("security audit gateway exposure findings", () => {
       const finding = findings.find(
         (entry) => entry.checkId === "config.insecure_or_dangerous_flags",
       );
-      expect(finding, testCase.name).toBeTruthy();
+      expect(finding, testCase.name).toMatchObject({
+        checkId: "config.insecure_or_dangerous_flags",
+      });
       expect(finding?.severity, testCase.name).toBe("warn");
       for (const snippet of testCase.expectedDangerousDetails) {
         expect(finding?.detail, `${testCase.name}:${snippet}`).toContain(snippet);
@@ -126,7 +128,7 @@ describe("security audit gateway exposure findings", () => {
     const findings = collectGatewayConfigFindings(cfg, cfg, {});
     expect(findings).toEqual(expect.arrayContaining([expect.objectContaining(expectedFinding)]));
     if (expectedNoFinding) {
-      expect(findings.some((finding) => finding.checkId === expectedNoFinding)).toBe(false);
+      expect(findings.map((finding) => finding.checkId)).not.toContain(expectedNoFinding);
     }
   });
 
@@ -408,10 +410,9 @@ describe("security audit gateway exposure findings", () => {
         testCase.name,
       ).toBe(true);
       if (testCase.suppressesGenericSharedSecretFindings) {
-        expect(findings.some((finding) => finding.checkId === "gateway.bind_no_auth")).toBe(false);
-        expect(findings.some((finding) => finding.checkId === "gateway.auth_no_rate_limit")).toBe(
-          false,
-        );
+        const checkIds = findings.map((finding) => finding.checkId);
+        expect(checkIds).not.toContain("gateway.bind_no_auth");
+        expect(checkIds).not.toContain("gateway.auth_no_rate_limit");
       }
     }
   });

@@ -466,26 +466,6 @@ async function authorizeGatewayConnectCore(
       }
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
-    if (localDirect && auth.password && connectAuth?.password) {
-      if (limiter) {
-        const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
-        if (!rlCheck.allowed) {
-          return {
-            ok: false,
-            reason: "rate_limited",
-            rateLimited: true,
-            retryAfterMs: rlCheck.retryAfterMs,
-          };
-        }
-      }
-      return authorizePasswordAuth({
-        authPassword: auth.password,
-        connectPassword: connectAuth.password,
-        limiter,
-        ip,
-        rateLimitScope,
-      });
-    }
     return { ok: false, reason: result.reason };
   }
 

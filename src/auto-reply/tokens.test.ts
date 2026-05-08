@@ -40,11 +40,6 @@ describe("isSilentReplyText", () => {
   it("returns false for token embedded in text", () => {
     expect(isSilentReplyText("Please NO_REPLY to this")).toBe(false);
   });
-
-  it("works with custom token", () => {
-    expect(isSilentReplyText("HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(true);
-    expect(isSilentReplyText("Checked inbox. HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(false);
-  });
 });
 
 describe("stripSilentToken", () => {
@@ -78,9 +73,27 @@ describe("stripSilentToken", () => {
     expect(stripSilentToken("some text **NO_REPLY")).toBe("some text");
     expect(stripSilentToken("reasoning**NO_REPLY")).toBe("reasoning");
   });
+});
 
-  it("works with custom token", () => {
-    expect(stripSilentToken("done HEARTBEAT_OK", "HEARTBEAT_OK")).toBe("done");
+describe("custom silent tokens", () => {
+  it.each([
+    {
+      name: "exact-token detection",
+      check: () => isSilentReplyText("HEARTBEAT_OK", "HEARTBEAT_OK"),
+      expected: true,
+    },
+    {
+      name: "substantive text detection",
+      check: () => isSilentReplyText("Checked inbox. HEARTBEAT_OK", "HEARTBEAT_OK"),
+      expected: false,
+    },
+    {
+      name: "trailing token stripping",
+      check: () => stripSilentToken("done HEARTBEAT_OK", "HEARTBEAT_OK"),
+      expected: "done",
+    },
+  ])("handles custom token for $name", ({ check, expected }) => {
+    expect(check()).toBe(expected);
   });
 });
 

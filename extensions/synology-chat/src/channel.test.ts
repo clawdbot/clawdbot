@@ -256,21 +256,23 @@ describe("createSynologyChatPlugin", () => {
       const plugin = createSynologyChatPlugin();
       const account = makeSecurityAccount({ token: "" });
       const warnings = plugin.security.collectWarnings({ cfg: {}, account });
-      expect(warnings.some((w: string) => w.includes("token"))).toBe(true);
+      expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining("token")]));
     });
 
     it("warns when allowInsecureSsl is true", () => {
       const plugin = createSynologyChatPlugin();
       const account = makeSecurityAccount({ allowInsecureSsl: true });
       const warnings = plugin.security.collectWarnings({ cfg: {}, account });
-      expect(warnings.some((w: string) => w.includes("SSL"))).toBe(true);
+      expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining("SSL")]));
     });
 
     it("warns when dangerous name matching is enabled", () => {
       const plugin = createSynologyChatPlugin();
       const account = makeSecurityAccount({ dangerouslyAllowNameMatching: true });
       const warnings = plugin.security.collectWarnings({ cfg: {}, account });
-      expect(warnings.some((w: string) => w.includes("dangerouslyAllowNameMatching"))).toBe(true);
+      expect(warnings).toEqual(
+        expect.arrayContaining([expect.stringContaining("dangerouslyAllowNameMatching")]),
+      );
     });
 
     it("warns when inherited shared webhookPath is dangerously re-enabled", () => {
@@ -281,30 +283,36 @@ describe("createSynologyChatPlugin", () => {
         dangerouslyAllowInheritedWebhookPath: true,
       });
       const warnings = plugin.security.collectWarnings({ cfg: {}, account });
-      expect(
-        warnings.some((w: string) => w.includes("dangerouslyAllowInheritedWebhookPath=true")),
-      ).toBe(true);
+      expect(warnings).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("dangerouslyAllowInheritedWebhookPath=true"),
+        ]),
+      );
     });
 
     it("warns when dmPolicy is open", () => {
       const plugin = createSynologyChatPlugin();
       const account = makeSecurityAccount({ dmPolicy: "open", allowedUserIds: ["*"] });
       const warnings = plugin.security.collectWarnings({ cfg: {}, account });
-      expect(warnings.some((w: string) => w.includes("open"))).toBe(true);
+      expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining("open")]));
     });
 
     it("warns when dmPolicy is open and allowedUserIds is empty", () => {
       const plugin = createSynologyChatPlugin();
       const account = makeSecurityAccount({ dmPolicy: "open", allowedUserIds: [] });
       const warnings = plugin.security.collectWarnings({ cfg: {}, account });
-      expect(warnings.some((w: string) => w.includes("empty allowedUserIds"))).toBe(true);
+      expect(warnings).toEqual(
+        expect.arrayContaining([expect.stringContaining("empty allowedUserIds")]),
+      );
     });
 
     it("warns when dmPolicy is allowlist and allowedUserIds is empty", () => {
       const plugin = createSynologyChatPlugin();
       const account = makeSecurityAccount();
       const warnings = plugin.security.collectWarnings({ cfg: {}, account });
-      expect(warnings.some((w: string) => w.includes("empty allowedUserIds"))).toBe(true);
+      expect(warnings).toEqual(
+        expect.arrayContaining([expect.stringContaining("empty allowedUserIds")]),
+      );
     });
 
     it("warns when named multi-account routes inherit a shared webhookPath", () => {
@@ -312,8 +320,8 @@ describe("createSynologyChatPlugin", () => {
       const cfg = makeSharedWebhookConfig();
       const account = plugin.config.resolveAccount(cfg, "alerts");
       const warnings = plugin.security.collectWarnings({ cfg, account });
-      expect(warnings.some((w: string) => w.includes("must set an explicit webhookPath"))).toBe(
-        true,
+      expect(warnings).toEqual(
+        expect.arrayContaining([expect.stringContaining("must set an explicit webhookPath")]),
       );
     });
 
@@ -334,7 +342,9 @@ describe("createSynologyChatPlugin", () => {
       };
       const account = plugin.config.resolveAccount(cfg, "alerts");
       const warnings = plugin.security.collectWarnings({ cfg, account });
-      expect(warnings.some((w: string) => w.includes("conflicts on webhookPath"))).toBe(true);
+      expect(warnings).toEqual(
+        expect.arrayContaining([expect.stringContaining("conflicts on webhookPath")]),
+      );
     });
 
     it("returns no warnings for fully configured account", () => {

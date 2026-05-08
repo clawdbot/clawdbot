@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { nextcloudTalkDoctor } from "./doctor.js";
 
+function getNextcloudTalkCompatibilityNormalizer(): NonNullable<
+  typeof nextcloudTalkDoctor.normalizeCompatibilityConfig
+> {
+  const normalize = nextcloudTalkDoctor.normalizeCompatibilityConfig;
+  if (!normalize) {
+    throw new Error("Expected nextcloud-talk doctor to expose normalizeCompatibilityConfig");
+  }
+  return normalize;
+}
+
 describe("nextcloud-talk doctor", () => {
   it("normalizes legacy private-network aliases", () => {
-    const normalize = nextcloudTalkDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getNextcloudTalkCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {

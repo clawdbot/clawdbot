@@ -1,5 +1,9 @@
 import { streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../context-engine-capabilities.js", () => ({
+  resolveContextEngineCapabilities: async () => ({ llm: undefined }),
+}));
 import type { OpenClawConfig } from "../../../config/config.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";

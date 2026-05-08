@@ -332,7 +332,7 @@ describe("createGatewayPluginRequestHandler", () => {
     setActivePluginRegistry(laterActiveRegistry);
 
     const unregister = registerPluginHttpRoute({
-      path: "/bluebubbles-webhook",
+      path: "/imessage-webhook",
       auth: "plugin",
       handler: routeHandler,
     });
@@ -344,7 +344,7 @@ describe("createGatewayPluginRequestHandler", () => {
       });
 
       const { res } = makeMockHttpResponse();
-      const handled = await handler({ url: "/bluebubbles-webhook" } as IncomingMessage, res);
+      const handled = await handler({ url: "/imessage-webhook" } as IncomingMessage, res);
       expect(handled).toBe(true);
       expect(routeHandler).toHaveBeenCalledTimes(1);
       expect(laterActiveRegistry.httpRoutes).toHaveLength(0);
@@ -367,7 +367,7 @@ describe("createGatewayPluginRequestHandler", () => {
     pinActivePluginHttpRouteRegistry(startupRegistry);
 
     const unregister = registerPluginHttpRoute({
-      path: "/bluebubbles-webhook",
+      path: "/imessage-webhook",
       auth: "plugin",
       handler: routeHandler,
     });
@@ -379,7 +379,7 @@ describe("createGatewayPluginRequestHandler", () => {
       });
 
       const { res } = makeMockHttpResponse();
-      const handled = await handler({ url: "/bluebubbles-webhook" } as IncomingMessage, res);
+      const handled = await handler({ url: "/imessage-webhook" } as IncomingMessage, res);
       expect(handled).toBe(true);
       expect(routeHandler).toHaveBeenCalledTimes(1);
       expect(staleExplicitRegistry.httpRoutes).toHaveLength(1);

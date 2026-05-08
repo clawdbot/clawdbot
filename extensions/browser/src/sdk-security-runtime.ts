@@ -3,6 +3,7 @@ export {
   ensurePortAvailable,
   extractErrorCode,
   formatErrorMessage,
+  ensureAbsoluteDirectory,
   hasProxyEnvConfigured,
   isNotFoundPathError,
   isPathInside,

@@ -578,8 +578,12 @@ liveGatewayDescribe("OpenClaw SDK live Gateway e2e", () => {
 
     try {
       await oc.connect();
-      await expect(oc.agents.list()).resolves.toBeDefined();
-      await expect(oc.models.status({ probe: false })).resolves.toBeDefined();
+      await expect(oc.agents.list()).resolves.toEqual(
+        expect.objectContaining({ agents: expect.any(Array) }),
+      );
+      await expect(oc.models.status({ probe: false })).resolves.toEqual(
+        expect.objectContaining({ providers: expect.any(Array) }),
+      );
 
       const agent = await oc.agents.get(process.env.OPENCLAW_SDK_LIVE_AGENT_ID ?? "main");
       const run = await agent.run({

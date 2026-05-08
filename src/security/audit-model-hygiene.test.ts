@@ -70,6 +70,6 @@ describe("security audit model hygiene findings", () => {
       },
     } satisfies OpenClawConfig);
 
-    expect(findings.some((finding) => finding.checkId === "models.weak_tier")).toBe(false);
+    expect(findings.map((finding) => finding.checkId)).not.toContain("models.weak_tier");
   });
 });

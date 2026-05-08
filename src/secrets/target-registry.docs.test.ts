@@ -7,7 +7,7 @@ import {
 } from "./credential-matrix.js";
 
 function buildSecretRefCredentialMatrixJson(): string {
-  return `${JSON.stringify(buildSecretRefCredentialMatrix())}\n`;
+  return `${JSON.stringify(buildSecretRefCredentialMatrix(), null, 2)}\n`;
 }
 
 const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;

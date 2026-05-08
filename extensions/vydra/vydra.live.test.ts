@@ -29,9 +29,11 @@ function expectBufferedAsset(
   kind: "image" | "video",
   minBytes: number,
 ): void {
-  expect(asset).toBeDefined();
-  expect(asset?.mimeType.startsWith(`${kind}/`)).toBe(true);
-  if (!asset?.buffer) {
+  if (!asset) {
+    throw new Error(`expected generated ${kind} asset`);
+  }
+  expect(asset.mimeType.startsWith(`${kind}/`)).toBe(true);
+  if (!asset.buffer) {
     throw new Error(`expected generated ${kind} buffer`);
   }
   expect(asset.buffer.byteLength).toBeGreaterThan(minBytes);

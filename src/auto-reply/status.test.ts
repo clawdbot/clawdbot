@@ -1169,7 +1169,9 @@ describe("buildStatusMessage", () => {
     });
 
     const optionsLine = text.split("\n").find((line) => line.trim().startsWith("⚙️"));
-    expect(optionsLine).toBeTruthy();
+    if (!optionsLine) {
+      throw new Error("expected status options line");
+    }
     expect(optionsLine).not.toContain("elevated");
   });
 
@@ -2148,8 +2150,10 @@ describe("buildCommandsMessagePaginated", () => {
       ),
     );
     const pluginPage = pages.find((page) => page.text.includes("/plugin_cmd (demo-plugin)"));
-    expect(pluginPage).toBeTruthy();
-    expect(pluginPage?.text).toContain("Plugins");
-    expect(pluginPage?.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
+    if (!pluginPage) {
+      throw new Error("expected plugin command page");
+    }
+    expect(pluginPage.text).toContain("Plugins");
+    expect(pluginPage.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
   });
 });

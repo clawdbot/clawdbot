@@ -594,12 +594,11 @@ and troubleshooting see the main [FAQ](/help/faq).
 
   <Accordion title="How does Codex auth work?">
     OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). Use
-    `openai/gpt-5.5` with `agentRuntime.id: "codex"` for the common setup:
-    ChatGPT/Codex subscription auth plus native Codex app-server execution. Use
-    `openai-codex/gpt-5.5` only when you want Codex OAuth through the default
-    Codex runtime. Direct OpenAI API-key access remains available for non-agent
-    OpenAI API surfaces and for agent models through an ordered
-    `openai-codex` API-key profile.
+    `openai/gpt-5.5` for the common setup: ChatGPT/Codex subscription auth plus
+    native Codex app-server execution. `openai-codex/gpt-*` model refs are
+    legacy config repaired by `openclaw doctor --fix`. Direct OpenAI API-key
+    access remains available for non-agent OpenAI API surfaces and for agent
+    models through an ordered `openai-codex` API-key profile.
     See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
   </Accordion>
 
@@ -670,22 +669,22 @@ and troubleshooting see the main [FAQ](/help/faq).
     No. OpenClaw runs on macOS or Linux (Windows via WSL2). A Mac mini is optional - some people
     buy one as an always-on host, but a small VPS, home server, or Raspberry Pi-class box works too.
 
-    You only need a Mac **for macOS-only tools**. For iMessage, use [BlueBubbles](/channels/bluebubbles) (recommended) - the BlueBubbles server runs on any Mac, and the Gateway can run on Linux or elsewhere. If you want other macOS-only tools, run the Gateway on a Mac or pair a macOS node.
+    You only need a Mac **for macOS-only tools**. For iMessage, use [iMessage](/channels/imessage) with `imsg` on any Mac signed into Messages. If the Gateway runs on Linux or elsewhere, set `channels.imessage.cliPath` to an SSH wrapper that runs `imsg` on that Mac. If you want other macOS-only tools, run the Gateway on a Mac or pair a macOS node.
 
-    Docs: [BlueBubbles](/channels/bluebubbles), [Nodes](/nodes), [Mac remote mode](/platforms/mac/remote).
+    Docs: [iMessage](/channels/imessage), [Nodes](/nodes), [Mac remote mode](/platforms/mac/remote).
 
   </Accordion>
 
   <Accordion title="Do I need a Mac mini for iMessage support?">
     You need **some macOS device** signed into Messages. It does **not** have to be a Mac mini -
-    any Mac works. **Use [BlueBubbles](/channels/bluebubbles)** (recommended) for iMessage - the BlueBubbles server runs on macOS, while the Gateway can run on Linux or elsewhere.
+    any Mac works. **Use [iMessage](/channels/imessage)** with `imsg`; the Gateway can run on that Mac, or it can run elsewhere with an SSH wrapper `cliPath`.
 
     Common setups:
 
-    - Run the Gateway on Linux/VPS, and run the BlueBubbles server on any Mac signed into Messages.
+    - Run the Gateway on Linux/VPS, and set `channels.imessage.cliPath` to an SSH wrapper that runs `imsg` on a Mac signed into Messages.
     - Run everything on the Mac if you want the simplest single-machine setup.
 
-    Docs: [BlueBubbles](/channels/bluebubbles), [Nodes](/nodes),
+    Docs: [iMessage](/channels/imessage), [Nodes](/nodes),
     [Mac remote mode](/platforms/mac/remote).
 
   </Accordion>

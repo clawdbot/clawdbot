@@ -20,22 +20,28 @@ const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
 describe("plugin extension import boundary inventory", () => {
   it("keeps dedicated web-search registry shims out of the remaining inventory", async () => {
     const inventory = await collectPluginExtensionImportBoundaryInventory();
+    const blockedShimFiles = inventory
+      .filter(
+        (entry) =>
+          entry.file === "src/plugins/web-search-providers.ts" ||
+          entry.file === "src/plugins/bundled-web-search-registry.ts",
+      )
+      .map((entry) => entry.file);
 
-    expect(inventory.some((entry) => entry.file === "src/plugins/web-search-providers.ts")).toBe(
-      false,
-    );
-    expect(
-      inventory.some((entry) => entry.file === "src/plugins/bundled-web-search-registry.ts"),
-    ).toBe(false);
+    expect(blockedShimFiles).toEqual([]);
   });
 
   it("ignores boundary shims by scope", async () => {
     const inventory = await collectPluginExtensionImportBoundaryInventory();
+    const boundaryShimFiles = inventory
+      .filter(
+        (entry) =>
+          entry.file.startsWith("src/plugin-sdk/") ||
+          entry.file.startsWith("src/plugin-sdk-internal/"),
+      )
+      .map((entry) => entry.file);
 
-    expect(inventory.some((entry) => entry.file.startsWith("src/plugin-sdk/"))).toBe(false);
-    expect(inventory.some((entry) => entry.file.startsWith("src/plugin-sdk-internal/"))).toBe(
-      false,
-    );
+    expect(boundaryShimFiles).toEqual([]);
   });
 
   it("produces stable sorted output", async () => {

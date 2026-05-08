@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   loadAgentIdentityMock: vi.fn(async () => {}),
   loadAgentSkillsMock: vi.fn(async () => {}),
   loadAgentsMock: vi.fn(async () => {}),
-  loadChannelsMock: vi.fn(async () => {}),
+  loadChannelsMock: vi.fn<(_host: unknown, _probe: boolean) => Promise<void>>(async () => {}),
   loadConfigMock: vi.fn(async () => {}),
   loadConfigSchemaMock: vi.fn(async () => {}),
   loadCronStatusMock: vi.fn(async () => {}),
@@ -239,6 +239,71 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadChannelsMock).toHaveBeenCalled();
     expect(mocks.loadSessionsMock).toHaveBeenCalled();
     expect(mocks.loadUsageMock).toHaveBeenCalled();
+  });
+
+  it("does not wait for config schema before resolving config tab refresh", async () => {
+    const host = createHost();
+    host.tab = "config";
+    let resolveSchema!: () => void;
+    mocks.loadConfigSchemaMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveSchema = resolve;
+      }),
+    );
+
+    const refresh = refreshActiveTab(host as never);
+    const outcome = await Promise.race([
+      refresh.then(() => "resolved" as const),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    expect(outcome).toBe("resolved");
+    expect(mocks.loadConfigSchemaMock).toHaveBeenCalledOnce();
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(host.requestUpdate).not.toHaveBeenCalled();
+
+    resolveSchema();
+
+    await vi.waitFor(() => {
+      expect(host.requestUpdate).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("renders channels from the cheap snapshot before starting slow probes", async () => {
+    const host = createHost();
+    host.tab = "channels";
+    let resolveSchema!: () => void;
+    let resolveProbe!: () => void;
+    mocks.loadConfigSchemaMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveSchema = resolve;
+      }),
+    );
+    mocks.loadChannelsMock.mockImplementation(async (_host, probe) => {
+      if (probe) {
+        await new Promise<void>((resolve) => {
+          resolveProbe = resolve;
+        });
+      }
+    });
+
+    const refresh = refreshActiveTab(host as never);
+    const outcome = await Promise.race([
+      refresh.then(() => "resolved" as const),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    expect(outcome).toBe("resolved");
+    expect(mocks.loadChannelsMock.mock.calls.map(([, probe]) => probe)).toEqual([false, true]);
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(host.requestUpdate).not.toHaveBeenCalled();
+
+    resolveSchema();
+    resolveProbe();
+
+    await vi.waitFor(() => {
+      expect(host.requestUpdate).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("records overview secondary refresh duration and aggregate status", async () => {

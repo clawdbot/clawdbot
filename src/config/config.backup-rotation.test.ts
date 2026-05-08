@@ -14,6 +14,10 @@ import {
 import { withTempHome } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
 
+async function expectRegularFile(filePath: string): Promise<void> {
+  expect((await fs.stat(filePath)).isFile()).toBe(true);
+}
+
 describe("config backup rotation", () => {
   it("keeps a 5-deep backup ring for config writes", async () => {
     await withTempHome(async () => {
@@ -92,9 +96,9 @@ describe("config backup rotation", () => {
       await cleanOrphanBackups(configPath, fs);
 
       // Valid backups preserved
-      await expect(fs.stat(`${configPath}.bak`)).resolves.toBeDefined();
-      await expect(fs.stat(`${configPath}.bak.1`)).resolves.toBeDefined();
-      await expect(fs.stat(`${configPath}.bak.2`)).resolves.toBeDefined();
+      await expectRegularFile(`${configPath}.bak`);
+      await expectRegularFile(`${configPath}.bak.1`);
+      await expectRegularFile(`${configPath}.bak.2`);
 
       // Orphans removed
       await expect(fs.stat(`${configPath}.bak.1772352289`)).rejects.toThrow();

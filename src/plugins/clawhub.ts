@@ -811,7 +811,12 @@ async function verifyClawHubArchiveFiles(params: {
       }
       actualFiles.delete(file.path);
     }
-    const unexpectedFile = [...actualFiles.keys()].toSorted()[0];
+    let unexpectedFile: string | undefined;
+    for (const file of actualFiles.keys()) {
+      if (unexpectedFile === undefined || file < unexpectedFile) {
+        unexpectedFile = file;
+      }
+    }
     if (unexpectedFile) {
       return buildClawHubInstallFailure(
         `ClawHub archive contents do not match files[] metadata for "${params.packageName}@${params.packageVersion}": unexpected file "${unexpectedFile}".`,

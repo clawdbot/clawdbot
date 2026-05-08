@@ -31,6 +31,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "active-memory",
   "bonjour",
   "browser",
+  "canvas",
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",
@@ -50,6 +51,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",
   "browser",
+  "canvas",
   "device-pair",
   "file-transfer",
   "memory-core",
@@ -323,6 +325,13 @@ describe("bundled plugin metadata", () => {
     const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
     expectArtifactPresence(slack?.publicSurfaceArtifacts, {
       contains: ["doctor-contract-api.js"],
+    });
+  });
+
+  it("keeps iMessage message-tool discovery on a narrow public surface", () => {
+    const imessage = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "imessage");
+    expectArtifactPresence(imessage?.publicSurfaceArtifacts, {
+      contains: ["message-tool-api.js"],
     });
   });
 

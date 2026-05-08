@@ -21,7 +21,7 @@ troubleshooting, see the main [FAQ](/help/faq).
     agents.defaults.model.primary
     ```
 
-    Models are referenced as `provider/model` (example: `openai/gpt-5.5` or `openai-codex/gpt-5.5`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default. You should still **explicitly** set `provider/model`.
+    Models are referenced as `provider/model` (example: `openai/gpt-5.5` or `anthropic/claude-sonnet-4-6`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default. You should still **explicitly** set `provider/model`.
 
   </Accordion>
 
@@ -150,7 +150,7 @@ troubleshooting, see the main [FAQ](/help/faq).
     - **Native Codex coding agent:** set `agents.defaults.model.primary` to `openai/gpt-5.5`. Sign in with `openclaw models auth login --provider openai-codex` when you want ChatGPT/Codex subscription auth.
     - **Direct OpenAI API tasks outside the agent loop:** configure `OPENAI_API_KEY` for images, embeddings, speech, realtime, and other non-agent OpenAI API surfaces.
     - **OpenAI agent API-key auth:** use `/model openai/gpt-5.5` with an ordered `openai-codex` API-key profile.
-    - **Sub-agents:** route coding tasks to a Codex-only agent with its own model and `agentRuntime` default.
+    - **Sub-agents:** route coding tasks to a Codex-focused agent with its own `openai/gpt-5.5` model.
 
     See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
 
@@ -159,8 +159,8 @@ troubleshooting, see the main [FAQ](/help/faq).
   <Accordion title="How do I configure fast mode for GPT 5.5?">
     Use either a session toggle or a config default:
 
-    - **Per session:** send `/fast on` while the session is using `openai/gpt-5.5` or `openai-codex/gpt-5.5`.
-    - **Per model default:** set `agents.defaults.models["openai/gpt-5.5"].params.fastMode` or `agents.defaults.models["openai-codex/gpt-5.5"].params.fastMode` to `true`.
+    - **Per session:** send `/fast on` while the session is using `openai/gpt-5.5`.
+    - **Per model default:** set `agents.defaults.models["openai/gpt-5.5"].params.fastMode` to `true`.
 
     Example:
 
@@ -271,7 +271,7 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     - `opus` → `anthropic/claude-opus-4-6`
     - `sonnet` → `anthropic/claude-sonnet-4-6`
-    - `gpt` → `openai/gpt-5.5` for API-key setups, or `openai-codex/gpt-5.5` when configured for Codex OAuth
+    - `gpt` → `openai/gpt-5.5`
     - `gpt-mini` → `openai/gpt-5.4-mini`
     - `gpt-nano` → `openai/gpt-5.4-nano`
     - `gemini` → `google/gemini-3.1-pro-preview`

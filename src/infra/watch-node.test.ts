@@ -102,7 +102,9 @@ describe("watch-node script", () => {
 
       expect(createWatcher).toHaveBeenCalledTimes(1);
       const firstWatcherCall = createWatcher.mock.calls[0];
-      expect(firstWatcherCall).toBeDefined();
+      if (firstWatcherCall === undefined) {
+        throw new Error("expected watcher setup call");
+      }
       const [watchPaths, watchOptions] = firstWatcherCall as unknown as [
         string[],
         { ignoreInitial: boolean; ignored: (watchPath: string) => boolean },
@@ -143,8 +145,16 @@ describe("watch-node script", () => {
             OPENCLAW_WATCH_MODE: "1",
             OPENCLAW_WATCH_SESSION: "1700000000000-4242",
             OPENCLAW_NO_RESPAWN: "1",
-            OPENCLAW_TRACE_SYNC_IO: "1",
             OPENCLAW_WATCH_COMMAND: "gateway --force",
+          }),
+        }),
+      );
+      expect(spawn).toHaveBeenCalledWith(
+        "/usr/local/bin/node",
+        ["scripts/run-node.mjs", "gateway", "--force"],
+        expect.objectContaining({
+          env: expect.not.objectContaining({
+            OPENCLAW_TRACE_SYNC_IO: expect.any(String),
           }),
         }),
       );

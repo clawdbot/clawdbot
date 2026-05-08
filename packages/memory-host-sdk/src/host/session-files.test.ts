@@ -124,7 +124,6 @@ describe("buildSessionEntry", () => {
     // Content line 0 → JSONL line 4 (the first user message)
     // Content line 1 → JSONL line 6 (the assistant message)
     // Content line 2 → JSONL line 7 (the second user message)
-    expect(entry!.lineMap).toBeDefined();
     expect(entry!.lineMap).toEqual([4, 6, 7]);
   });
 

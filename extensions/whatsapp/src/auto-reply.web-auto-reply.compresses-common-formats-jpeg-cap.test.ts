@@ -42,7 +42,10 @@ describe("web auto-reply", () => {
     };
 
     await monitorWebChannel(false, listenerFactory, false, resolver);
-    expect(capturedOnMessage).toBeDefined();
+    if (!capturedOnMessage) {
+      throw new Error("expected WhatsApp web message handler");
+    }
+    const onMessage = capturedOnMessage;
 
     return {
       reply,
@@ -52,7 +55,7 @@ describe("web auto-reply", () => {
           Pick<WebInboundMessage, "from" | "conversationId" | "to" | "accountId" | "chatId">
         >,
       ) => {
-        await capturedOnMessage?.({
+        await onMessage({
           body: "hello",
           from: "+1",
           conversationId: "+1",

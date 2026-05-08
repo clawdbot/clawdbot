@@ -430,6 +430,7 @@ function resolveOwnerAuthorizationState(params: {
 
 function resolveCommandSenderAuthorization(params: {
   commandAuthorized: boolean;
+  enforceOwnerForCommands: boolean;
   nativeCommandAuthorized: boolean;
   isOwnerForCommands: boolean;
   senderCandidates: string[];
@@ -437,6 +438,9 @@ function resolveCommandSenderAuthorization(params: {
   providerResolutionError: boolean;
   commandsAllowFromConfigured: boolean;
 }): boolean {
+  if (params.enforceOwnerForCommands && !params.isOwnerForCommands) {
+    return false;
+  }
   if (
     params.commandsAllowFromList !== null ||
     (params.providerResolutionError && params.commandsAllowFromConfigured)
@@ -707,9 +711,10 @@ export function resolveCommandAuthorization(params: {
         ? senderIsOwner
         : senderIsOwnerByScope || Boolean(matchedCommandOwner);
   const nativeCommandAuthorized =
-    commandAuthorized && ctx.CommandSource === "native" && !ownerAllowlistConfigured;
+    commandAuthorized && ctx.CommandSource === "native" && !requireOwner;
   const isAuthorizedSender = resolveCommandSenderAuthorization({
     commandAuthorized,
+    enforceOwnerForCommands: enforceOwner,
     nativeCommandAuthorized,
     isOwnerForCommands,
     senderCandidates,

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -174,10 +174,10 @@ function formatProjectDirHealthLine(
   return `- ${label}: ${display} is not writable by this user.`;
 }
 
-function resolveClaudeCliAgentIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+function resolveClaudeCliAgentIds(cfg: OpenClawConfig): string[] {
   const agentIds = listAgentIds(cfg);
   const runtimeAgentIds = agentIds.filter(
-    (agentId) => resolveAgentRuntimeMetadata(cfg, agentId, env).id === CLAUDE_CLI_PROVIDER,
+    (agentId) => resolveModelAgentRuntimeMetadata({ cfg, agentId }).id === CLAUDE_CLI_PROVIDER,
   );
   if (runtimeAgentIds.length > 0) {
     return runtimeAgentIds;
@@ -202,7 +202,7 @@ function resolveClaudeCliWorkspaceTargets(params: {
   homeDir?: string;
   workspaceDir?: string;
 }): ClaudeCliWorkspaceTarget[] {
-  const agentIds = resolveClaudeCliAgentIds(params.cfg, params.env);
+  const agentIds = resolveClaudeCliAgentIds(params.cfg);
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const seen = new Set<string>();
   return agentIds

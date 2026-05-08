@@ -44,8 +44,17 @@ describe("createChannelReplyPipeline", () => {
         : input,
     );
 
-    expect(typeof pipeline.onModelSelected).toBe("function");
-    expect(typeof pipeline.responsePrefixContextProvider).toBe("function");
+    pipeline.onModelSelected({
+      provider: "openai",
+      model: "gpt-5.5",
+      thinkLevel: "high",
+    });
+    expect(pipeline.responsePrefixContextProvider()).toMatchObject({
+      model: "gpt-5.5",
+      modelFull: "openai/gpt-5.5",
+      provider: "openai",
+      thinkingLevel: "high",
+    });
 
     if (!expectTypingCallbacks) {
       expect(pipeline.typingCallbacks).toBeUndefined();
@@ -65,7 +74,7 @@ describe("createChannelReplyPipeline", () => {
     const pipeline = createChannelReplyPipeline({
       cfg: {},
       agentId: "main",
-      channel: "bluebubbles",
+      channel: "imessage",
       typingCallbacks: {
         onReplyStart,
         onIdle,

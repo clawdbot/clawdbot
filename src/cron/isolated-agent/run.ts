@@ -1,4 +1,6 @@
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
@@ -735,6 +737,16 @@ async function prepareCronRunContext(params: {
         ).resolveSessionAuthProfileOverride({
           cfg: cfgWithAgentDefaults,
           provider,
+          acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
+            provider,
+            harnessRuntime: resolveAgentHarnessPolicy({
+              provider,
+              modelId: model,
+              config: cfgWithAgentDefaults,
+              agentId,
+              sessionKey: agentSessionKey,
+            }).runtime,
+          }),
           agentDir,
           sessionEntry: cronSession.sessionEntry,
           sessionStore: cronSession.store,

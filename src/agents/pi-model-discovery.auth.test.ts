@@ -156,7 +156,7 @@ describe("discoverAuthStorage", () => {
     });
   });
 
-  it("includes env-backed provider auth when no auth profile exists", async () => {
+  it("includes env-backed provider auth when no auth profile exists", () => {
     const previousMistral = process.env.MISTRAL_API_KEY;
     const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     const previousDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;

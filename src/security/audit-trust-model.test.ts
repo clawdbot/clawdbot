@@ -10,7 +10,7 @@ function audit(cfg: OpenClawConfig) {
 }
 
 describe("security audit trust model findings", () => {
-  it("evaluates trust-model exposure findings", async () => {
+  it("evaluates trust-model exposure findings", () => {
     const cases = [
       {
         name: "flags open groupPolicy when tools.elevated is enabled",

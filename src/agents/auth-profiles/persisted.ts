@@ -31,12 +31,7 @@ export type LegacyAuthStore = Record<string, AuthProfileCredential>;
 type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider";
 type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
 
-const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>([
-  "api_key",
-  "aws-sdk",
-  "oauth",
-  "token",
-]);
+const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
 
 function normalizeSecretBackedField(params: {
   entry: Record<string, unknown>;
@@ -540,14 +535,6 @@ export function applyLegacyAuthStore(store: AuthProfileStore, legacy: LegacyAuth
         type: "api_key",
         provider: credentialProvider,
         key: cred.key,
-        ...(cred.email ? { email: cred.email } : {}),
-      };
-      continue;
-    }
-    if (cred.type === "aws-sdk") {
-      store.profiles[profileId] = {
-        type: "aws-sdk",
-        provider: credentialProvider,
         ...(cred.email ? { email: cred.email } : {}),
       };
       continue;

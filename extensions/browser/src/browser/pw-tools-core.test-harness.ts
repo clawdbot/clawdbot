@@ -18,6 +18,7 @@ let pageState: {
 
 const sessionMocks = vi.hoisted(() => ({
   assertPageNavigationCompletedSafely: vi.fn(async () => {}),
+  closeBlockedNavigationTarget: vi.fn(async () => {}),
   getPageForTargetId: vi.fn(async () => {
     if (!currentPage) {
       throw new Error("missing page");
@@ -33,6 +34,13 @@ const sessionMocks = vi.hoisted(() => ({
       page: { goto: (url: string, init: { timeout: number }) => Promise<unknown> };
     }) => (await opts.page.goto(opts.url, { timeout: opts.timeoutMs })) ?? null,
   ),
+  // Match by name so mocked errors are recognized without importing real classes.
+  isPolicyDenyNavigationError: vi.fn((err: unknown) => {
+    if (!(err instanceof Error)) {
+      return false;
+    }
+    return err.name === "SsrFBlockedError" || err.name === "InvalidBrowserNavigationUrlError";
+  }),
   restoreRoleRefsForTarget: vi.fn(() => {}),
   storeRoleRefsForTarget: vi.fn(() => {}),
   refLocator: vi.fn(() => {

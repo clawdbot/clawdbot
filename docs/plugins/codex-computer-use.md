@@ -96,9 +96,6 @@ Computer Use available before a thread starts:
   agents: {
     defaults: {
       model: "openai/gpt-5.5",
-      agentRuntime: {
-        id: "codex",
-      },
     },
   },
 }
@@ -114,9 +111,8 @@ register the bundled Codex marketplace from
 fails. If setup still cannot make the MCP server available, the turn fails
 before the thread starts.
 
-Existing sessions keep their runtime and Codex thread binding. After changing
-`agentRuntime` or Computer Use config, use `/new` or `/reset` in the affected
-chat before testing.
+After changing Computer Use config, use `/new` or `/reset` in the affected chat
+before testing if an existing Codex thread has already started.
 
 ## Commands
 

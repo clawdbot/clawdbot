@@ -140,10 +140,12 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
 
     await runCli(["qr", "--setup-code-only"]);
     const setupCode = findSetupCodeLogLine(runtimeLogs);
-    expect(setupCode).toBeTruthy();
-    const payload = decodeSetupCode(setupCode ?? "");
+    if (!setupCode) {
+      throw new Error("expected QR setup code log line");
+    }
+    const payload = decodeSetupCode(setupCode);
     expect(payload.url).toBe("ws://127.0.0.1:18789");
-    expect(payload.bootstrapToken).toBeTruthy();
+    expect(payload.bootstrapToken).toBe("bootstrap-123");
     expect(runtimeErrors).toEqual([]);
 
     runtimeLogs.length = 0;

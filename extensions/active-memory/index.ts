@@ -540,14 +540,16 @@ function resolveRecallRunChannelContext(params: {
   messageChannel?: string;
   messageProvider?: string;
 } {
+  const isRunnableChannelName = (channel: string) =>
+    !channel.includes(":") && !channel.includes("/");
   const explicitChannel = normalizeOptionalString(params.channelId);
   const explicitProvider = normalizeOptionalString(params.messageProvider);
   // A channelId that contains ":" is a scoped conversation id (e.g. Telegram
-  // forum-topic "-100123:topic:77"), not a runnable channel name. Using it as
-  // the embedded recall run's channel causes bundled-plugin dirName validation
-  // to throw because ":" is not allowed in directory names (#76704).
+  // forum-topic "-100123:topic:77") or "/" (e.g. Google Chat "spaces/...") is
+  // not a runnable channel name. Using it as the embedded recall run's channel
+  // causes bundled-plugin dirName validation to throw (#76704, #78918).
   const runnableExplicitChannel =
-    explicitChannel && !explicitChannel.includes(":") ? explicitChannel : undefined;
+    explicitChannel && isRunnableChannelName(explicitChannel) ? explicitChannel : undefined;
   const trustedExplicitChannel =
     runnableExplicitChannel && runnableExplicitChannel !== explicitProvider
       ? runnableExplicitChannel
@@ -599,12 +601,12 @@ function resolveRecallRunChannelContext(params: {
     const rawStrongEntryChannel =
       normalizeOptionalString(sessionEntry?.lastChannel) ??
       normalizeOptionalString(sessionEntry?.channel);
-    // Channel IDs containing ":" are scoped conversation IDs (e.g. QQ c2c
-    // "c2c:10D4F7C2..."), not runnable channel names. The same guard that
+    // Channel IDs containing ":" or "/" are scoped conversation IDs, not
+    // runnable channel names. The same guard that
     // applies to explicit channelId (#76704) must also apply to channels
     // read from the session store (#77396).
     const strongEntryChannel =
-      rawStrongEntryChannel && !rawStrongEntryChannel.includes(":")
+      rawStrongEntryChannel && isRunnableChannelName(rawStrongEntryChannel)
         ? rawStrongEntryChannel
         : undefined;
     const weakEntryChannel = normalizeOptionalString(sessionEntry?.origin?.provider);
@@ -781,6 +783,13 @@ function updateActiveMemoryGlobalEnabledInConfig(
     },
   };
 }
+
+function requiresAdminToMutateActiveMemoryGlobal(gatewayClientScopes?: readonly string[]): boolean {
+  return Array.isArray(gatewayClientScopes) && !gatewayClientScopes.includes("operator.admin");
+}
+
+const ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT =
+  "⚠️ /active-memory global enable/disable changes require operator.admin for gateway clients.";
 
 function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPluginConfig {
   const raw = (
@@ -2819,6 +2828,11 @@ export default definePluginEntry({
               text: `Active Memory: ${isActiveMemoryGloballyEnabled(currentConfig) ? "on" : "off"} globally.`,
             };
           }
+          if (requiresAdminToMutateActiveMemoryGlobal(ctx.gatewayClientScopes)) {
+            return {
+              text: ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
+            };
+          }
           if (action === "on" || action === "enable" || action === "enabled") {
             const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, true);
             await api.runtime.config.replaceConfigFile({
@@ -2848,6 +2862,10 @@ export default definePluginEntry({
           return {
             text: "Active Memory: session toggle unavailable because this command has no session context.",
           };
+        }
+        const commandAgentId = resolveStatusUpdateAgentId({ sessionKey });
+        if (!isEnabledForAgent(config, commandAgentId)) {
+          return { text: "Active Memory: off for this session." };
         }
         if (action === "status") {
           const disabled = await isSessionActiveMemoryDisabled({ api, sessionKey });

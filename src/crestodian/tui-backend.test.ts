@@ -62,6 +62,6 @@ describe("runCrestodianTui", () => {
       config: {},
       title: "openclaw crestodian",
     });
-    expect((runTuiOptions as { backend?: unknown }).backend).toBeTruthy();
+    expect(runTuiOptions).toMatchObject({ backend: expect.any(Object) });
   });
 });

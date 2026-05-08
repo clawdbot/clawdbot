@@ -96,7 +96,6 @@ function buildOpenAICodexOAuthResult(params: {
           models: {
             "openai/gpt-5.5": {},
           },
-          agentRuntime: { id: "codex" },
         },
       },
     },

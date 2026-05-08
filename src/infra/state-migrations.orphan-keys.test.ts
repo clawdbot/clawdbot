@@ -14,6 +14,17 @@ function readStore(storePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(storePath, "utf-8"));
 }
 
+function requireStoreEntry(
+  store: Record<string, unknown>,
+  key: string,
+): { sessionId: string; updatedAt?: number } {
+  const entry = store[key] as { sessionId?: unknown; updatedAt?: number } | undefined;
+  if (!entry || typeof entry.sessionId !== "string") {
+    throw new Error(`expected session store entry ${key}`);
+  }
+  return { sessionId: entry.sessionId, updatedAt: entry.updatedAt };
+}
+
 async function withStateFixture(
   run: (params: { tmpDir: string; stateDir: string }) => Promise<void>,
 ): Promise<void> {
@@ -59,8 +70,7 @@ describe("migrateOrphanedSessionKeys", () => {
 
       expect(result.changes.length).toBeGreaterThan(0);
       const store = readStore(storePath);
-      expect(store["agent:ops:work"]).toBeDefined();
-      expect((store["agent:ops:work"] as { sessionId: string }).sessionId).toBe("abc-123");
+      expect(requireStoreEntry(store, "agent:ops:work").sessionId).toBe("abc-123");
       expect(store["agent:main:main"]).toBeUndefined();
     });
   });
@@ -136,10 +146,8 @@ describe("migrateOrphanedSessionKeys", () => {
       const store = readStore(sharedStorePath);
       // main agent's session is canonicalised to use configured mainKey ("work"),
       // but stays in the "main" agent namespace — NOT remapped into "ops".
-      expect(store["agent:main:work"]).toBeDefined();
-      expect((store["agent:main:work"] as { sessionId: string }).sessionId).toBe("main-session");
-      expect(store["agent:ops:work"]).toBeDefined();
-      expect((store["agent:ops:work"] as { sessionId: string }).sessionId).toBe("ops-session");
+      expect(requireStoreEntry(store, "agent:main:work").sessionId).toBe("main-session");
+      expect(requireStoreEntry(store, "agent:ops:work").sessionId).toBe("ops-session");
       // The key must NOT have been merged into ops namespace
       expect(Object.keys(store).filter((k) => k.startsWith("agent:ops:")).length).toBe(1);
     });
@@ -156,10 +164,9 @@ describe("migrateOrphanedSessionKeys", () => {
       await migrateFixtureState(stateDir, sharedMainOpsConfig(sharedStorePath));
 
       const store = readStore(sharedStorePath);
-      expect(store["agent:main:work"]).toBeDefined();
-      expect((store["agent:main:work"] as { sessionId: string }).sessionId).toBe("main-session");
+      expect(requireStoreEntry(store, "agent:main:work").sessionId).toBe("main-session");
       expect(store.main).toBeUndefined();
-      expect(store["agent:ops:work"]).toBeDefined();
+      expect(requireStoreEntry(store, "agent:ops:work").sessionId).toBe("ops-session");
     });
   });
 
@@ -179,7 +186,7 @@ describe("migrateOrphanedSessionKeys", () => {
 
       expect(result.changes).toHaveLength(0);
       const store = readStore(storePath);
-      expect(store["agent:main:main"]).toBeDefined();
+      expect(requireStoreEntry(store, "agent:main:main").sessionId).toBe("abc-123");
     });
   });
 });

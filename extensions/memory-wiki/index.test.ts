@@ -5,7 +5,7 @@ import { createMemoryWikiTestHarness } from "./src/test-helpers.js";
 const { createPluginApi } = createMemoryWikiTestHarness();
 
 describe("memory-wiki plugin", () => {
-  it("registers prompt supplement, gateway methods, tools, and wiki cli surface", async () => {
+  it("registers prompt supplement, gateway methods, tools, and wiki cli surface", () => {
     const {
       api,
       registerCli,

@@ -1,6 +1,5 @@
-import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
-import { selectAgentHarness } from "../agents/harness/selection.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionStore, resolveSessionTotalTokens } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -34,7 +33,7 @@ import {
 type SessionRow = SessionDisplayRow & {
   agentId: string;
   kind: "cron" | "direct" | "group" | "global" | "unknown";
-  agentRuntime: ReturnType<typeof resolveAgentRuntimeMetadata>;
+  agentRuntime: ReturnType<typeof resolveModelAgentRuntimeMetadata>;
   runtimeLabel: string;
 };
 
@@ -172,42 +171,14 @@ const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
 function resolveSessionRuntimeLabel(params: {
   cfg: OpenClawConfig;
   entry: SessionEntry;
-  agentRuntime: ReturnType<typeof resolveAgentRuntimeMetadata>;
+  agentRuntime: ReturnType<typeof resolveModelAgentRuntimeMetadata>;
   modelProvider: string;
   model: string;
   agentId: string;
   sessionKey: string;
 }): string {
-  const explicitRuntime =
-    normalizeOptionalLowercaseString(params.entry.agentRuntimeOverride) ??
-    normalizeOptionalLowercaseString(params.entry.agentHarnessId) ??
-    (params.agentRuntime.source === "implicit"
-      ? undefined
-      : normalizeOptionalLowercaseString(params.agentRuntime.id));
-  if (explicitRuntime && explicitRuntime !== "auto" && explicitRuntime !== "default") {
-    return resolveAgentRuntimeLabel({
-      config: params.cfg,
-      sessionEntry: params.entry,
-      resolvedHarness: explicitRuntime,
-      fallbackProvider: params.modelProvider,
-    });
-  }
-
-  let resolvedHarness: string | undefined;
-  try {
-    const selected = selectAgentHarness({
-      provider: params.modelProvider,
-      modelId: params.model,
-      config: params.cfg,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      agentHarnessId: params.entry.agentHarnessId,
-    });
-    const id = normalizeOptionalLowercaseString(selected.id);
-    resolvedHarness = id && id !== "pi" ? id : undefined;
-  } catch {
-    resolvedHarness = undefined;
-  }
+  const id = normalizeOptionalLowercaseString(params.agentRuntime.id);
+  const resolvedHarness = id && id !== "pi" && id !== "auto" ? id : undefined;
   return resolveAgentRuntimeLabel({
     config: params.cfg,
     sessionEntry: params.entry,
@@ -291,7 +262,13 @@ export async function sessionsCommand(
         const row = toSessionDisplayRow(key, entry);
         const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
         const modelRef = resolveSessionDisplayModelRef(cfg, row);
-        const agentRuntime = resolveAgentRuntimeMetadata(cfg, agentId);
+        const agentRuntime = resolveModelAgentRuntimeMetadata({
+          cfg,
+          agentId,
+          provider: modelRef.provider,
+          model: modelRef.model,
+          sessionKey: row.key,
+        });
         return Object.assign({}, row, {
           agentId,
           agentRuntime,

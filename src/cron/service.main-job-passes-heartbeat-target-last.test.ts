@@ -46,6 +46,17 @@ describe("cron main job passes heartbeat target=last", () => {
     return { cron, requestHeartbeat };
   }
 
+  function requireRunHeartbeatOnceCall(
+    runHeartbeatOnce: ReturnType<typeof vi.fn<RunHeartbeatOnce>>,
+  ) {
+    const callArgs = runHeartbeatOnce.mock.calls[0]?.[0];
+    const heartbeat = callArgs?.heartbeat;
+    if (!callArgs || !heartbeat) {
+      throw new Error("expected runHeartbeatOnce call with heartbeat config");
+    }
+    return { ...callArgs, heartbeat };
+  }
+
   async function runSingleTick(cron: CronService) {
     const startPromise = cron.start();
     await vi.advanceTimersByTimeAsync(2_000);
@@ -83,10 +94,8 @@ describe("cron main job passes heartbeat target=last", () => {
 
     // The heartbeat config passed should include target: "last" so the
     // heartbeat runner delivers the response to the last active channel.
-    const callArgs = runHeartbeatOnce.mock.calls[0]?.[0];
-    expect(callArgs).toBeDefined();
-    expect(callArgs?.heartbeat).toBeDefined();
-    expect(callArgs?.heartbeat?.target).toBe("last");
+    const callArgs = requireRunHeartbeatOnceCall(runHeartbeatOnce);
+    expect(callArgs.heartbeat.target).toBe("last");
   });
 
   it("should preserve heartbeat.target=last when wakeMode=now falls back to requestHeartbeat", async () => {

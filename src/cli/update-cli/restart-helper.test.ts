@@ -21,9 +21,11 @@ describe("restart-helper", () => {
 
   async function prepareAndReadScript(env: Record<string, string>, gatewayPort = 18789) {
     const scriptPath = await prepareRestartScript(env, gatewayPort);
-    expect(scriptPath).toBeTruthy();
-    const content = await fs.readFile(scriptPath!, "utf-8");
-    return { scriptPath: scriptPath!, content };
+    if (scriptPath == null) {
+      throw new Error("expected restart script path");
+    }
+    const content = await fs.readFile(scriptPath, "utf-8");
+    return { scriptPath, content };
   }
 
   async function cleanupScript(scriptPath: string) {

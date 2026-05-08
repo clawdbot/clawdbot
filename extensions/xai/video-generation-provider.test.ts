@@ -38,8 +38,8 @@ describe("xai video generation provider", () => {
         }),
       })
       .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        headers: new Headers({ "content-type": "video/webm" }),
+        arrayBuffer: async () => Buffer.from("webm-bytes"),
       });
 
     const provider = buildXaiVideoGenerationProvider();
@@ -72,7 +72,8 @@ describe("xai video generation provider", () => {
       120000,
       fetch,
     );
-    expect(result.videos[0]?.mimeType).toBe("video/mp4");
+    expect(result.videos[0]?.mimeType).toBe("video/webm");
+    expect(result.videos[0]?.fileName).toBe("video-1.webm");
     expect(result.metadata).toEqual(
       expect.objectContaining({
         requestId: "req_123",

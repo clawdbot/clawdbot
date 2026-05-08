@@ -1184,9 +1184,11 @@ describe("readSessionMessages", () => {
     sessionManager.appendMessage(buildSessionAssistantMessage("old answer", 2));
 
     const sessionFile = sessionManager.getSessionFile();
-    expect(sessionFile).toBeTruthy();
+    if (!sessionFile) {
+      throw new Error("expected SessionManager to expose a session file");
+    }
 
-    const out = readSessionMessages(sessionId, storePath, sessionFile ?? undefined);
+    const out = readSessionMessages(sessionId, storePath, sessionFile);
 
     expect(
       out.map((message) => ({
@@ -1256,7 +1258,7 @@ describe("readSessionMessages", () => {
     ]);
   });
 
-  test("keeps blocked hook messages on the current active branch", async () => {
+  test("keeps blocked hook messages on the current active branch", () => {
     const sessionId = "blocked-hook-branch-session";
     const sessionKey = "agent:main:explicit:blocked-hook-branch";
     const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -1300,7 +1302,8 @@ describe("readSessionMessages", () => {
       pluginId: "hitl-test-hooks",
     });
 
-    expect(messageId).toBeTruthy();
+    expect(messageId).toEqual(expect.any(String));
+    expect(messageId.length).toBeGreaterThan(0);
     const out = readSessionMessages(sessionId, storePath, sessionFile);
     expect(
       out.map((message) => ({
@@ -1316,7 +1319,7 @@ describe("readSessionMessages", () => {
     expect(JSON.stringify(out)).not.toContain("matched original");
   });
 
-  test("keeps repeated blocked hook messages together in a new session", async () => {
+  test("keeps repeated blocked hook messages together in a new session", () => {
     const sessionKey = "agent:main:explicit:repeated-blocked-hook";
     const sessionManager = SessionManager.create(tmpDir, tmpDir);
     const sessionId = sessionManager.getSessionId();

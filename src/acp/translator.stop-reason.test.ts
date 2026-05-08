@@ -12,6 +12,13 @@ import {
 } from "./translator.prompt-harness.test-support.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
+function requireValue<T>(value: T | undefined, label: string): T {
+  if (value === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 describe("acp translator stop reason mapping", () => {
   it("error state resolves as end_turn, not refusal", async () => {
     const { agent, promptPromise, runId } = await createPendingPromptHarness();
@@ -57,6 +64,63 @@ describe("acp translator stop reason mapping", () => {
     );
 
     await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
+  });
+
+  it("reconciles provisional ACP session keys to canonical Gateway keys by run id", async () => {
+    const sentRunIds: string[] = [];
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        const runId = params?.idempotencyKey;
+        if (typeof runId === "string") {
+          sentRunIds.push(runId);
+        }
+      }
+      return {};
+    }) as GatewayClient["request"];
+    const { agent, sessionId, sessionStore } = createSessionAgentHarness(request, {
+      sessionKey: "acp:session-1",
+    });
+
+    const firstPrompt = promptAgent(agent, sessionId);
+    await vi.waitFor(() => {
+      expect(sentRunIds).toHaveLength(1);
+    });
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId: sentRunIds[0],
+        sessionKey: "agent:main:acp:session-1",
+        seq: 1,
+        state: "final",
+        message: {
+          content: [{ type: "text", text: "first" }],
+        },
+      }),
+    );
+
+    await expect(firstPrompt).resolves.toEqual({ stopReason: "end_turn" });
+    expect(sessionStore.getSession(sessionId)?.sessionKey).toBe("agent:main:acp:session-1");
+
+    const secondPrompt = promptAgent(agent, sessionId, "again");
+    await vi.waitFor(() => {
+      expect(sentRunIds).toHaveLength(2);
+    });
+    expect(request).toHaveBeenLastCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main:acp:session-1",
+      }),
+      { timeoutMs: null },
+    );
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId: sentRunIds[1],
+        sessionKey: "agent:main:acp:session-1",
+        seq: 2,
+        state: "final",
+      }),
+    );
+
+    await expect(secondPrompt).resolves.toEqual({ stopReason: "end_turn" });
   });
 
   it("keeps in-flight prompts pending across transient gateway disconnects", async () => {
@@ -139,8 +203,9 @@ describe("acp translator stop reason mapping", () => {
     const promptPromise = promptAgent(agent, sessionId);
 
     await vi.waitFor(() => {
-      expect(runId).toBeDefined();
+      expect(runId).toEqual(expect.any(String));
     });
+    const capturedRunId = requireValue(runId, "chat.send run id");
 
     agent.handleGatewayDisconnect("1006: connection lost");
     agent.handleGatewayReconnect();
@@ -149,7 +214,7 @@ describe("acp translator stop reason mapping", () => {
     expect(request).toHaveBeenCalledWith(
       "agent.wait",
       {
-        runId,
+        runId: capturedRunId,
         timeoutMs: 0,
       },
       { timeoutMs: null },
@@ -255,10 +320,10 @@ describe("acp translator stop reason mapping", () => {
         }
         await Promise.resolve();
       }
-      expect(resolveAgentWait).toBeDefined();
+      const resolveWait = requireValue(resolveAgentWait, "agent.wait resolver");
 
       agent.handleGatewayDisconnect("1006: second disconnect");
-      resolveAgentWait?.({ status: "timeout" });
+      resolveWait({ status: "timeout" });
       await Promise.resolve();
 
       await vi.advanceTimersByTimeAsync(4_999);
@@ -351,14 +416,14 @@ describe("acp translator stop reason mapping", () => {
       const firstPrompt = promptAgent(agent, sessionId, "first");
       void firstPrompt.catch(() => {});
       await Promise.resolve();
-      expect(firstSendResolve).toBeDefined();
+      const resolveFirstSend = requireValue(firstSendResolve, "first chat.send resolver");
 
       const secondPrompt = promptAgent(agent, sessionId, "second");
       void secondPrompt.catch(() => {});
       await Promise.resolve();
       expect(sendCount).toBe(2);
 
-      firstSendResolve?.();
+      resolveFirstSend();
       await Promise.resolve();
 
       agent.handleGatewayDisconnect("1006: connection lost");

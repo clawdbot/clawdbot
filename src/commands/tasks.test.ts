@@ -150,9 +150,11 @@ describe("tasks commands", () => {
 
       expect(payload.mode).toBe("preview");
       expect(payload.maintenance.taskFlows.pruned).toBe(1);
-      expect(payload.auditBefore.byCode).toBeDefined();
+      expect(payload.auditBefore.byCode).toEqual(expect.any(Object));
+      expect(Array.isArray(payload.auditBefore.byCode)).toBe(false);
       expect(payload.auditBefore.taskFlows.byCode.stale_running).toBe(0);
-      expect(payload.auditAfter.byCode).toBeDefined();
+      expect(payload.auditAfter.byCode).toEqual(expect.any(Object));
+      expect(Array.isArray(payload.auditAfter.byCode)).toBe(false);
       expect(payload.auditAfter.taskFlows.byCode.stale_running).toBe(0);
     });
   });

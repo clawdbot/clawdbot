@@ -61,7 +61,6 @@ describe("createFeishuCommentReplyDispatcher", () => {
 
   function latestReplyDispatcherOptions() {
     const options = createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0];
-    expect(options).toBeDefined();
     if (!options) {
       throw new Error("expected reply dispatcher options");
     }

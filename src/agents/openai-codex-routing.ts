@@ -1,61 +1,70 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeEmbeddedAgentRuntime } from "./pi-embedded-runner/runtime.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+export const OPENAI_PROVIDER_ID = "openai";
+export const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 
 function isOfficialOpenAIBaseUrl(baseUrl: unknown): boolean {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
     return true;
   }
-  return /^https?:\/\/api\.openai\.com(?:\/v1)?\/?$/iu.test(baseUrl.trim());
+  try {
+    const url = new URL(baseUrl.trim());
+    return (
+      url.protocol === "https:" &&
+      url.hostname.toLowerCase() === "api.openai.com" &&
+      (url.pathname === "" ||
+        url.pathname === "/" ||
+        url.pathname === "/v1" ||
+        url.pathname === "/v1/")
+    );
+  } catch {
+    return false;
+  }
 }
 
 function openAIProviderUsesCustomBaseUrl(config: OpenClawConfig | undefined): boolean {
-  const providerConfig = config?.models?.providers?.openai;
-  return !isOfficialOpenAIBaseUrl(providerConfig?.baseUrl);
+  return !isOfficialOpenAIBaseUrl(config?.models?.providers?.openai?.baseUrl);
 }
 
 export function isOpenAIProvider(provider: string | undefined): boolean {
   return normalizeProviderId(provider ?? "") === OPENAI_PROVIDER_ID;
 }
 
-export function openAIRouteRequiresCodexRuntime(params: {
+export function isOpenAICodexProvider(provider: string | undefined): boolean {
+  return normalizeProviderId(provider ?? "") === OPENAI_CODEX_PROVIDER_ID;
+}
+
+export function openAIProviderUsesCodexRuntimeByDefault(params: {
   provider?: string;
   config?: OpenClawConfig;
 }): boolean {
-  return normalizeProviderId(params.provider ?? "") === OPENAI_CODEX_PROVIDER_ID;
+  return isOpenAIProvider(params.provider) && !openAIProviderUsesCustomBaseUrl(params.config);
 }
 
-export function modelSelectionRequiresCodexRuntime(params: {
-  model?: string;
-  config?: OpenClawConfig;
-}): boolean {
-  const model = params.model?.trim();
-  if (!model) {
-    return false;
+export function parseModelRefProvider(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
   }
-  const slashIndex = model.indexOf("/");
+  const slashIndex = value.trim().indexOf("/");
   if (slashIndex <= 0) {
-    return false;
+    return undefined;
   }
-  const provider = normalizeProviderId(model.slice(0, slashIndex));
-  return openAIRouteRequiresCodexRuntime({ provider, config: params.config });
+  return normalizeProviderId(value.trim().slice(0, slashIndex));
+}
+
+export function modelRefUsesOpenAIProvider(value: unknown): boolean {
+  return parseModelRefProvider(value) === OPENAI_PROVIDER_ID;
 }
 
 export function modelSelectionShouldEnsureCodexPlugin(params: {
   model?: string;
   config?: OpenClawConfig;
 }): boolean {
-  const model = params.model?.trim();
-  if (!model) {
-    return false;
-  }
-  const slashIndex = model.indexOf("/");
-  if (slashIndex <= 0) {
-    return false;
-  }
-  const provider = normalizeProviderId(model.slice(0, slashIndex));
+  const provider = parseModelRefProvider(params.model);
   if (provider === OPENAI_CODEX_PROVIDER_ID) {
     return true;
   }
@@ -63,14 +72,80 @@ export function modelSelectionShouldEnsureCodexPlugin(params: {
 }
 
 export function hasOpenAICodexAuthProfileOverride(value: unknown): boolean {
-  return typeof value === "string" && value.trim().toLowerCase().startsWith("openai-codex:");
+  return (
+    typeof value === "string" &&
+    normalizeOptionalLowercaseString(value)?.startsWith(`${OPENAI_CODEX_PROVIDER_ID}:`) === true
+  );
 }
 
-export function modelRefUsesOpenAIProvider(value: unknown): boolean {
-  if (typeof value !== "string") {
+export function shouldRouteOpenAIPiThroughCodexAuthProvider(params: {
+  provider: string;
+  harnessRuntime?: string;
+  agentHarnessId?: string;
+  authProfileProvider?: string;
+  authProfileId?: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+}): boolean {
+  if (
+    !isOpenAIProvider(params.provider) ||
+    !hasOpenAICodexAuthProfileOverride(params.authProfileId)
+  ) {
     return false;
   }
-  const trimmed = value.trim();
-  const slashIndex = trimmed.indexOf("/");
-  return slashIndex > 0 && isOpenAIProvider(trimmed.slice(0, slashIndex));
+  const runtime = normalizeEmbeddedAgentRuntime(params.agentHarnessId ?? params.harnessRuntime);
+  if (runtime !== "pi") {
+    return false;
+  }
+  const aliasLookupParams = {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  };
+  const authProfileProvider = resolveProviderIdForAuth(
+    params.authProfileProvider ?? params.authProfileId?.split(":", 1)[0] ?? "",
+    aliasLookupParams,
+  );
+  return authProfileProvider === OPENAI_CODEX_PROVIDER_ID;
+}
+
+export function listOpenAIAuthProfileProvidersForAgentRuntime(params: {
+  provider: string;
+  harnessRuntime?: string;
+  agentHarnessId?: string;
+}): string[] {
+  if (!isOpenAIProvider(params.provider)) {
+    return [params.provider];
+  }
+  const runtime = normalizeEmbeddedAgentRuntime(
+    normalizeExplicitRuntimePin(params.agentHarnessId) ?? params.harnessRuntime,
+  );
+  if (runtime === "codex") {
+    return [OPENAI_CODEX_PROVIDER_ID];
+  }
+  if (runtime === "pi") {
+    return [OPENAI_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID];
+  }
+  return [params.provider];
+}
+
+function normalizeExplicitRuntimePin(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const runtime = normalizeEmbeddedAgentRuntime(value);
+  return runtime === "auto" || runtime === "default" ? undefined : runtime;
+}
+
+export function resolveOpenAIRuntimeProviderForPi(params: {
+  provider: string;
+  harnessRuntime?: string;
+  agentHarnessId?: string;
+  authProfileProvider?: string;
+  authProfileId?: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+}): string {
+  return shouldRouteOpenAIPiThroughCodexAuthProvider(params)
+    ? OPENAI_CODEX_PROVIDER_ID
+    : params.provider;
 }

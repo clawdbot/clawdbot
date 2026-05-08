@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
+import { movePathWithCopyFallback } from "./replace-file.js";
 import {
   collectInstalledGlobalPackageErrors,
   globalInstallArgs,
@@ -283,10 +284,18 @@ async function swapStagedNpmInstall(params: {
   try {
     await fs.mkdir(targetLayout.globalRoot, { recursive: true });
     if (await pathExists(targetPackageRoot)) {
-      await fs.rename(targetPackageRoot, backupRoot);
+      await movePathWithCopyFallback({
+        from: targetPackageRoot,
+        sourceHardlinks: "reject",
+        to: backupRoot,
+      });
       movedExisting = true;
     }
-    await fs.rename(params.stage.packageRoot, targetPackageRoot);
+    await movePathWithCopyFallback({
+      from: params.stage.packageRoot,
+      sourceHardlinks: "reject",
+      to: targetPackageRoot,
+    });
     movedStaged = true;
     await replaceNpmBinShims({
       stageLayout: params.stage.layout,
@@ -312,7 +321,11 @@ async function swapStagedNpmInstall(params: {
       await removePathBestEffort(targetPackageRoot);
     }
     if (movedExisting) {
-      await fs.rename(backupRoot, targetPackageRoot).catch(() => undefined);
+      await movePathWithCopyFallback({
+        from: backupRoot,
+        sourceHardlinks: "reject",
+        to: targetPackageRoot,
+      }).catch(() => undefined);
     }
     return {
       name: "global install swap",

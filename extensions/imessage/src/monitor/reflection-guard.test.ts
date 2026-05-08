@@ -104,4 +104,20 @@ describe("detectReflectedContent", () => {
     const result = detectReflectedContent("This is a <thought experiment I ran");
     expect(result.isReflection).toBe(false);
   });
+
+  it("detects reflected ACP channel error replies", () => {
+    const result = detectReflectedContent(
+      "ACP error (ACP_SESSION_INIT_FAILED): ACP metadata is missing for agent:codex",
+    );
+    expect(result.isReflection).toBe(true);
+    expect(result.matchedLabels).toContain("acp-error");
+  });
+
+  it("detects reflected gateway auth failure replies", () => {
+    const result = detectReflectedContent(
+      "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.5`, or set `OPENAI_API_KEY`, then try again.",
+    );
+    expect(result.isReflection).toBe(true);
+    expect(result.matchedLabels).toContain("gateway-missing-api-key");
+  });
 });

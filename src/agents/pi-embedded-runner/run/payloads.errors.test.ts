@@ -451,7 +451,7 @@ describe("buildEmbeddedRunPayloads", () => {
       },
     });
     const warningText = seed[0]?.text;
-    expect(warningText).toBeTruthy();
+    expect(warningText).toBe("⚠️ ✍️ Write failed");
 
     const payloads = buildPayloads({
       assistantTexts: [warningText ?? ""],

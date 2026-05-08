@@ -182,7 +182,6 @@ describe("sessions tools", () => {
     const tools = createOpenClawTools();
     const byName = (name: string) => {
       const tool = tools.find((candidate) => candidate.name === name);
-      expect(tool).toBeDefined();
       if (!tool) {
         throw new Error(`missing ${name} tool`);
       }
@@ -201,7 +200,6 @@ describe("sessions tools", () => {
 
       const properties = schema.properties ?? {};
       const value = properties[prop] as { type?: unknown } | undefined;
-      expect(value).toBeDefined();
       if (!value) {
         throw new Error(`missing ${toolName} schema prop: ${prop}`);
       }
@@ -291,7 +289,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_list");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_list tool");
     }
@@ -427,7 +424,6 @@ describe("sessions tools", () => {
           },
         } as OpenClawConfig,
       }).find((candidate) => candidate.name === "sessions_list");
-      expect(tool).toBeDefined();
       if (!tool) {
         throw new Error("missing sessions_list tool");
       }
@@ -475,7 +471,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_list");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_list tool");
     }
@@ -510,7 +505,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -559,7 +553,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -623,7 +616,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -672,7 +664,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -713,7 +704,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -751,7 +741,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -779,7 +768,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -855,7 +843,6 @@ describe("sessions tools", () => {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -953,7 +940,6 @@ describe("sessions tools", () => {
       agentSessionKey: "main",
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -1051,7 +1037,6 @@ describe("sessions tools", () => {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -1167,7 +1152,6 @@ describe("sessions tools", () => {
         },
       },
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -1190,7 +1174,9 @@ describe("sessions tools", () => {
             call.method === "agent" &&
             (call.params as { sessionKey?: string } | undefined)?.sessionKey === requesterKey,
         );
-        expect(requesterReplyCall).toBeDefined();
+        if (!requesterReplyCall) {
+          throw new Error("expected requester reply call");
+        }
       },
       { timeout: 2_000, interval: 5 },
     );
@@ -1247,7 +1233,6 @@ describe("sessions tools", () => {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -1315,7 +1300,6 @@ describe("sessions tools", () => {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -1451,7 +1435,6 @@ describe("sessions tools", () => {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }

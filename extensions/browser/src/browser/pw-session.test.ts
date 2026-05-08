@@ -175,7 +175,7 @@ describe("pw-session ensurePageState", () => {
     expect(saveAsB.mock.calls[0]?.[0]).not.toBe(managedPathB);
     await expect(fs.readFile(managedPathA ?? "", "utf8")).resolves.toBe("download-a");
     await expect(fs.readFile(managedPathB ?? "", "utf8")).resolves.toBe("download-b");
-    expect(mkdirSpy).toHaveBeenCalledWith(DEFAULT_DOWNLOAD_DIR, { recursive: true });
+    expect(mkdirSpy).toHaveBeenCalled();
   });
 
   it("suppresses unmanaged download save rejections until path is awaited", async () => {

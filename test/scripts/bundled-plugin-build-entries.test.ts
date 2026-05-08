@@ -7,6 +7,14 @@ import {
   listBundledPluginPackArtifacts,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 
+function expectNoPrefixMatches(values: string[], prefix: string) {
+  expect(values.filter((value) => value.startsWith(prefix))).toEqual([]);
+}
+
+function expectSomePrefixMatch(values: string[], prefix: string) {
+  expect(values.filter((value) => value.startsWith(prefix)).length).toBeGreaterThan(0);
+}
+
 describe("bundled plugin build entries", () => {
   const bundledChannelEntrySources = ["index.ts", "channel-entry.ts", "setup-entry.ts"];
   const forEachBundledChannelEntry = (
@@ -77,37 +85,21 @@ describe("bundled plugin build entries", () => {
   it("keeps private QA bundles out of required npm pack artifacts", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
-    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-channel/"))).toBe(
-      false,
-    );
-    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-lab/"))).toBe(
-      false,
-    );
-    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-matrix/"))).toBe(
-      false,
-    );
+    expectNoPrefixMatches(artifacts, "dist/extensions/qa-channel/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/qa-lab/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/qa-matrix/");
   });
 
   it("keeps explicitly downloadable plugins out of bundled package artifacts", () => {
     const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts();
 
-    expect(Object.keys(entries).some((entry) => entry.startsWith("extensions/bluebubbles/"))).toBe(
-      true,
-    );
-    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/bluebubbles/"))).toBe(
-      false,
-    );
     for (const pluginId of ["acpx", "googlechat", "line"]) {
-      expect(
-        Object.keys(entries).some((entry) => entry.startsWith(`extensions/${pluginId}/`)),
-      ).toBe(true);
-      expect(
-        artifacts.some((artifact) => artifact.startsWith(`dist/extensions/${pluginId}/`)),
-      ).toBe(false);
+      expectSomePrefixMatch(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
-    expect(Object.keys(entries).some((entry) => entry.startsWith("extensions/qqbot/"))).toBe(false);
-    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qqbot/"))).toBe(false);
+    expectNoPrefixMatches(Object.keys(entries), "extensions/qqbot/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/qqbot/");
   });
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {

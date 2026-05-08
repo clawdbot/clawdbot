@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -11,6 +12,15 @@ type ModelTarget = {
   provider?: string;
   modelId: string;
 };
+
+const GOOGLE_LIVE_TARGET_PROVIDERS = new Set(["google", "google-gemini-cli", "google-vertex"]);
+
+function normalizeLiveTargetModelId(provider: string, modelId: string): string {
+  const trimmed = modelId.trim();
+  return GOOGLE_LIVE_TARGET_PROVIDERS.has(provider)
+    ? normalizeGooglePreviewModelId(trimmed)
+    : trimmed;
+}
 
 function normalizeCsvSet(values: Set<string> | null): Set<string> | null {
   if (!values) {
@@ -40,7 +50,9 @@ function parseModelTarget(raw: string): ModelTarget | null {
     };
   }
   const provider = normalizeProviderId(trimmed.slice(0, slash));
-  const modelId = normalizeLowercaseStringOrEmpty(trimmed.slice(slash + 1));
+  const modelId = normalizeLowercaseStringOrEmpty(
+    normalizeLiveTargetModelId(provider, trimmed.slice(slash + 1)),
+  );
   if (!provider || !modelId) {
     return null;
   }

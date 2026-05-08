@@ -298,7 +298,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("disables block streaming by default to prevent silent reply drops", async () => {
+  it("disables block streaming by default to prevent silent reply drops", () => {
     const result = createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
@@ -334,7 +334,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
-  it("keeps core block streaming disabled when Feishu blockStreaming is explicitly false", async () => {
+  it("keeps core block streaming disabled when Feishu blockStreaming is explicitly false", () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
@@ -910,7 +910,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(reasoningUpdate).not.toMatch(/> _.*_/);
 
     const combinedUpdate = updateCalls.find((c) => c.includes("Thinking") && c.includes("---"));
-    expect(combinedUpdate).toBeDefined();
+    if (!combinedUpdate) {
+      throw new Error("expected combined reasoning and final-answer streaming update");
+    }
 
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
@@ -1136,7 +1138,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const updateTexts = streamingInstances[0].update.mock.calls.map((call: unknown[]) =>
       typeof call[0] === "string" ? call[0] : "",
     );
-    expect(updateTexts.some((text) => text.includes("🔎 Web Search"))).toBe(true);
+    expect(updateTexts).toEqual(expect.arrayContaining([expect.stringContaining("🔎 Web Search")]));
     expect(streamingInstances[0].close).toHaveBeenCalledWith("final answer", {
       note: "Agent: agent",
     });
@@ -1169,9 +1171,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const updateTexts = streamingInstances[0].update.mock.calls.map((call: unknown[]) =>
       typeof call[0] === "string" ? call[0] : "",
     );
-    expect(
-      updateTexts.some((text) => text.includes("🛠️ Exec: run tests, `pnpm test -- --watch=false`")),
-    ).toBe(true);
+    expect(updateTexts).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("🛠️ Exec: run tests, `pnpm test -- --watch=false`"),
+      ]),
+    );
   });
 
   it("omits message-like tools from streaming card status", async () => {
@@ -1197,7 +1201,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const updateTexts = streamingInstances[0].update.mock.calls.map((call: unknown[]) =>
       typeof call[0] === "string" ? call[0] : "",
     );
-    expect(updateTexts.some((text) => text.includes("Message"))).toBe(false);
+    expect(updateTexts).not.toEqual(expect.arrayContaining([expect.stringContaining("Message")]));
   });
 
   it("does not suppress a later final after error closeout", async () => {

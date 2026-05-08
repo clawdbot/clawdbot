@@ -19,10 +19,12 @@ import {
 } from "./pw-role-snapshot.js";
 import {
   assertPageNavigationCompletedSafely,
+  closeBlockedNavigationTarget,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   gotoPageWithNavigationGuard,
+  isPolicyDenyNavigationError,
   storeRoleRefsForTarget,
 } from "./pw-session.js";
 import { markBackendDomRefsOnPage, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
@@ -378,14 +380,25 @@ export async function navigateViaPlaywright(opts: {
     ensurePageState(page);
     response = await navigate();
   }
-  await assertPageNavigationCompletedSafely({
-    cdpUrl: opts.cdpUrl,
-    page,
-    response,
-    ssrfPolicy: opts.ssrfPolicy,
-    browserProxyMode: opts.browserProxyMode,
-    targetId: opts.targetId,
-  });
+  try {
+    await assertPageNavigationCompletedSafely({
+      cdpUrl: opts.cdpUrl,
+      page,
+      response,
+      ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
+      targetId: opts.targetId,
+    });
+  } catch (err) {
+    if (isPolicyDenyNavigationError(err)) {
+      await closeBlockedNavigationTarget({
+        cdpUrl: opts.cdpUrl,
+        page,
+        targetId: opts.targetId,
+      });
+    }
+    throw err;
+  }
   const finalUrl = page.url();
   return { url: finalUrl };
 }

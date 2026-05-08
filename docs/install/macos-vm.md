@@ -2,7 +2,7 @@
 summary: "Run OpenClaw in a sandboxed macOS VM (local or hosted) when you need isolation or iMessage"
 read_when:
   - You want OpenClaw isolated from your main macOS environment
-  - You want iMessage integration (BlueBubbles) in a sandbox
+  - You want iMessage integration in a sandbox
   - You want a resettable macOS environment you can clone
   - You want to compare local vs hosted macOS VM options
 title: "macOS VMs"
@@ -14,7 +14,7 @@ title: "macOS VMs"
 - **Dedicated hardware** (Mac mini or Linux box) if you want full control and a **residential IP** for browser automation. Many sites block data center IPs, so local browsing often works better.
 - **Hybrid:** keep the Gateway on a cheap VPS, and connect your Mac as a **node** when you need browser/UI automation. See [Nodes](/nodes) and [Gateway remote](/gateway/remote).
 
-Use a macOS VM when you specifically need macOS-only capabilities (iMessage/BlueBubbles) or want strict isolation from your daily Mac.
+Use a macOS VM when you specifically need macOS-only capabilities such as iMessage or want strict isolation from your daily Mac.
 
 ## macOS VM options
 
@@ -25,7 +25,7 @@ Run OpenClaw in a sandboxed macOS VM on your existing Apple Silicon Mac using [L
 This gives you:
 
 - Full macOS environment in isolation (your host stays clean)
-- iMessage support via BlueBubbles (impossible on Linux/Windows)
+- iMessage support via `imsg` (the default local path is impossible on Linux/Windows)
 - Instant reset by cloning VMs
 - No extra hardware or cloud costs
 
@@ -198,24 +198,24 @@ ssh youruser@192.168.64.X "openclaw status"
 
 ## Bonus: iMessage integration
 
-This is the killer feature of running on macOS. Use [BlueBubbles](https://bluebubbles.app) to add iMessage to OpenClaw.
+This is the killer feature of running on macOS. Use [iMessage](/channels/imessage) with `imsg` to add Messages to OpenClaw.
 
 Inside the VM:
 
-1. Download BlueBubbles from bluebubbles.app
-2. Sign in with your Apple ID
-3. Enable the Web API and set a password
-4. Point BlueBubbles webhooks at your gateway (example: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`)
+1. Sign in to Messages.
+2. Install `imsg`.
+3. Grant Full Disk Access and Automation permission for the process running OpenClaw/`imsg`.
+4. Verify RPC support with `imsg rpc --help`.
 
 Add to your OpenClaw config:
 
 ```json5
 {
   channels: {
-    bluebubbles: {
-      serverUrl: "http://localhost:1234",
-      password: "your-api-password",
-      webhookPath: "/bluebubbles-webhook",
+    imessage: {
+      enabled: true,
+      cliPath: "imsg",
+      dbPath: "~/Library/Messages/chat.db",
     },
   },
 }
@@ -223,7 +223,7 @@ Add to your OpenClaw config:
 
 Restart the gateway. Now your agent can send and receive iMessages.
 
-Full setup details: [BlueBubbles channel](/channels/bluebubbles)
+Full setup details: [iMessage channel](/channels/imessage)
 
 ---
 
@@ -274,7 +274,7 @@ For true always-on, consider a dedicated Mac mini or a small VPS. See [VPS hosti
 - [VPS hosting](/vps)
 - [Nodes](/nodes)
 - [Gateway remote](/gateway/remote)
-- [BlueBubbles channel](/channels/bluebubbles)
+- [iMessage channel](/channels/imessage)
 - [Lume Quickstart](https://cua.ai/docs/lume/guide/getting-started/quickstart)
 - [Lume CLI Reference](https://cua.ai/docs/lume/reference/cli-reference)
 - [Unattended VM Setup](https://cua.ai/docs/lume/guide/fundamentals/unattended-setup) (advanced)

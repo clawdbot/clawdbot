@@ -15,7 +15,7 @@ function requireStreamFn(streamFn: ReturnType<typeof wrapCopilotProviderStream>)
 }
 
 describe("wrapCopilotAnthropicStream", () => {
-  it("adds Copilot headers and Anthropic cache markers for Claude payloads", async () => {
+  it("adds Copilot headers and Anthropic cache markers for Claude payloads", () => {
     const payloads: Array<{
       messages: Array<Record<string, unknown>>;
     }> = [];

@@ -1,6 +1,9 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
+import type { v2 } from "../app-server/protocol.js";
+import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
   exists,
   isDirectory,
@@ -19,10 +22,17 @@ export type CodexSkillSource = {
   sourceLabel: string;
 };
 
-type CodexPluginSource = {
+export type CodexPluginSource = {
   name: string;
   source: string;
-  manifestPath: string;
+  sourceKind: "app-server" | "cache";
+  migratable: boolean;
+  manifestPath?: string;
+  marketplaceName?: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
+  pluginName?: string;
+  installed?: boolean;
+  enabled?: boolean;
+  message?: string;
 };
 
 type CodexArchiveSource = {
@@ -42,6 +52,7 @@ type CodexSource = {
   hooksPath?: string;
   skills: CodexSkillSource[];
   plugins: CodexPluginSource[];
+  pluginDiscoveryError?: string;
   archivePaths: CodexArchiveSource[];
 };
 
@@ -104,7 +115,15 @@ async function discoverPluginDirs(codexHome: string): Promise<CodexPluginSource[
       const manifest = await readJsonObject(manifestPath);
       const manifestName = typeof manifest.name === "string" ? manifest.name.trim() : "";
       const name = manifestName || path.basename(dir);
-      discovered.set(dir, { name, source: dir, manifestPath });
+      discovered.set(dir, {
+        name,
+        source: dir,
+        manifestPath,
+        sourceKind: "cache",
+        migratable: false,
+        message:
+          "Cached Codex plugin bundle found. Review manually unless the plugin is also installed in the source Codex app-server inventory.",
+      });
       return;
     }
     for (const entry of await safeReadDir(dir)) {
@@ -116,6 +135,84 @@ async function discoverPluginDirs(codexHome: string): Promise<CodexPluginSource[
   }
   await visit(root, 0);
   return [...discovered.values()].toSorted((a, b) => a.source.localeCompare(b.source));
+}
+
+async function discoverInstalledCuratedPlugins(codexHome: string): Promise<{
+  plugins: CodexPluginSource[];
+  error?: string;
+}> {
+  try {
+    const response = await requestCodexAppServerJson<v2.PluginListResponse>({
+      method: "plugin/list",
+      requestParams: { cwds: [] } satisfies v2.PluginListParams,
+      timeoutMs: 60_000,
+      startOptions: {
+        transport: "stdio",
+        command: "codex",
+        commandSource: "config",
+        args: ["app-server", "--listen", "stdio://"],
+        headers: {},
+        env: {
+          CODEX_HOME: codexHome,
+          HOME: path.dirname(codexHome),
+        },
+      },
+    });
+    const marketplace = response.marketplaces.find(
+      (entry) => entry.name === CODEX_PLUGINS_MARKETPLACE_NAME,
+    );
+    if (!marketplace) {
+      return {
+        plugins: [],
+        error: `Codex marketplace ${CODEX_PLUGINS_MARKETPLACE_NAME} was not found in source plugin inventory.`,
+      };
+    }
+    const plugins = marketplace.plugins
+      .filter((plugin) => plugin.installed)
+      .map((plugin): CodexPluginSource | undefined => {
+        const pluginName = pluginNameFromSummary(plugin);
+        if (!pluginName) {
+          return undefined;
+        }
+        return {
+          name: plugin.name,
+          pluginName,
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          source: `${CODEX_PLUGINS_MARKETPLACE_NAME}/${pluginName}`,
+          sourceKind: "app-server",
+          migratable: true,
+          installed: plugin.installed,
+          enabled: plugin.enabled,
+        };
+      })
+      .filter((plugin): plugin is CodexPluginSource => plugin !== undefined)
+      .toSorted((a, b) => (a.pluginName ?? a.name).localeCompare(b.pluginName ?? b.name));
+    return { plugins };
+  } catch (error) {
+    return {
+      plugins: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function pluginNameFromSummary(summary: v2.PluginSummary): string | undefined {
+  const candidates = [summary.id, summary.name];
+  for (const candidate of candidates) {
+    const trimmed = candidate.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const withoutMarketplaceSuffix = trimmed.endsWith(`@${CODEX_PLUGINS_MARKETPLACE_NAME}`)
+      ? trimmed.slice(0, -`@${CODEX_PLUGINS_MARKETPLACE_NAME}`.length)
+      : trimmed;
+    const pathSegment = withoutMarketplaceSuffix.split("/").at(-1)?.trim();
+    const normalized = pathSegment?.toLowerCase().replaceAll(/\s+/gu, "-");
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
 }
 
 export async function discoverCodexSource(input?: string): Promise<CodexSource> {
@@ -133,7 +230,19 @@ export async function discoverCodexSource(input?: string): Promise<CodexSource> 
     root: agentsSkillsDir,
     sourceLabel: "personal AgentSkill",
   });
-  const plugins = await discoverPluginDirs(codexHome);
+  const sourcePluginDiscovery = await discoverInstalledCuratedPlugins(codexHome);
+  const sourcePluginNames = new Set(
+    sourcePluginDiscovery.plugins.flatMap((plugin) =>
+      plugin.pluginName ? [plugin.pluginName] : [],
+    ),
+  );
+  const cachedPlugins = (await discoverPluginDirs(codexHome)).filter((plugin) => {
+    const normalizedName = sanitizePluginName(plugin.name);
+    return !sourcePluginNames.has(normalizedName);
+  });
+  const plugins = [...sourcePluginDiscovery.plugins, ...cachedPlugins].toSorted((a, b) =>
+    a.source.localeCompare(b.source),
+  );
   const archivePaths: CodexArchiveSource[] = [];
   if (await exists(configPath)) {
     archivePaths.push({
@@ -167,10 +276,15 @@ export async function discoverCodexSource(input?: string): Promise<CodexSource> 
     ...((await exists(hooksPath)) ? { hooksPath } : {}),
     skills,
     plugins,
+    ...(sourcePluginDiscovery.error ? { pluginDiscoveryError: sourcePluginDiscovery.error } : {}),
     archivePaths,
   };
 }
 
 export function hasCodexSource(source: CodexSource): boolean {
   return source.confidence !== "low";
+}
+
+function sanitizePluginName(value: string): string {
+  return value.trim().toLowerCase().replaceAll(/\s+/gu, "-");
 }

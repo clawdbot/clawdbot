@@ -67,6 +67,26 @@ describe("short-term promotion", () => {
     return notePath;
   }
 
+  function requireCandidateKey(
+    candidate: { key?: string } | null | undefined,
+    label: string,
+  ): string {
+    if (!candidate?.key) {
+      throw new Error(`expected ${label} candidate key`);
+    }
+    return candidate.key;
+  }
+
+  function requirePromotedAt(
+    candidate: { promotedAt?: string } | null | undefined,
+    label: string,
+  ): string {
+    if (typeof candidate?.promotedAt !== "string" || candidate.promotedAt.length === 0) {
+      throw new Error(`expected ${label} promotedAt timestamp`);
+    }
+    return candidate.promotedAt;
+  }
+
   it("detects short-term daily memory paths", () => {
     expect(isShortTermMemoryPath("memory/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("2026-04-03.md")).toBe(true);
@@ -441,8 +461,7 @@ describe("short-term promotion", () => {
           minUniqueQueries: 0,
           nowMs,
         });
-        candidateKey = ranked[0]?.key ?? candidateKey;
-        expect(candidateKey).toBeTruthy();
+        candidateKey = requireCandidateKey(ranked[0], "ranked daily");
 
         await recordDreamingPhaseSignals({
           workspaceDir,
@@ -754,18 +773,20 @@ describe("short-term promotion", () => {
       expect(baseline).toHaveLength(2);
       expect(baseline[0]?.path).toBe("memory/2026-04-01.md");
 
-      const boostedKey = baseline.find((entry) => entry.path === "memory/2026-04-02.md")?.key;
-      expect(boostedKey).toBeTruthy();
+      const boostedKey = requireCandidateKey(
+        baseline.find((entry) => entry.path === "memory/2026-04-02.md"),
+        "boosted baseline",
+      );
       await recordDreamingPhaseSignals({
         workspaceDir,
         phase: "light",
-        keys: [boostedKey!],
+        keys: [boostedKey],
         nowMs,
       });
       await recordDreamingPhaseSignals({
         workspaceDir,
         phase: "rem",
-        keys: [boostedKey!],
+        keys: [boostedKey],
         nowMs,
       });
 
@@ -783,7 +804,7 @@ describe("short-term promotion", () => {
       const phaseStore = JSON.parse(await fs.readFile(phaseStorePath, "utf-8")) as {
         entries: Record<string, { lightHits: number; remHits: number }>;
       };
-      expect(phaseStore.entries[boostedKey!]).toMatchObject({
+      expect(phaseStore.entries[boostedKey]).toMatchObject({
         lightHits: 1,
         remHits: 1,
       });
@@ -830,8 +851,7 @@ describe("short-term promotion", () => {
         minUniqueQueries: 0,
         nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
       });
-      const key = rankedBaseline[0]?.key;
-      expect(key).toBeTruthy();
+      const key = requireCandidateKey(rankedBaseline[0], "ranked baseline");
 
       await recordDreamingPhaseSignals({
         workspaceDir,
@@ -1269,7 +1289,9 @@ describe("short-term promotion", () => {
         includePromoted: true,
       });
       expect(rankedIncludingPromoted).toHaveLength(1);
-      expect(rankedIncludingPromoted[0]?.promotedAt).toBeTruthy();
+      expect(requirePromotedAt(rankedIncludingPromoted[0], "promoted candidate")).toMatch(
+        /^\d{4}-\d{2}-\d{2}T/,
+      );
     });
   });
 

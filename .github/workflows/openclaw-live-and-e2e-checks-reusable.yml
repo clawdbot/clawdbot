@@ -2135,8 +2135,8 @@ jobs:
               # inside the already-isolated container to keep MCP cron/tool
               # execution representative instead of failing on nested sandbox
               # setup.
-              echo 'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
-              echo 'OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=["exec","resume","{sessionId}","-c","sandbox_mode=\"danger-full-access\"","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
+              echo 'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","-c","service_tier=\"priority\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
+              echo 'OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=["exec","resume","{sessionId}","-c","sandbox_mode=\"danger-full-access\"","-c","service_tier=\"priority\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
               echo "OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
@@ -2354,8 +2354,8 @@ jobs:
             live-cli-backend-docker)
               echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4" >> "$GITHUB_ENV"
               echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
-              echo 'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
-              echo 'OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=["exec","resume","{sessionId}","-c","sandbox_mode=\"danger-full-access\"","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
+              echo 'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","-c","service_tier=\"priority\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
+              echo 'OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=["exec","resume","{sessionId}","-c","sandbox_mode=\"danger-full-access\"","-c","service_tier=\"priority\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
               echo "OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"

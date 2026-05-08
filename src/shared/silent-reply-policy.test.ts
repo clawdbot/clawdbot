@@ -8,6 +8,19 @@ import {
   resolveSilentReplyRewriteText,
 } from "./silent-reply-policy.js";
 
+const defaultPolicyResolverCases = [
+  {
+    name: "resolveSilentReplyRewriteFromPolicies",
+    resolve: resolveSilentReplyRewriteFromPolicies,
+    defaults: DEFAULT_SILENT_REPLY_REWRITE,
+  },
+  {
+    name: "resolveSilentReplyPolicyFromPolicies",
+    resolve: resolveSilentReplyPolicyFromPolicies,
+    defaults: DEFAULT_SILENT_REPLY_POLICY,
+  },
+];
+
 describe("classifySilentReplyConversationType", () => {
   it("prefers an explicit conversation type", () => {
     expect(
@@ -37,16 +50,17 @@ describe("classifySilentReplyConversationType", () => {
   });
 });
 
-describe("resolveSilentReplyRewriteFromPolicies", () => {
-  it("uses defaults when no overrides exist", () => {
-    expect(resolveSilentReplyRewriteFromPolicies({ conversationType: "direct" })).toBe(
-      DEFAULT_SILENT_REPLY_REWRITE.direct,
-    );
-    expect(resolveSilentReplyRewriteFromPolicies({ conversationType: "group" })).toBe(
-      DEFAULT_SILENT_REPLY_REWRITE.group,
-    );
-  });
+describe("silent reply default policy resolution", () => {
+  it.each(defaultPolicyResolverCases)(
+    "$name uses defaults when no overrides exist",
+    ({ defaults, resolve }) => {
+      expect(resolve({ conversationType: "direct" })).toBe(defaults.direct);
+      expect(resolve({ conversationType: "group" })).toBe(defaults.group);
+    },
+  );
+});
 
+describe("resolveSilentReplyRewriteFromPolicies", () => {
   it("prefers surface rewrite settings over defaults", () => {
     expect(
       resolveSilentReplyRewriteFromPolicies({
@@ -69,15 +83,6 @@ describe("resolveSilentReplyRewriteText", () => {
 });
 
 describe("resolveSilentReplyPolicyFromPolicies", () => {
-  it("uses defaults when no overrides exist", () => {
-    expect(resolveSilentReplyPolicyFromPolicies({ conversationType: "direct" })).toBe(
-      DEFAULT_SILENT_REPLY_POLICY.direct,
-    );
-    expect(resolveSilentReplyPolicyFromPolicies({ conversationType: "group" })).toBe(
-      DEFAULT_SILENT_REPLY_POLICY.group,
-    );
-  });
-
   it("prefers surface policy over defaults", () => {
     expect(
       resolveSilentReplyPolicyFromPolicies({

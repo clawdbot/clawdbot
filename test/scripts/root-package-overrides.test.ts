@@ -23,7 +23,7 @@ describe("root package override guardrails", () => {
     const pnpmOverride = manifest.pnpm?.overrides?.["@aws-sdk/client-bedrock-runtime"];
 
     expect(pnpmOverride).toBe("3.1024.0");
-    expect(manifest.dependencies?.[packageName]).toBeDefined();
+    expect(manifest.dependencies).toHaveProperty(packageName);
     expect(npmOverride).toBe(`$${packageName}`);
   });
 

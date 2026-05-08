@@ -5,6 +5,16 @@ async function flushStreamTimer(): Promise<void> {
   await vi.advanceTimersByTimeAsync(1);
 }
 
+function requireMessageActivity(sent: unknown[]): Record<string, unknown> {
+  const activity = sent.find((entry) => (entry as Record<string, unknown>).type === "message") as
+    | Record<string, unknown>
+    | undefined;
+  if (!activity) {
+    throw new Error("expected final Teams message activity");
+  }
+  return activity;
+}
+
 describe("TeamsHttpStream", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -58,19 +68,14 @@ describe("TeamsHttpStream", () => {
     await stream.finalize();
 
     // Find the final message activity
-    const finalActivity = sent.find((a) => (a as Record<string, unknown>).type === "message") as
-      | Record<string, unknown>
-      | undefined;
+    const finalActivity = requireMessageActivity(sent);
 
-    expect(finalActivity).toBeDefined();
-    expect(finalActivity!.text).toBe(
-      "Hello, this is a complete response for finalization testing.",
-    );
+    expect(finalActivity.text).toBe("Hello, this is a complete response for finalization testing.");
     // No cursor in final
-    expect(finalActivity!.text as string).not.toContain("\u258D");
+    expect(finalActivity.text as string).not.toContain("\u258D");
 
     // Should have AI-generated entity
-    const entities = finalActivity!.entities as Array<Record<string, unknown>>;
+    const entities = finalActivity.entities as Array<Record<string, unknown>>;
     expect(entities).toEqual(
       expect.arrayContaining([expect.objectContaining({ additionalType: ["AIGeneratedContent"] })]),
     );
@@ -274,12 +279,9 @@ describe("TeamsHttpStream", () => {
 
     expect(stream.isFailed).toBe(true);
 
-    const finalActivity = sent.find((a) => (a as Record<string, unknown>).type === "message") as
-      | Record<string, unknown>
-      | undefined;
+    const finalActivity = requireMessageActivity(sent);
 
-    expect(finalActivity).toBeDefined();
-    expect(finalActivity!.text).toBe(
+    expect(finalActivity.text).toBe(
       "Hello, this is a long enough response for streaming to begin. More text before timeout.",
     );
   });

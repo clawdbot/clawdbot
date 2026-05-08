@@ -2230,15 +2230,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             MediaTypes?: string[];
           }
         | undefined;
-      expect(message).toBeDefined();
-      expect(message?.content).toBe("edit these");
-      expect(message?.MediaPath).toBe("/tmp/chat-send-image-a.png");
-      expect(message?.MediaPaths).toEqual([
+      if (!message) {
+        throw new Error("expected user transcript update with media metadata");
+      }
+      expect(message.content).toBe("edit these");
+      expect(message.MediaPath).toBe("/tmp/chat-send-image-a.png");
+      expect(message.MediaPaths).toEqual([
         "/tmp/chat-send-image-a.png",
         "/tmp/chat-send-image-b.jpg",
       ]);
-      expect(message?.MediaType).toBe("image/png");
-      expect(message?.MediaTypes).toEqual(["image/png", "image/jpeg"]);
+      expect(message.MediaType).toBe("image/png");
+      expect(message.MediaTypes).toEqual(["image/png", "image/jpeg"]);
       expect(mockState.lastDispatchCtx?.MediaPath).toBeUndefined();
       expect(mockState.lastDispatchCtx?.MediaPaths).toBeUndefined();
       expect(mockState.lastDispatchImages).toHaveLength(2);
@@ -2467,9 +2469,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     await waitForAssertion(() => {
       expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
-      expect(
-        mockState.emittedTranscriptUpdates.find((update) => update.message !== undefined),
-      ).toBeDefined();
+      expect(mockState.emittedTranscriptUpdates).toEqual(
+        expect.arrayContaining([expect.objectContaining({ message: expect.any(Object) })]),
+      );
     });
   });
 

@@ -172,7 +172,7 @@ describe("mattermost websocket monitor", () => {
       data: { token: "token" },
       seq: 1,
     });
-    expect(patches.some((patch) => patch.connected === true)).toBe(true);
+    expect(patches.filter((patch) => patch.connected === true)).toHaveLength(1);
     expect(patches.filter((patch) => patch.connected === false)).toHaveLength(2);
   });
 

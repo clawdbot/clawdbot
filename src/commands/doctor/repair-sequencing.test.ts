@@ -397,11 +397,11 @@ describe("doctor repair sequencing", () => {
     );
   });
 
-  it("moves legacy Codex routes to Codex before missing plugin install repair", async () => {
+  it("moves legacy Codex routes to canonical OpenAI before missing plugin install repair", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(
       async (params: { cfg: OpenClawConfig }) => {
         expect(params.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
-        expect(params.cfg.agents?.defaults?.agentRuntime).toEqual({ id: "codex" });
+        expect(params.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
         return {
           changes: [],
           warnings: [],
@@ -434,9 +434,9 @@ describe("doctor repair sequencing", () => {
 
     expect(result.state.pendingChanges).toBe(true);
     expect(result.state.candidate.agents?.defaults?.model).toBe("openai/gpt-5.5");
-    expect(result.state.candidate.agents?.defaults?.agentRuntime).toEqual({ id: "codex" });
+    expect(result.state.candidate.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(result.changeNotes.join("\n")).toContain(
-      'agents.defaults.model: openai-codex/gpt-5.5 -> openai/gpt-5.5; set agentRuntime.id to "codex".',
+      "agents.defaults.model: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
     );
     expect(result.changeNotes.join("\n")).not.toContain("Installed missing configured plugin");
   });

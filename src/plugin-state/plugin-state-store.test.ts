@@ -152,8 +152,10 @@ describe("plugin state keyed store", () => {
 
       expect(attempts.filter(Boolean)).toHaveLength(1);
       const stored = await store.lookup("claim");
-      expect(stored).toBeDefined();
-      expect(attempts[stored?.claimant ?? -1]).toBe(true);
+      if (stored === undefined) {
+        throw new Error("expected winning plugin-state claim");
+      }
+      expect(attempts[stored.claimant]).toBe(true);
     });
   });
 

@@ -45,8 +45,10 @@ function buildInfoContext(params: { cfg: OpenClawConfig; runs: object[]; restTok
 }
 
 function requireReplyText(reply: ReplyPayload | undefined): string {
-  expect(reply?.text).toBeDefined();
-  return reply?.text as string;
+  if (reply?.text === undefined) {
+    throw new Error("expected reply text");
+  }
+  return reply.text;
 }
 
 beforeEach(() => {

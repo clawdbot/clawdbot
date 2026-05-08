@@ -868,7 +868,7 @@ describe("runCliAgent reliability", () => {
       });
       const llmInputCalls = hookRunner.runLlmInput.mock.calls as unknown as Array<Array<unknown>>;
       const llmInputEvent = llmInputCalls[0]?.[0] as { historyMessages: unknown[] } | undefined;
-      expect(llmInputEvent).toBeDefined();
+      expect(llmInputEvent).toMatchObject({ historyMessages: expect.any(Array) });
       expect(llmInputEvent?.historyMessages).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES);
       expect(llmInputEvent?.historyMessages[0]).toMatchObject({
         role: "user",

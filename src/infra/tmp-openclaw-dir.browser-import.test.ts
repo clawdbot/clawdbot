@@ -49,11 +49,9 @@ describe("tmp-openclaw-dir browser-safe import", () => {
     });
 
     const bundledSource = bundled.outputFiles[0]?.text;
-    expect(bundledSource).toBeTruthy();
+    expect(bundledSource).toContain(resultKey);
 
-    await import(
-      `data:text/javascript;base64,${Buffer.from(bundledSource ?? "").toString("base64")}`
-    );
+    await import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString("base64")}`);
 
     try {
       expect((globalThis as Record<string, unknown>)[resultKey]).toEqual({

@@ -319,7 +319,7 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
   }
   return new Promise((resolve, reject) => {
     const child = spawn(
-      "/usr/bin/scp",
+      "scp",
       [
         "-o",
         "BatchMode=yes",

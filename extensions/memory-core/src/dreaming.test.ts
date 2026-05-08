@@ -941,19 +941,18 @@ describe("gateway startup reconciliation", () => {
       const managed = startupHarness.jobs.find((job) =>
         job.description?.includes("[managed-by=memory-core.short-term-promotion]"),
       );
-      expect(managed).toBeDefined();
+      if (!managed) {
+        throw new Error("expected managed short-term promotion dreaming job");
+      }
+      expect(managed.description).toContain("[managed-by=memory-core.short-term-promotion]");
 
-      const reloadedHarness = createCronHarness(
-        managed
-          ? [
-              {
-                ...managed,
-                schedule: managed.schedule ? { ...managed.schedule } : undefined,
-                payload: managed.payload ? { ...managed.payload } : undefined,
-              },
-            ]
-          : [],
-      );
+      const reloadedHarness = createCronHarness([
+        {
+          ...managed,
+          schedule: managed.schedule ? { ...managed.schedule } : undefined,
+          payload: managed.payload ? { ...managed.payload } : undefined,
+        },
+      ]);
       cronRef.current = reloadedHarness.cron;
       api.config = {
         plugins: {

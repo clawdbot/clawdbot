@@ -14,7 +14,7 @@ generation, video generation, web fetch, web search, agent tools, or any
 combination.
 
 You do not need to add your plugin to the OpenClaw repository. Publish to
-[ClawHub](/tools/clawhub) and users install with
+[ClawHub](/clawhub) and users install with
 `openclaw plugins install clawhub:<package-name>`. Bare package specs still
 install from npm during the launch cutover.
 

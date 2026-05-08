@@ -39,9 +39,11 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     const updateLastRoute = getRecordedUpdateLastRoute(0) as
       | { threadId?: string; to?: string }
       | undefined;
-    expect(updateLastRoute).toBeDefined();
-    expect(updateLastRoute?.to).toBe(params.to);
-    expect(updateLastRoute?.threadId).toBe(params.threadId);
+    if (!updateLastRoute) {
+      throw new Error("expected recorded Telegram route");
+    }
+    expect(updateLastRoute.to).toBe(params.to);
+    expect(updateLastRoute.threadId).toBe(params.threadId);
   }
 
   afterEach(() => {

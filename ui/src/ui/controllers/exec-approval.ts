@@ -9,6 +9,10 @@ export type ExecApprovalRequestPayload = {
   agentId?: string | null;
   resolvedPath?: string | null;
   sessionKey?: string | null;
+  commandSpans?: readonly {
+    startIndex: number;
+    endIndex: number;
+  }[];
 };
 
 export type ExecApprovalRequest = {
@@ -34,6 +38,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function parseCommandSpans(
+  value: unknown,
+  commandLength: number,
+):
+  | {
+      startIndex: number;
+      endIndex: number;
+    }[]
+  | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const spans = value.filter(
+    (
+      item,
+    ): item is {
+      startIndex: number;
+      endIndex: number;
+    } => {
+      if (!isRecord(item)) {
+        return false;
+      }
+      const { startIndex, endIndex } = item;
+      return (
+        Number.isSafeInteger(startIndex) &&
+        Number.isSafeInteger(endIndex) &&
+        typeof startIndex === "number" &&
+        typeof endIndex === "number" &&
+        startIndex >= 0 &&
+        endIndex > startIndex &&
+        endIndex <= commandLength
+      );
+    },
+  );
+  return spans.length > 0 ? spans : undefined;
+}
+
 export function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
   if (!isRecord(payload)) {
     return null;
@@ -43,8 +84,8 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
   if (!id || !isRecord(request)) {
     return null;
   }
-  const command = normalizeOptionalString(request.command) ?? "";
-  if (!command) {
+  const command = typeof request.command === "string" ? request.command : "";
+  if (command.trim().length === 0) {
     return null;
   }
   const createdAtMs = typeof payload.createdAtMs === "number" ? payload.createdAtMs : 0;
@@ -64,6 +105,7 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
       agentId: typeof request.agentId === "string" ? request.agentId : null,
       resolvedPath: typeof request.resolvedPath === "string" ? request.resolvedPath : null,
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
+      commandSpans: parseCommandSpans(request.commandSpans, command.length),
     },
     createdAtMs,
     expiresAtMs,

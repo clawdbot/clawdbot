@@ -459,7 +459,25 @@ function trimDreamingEntries(
   entries: DoctorMemoryDreamingEntryPayload[],
   compare: (a: DoctorMemoryDreamingEntryPayload, b: DoctorMemoryDreamingEntryPayload) => number,
 ): DoctorMemoryDreamingEntryPayload[] {
-  return entries.toSorted(compare).slice(0, DREAMING_ENTRY_LIST_LIMIT);
+  const selected: DoctorMemoryDreamingEntryPayload[] = [];
+  for (const entry of entries) {
+    let insertAt = selected.length;
+    for (let index = 0; index < selected.length; index += 1) {
+      if (compare(entry, selected[index]) < 0) {
+        insertAt = index;
+        break;
+      }
+    }
+    if (insertAt < DREAMING_ENTRY_LIST_LIMIT) {
+      selected.splice(insertAt, 0, entry);
+      if (selected.length > DREAMING_ENTRY_LIST_LIMIT) {
+        selected.pop();
+      }
+    } else if (selected.length < DREAMING_ENTRY_LIST_LIMIT) {
+      selected.push(entry);
+    }
+  }
+  return selected;
 }
 
 async function loadDreamingStoreStats(

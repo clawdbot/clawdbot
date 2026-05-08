@@ -34,6 +34,43 @@ type AmazonBedrockPluginConfig = {
   guardrail?: GuardrailConfig;
 };
 
+const BEDROCK_SERVICE_TIER_VALUES = ["flex", "priority", "default", "reserved"] as const;
+type BedrockServiceTier = (typeof BEDROCK_SERVICE_TIER_VALUES)[number];
+
+function isBedrockServiceTier(value: string): value is BedrockServiceTier {
+  return BEDROCK_SERVICE_TIER_VALUES.some((tier) => tier === value);
+}
+
+function resolveBedrockServiceTier(
+  extraParams: Record<string, unknown> | undefined,
+  warn: (message: string) => void,
+): BedrockServiceTier | undefined {
+  const raw = extraParams?.serviceTier ?? extraParams?.service_tier;
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (isBedrockServiceTier(normalized)) {
+    return normalized;
+  }
+  warn(`ignoring invalid Bedrock service_tier param: ${raw}`);
+  return undefined;
+}
+
+function createBedrockServiceTierWrapper(
+  underlying: StreamFn,
+  serviceTier: BedrockServiceTier,
+): StreamFn {
+  return (model, context, options) => {
+    if (model.api !== "bedrock-converse-stream") {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      payloadObj.serviceTier ??= { type: serviceTier };
+    });
+  };
+}
+
 function createGuardrailWrapStreamFn(
   innerWrapStreamFn: (ctx: { modelId: string; streamFn?: StreamFn }) => StreamFn | null | undefined,
   guardrailConfig: GuardrailConfig,
@@ -484,13 +521,20 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     },
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
     ...anthropicByModelReplayHooks,
-    wrapStreamFn: ({ modelId, config, model, streamFn, thinkingLevel }) => {
+    wrapStreamFn: ({ modelId, config, model, streamFn, thinkingLevel, extraParams }) => {
       const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;
-      // Apply cache + guardrail wrapping.
-      const wrapped =
-        currentGuardrail?.guardrailIdentifier && currentGuardrail?.guardrailVersion
+      let wrapped =
+        (currentGuardrail?.guardrailIdentifier && currentGuardrail?.guardrailVersion
           ? createGuardrailWrapStreamFn(baseWrapStreamFn, currentGuardrail)({ modelId, streamFn })
-          : baseWrapStreamFn({ modelId, streamFn });
+          : baseWrapStreamFn({ modelId, streamFn })) ?? undefined;
+
+      const serviceTier = resolveBedrockServiceTier(extraParams, (message) =>
+        api.logger.warn(message),
+      );
+      if (serviceTier && wrapped) {
+        wrapped = createBedrockServiceTierWrapper(wrapped, serviceTier);
+      }
+
       const region = resolveBedrockRegion(config) ?? extractRegionFromBaseUrl(model?.baseUrl);
       const mayNeedCacheInjection =
         isBedrockAppInferenceProfile(modelId) && !piAiWouldInjectCachePoints(modelId);

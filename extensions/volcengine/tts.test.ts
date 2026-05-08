@@ -111,7 +111,7 @@ describe("Volcengine speech provider", () => {
     const voices = await provider.listVoices!({});
     expect(voices.length).toBeGreaterThan(0);
     expect(voices[0]).toMatchObject({ locale: "en-US" });
-    expect(voices[0].gender).toBeDefined();
+    expect(voices[0].gender).toMatch(/^(female|male)$/u);
   });
 
   it("sends the documented Seed Speech API key payload and returns voice-note Opus metadata", async () => {

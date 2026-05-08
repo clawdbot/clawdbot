@@ -4,7 +4,10 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
-import { resolveContextEngine } from "../../context-engine/registry.js";
+import {
+  resolveContextEngine,
+  resolveContextEngineOwnerPluginId,
+} from "../../context-engine/registry.js";
 import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
@@ -45,6 +48,7 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
@@ -82,11 +86,13 @@ import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+import { resolveSessionSuspensionReason, suspendSession } from "../session-suspension.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
+import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { hasMessagingToolDeliveryEvidence } from "./delivery-evidence.js";
 import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
@@ -495,6 +501,14 @@ export async function runEmbeddedPiAgent(
       modelId = hookSelection.modelId;
       const legacyBeforeAgentStartResult = hookSelection.legacyBeforeAgentStartResult;
       startupStages.mark("hooks");
+      await ensureSelectedAgentHarnessPlugin({
+        provider,
+        modelId,
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        workspaceDir: resolvedWorkspace,
+      });
       const agentHarness = selectAgentHarness({
         provider,
         modelId,
@@ -947,6 +961,7 @@ export async function runEmbeddedPiAgent(
         agentDir,
         workspaceDir: resolvedWorkspace,
       });
+      const contextEnginePluginId = resolveContextEngineOwnerPluginId(contextEngine);
       startupStages.mark("context-engine");
       try {
         const resolveActiveHookContext = () => ({
@@ -1481,6 +1496,13 @@ export async function runEmbeddedPiAgent(
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                   }),
+                  ...resolveContextEngineCapabilities({
+                    config: params.config,
+                    sessionKey: params.sessionKey,
+                    agentId: sessionAgentId,
+                    contextEnginePluginId,
+                    purpose: "context-engine.timeout-compaction",
+                  }),
                   onCompactionHookMessages,
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
@@ -1639,6 +1661,13 @@ export async function runEmbeddedPiAgent(
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                   }),
+                  ...resolveContextEngineCapabilities({
+                    config: params.config,
+                    sessionKey: params.sessionKey,
+                    agentId: sessionAgentId,
+                    contextEnginePluginId,
+                    purpose: "context-engine.overflow-compaction",
+                  }),
                   onCompactionHookMessages,
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
@@ -1672,6 +1701,7 @@ export async function runEmbeddedPiAgent(
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,
                     config: params.config,
+                    agentId: sessionAgentId,
                   });
                 }
               } catch (compactErr) {
@@ -1878,6 +1908,17 @@ export async function runEmbeddedPiAgent(
             const promptErrorDetails = normalizedPromptFailover
               ? describeFailoverError(normalizedPromptFailover)
               : describeFailoverError(promptError);
+            if (normalizedPromptFailover?.suspend) {
+              void suspendSession({
+                cfg: params.config,
+                agentDir,
+                sessionId: activeSessionId ?? params.sessionId,
+                laneId: globalLane,
+                reason: resolveSessionSuspensionReason(normalizedPromptFailover.reason),
+                failedProvider: normalizedPromptFailover.provider ?? provider,
+                failedModel: normalizedPromptFailover.model ?? modelId,
+              });
+            }
             const errorText = promptErrorDetails.message || formatErrorMessage(promptError);
             if (await maybeRefreshRuntimeAuthForAuthError(errorText, runtimeAuthRetry)) {
               authRetryPending = true;
@@ -2248,6 +2289,17 @@ export async function runEmbeddedPiAgent(
                 ? { status: assistantFailoverOutcome.error.status }
                 : {}),
             });
+            if (assistantFailoverOutcome.error.suspend) {
+              void suspendSession({
+                cfg: params.config,
+                agentDir,
+                sessionId: activeSessionId ?? params.sessionId,
+                laneId: globalLane,
+                reason: resolveSessionSuspensionReason(assistantFailoverOutcome.error.reason),
+                failedProvider: assistantFailoverOutcome.error.provider ?? provider,
+                failedModel: assistantFailoverOutcome.error.model ?? modelId,
+              });
+            }
             throw assistantFailoverOutcome.error;
           }
           const usageMeta = buildUsageAgentMetaFields({

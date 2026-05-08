@@ -50,6 +50,16 @@ async function waitForPluginEventHandlers(): Promise<void> {
   });
 }
 
+function requireFirstCommandRegistration(
+  registry: ReturnType<typeof createPluginRegistryFixture>["registry"]["registry"],
+) {
+  const registration = registry.commands[0];
+  if (!registration) {
+    throw new Error("expected first plugin command registration");
+  }
+  return registration;
+}
+
 describe("host-hook fixture plugin contract", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -1328,8 +1338,7 @@ describe("host-hook fixture plugin contract", () => {
         });
       },
     });
-    const registration = registry.registry.commands[0];
-    expect(registration).toBeTruthy();
+    const registration = requireFirstCommandRegistration(registry.registry);
     const command = {
       ...registration.command,
       pluginId: registration.pluginId,
@@ -1706,8 +1715,8 @@ describe("host-hook fixture plugin contract", () => {
 
     expect(parityMap).toHaveLength(8);
     for (const [entryPoint, seam] of parityMap) {
-      expect(entryPoint).toBeTruthy();
-      expect(seam).toBeTruthy();
+      expect(entryPoint).not.toBe("");
+      expect(seam).not.toBe("");
       expect(seam).not.toContain("Plan Mode");
     }
   });

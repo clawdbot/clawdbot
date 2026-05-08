@@ -72,9 +72,8 @@ describe("telegram doctor", () => {
 
   it("normalizes legacy telegram streaming aliases into the nested streaming shape", () => {
     const normalize = telegramDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
     if (!normalize) {
-      return;
+      throw new Error("expected telegram compatibility normalizer");
     }
 
     const result = normalize({
@@ -134,9 +133,8 @@ describe("telegram doctor", () => {
 
   it("does not duplicate streaming.mode change messages when streamMode wins over boolean streaming", () => {
     const normalize = telegramDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
     if (!normalize) {
-      return;
+      throw new Error("expected telegram compatibility normalizer");
     }
 
     const result = normalize({

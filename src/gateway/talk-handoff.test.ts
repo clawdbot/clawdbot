@@ -23,7 +23,7 @@ describe("talk handoff store", () => {
       channel: "discord",
       target: "dm:123",
       provider: "openai",
-      model: "gpt-realtime-1.5",
+      model: "gpt-realtime-2",
       voice: "alloy",
       ttlMs: 5000,
     });
@@ -37,7 +37,7 @@ describe("talk handoff store", () => {
       channel: "discord",
       target: "dm:123",
       provider: "openai",
-      model: "gpt-realtime-1.5",
+      model: "gpt-realtime-2",
       voice: "alloy",
       mode: "stt-tts",
       transport: "managed-room",
@@ -56,9 +56,11 @@ describe("talk handoff store", () => {
       },
     });
     expect(handoff).not.toHaveProperty("tokenHash");
-    expect(record?.tokenHash).toBeTruthy();
-    expect(record?.tokenHash).not.toBe(handoff.token);
-    expect(record && verifyTalkHandoffToken(record, handoff.token)).toBe(true);
+    if (record === undefined) {
+      throw new Error("expected stored talk handoff record");
+    }
+    expect(record.tokenHash).not.toBe(handoff.token);
+    expect(verifyTalkHandoffToken(record, handoff.token)).toBe(true);
 
     vi.advanceTimersByTime(5001);
     expect(getTalkHandoff(handoff.id)).toBeUndefined();

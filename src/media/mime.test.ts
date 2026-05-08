@@ -8,6 +8,7 @@ import {
   imageMimeFromFormat,
   isAudioFileName,
   kindFromMime,
+  mimeTypeFromFilePath,
   normalizeMimeType,
   sliceMimeSniffBuffer,
 } from "./mime.js";
@@ -122,7 +123,7 @@ describe("mime detection", () => {
     // CAF files start with the four-byte ASCII tag "caff". `file-type` v22 has
     // no native CAF detector, so without the manual magic-byte fallback the
     // host-local-media validator drops `afconvert`-produced voice-memo CAFs as
-    // unknown binary blobs. Regression guard for the BlueBubbles voice-memo
+    // unknown binary blobs. Regression guard for the iMessage voice-memo
     // pre-transcode path.
     const buf = Buffer.concat([Buffer.from("caff", "ascii"), Buffer.alloc(60)]);
     const mime = await detectMime({ buffer: buf });
@@ -144,6 +145,26 @@ describe("mime detection", () => {
   });
 });
 
+describe("mimeTypeFromFilePath", () => {
+  it.each([
+    { filePath: "image.bmp", expected: "image/bmp" },
+    { filePath: "photo.jpg", expected: "image/jpeg" },
+    { filePath: "photo.JPG", expected: "image/jpeg" },
+    { filePath: "voice.mp3", expected: "audio/mpeg" },
+    { filePath: "voice.wav", expected: "audio/wav" },
+    { filePath: "clip.avi", expected: "video/x-msvideo" },
+    { filePath: "clip.mkv", expected: "video/x-matroska" },
+    { filePath: "clip.webm", expected: "video/webm" },
+    { filePath: "clip.flv", expected: "video/x-flv" },
+    { filePath: "clip.wmv", expected: "video/x-ms-wmv" },
+    { filePath: "debug.log", expected: "text/plain" },
+    { filePath: "page.xml", expected: "text/xml" },
+    { filePath: "unknown.bin", expected: undefined },
+  ] as const)("maps $filePath", ({ filePath, expected }) => {
+    expect(mimeTypeFromFilePath(filePath)).toBe(expected);
+  });
+});
+
 describe("extensionForMime", () => {
   function expectMimeExtensionCase(
     mime: Parameters<typeof extensionForMime>[0],
@@ -154,15 +175,26 @@ describe("extensionForMime", () => {
 
   it.each([
     { mime: "image/jpeg", expected: ".jpg" },
+    { mime: "image/jpg", expected: ".jpg" },
+    { mime: "image/bmp", expected: ".bmp" },
     { mime: "image/png", expected: ".png" },
+    { mime: "image/svg+xml", expected: ".svg" },
     { mime: "image/webp", expected: ".webp" },
     { mime: "image/gif", expected: ".gif" },
     { mime: "image/heic", expected: ".heic" },
     { mime: "audio/mpeg", expected: ".mp3" },
+    { mime: "audio/mp3", expected: ".mp3" },
     { mime: "audio/ogg", expected: ".ogg" },
+    { mime: "audio/x-wav", expected: ".wav" },
+    { mime: "audio/webm", expected: ".webm" },
     { mime: "audio/x-m4a", expected: ".m4a" },
     { mime: "audio/mp4", expected: ".m4a" },
+    { mime: "video/x-msvideo", expected: ".avi" },
     { mime: "video/mp4", expected: ".mp4" },
+    { mime: "video/x-matroska", expected: ".mkv" },
+    { mime: "video/webm", expected: ".webm" },
+    { mime: "video/x-flv", expected: ".flv" },
+    { mime: "video/x-ms-wmv", expected: ".wmv" },
     { mime: "video/quicktime", expected: ".mov" },
     { mime: "application/pdf", expected: ".pdf" },
     { mime: "text/plain", expected: ".txt" },

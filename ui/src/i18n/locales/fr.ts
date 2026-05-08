@@ -711,6 +711,17 @@ export const fr: TranslationMap = {
       today: "Aujourd’hui",
       last7d: "7 j",
       last30d: "30 j",
+      last90d: "90 j",
+      last1y: "1 an",
+      all: "Tous",
+    },
+    scope: {
+      instance: "Instance actuelle",
+      instanceHint: "Afficher uniquement l’id de session actif pour chaque session logique.",
+      family: "Lignée historique",
+      familyHint:
+        "Regrouper les ids de session connus adossés à des transcriptions ayant fait l’objet d’une rotation.",
+      familyIncluded: "La lignée historique inclut {count} instances de session.",
     },
     filters: {
       title: "Filtres",
@@ -934,6 +945,101 @@ export const fr: TranslationMap = {
     showPassword: "Afficher le mot de passe",
     hidePassword: "Masquer le mot de passe",
     togglePasswordVisibility: "Basculer la visibilité du mot de passe",
+    failure: {
+      rawError: "Erreur brute",
+      docsAuth: "Docs d’authentification Control UI",
+      docsPairing: "Docs d’appairage des appareils",
+      docsInsecure: "Docs HTTP non sécurisé",
+      authRequired: {
+        title: "Authentification requise",
+        summary:
+          "Le Gateway est joignable, mais il lui faut un jeton ou un mot de passe correspondant avant que ce navigateur puisse se connecter.",
+        stepPaste:
+          "Collez le jeton de openclaw dashboard --no-open ou saisissez le mot de passe configuré.",
+        stepGenerate:
+          "Si aucun jeton n’est configuré, exécutez openclaw doctor --generate-gateway-token sur l’hôte Gateway.",
+        stepConnect: "Cliquez de nouveau sur Connect après avoir mis à jour l’identifiant.",
+      },
+      authFailed: {
+        title: "L’authentification ne correspond pas",
+        summary:
+          "L’identifiant fourni a été refusé. La cause la plus courante est un jeton obsolète ou copié depuis une autre URL Gateway.",
+        stepDashboard:
+          "Exécutez openclaw dashboard --no-open et ouvrez la nouvelle URL ou collez son jeton.",
+        stepReplace:
+          "Remplacez les valeurs de jeton/mot de passe obsolètes ; ne réutilisez pas un jeton provenant d’une autre URL Gateway.",
+        stepMode:
+          "Utilisez un seul mode d’authentification correspondant à la fois : jeton gateway pour le mode jeton, mot de passe pour le mode mot de passe.",
+      },
+      rateLimited: {
+        title: "Trop de tentatives échouées",
+        summary:
+          "Le Gateway limite temporairement les tentatives d’authentification pour ce client.",
+        stepStop: "Arrêtez de réessayer depuis cet onglet pendant un moment.",
+        stepWait:
+          "Attendez que le limiteur d’authentification se calme, puis reconnectez-vous avec l’identifiant corrigé.",
+        stepCheckClients:
+          "Si cet hôte est partagé, vérifiez que d’autres clients ne répètent pas de mauvais essais.",
+      },
+      pairing: {
+        title: "Appairage de l’appareil requis",
+        scopeTitle: "Mise à niveau de scope en attente",
+        roleTitle: "Mise à niveau du rôle en attente",
+        metadataTitle: "Actualisation de l’appareil en attente",
+        summary:
+          "Ce navigateur nécessite une approbation unique de l’hôte Gateway avant de pouvoir utiliser Control UI.",
+        upgradeSummary:
+          "Ce navigateur est déjà connu, mais l’accès demandé a changé et nécessite une nouvelle approbation.",
+        stepList: "Exécutez openclaw devices list sur l’hôte Gateway.",
+        stepApproveId: "Approuvez cette demande : openclaw devices approve {requestId}.",
+        stepApprove: "Approuvez la demande navigateur/appareil en attente depuis cette liste.",
+        stepReconnect: "Reconnectez-vous après la fin de l’approbation.",
+      },
+      insecure: {
+        title: "Contexte de navigateur sécurisé requis",
+        summary:
+          "Cette page s’exécute en HTTP simple, le navigateur ne peut donc pas créer l’identité d’appareil attendue par le Gateway.",
+        stepHttps:
+          "Utilisez HTTPS/Tailscale Serve, ou ouvrez http://127.0.0.1:18789 sur l’hôte Gateway.",
+        stepLocalCompat:
+          "Pour la compatibilité locale en mode jeton uniquement, définissez gateway.controlUi.allowInsecureAuth: true.",
+        stepAvoidDisable:
+          "Évitez de désactiver l’authentification des appareils pour l’accès HTTP distant.",
+      },
+      origin: {
+        title: "Origine du navigateur non autorisée",
+        summary:
+          "Le Gateway a rejeté l’origine de cette page avant d’accepter la connexion Control UI.",
+        stepAllowedOrigins:
+          "Ajoutez cette origine de navigateur à gateway.controlUi.allowedOrigins.",
+        stepFullOrigin:
+          "Utilisez des origines complètes comme http://localhost:5173, pas des motifs wildcard.",
+        stepRestart:
+          "Redémarrez ou rechargez le Gateway après avoir modifié les origines autorisées.",
+      },
+      protocol: {
+        title: "Incompatibilité de protocole",
+        summary:
+          "La Control UI servie et le Gateway en cours d’exécution ne sont pas d’accord sur le protocole de connexion pris en charge.",
+        stepDashboard:
+          "Rouvrez le dashboard servi avec openclaw dashboard afin que l’UI et le Gateway viennent de la même installation.",
+        stepDevUi:
+          "Si vous utilisez pnpm ui:dev, reconstruisez ou redémarrez l’UI de développement avec le checkout actuel.",
+        stepRestart:
+          "Redémarrez le Gateway après la mise à jour d’OpenClaw afin qu’il serve le protocole actuel.",
+      },
+      network: {
+        title: "Connexion impossible",
+        summary:
+          "Le navigateur n’a pas pu terminer la connexion au Gateway. Vérifiez la cible et le transport avant de réessayer les identifiants.",
+        stepGateway:
+          "Confirmez que le Gateway fonctionne avec openclaw status ou openclaw gateway run.",
+        stepUrl:
+          "Vérifiez l’URL WebSocket et utilisez wss:// lorsque le Gateway est derrière HTTPS/Tailscale Serve.",
+        stepDashboard:
+          "Rouvrez le dashboard avec openclaw dashboard --no-open pour recopier l’URL actuelle et les détails d’authentification.",
+      },
+    },
   },
   chat: {
     disconnected: "Déconnecté du Gateway.",

@@ -12,8 +12,8 @@ describe("qa coverage report", () => {
     expect(inventory.secondaryCoverageIdCount).toBeGreaterThan(0);
     expect(inventory.overlappingCoverage.length).toBeGreaterThan(0);
     expect(inventory.missingCoverage).toEqual([]);
-    expect(inventory.byTheme.memory.some((feature) => feature.id === "memory.recall")).toBe(true);
-    expect(inventory.bySurface.memory.some((feature) => feature.id === "memory.recall")).toBe(true);
+    expect(inventory.byTheme.memory.map((feature) => feature.id)).toContain("memory.recall");
+    expect(inventory.bySurface.memory.map((feature) => feature.id)).toContain("memory.recall");
   });
 
   it("renders a compact markdown inventory", () => {

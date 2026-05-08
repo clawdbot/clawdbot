@@ -236,6 +236,14 @@ function ownerParams(): Parameters<typeof runPreparedReply>[0] {
   return params;
 }
 
+function requireRunReplyAgentCall(index = 0) {
+  const call = vi.mocked(runReplyAgent).mock.calls[index]?.[0];
+  if (!call) {
+    throw new Error(`runReplyAgent call ${index} missing`);
+  }
+  return call;
+}
+
 describe("runPreparedReply media-only handling", () => {
   beforeAll(async () => {
     ({ runPreparedReply } = await import("./get-reply-run.js"));
@@ -454,11 +462,10 @@ describe("runPreparedReply media-only handling", () => {
     const result = await runPreparedReply(baseParams());
     expect(result).toEqual({ text: "ok" });
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
-    expect(call).toBeTruthy();
-    expect(call?.followupRun.prompt).toContain("[Thread history - for context]");
-    expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
-    expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.prompt).toContain("[Thread history - for context]");
+    expect(call.followupRun.prompt).toContain("Earlier message in this thread");
+    expect(call.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
   it("keeps thread history context on follow-up turns", async () => {
@@ -469,10 +476,9 @@ describe("runPreparedReply media-only handling", () => {
     );
     expect(result).toEqual({ text: "ok" });
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
-    expect(call).toBeTruthy();
-    expect(call?.followupRun.prompt).toContain("[Thread history - for context]");
-    expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.prompt).toContain("[Thread history - for context]");
+    expect(call.followupRun.prompt).toContain("Earlier message in this thread");
   });
 
   it("falls back to thread starter context on follow-up turns when history is absent", async () => {
@@ -504,10 +510,9 @@ describe("runPreparedReply media-only handling", () => {
     );
     expect(result).toEqual({ text: "ok" });
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
-    expect(call).toBeTruthy();
-    expect(call?.followupRun.prompt).toContain("[Thread starter - for context]");
-    expect(call?.followupRun.prompt).toContain("starter message");
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.prompt).toContain("[Thread starter - for context]");
+    expect(call.followupRun.prompt).toContain("starter message");
   });
 
   it("prefers thread history over thread starter on follow-up turns", async () => {
@@ -539,10 +544,9 @@ describe("runPreparedReply media-only handling", () => {
     );
     expect(result).toEqual({ text: "ok" });
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
-    expect(call).toBeTruthy();
-    expect(call?.followupRun.prompt).toContain("[Thread history - for context]");
-    expect(call?.followupRun.prompt).not.toContain("[Thread starter - for context]");
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.prompt).toContain("[Thread history - for context]");
+    expect(call.followupRun.prompt).not.toContain("[Thread starter - for context]");
   });
 
   it("does not duplicate thread starter text with a plain-text prelude", async () => {
@@ -580,10 +584,9 @@ describe("runPreparedReply media-only handling", () => {
     );
     expect(result).toEqual({ text: "ok" });
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
-    expect(call).toBeTruthy();
-    expect(call?.followupRun.prompt).toContain("Thread starter (untrusted, for context):");
-    expect(call?.followupRun.prompt).not.toContain("[Thread starter - for context]");
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.prompt).toContain("Thread starter (untrusted, for context):");
+    expect(call.followupRun.prompt).not.toContain("[Thread starter - for context]");
   });
 
   it("returns the empty-body reply when there is no text and no media", async () => {
@@ -1448,10 +1451,9 @@ describe("runPreparedReply media-only handling", () => {
 
     await runPreparedReply(baseParams());
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
-    expect(call).toBeTruthy();
-    expect(call?.commandBody).toContain("System: [t] Model switched.");
-    expect(call?.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
+    const call = requireRunReplyAgentCall();
+    expect(call.commandBody).toContain("System: [t] Model switched.");
+    expect(call.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
   });
 
   it("downgrades sender ownership when drained system events include untrusted lines", async () => {
@@ -1502,15 +1504,14 @@ describe("runPreparedReply media-only handling", () => {
       }),
     );
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
-    expect(call).toBeTruthy();
+    const call = requireRunReplyAgentCall();
     // Think hint extracted before events arrived — level must be "low", not the model default.
-    expect(call?.followupRun.run.thinkLevel).toBe("low");
+    expect(call.followupRun.run.thinkLevel).toBe("low");
     // The stripped user text (no "low" token) must still appear after the event block.
-    expect(call?.commandBody).toContain("tell me about cats");
-    expect(call?.commandBody).not.toMatch(/^low\b/);
+    expect(call.commandBody).toContain("tell me about cats");
+    expect(call.commandBody).not.toMatch(/^low\b/);
     // System events are still present in the body.
-    expect(call?.commandBody).toContain("System: [t] Node connected.");
+    expect(call.commandBody).toContain("System: [t] Node connected.");
   });
 
   it("carries system events into followupRun.prompt for deferred turns", async () => {
@@ -1520,9 +1521,8 @@ describe("runPreparedReply media-only handling", () => {
 
     await runPreparedReply(baseParams());
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
-    expect(call).toBeTruthy();
-    expect(call?.followupRun.prompt).toContain("System: [t] Node connected.");
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.prompt).toContain("System: [t] Node connected.");
   });
 
   it("does not strip think-hint token from deferred queue body", async () => {
@@ -1541,9 +1541,8 @@ describe("runPreparedReply media-only handling", () => {
       }),
     );
 
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
-    expect(call).toBeTruthy();
+    const call = requireRunReplyAgentCall();
     // Queue body (used by steer mode) must keep the full original text.
-    expect(call?.followupRun.prompt).toContain("low steer this conversation");
+    expect(call.followupRun.prompt).toContain("low steer this conversation");
   });
 });

@@ -608,8 +608,13 @@ describe("OpenAIWebSocketManager", () => {
         await vi.advanceTimersByTimeAsync(20);
       }
 
-      const maxRetryError = errors.find((e) => e.message.includes("max reconnect retries"));
-      expect(maxRetryError).toBeDefined();
+      expect(errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: expect.stringContaining("max reconnect retries"),
+          }),
+        ]),
+      );
     });
 
     it("does not double-count retries when error and close both fire on a reconnect attempt", async () => {
@@ -655,8 +660,13 @@ describe("OpenAIWebSocketManager", () => {
       sock4.simulateClose(1006, "Connection failed");
       await vi.advanceTimersByTimeAsync(10);
 
-      const maxRetryError = errors.find((e) => e.message.includes("max reconnect retries"));
-      expect(maxRetryError).toBeDefined();
+      expect(errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: expect.stringContaining("max reconnect retries"),
+          }),
+        ]),
+      );
     });
 
     it("resets retry count after a successful reconnect", async () => {

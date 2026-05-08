@@ -1,3 +1,5 @@
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+
 type QaBrowserGateway = {
   call: (
     method: string,
@@ -178,10 +180,6 @@ export async function qaBrowserAct<T = unknown>(
 
 function isQaBrowserReady(status: QaBrowserStatus | null | undefined) {
   return status?.enabled === true && status?.running === true && status?.cdpReady === true;
-}
-
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 export async function waitForQaBrowserReady<T extends QaBrowserStatus = QaBrowserStatus>(

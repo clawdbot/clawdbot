@@ -500,7 +500,6 @@ describe("gateway server agent", () => {
         string,
         { sessionId?: string }
       >;
-      expect(store["agent:main:main"]?.sessionId).toBeDefined();
       expect(store["agent:main:main"]?.sessionId).toBe("sess-main-before-write-reset");
       expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
 
@@ -530,7 +529,7 @@ describe("gateway server agent", () => {
     if (!ackPayload || !finalPayload) {
       throw new Error("missing websocket payload");
     }
-    expect(ackPayload.runId).toBeDefined();
+    expect(ackPayload.runId).toEqual(expect.any(String));
     expect(finalPayload.runId).toBe(ackPayload.runId);
     expect(finalPayload.status).toBe("ok");
   });

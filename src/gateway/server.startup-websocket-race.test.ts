@@ -92,7 +92,6 @@ describe("gateway startup websocket readiness", () => {
 
       machineNameDelay.release();
       server = await startup;
-      expect(server).toBeDefined();
     } finally {
       machineNameDelay.release();
       if (server) {
@@ -124,8 +123,6 @@ describe("gateway startup websocket readiness", () => {
         timeoutMs: 5_000,
         timeoutMessage: "expected websocket connect to succeed immediately after startup",
       });
-
-      expect(client).toBeDefined();
     } finally {
       if (client) {
         await disconnectGatewayClient(client);

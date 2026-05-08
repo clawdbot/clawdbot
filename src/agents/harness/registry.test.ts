@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearAgentHarnesses,
   disposeRegisteredAgentHarnesses,
@@ -43,6 +44,20 @@ function makeHarness(
       throw new Error("not used");
     },
   };
+}
+
+function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        [provider]: {
+          baseUrl: "https://api.openclaw.test/v1",
+          agentRuntime: { id: runtime },
+          models: [],
+        },
+      },
+    },
+  } as OpenClawConfig;
 }
 
 describe("agent harness registry", () => {
@@ -132,21 +147,31 @@ describe("agent harness registry", () => {
     expect(selectAgentHarness({ provider: "codex", modelId: "gpt-5.4" }).id).toBe("plugin-harness");
   });
 
-  it("honors explicit PI mode", () => {
-    process.env.OPENCLAW_AGENT_RUNTIME = "pi";
+  it("honors explicit provider PI runtime policy", () => {
     registerAgentHarness(makeHarness("plugin-harness", { priority: 200 }), {
       ownerPluginId: "plugin-a",
     });
 
-    expect(selectAgentHarness({ provider: "codex", modelId: "gpt-5.4" }).id).toBe("pi");
+    expect(
+      selectAgentHarness({
+        provider: "codex",
+        modelId: "gpt-5.4",
+        config: providerRuntimeConfig("codex", "pi"),
+      }).id,
+    ).toBe("pi");
   });
 
-  it("honors explicit plugin harness mode when the plugin harness is registered", () => {
-    process.env.OPENCLAW_AGENT_RUNTIME = "custom";
+  it("honors explicit provider plugin runtime policy when the plugin harness is registered", () => {
     registerAgentHarness(makeHarness("custom", { providers: ["custom-provider"] }), {
       ownerPluginId: "plugin-a",
     });
 
-    expect(selectAgentHarness({ provider: "anthropic", modelId: "sonnet-4.6" }).id).toBe("custom");
+    expect(
+      selectAgentHarness({
+        provider: "anthropic",
+        modelId: "sonnet-4.6",
+        config: providerRuntimeConfig("anthropic", "custom"),
+      }).id,
+    ).toBe("custom");
   });
 });

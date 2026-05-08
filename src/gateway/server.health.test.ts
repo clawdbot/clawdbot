@@ -167,7 +167,7 @@ describe("gateway server health/presence", () => {
     await localHarness.close();
     const evt = await shutdownP;
     const evtPayload = evt.payload as { reason?: unknown } | undefined;
-    expect(evtPayload?.reason).toBeDefined();
+    expect(evtPayload?.reason).toEqual(expect.any(String));
   });
 
   test(

@@ -509,10 +509,10 @@ describe("subagent registry lifecycle error grace", () => {
     const run = mod
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
       .find((candidate) => candidate.runId === "run-capped");
-    expect(run).toBeDefined();
     if (!run) {
       throw new Error("expected capped run to exist");
     }
+    expect(run.runId).toBe("run-capped");
     expect(typeof run.frozenResultText).toBe("string");
     expect(run.frozenResultText).toContain("[truncated: frozen completion output exceeded 100KB");
     expect(run.frozenResultCapturedAt).toBeTypeOf("number");

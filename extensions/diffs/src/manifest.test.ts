@@ -11,6 +11,6 @@ describe("diffs package manifest", () => {
       fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
     ) as DiffsPackageManifest;
 
-    expect(packageJson.dependencies?.["@pierre/diffs"]).toBeDefined();
+    expect(packageJson.dependencies).toHaveProperty("@pierre/diffs");
   });
 });

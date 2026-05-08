@@ -9,10 +9,12 @@ const formatAriaSnapshot = vi.fn();
 
 vi.mock("./pw-session.js", () => ({
   assertPageNavigationCompletedSafely: vi.fn(),
+  closeBlockedNavigationTarget: vi.fn(),
   ensurePageState,
   forceDisconnectPlaywrightForTarget: vi.fn(),
   getPageForTargetId,
   gotoPageWithNavigationGuard: vi.fn(),
+  isPolicyDenyNavigationError: vi.fn(() => false),
   storeRoleRefsForTarget,
 }));
 

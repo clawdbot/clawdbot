@@ -930,6 +930,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 - With default `session.dmScope=main`, Slack DMs collapse to agent main session.
 - Channel sessions: `agent:<agentId>:slack:channel:<channelId>`.
 - Thread replies can create thread session suffixes (`:thread:<threadTs>`) when applicable.
+- In channels where OpenClaw handles top-level messages without requiring an explicit mention, non-`off` `replyToMode` routes each handled root into `agent:<agentId>:slack:channel:<channelId>:thread:<rootTs>` so the visible Slack thread maps to one OpenClaw session from the first turn.
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
 - `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
 - `channels.slack.thread.requireExplicitMention` (default `false`): when `true`, suppress implicit thread mentions so the bot only responds to explicit `@bot` mentions inside threads, even when the bot already participated in the thread. Without this, replies in a bot-participated thread bypass `requireMention` gating.

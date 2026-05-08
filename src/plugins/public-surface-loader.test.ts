@@ -48,7 +48,6 @@ describe("bundled plugin public surface loader", () => {
       }),
     }));
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    vi.resetModules();
 
     try {
       const publicSurfaceLoader = await importFreshModule<
@@ -93,7 +92,6 @@ describe("bundled plugin public surface loader", () => {
         createRequire: vi.fn(() => requireLoader),
       });
     });
-    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
@@ -127,7 +125,6 @@ describe("bundled plugin public surface loader", () => {
         moduleExport: { marker: path.basename(path.dirname(modulePath)) },
       }),
     }));
-    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
@@ -168,7 +165,6 @@ describe("bundled plugin public surface loader", () => {
         moduleExport: { marker: path.basename(path.dirname(modulePath)) },
       }),
     }));
-    vi.resetModules();
 
     const tempRoot = createTempDir();
     const bundledPluginsDir = path.join(tempRoot, "dist");
@@ -203,7 +199,6 @@ describe("bundled plugin public surface loader", () => {
     vi.doMock("jiti", () => ({
       createJiti,
     }));
-    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")

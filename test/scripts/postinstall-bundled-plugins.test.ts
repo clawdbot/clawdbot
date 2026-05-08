@@ -26,6 +26,10 @@ async function createExtensionsDir() {
   return extensionsDir;
 }
 
+async function expectPathExists(filePath: string) {
+  await expect(fs.access(filePath)).resolves.toBeUndefined();
+}
+
 async function writePluginPackage(
   extensionsDir: string,
   pluginId: string,
@@ -284,7 +288,7 @@ describe("bundled plugin postinstall", () => {
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    await expect(fs.stat(legacyRuntimeRoot)).resolves.toBeTruthy();
+    await expectPathExists(legacyRuntimeRoot);
   });
 
   it("honors disable env before source-checkout pruning", async () => {
@@ -301,7 +305,7 @@ describe("bundled plugin postinstall", () => {
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).resolves.toBeTruthy();
+    await expectPathExists(path.join(extensionsDir, "acpx", "node_modules"));
   });
 
   it("migrates the plugin registry during postinstall from built dist contracts", async () => {
@@ -448,7 +452,7 @@ describe("bundled plugin postinstall", () => {
       }),
     ).toEqual(["dist/channel-CJUAgRQR.js"]);
 
-    await expect(fs.stat(currentFile)).resolves.toBeTruthy();
+    await expectPathExists(currentFile);
     await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -515,7 +519,7 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(overrideLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(systemLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.lstat(legacySymlink)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(thirdPartyNodeModules)).resolves.toBeTruthy();
+    await expectPathExists(thirdPartyNodeModules);
     expect(log.warn).not.toHaveBeenCalled();
     expect(log.log).toHaveBeenCalledWith(
       expect.stringContaining("[postinstall] pruned legacy plugin runtime deps:"),
@@ -620,7 +624,7 @@ describe("bundled plugin postinstall", () => {
       }),
     ).toEqual(["dist/memory-state-old.js"]);
 
-    await expect(fs.stat(importedChunk)).resolves.toBeTruthy();
+    await expectPathExists(importedChunk);
     await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -704,7 +708,7 @@ describe("bundled plugin postinstall", () => {
       }),
     ).not.toThrow();
 
-    await expect(fs.stat(staleFile)).resolves.toBeTruthy();
+    await expectPathExists(staleFile);
     expect(warn).toHaveBeenCalledWith(
       "[postinstall] skipping dist prune: missing dist inventory: dist/postinstall-inventory.json",
     );
@@ -726,7 +730,7 @@ describe("bundled plugin postinstall", () => {
       }),
     ).not.toThrow();
 
-    await expect(fs.stat(currentFile)).resolves.toBeTruthy();
+    await expectPathExists(currentFile);
     expect(warn).toHaveBeenCalledWith(
       "[postinstall] skipping dist prune: invalid dist inventory: dist/postinstall-inventory.json",
     );
@@ -898,9 +902,7 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    await expect(
-      fs.stat(path.join(extensionsDir, "fixtures", "node_modules")),
-    ).resolves.toBeTruthy();
+    await expectPathExists(path.join(extensionsDir, "fixtures", "node_modules"));
   });
 
   it("skips symlink entries when pruning source-checkout bundled plugin node_modules", () => {

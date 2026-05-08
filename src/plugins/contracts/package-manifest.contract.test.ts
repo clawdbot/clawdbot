@@ -3,7 +3,6 @@ import { describePackageManifestContract } from "openclaw/plugin-sdk/plugin-test
 type PackageManifestContractParams = Parameters<typeof describePackageManifestContract>[0];
 
 const packageManifestContractTests: PackageManifestContractParams[] = [
-  { pluginId: "bluebubbles", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "discord",
     pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "opusscript"],

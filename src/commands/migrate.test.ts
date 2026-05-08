@@ -125,6 +125,54 @@ function codexSkillPlan(overrides: Partial<MigrationPlan> = {}): MigrationPlan {
   };
 }
 
+function codexPluginPlan(overrides: Partial<MigrationPlan> = {}): MigrationPlan {
+  const items: MigrationPlan["items"] = [
+    {
+      id: "plugin:google-calendar",
+      kind: "plugin",
+      action: "install",
+      status: "planned",
+      details: {
+        configKey: "google-calendar",
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+      },
+    },
+    {
+      id: "plugin:gmail",
+      kind: "plugin",
+      action: "install",
+      status: "planned",
+      details: {
+        configKey: "gmail",
+        marketplaceName: "openai-curated",
+        pluginName: "gmail",
+      },
+    },
+    {
+      id: "config:codex-plugins",
+      kind: "config",
+      action: "merge",
+      status: "planned",
+    },
+  ];
+  return {
+    providerId: "codex",
+    source: "/tmp/codex",
+    summary: {
+      total: 3,
+      planned: 3,
+      migrated: 0,
+      skipped: 0,
+      conflicts: 0,
+      errors: 0,
+      sensitive: 0,
+    },
+    items,
+    ...overrides,
+  };
+}
+
 const runtime: RuntimeEnv = {
   log: vi.fn(),
   error: vi.fn(),
@@ -571,6 +619,35 @@ describe("migrateApplyCommand", () => {
           status: "skipped",
           reason: "not selected for migration",
         }),
+      ]),
+    );
+    expect(mocks.backupCreateCommand).toHaveBeenCalled();
+  });
+
+  it("filters explicit Codex plugins before apply", async () => {
+    const planned = codexPluginPlan();
+    mocks.provider.plan.mockResolvedValue(planned);
+    mocks.provider.apply.mockImplementation(async (_ctx, selectedPlan: MigrationPlan) => ({
+      ...selectedPlan,
+      summary: { ...selectedPlan.summary, planned: 0, migrated: 2 },
+      items: selectedPlan.items.map((item) =>
+        item.status === "planned" ? { ...item, status: "migrated" as const } : item,
+      ),
+    }));
+
+    await migrateApplyCommand(runtime, { provider: "codex", yes: true, plugins: ["gmail"] });
+
+    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    expect(appliedPlan.summary).toMatchObject({ planned: 2, skipped: 1, conflicts: 0 });
+    expect(appliedPlan.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "plugin:google-calendar",
+          status: "skipped",
+          reason: "not selected for migration",
+        }),
+        expect.objectContaining({ id: "plugin:gmail", status: "planned" }),
+        expect.objectContaining({ id: "config:codex-plugins", status: "planned" }),
       ]),
     );
     expect(mocks.backupCreateCommand).toHaveBeenCalled();

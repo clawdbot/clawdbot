@@ -220,7 +220,9 @@ describe("installToolResultContextGuard", () => {
 
     expectPiStyleTruncation(newResultText);
     expect(result.details).toBeUndefined();
-    expect((contextForNextCall[0] as { details?: unknown }).details).toBeDefined();
+    expect((contextForNextCall[0] as { details?: unknown }).details).toMatchObject({
+      truncation: { truncated: true },
+    });
   });
 
   it("throws a preemptive overflow when total context still exceeds the high-water mark", async () => {
@@ -809,7 +811,7 @@ describe("installContextEngineLoopHook", () => {
     expect(transformed).toBe(compactedView);
   });
 
-  it("restores the previous transformContext when the returned dispose is called", async () => {
+  it("restores the previous transformContext when the returned dispose is called", () => {
     const upstream = vi.fn(async (messages: AgentMessage[]) => messages);
     const agent = makeGuardableAgent(upstream);
     const engine = makeMockEngine();

@@ -11,7 +11,21 @@ type SignalMsgContext = Pick<MsgContext, "Body" | "WasMentioned"> & {
 let capturedCtx: SignalMsgContext | undefined;
 
 function getCapturedCtx() {
-  return capturedCtx as SignalMsgContext;
+  if (!capturedCtx) {
+    throw new Error("expected captured Signal MsgContext");
+  }
+  return capturedCtx;
+}
+
+function getGroupHistoryEntries(
+  groupHistories: Map<string, Array<{ sender?: string; body?: string }>>,
+  groupId = "g1",
+) {
+  const entries = groupHistories.get(groupId);
+  if (!entries) {
+    throw new Error(`expected pending history for ${groupId}`);
+  }
+  return entries;
 }
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
@@ -100,8 +114,7 @@ async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: str
   const { handler, groupHistories } = createMentionGatedHistoryHandler();
   await handler(makeGroupEvent(opts));
   expect(capturedCtx).toBeUndefined();
-  const entries = groupHistories.get("g1");
-  expect(entries).toBeTruthy();
+  const entries = getGroupHistoryEntries(groupHistories);
   expect(entries).toHaveLength(1);
   expect(entries[0].body).toBe(expectedBody);
 }
@@ -122,16 +135,14 @@ describe("signal mention gating", () => {
     const handler = createMentionHandler({ requireMention: true });
 
     await handler(makeGroupEvent({ message: "hey @bot what's up" }));
-    expect(capturedCtx).toBeTruthy();
-    expect(getCapturedCtx()?.WasMentioned).toBe(true);
+    expect(getCapturedCtx().WasMentioned).toBe(true);
   });
 
   it("sets WasMentioned=false for group messages without mention when requireMention is off", async () => {
     const handler = createMentionHandler({ requireMention: false });
 
     await handler(makeGroupEvent({ message: "hello everyone" }));
-    expect(capturedCtx).toBeTruthy();
-    expect(getCapturedCtx()?.WasMentioned).toBe(false);
+    expect(getCapturedCtx().WasMentioned).toBe(false);
   });
 
   it("allows explicitly configured Signal groups by group id without a mention", async () => {
@@ -156,15 +167,14 @@ describe("signal mention gating", () => {
     );
 
     await handler(makeGroupEvent({ message: "hello everyone" }));
-    expect(capturedCtx).toBeTruthy();
-    expect(getCapturedCtx()?.WasMentioned).toBe(false);
+    expect(getCapturedCtx().WasMentioned).toBe(false);
   });
 
   it("records pending history for skipped group messages", async () => {
     const { handler, groupHistories } = createMentionGatedHistoryHandler();
     await handler(makeGroupEvent({ message: "hello from alice" }));
     expect(capturedCtx).toBeUndefined();
-    const entries = groupHistories.get("g1");
+    const entries = getGroupHistoryEntries(groupHistories);
     expect(entries).toHaveLength(1);
     expect(entries[0].sender).toBe("Alice");
     expect(entries[0].body).toBe("hello from alice");
@@ -196,7 +206,7 @@ describe("signal mention gating", () => {
     );
 
     expect(capturedCtx).toBeUndefined();
-    const entries = groupHistories.get("g1");
+    const entries = getGroupHistoryEntries(groupHistories);
     expect(entries).toHaveLength(1);
     expect(entries[0].body).toBe("<media:audio>");
   });
@@ -223,7 +233,7 @@ describe("signal mention gating", () => {
     );
 
     expect(capturedCtx).toBeUndefined();
-    const entries = groupHistories.get("g1");
+    const entries = getGroupHistoryEntries(groupHistories);
     expect(entries).toHaveLength(1);
     expect(entries[0].body).toBe("[2 files attached]");
   });
@@ -236,7 +246,7 @@ describe("signal mention gating", () => {
     const handler = createMentionHandler({ requireMention: true });
 
     await handler(makeGroupEvent({ message: "/help" }));
-    expect(capturedCtx).toBeTruthy();
+    expect(getCapturedCtx().Body).toContain("/help");
   });
 
   it("hydrates mention placeholders before trimming so offsets stay aligned", async () => {
@@ -257,8 +267,7 @@ describe("signal mention gating", () => {
       }),
     );
 
-    expect(capturedCtx).toBeTruthy();
-    const body = getCapturedCtx()?.Body ?? "";
+    const body = getCapturedCtx().Body ?? "";
     expect(body).toContain("@123e4567 hi @+15550002222");
     expect(body).not.toContain(placeholder);
   });
@@ -280,9 +289,8 @@ describe("signal mention gating", () => {
       }),
     );
 
-    expect(capturedCtx).toBeTruthy();
     expect(getCapturedCtx()?.Body ?? "").toContain("@123e4567");
-    expect(getCapturedCtx()?.WasMentioned).toBe(true);
+    expect(getCapturedCtx().WasMentioned).toBe(true);
   });
 });
 

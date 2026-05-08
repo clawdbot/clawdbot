@@ -56,7 +56,7 @@ describe("enableConsoleCapture", () => {
     });
     routeLogsToStderr();
     enableConsoleCapture();
-    expect(() => console.log("hello")).not.toThrow();
+    expect(console.log("hello")).toBeUndefined();
   });
 
   it("swallows EIO from original console writes", () => {
@@ -65,7 +65,7 @@ describe("enableConsoleCapture", () => {
       throw eioError();
     };
     enableConsoleCapture();
-    expect(() => console.log("hello")).not.toThrow();
+    expect(console.log("hello")).toBeUndefined();
   });
 
   it("prefixes console output with timestamps when enabled", () => {

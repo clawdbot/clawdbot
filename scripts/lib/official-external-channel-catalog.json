@@ -122,32 +122,6 @@
       }
     },
     {
-      "name": "@openclaw/bluebubbles",
-      "description": "OpenClaw BlueBubbles channel plugin",
-      "source": "official",
-      "kind": "channel",
-      "openclaw": {
-        "channel": {
-          "id": "bluebubbles",
-          "label": "BlueBubbles",
-          "selectionLabel": "BlueBubbles (macOS app)",
-          "detailLabel": "BlueBubbles",
-          "docsPath": "/channels/bluebubbles",
-          "docsLabel": "bluebubbles",
-          "blurb": "iMessage via the BlueBubbles mac app + REST API.",
-          "aliases": ["bb"],
-          "preferOver": ["imessage"],
-          "systemImage": "bubble.left.and.text.bubble.right",
-          "order": 75
-        },
-        "install": {
-          "npmSpec": "@openclaw/bluebubbles",
-          "defaultChoice": "npm",
-          "minHostVersion": ">=2026.4.10"
-        }
-      }
-    },
-    {
       "name": "@openclaw/discord",
       "description": "OpenClaw Discord channel plugin",
       "source": "official",

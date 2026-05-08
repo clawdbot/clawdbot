@@ -341,6 +341,43 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("preserves non-OK SSE bodies for provider HTTP error parsing", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          error: {
+            message: "API key expired",
+          },
+        }),
+        {
+          status: 400,
+          headers: { "content-type": "text/event-stream" },
+        },
+      ),
+      finalUrl:
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini:streamGenerateContent",
+      release: vi.fn(async () => undefined),
+    });
+
+    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+    const model = {
+      id: "gemini-3.1-pro-preview",
+      provider: "google",
+      api: "openai-completions",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini:streamGenerateContent",
+      { method: "POST" },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: { message: "API key expired" },
+    });
+  });
+
   it("refreshes the guarded timeout while consuming streaming response chunks", async () => {
     const encoder = new TextEncoder();
     const refreshTimeout = vi.fn();

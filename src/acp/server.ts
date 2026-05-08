@@ -10,6 +10,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { createFileAcpEventLedger, resolveDefaultAcpEventLedgerPath } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode, type AcpServerOptions } from "./types.js";
@@ -121,9 +122,12 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   const input = Writable.toWeb(process.stdout);
   const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);
+  const eventLedger = createFileAcpEventLedger({
+    filePath: resolveDefaultAcpEventLedgerPath(process.env),
+  });
 
   const _connection = new AgentSideConnection((conn: AgentSideConnection) => {
-    agent = new AcpGatewayAgent(conn, gateway, opts);
+    agent = new AcpGatewayAgent(conn, gateway, { ...opts, eventLedger });
     agent.start();
     return agent;
   }, stream);

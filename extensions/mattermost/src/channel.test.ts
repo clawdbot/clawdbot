@@ -449,7 +449,6 @@ describe("mattermostPlugin", () => {
     it("chunks outbound text without requiring Mattermost runtime initialization", () => {
       const chunker = requireMattermostChunker();
 
-      expect(() => chunker("hello world", 5)).not.toThrow();
       expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
     });
 

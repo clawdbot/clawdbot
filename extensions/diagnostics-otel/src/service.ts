@@ -83,6 +83,7 @@ type ModelCallLifecycleDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "model.call.completed" | "model.call.error" }
 >;
+type ModelFailoverDiagnosticEvent = Extract<DiagnosticEventPayload, { type: "model.failover" }>;
 type HarnessRunDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "harness.run.started" | "harness.run.completed" | "harness.run.error" }
@@ -1844,6 +1845,44 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span.end(evt.ts);
       };
 
+      const recordModelFailover = (
+        evt: ModelFailoverDiagnosticEvent,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number | boolean> = {
+          "openclaw.failover.reason": lowCardinalityAttr(evt.reason, "unknown"),
+        };
+        if (evt.fromProvider) {
+          spanAttrs["openclaw.provider"] = evt.fromProvider;
+        }
+        if (evt.fromModel) {
+          spanAttrs["openclaw.model"] = evt.fromModel;
+        }
+        if (evt.toProvider) {
+          spanAttrs["openclaw.failover.to_provider"] = evt.toProvider;
+        }
+        if (evt.toModel) {
+          spanAttrs["openclaw.failover.to_model"] = evt.toModel;
+        }
+        if (evt.lane) {
+          spanAttrs["openclaw.lane"] = lowCardinalityAttr(evt.lane, "unknown");
+        }
+        if (evt.suspended !== undefined) {
+          spanAttrs["openclaw.failover.suspended"] = evt.suspended;
+        }
+        if (evt.cascadeDepth !== undefined) {
+          spanAttrs["openclaw.failover.cascade_depth"] = evt.cascadeDepth;
+        }
+        const span = spanWithDuration("openclaw.model.failover", spanAttrs, 0, {
+          parentContext: activeTrustedParentContext(evt, metadata),
+          endTimeMs: evt.ts,
+        });
+        span.end(evt.ts);
+      };
+
       const modelCallMetricAttrs = (evt: ModelCallLifecycleDiagnosticEvent) => ({
         "openclaw.provider": evt.provider,
         "openclaw.model": evt.model,
@@ -2420,6 +2459,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordTelemetryExporter(evt, metadata);
               return;
             case "payload.large":
+              return;
+            case "model.failover":
+              recordModelFailover(evt, metadata);
               return;
           }
         } catch (err) {

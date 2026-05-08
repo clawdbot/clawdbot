@@ -163,7 +163,9 @@ describe("feishu_doc image fetch hardening", () => {
     });
     registerFeishuDocTools(harness.api);
     const tool = harness.resolveTool("feishu_doc", context);
-    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("expected Feishu doc tool");
+    }
     return tool;
   }
 
@@ -206,8 +208,8 @@ describe("feishu_doc image fetch hardening", () => {
     expect(blockDescendantCreateMock).toHaveBeenCalledTimes(1);
     const call = blockDescendantCreateMock.mock.calls[0]?.[0];
     expect(call?.data.children_id).toEqual(["h1", "t1", "h2"]);
-    expect(call?.data.descendants).toBeDefined();
-    expect(call?.data.descendants.length).toBeGreaterThanOrEqual(3);
+    expect(call?.data.descendants).toEqual(expect.arrayContaining(blocks));
+    expect(call?.data.descendants).toHaveLength(3);
 
     expect(result.details.blocks_added).toBe(3);
   });

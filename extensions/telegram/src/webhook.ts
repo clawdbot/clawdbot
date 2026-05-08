@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
-import * as grammy from "grammy";
+import { InputFile } from "grammy";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -46,13 +46,6 @@ const TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY: BackoffPolicy = {
   factor: 2,
   jitter: 0.2,
 };
-const InputFileCtor: typeof grammy.InputFile =
-  typeof grammy.InputFile === "function"
-    ? grammy.InputFile
-    : (class InputFileFallback {
-        constructor(public readonly path: string) {}
-      } as unknown as typeof grammy.InputFile);
-
 async function listenHttpServer(params: {
   server: ReturnType<typeof createServer>;
   port: number;
@@ -462,7 +455,7 @@ export async function startTelegramWebhook(opts: {
           bot.api.setWebhook(publicUrl, {
             secret_token: secret,
             allowed_updates: resolveTelegramAllowedUpdates(),
-            certificate: opts.webhookCertPath ? new InputFileCtor(opts.webhookCertPath) : undefined,
+            certificate: opts.webhookCertPath ? new InputFile(opts.webhookCertPath) : undefined,
           }),
       });
     } catch (err) {

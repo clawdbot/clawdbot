@@ -59,7 +59,7 @@ Config (global default + per-channel overrides):
 Notes:
 
 - Debounce applies to **text-only** messages; media/attachments flush immediately.
-- Control commands bypass debouncing so they remain standalone — **except** when a channel explicitly opts in to same-sender DM coalescing (e.g. [BlueBubbles `coalesceSameSenderDms`](/channels/bluebubbles#coalescing-split-send-dms-command--url-in-one-composition)), where DM commands wait inside the debounce window so a split-send payload can join the same agent turn.
+- Control commands bypass debouncing so they remain standalone. Channels that explicitly opt in to same-sender DM coalescing can keep DM commands inside the debounce window so a split-send payload can join the same agent turn.
 
 ## Sessions and devices
 

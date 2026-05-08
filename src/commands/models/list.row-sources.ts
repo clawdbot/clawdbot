@@ -88,11 +88,10 @@ export async function appendAllModelRowSources(
       }
       await appendDiscoveredRows({
         rows: params.rows,
-        models: params.modelRegistry.getAll(),
+        models: params.registryModels ?? params.modelRegistry.getAll(),
         modelRegistry: params.modelRegistry,
         context: params.context,
         resolveWithRegistry: false,
-        skipSuppression: true,
       });
     }
     return { requiresRegistryFallback: false };

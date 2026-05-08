@@ -47,15 +47,6 @@ afterEach(async () => {
 });
 
 describe("isSafeToOverwriteStoredOAuthIdentity", () => {
-  it("accepts matching account identities", () => {
-    expect(
-      isSafeToOverwriteStoredOAuthIdentity(
-        createCredential({ accountId: "acct-123" }),
-        createCredential({ access: "rotated-access", accountId: "acct-123" }),
-      ),
-    ).toBe(true);
-  });
-
   it("refuses overwriting an existing identity-less credential with a different token", () => {
     expect(
       isSafeToOverwriteStoredOAuthIdentity(
@@ -107,14 +98,32 @@ describe("isSafeToAdoptMainStoreOAuthIdentity", () => {
       ),
     ).toBe(true);
   });
+});
 
-  it("accepts matching account identities", () => {
-    expect(
-      isSafeToAdoptMainStoreOAuthIdentity(
-        createCredential({ accountId: "acct-123" }),
-        createCredential({ access: "main-access", refresh: "main-refresh", accountId: "acct-123" }),
-      ),
-    ).toBe(true);
+describe("matching account identity adoption", () => {
+  it.each([
+    {
+      name: "stored credential overwrite",
+      check: () =>
+        isSafeToOverwriteStoredOAuthIdentity(
+          createCredential({ accountId: "acct-123" }),
+          createCredential({ access: "rotated-access", accountId: "acct-123" }),
+        ),
+    },
+    {
+      name: "main-store adoption",
+      check: () =>
+        isSafeToAdoptMainStoreOAuthIdentity(
+          createCredential({ accountId: "acct-123" }),
+          createCredential({
+            access: "main-access",
+            refresh: "main-refresh",
+            accountId: "acct-123",
+          }),
+        ),
+    },
+  ])("accepts matching account identities for $name", ({ check }) => {
+    expect(check()).toBe(true);
   });
 });
 

@@ -33,6 +33,10 @@ function loadFacadeModule(): FacadeModule {
   });
 }
 
+export function prewarmTtsRuntimeFacade(): void {
+  loadFacadeModule();
+}
+
 export const _test: FacadeModule["_test"] = createLazyFacadeObjectValue(
   () => loadFacadeModule()._test,
 );

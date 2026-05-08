@@ -355,6 +355,7 @@ export async function ensureSandboxBrowser(params: {
   const existingProfile = existing
     ? resolveProfile(existing.bridge.state.resolved, DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME)
     : null;
+  const desiredEvaluateEnabled = params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
 
   let desiredAuthToken = normalizeOptionalString(params.bridgeAuth?.token);
   let desiredAuthPassword = normalizeOptionalString(params.bridgeAuth?.password);
@@ -373,17 +374,19 @@ export async function ensureSandboxBrowser(params: {
   const authMatches =
     !existing ||
     (existing.authToken === desiredAuthToken && existing.authPassword === desiredAuthPassword);
+  const evaluateMatches =
+    !existing || existing.bridge.state.resolved.evaluateEnabled === desiredEvaluateEnabled;
   if (existing && !shouldReuse) {
     await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
     BROWSER_BRIDGES.delete(params.scopeKey);
   }
-  if (existing && shouldReuse && (!policyMatches || !authMatches)) {
+  if (existing && shouldReuse && (!policyMatches || !authMatches || !evaluateMatches)) {
     await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
     BROWSER_BRIDGES.delete(params.scopeKey);
   }
 
   const bridge = (() => {
-    if (shouldReuse && policyMatches && authMatches && existing) {
+    if (shouldReuse && policyMatches && authMatches && evaluateMatches && existing) {
       return existing.bridge;
     }
     return null;
@@ -418,7 +421,7 @@ export async function ensureSandboxBrowser(params: {
         controlPort: 0,
         cdpPort: mappedCdp,
         headless: params.cfg.browser.headless,
-        evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
+        evaluateEnabled: desiredEvaluateEnabled,
         ssrfPolicy: params.ssrfPolicy,
       }),
       authToken: desiredAuthToken,
@@ -429,7 +432,7 @@ export async function ensureSandboxBrowser(params: {
   };
 
   const resolvedBridge = await ensureBridge();
-  if (!shouldReuse || !policyMatches || !authMatches) {
+  if (!shouldReuse || !policyMatches || !authMatches || !evaluateMatches) {
     BROWSER_BRIDGES.set(params.scopeKey, {
       bridge: resolvedBridge,
       containerName,

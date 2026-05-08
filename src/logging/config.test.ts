@@ -31,7 +31,7 @@ describe("readLoggingConfig", () => {
     tempDirs = [];
   });
 
-  it("skips mutating config loads for config schema", async () => {
+  it("skips mutating config loads for config schema", () => {
     process.argv = ["node", "openclaw", "config", "schema"];
     const configPath = writeConfig(`{ logging: { file: "/tmp/should-not-read.log" } }`);
     fs.rmSync(configPath);

@@ -5,15 +5,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { VERSION } from "../../version.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { gatherDaemonStatus } from "./status.gather.js";
 
 const callGatewayStatusProbe = vi.fn<
-  (opts?: unknown) => Promise<{ ok: boolean; url?: string; error?: string | null }>
+  (opts?: unknown) => Promise<{
+    ok: boolean;
+    url?: string;
+    error?: string | null;
+    server?: { version?: string | null; connId?: string | null };
+  }>
 >(async (_opts?: unknown) => ({
   ok: true,
   url: "ws://127.0.0.1:19001",
   error: null,
+  server: { version: "2026.5.6", connId: "conn-1" },
 }));
 const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   enabled: true,
@@ -221,6 +228,11 @@ describe("gatherDaemonStatus", () => {
     expect(status.gateway?.tlsEnabled).toBe(true);
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
+    expect(status.rpc?.server).toEqual({ version: "2026.5.6", connId: "conn-1" });
+    expect(status.cli?.version).toBe(VERSION);
+    if (process.argv[1]) {
+      expect(status.cli?.entrypoint).toBe(process.argv[1]);
+    }
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
   });
 

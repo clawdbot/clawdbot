@@ -44,4 +44,27 @@ describe("byteplus plugin", () => {
       "byteplus-plan": "byteplus",
     });
   });
+
+  it("keeps Kimi catalog metadata aligned with provider capabilities", () => {
+    const standardKimi = BYTEPLUS_MODEL_CATALOG.find((entry) => entry.id === "kimi-k2-5-260127");
+    const planKimi = BYTEPLUS_CODING_MODEL_CATALOG.find((entry) => entry.id === "kimi-k2.5");
+    const thinkingKimi = BYTEPLUS_CODING_MODEL_CATALOG.find(
+      (entry) => entry.id === "kimi-k2-thinking",
+    );
+
+    for (const entry of [standardKimi, planKimi, thinkingKimi]) {
+      expect(entry).toEqual(
+        expect.objectContaining({
+          reasoning: true,
+          maxTokens: 32768,
+          cost: expect.objectContaining({
+            input: 0.6,
+            output: 2.5,
+            cacheRead: 0.12,
+            cacheWrite: 0,
+          }),
+        }),
+      );
+    }
+  });
 });

@@ -242,7 +242,7 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(1);
   });
 
-  it("force-stops app-server transports that ignore the graceful signal", async () => {
+  it("waits for app-server transports to exit after closing stdin before force-stopping", async () => {
     vi.useFakeTimers();
     const process = Object.assign(new EventEmitter(), {
       stdin: {
@@ -261,7 +261,8 @@ describe("CodexAppServerClient", () => {
 
     __testing.closeCodexAppServerTransport(process, { forceKillDelayMs: 25 });
 
-    expect(process.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(process.stdin.end).toHaveBeenCalledTimes(1);
+    expect(process.kill).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(25);
     expect(process.kill).toHaveBeenCalledWith("SIGKILL");
     expect(process.unref).toHaveBeenCalledTimes(1);
@@ -288,14 +289,42 @@ describe("CodexAppServerClient", () => {
       exitTimeoutMs: 100,
       forceKillDelayMs: 25,
     });
-    await vi.advanceTimersByTimeAsync(25);
 
-    expect(process.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(process.stdin.end).toHaveBeenCalledTimes(1);
+    expect(process.kill).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(25);
     expect(process.kill).toHaveBeenCalledWith("SIGKILL");
     process.signalCode = "SIGKILL";
     process.emit("exit");
 
     await expect(closed).resolves.toBe(true);
+  });
+
+  it("keeps async shutdown alive until the exit timeout resolves", async () => {
+    vi.useFakeTimers();
+    const process = Object.assign(new EventEmitter(), {
+      stdin: {
+        write: vi.fn(),
+        end: vi.fn(),
+        destroy: vi.fn(),
+        unref: vi.fn(),
+      },
+      stdout: Object.assign(new PassThrough(), { unref: vi.fn() }),
+      stderr: Object.assign(new PassThrough(), { unref: vi.fn() }),
+      exitCode: null as number | null,
+      signalCode: null as string | null,
+      kill: vi.fn(),
+      unref: vi.fn(),
+    });
+
+    const closed = __testing.closeCodexAppServerTransportAndWait(process, {
+      exitTimeoutMs: 100,
+      forceKillDelayMs: 25,
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    await expect(closed).resolves.toBe(false);
   });
 
   it("handles stdin write errors without crashing the process", async () => {
@@ -333,7 +362,7 @@ describe("CodexAppServerClient", () => {
     );
   });
 
-  it("does not write to stdin after the child process exits", async () => {
+  it("does not write to stdin after the child process exits", () => {
     const harness = createClientHarness();
     clients.push(harness.client);
 

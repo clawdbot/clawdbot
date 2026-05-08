@@ -67,12 +67,14 @@ describe("shell env fallback", () => {
   }
 
   function expectSanitizedStartupEnv(receivedEnv: NodeJS.ProcessEnv | undefined) {
-    expect(receivedEnv).toBeDefined();
-    expect(receivedEnv?.BASH_ENV).toBeUndefined();
-    expect(receivedEnv?.PS4).toBeUndefined();
-    expect(receivedEnv?.ZDOTDIR).toBeUndefined();
-    expect(receivedEnv?.SHELL).toBeUndefined();
-    expect(receivedEnv?.HOME).toBe(os.homedir());
+    if (receivedEnv === undefined) {
+      throw new Error("expected sanitized startup env");
+    }
+    expect(receivedEnv.BASH_ENV).toBeUndefined();
+    expect(receivedEnv.PS4).toBeUndefined();
+    expect(receivedEnv.ZDOTDIR).toBeUndefined();
+    expect(receivedEnv.SHELL).toBeUndefined();
+    expect(receivedEnv.HOME).toBe(os.homedir());
   }
 
   function withEtcShells(shells: string[], fn: () => void) {
@@ -112,7 +114,11 @@ describe("shell env fallback", () => {
 
   function expectBinShFallbackExec(exec: ReturnType<typeof vi.fn>) {
     expect(exec).toHaveBeenCalledTimes(1);
-    expect(exec).toHaveBeenCalledWith("/bin/sh", ["-l", "-c", "env -0"], expect.any(Object));
+    expect(exec).toHaveBeenCalledWith(
+      "/bin/sh",
+      ["-l", "-c", "env -0"],
+      expect.objectContaining({ windowsHide: true }),
+    );
   }
 
   it("is disabled by default", () => {
@@ -423,7 +429,11 @@ describe("shell env fallback", () => {
 
       expect(res.ok).toBe(true);
       expect(exec).toHaveBeenCalledTimes(1);
-      expect(exec).toHaveBeenCalledWith(trustedShell, ["-l", "-c", "env -0"], expect.any(Object));
+      expect(exec).toHaveBeenCalledWith(
+        trustedShell,
+        ["-l", "-c", "env -0"],
+        expect.objectContaining({ windowsHide: true }),
+      );
     });
   });
 

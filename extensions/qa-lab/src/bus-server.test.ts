@@ -1,6 +1,7 @@
 import { Agent, createServer, request } from "node:http";
 import { describe, expect, it } from "vitest";
-import { closeQaHttpServer } from "./bus-server.js";
+import { closeQaHttpServer, handleQaBusRequest } from "./bus-server.js";
+import { createQaBusState } from "./bus-state.js";
 
 async function listenOnLoopback(server: ReturnType<typeof createServer>): Promise<number> {
   await new Promise<void>((resolve, reject) => {
@@ -55,5 +56,39 @@ describe("closeQaHttpServer", () => {
       agent.destroy();
       server.closeAllConnections?.();
     }
+  });
+});
+
+describe("handleQaBusRequest", () => {
+  it("returns a controlled error when a v1 POST body exceeds the limit", async () => {
+    const req = {
+      method: "POST",
+      url: "/v1/reset",
+      headers: { "content-length": String(1024 * 1024 + 1) },
+      destroyed: false,
+      destroy() {
+        this.destroyed = true;
+      },
+    };
+    const res = {
+      statusCode: 0,
+      body: "",
+      writeHead(statusCode: number) {
+        this.statusCode = statusCode;
+      },
+      end(payload: string) {
+        this.body = payload;
+      },
+    };
+
+    const handled = await handleQaBusRequest({
+      req: req as never,
+      res: res as never,
+      state: createQaBusState(),
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(413);
+    expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
   });
 });

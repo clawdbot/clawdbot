@@ -142,4 +142,50 @@ describe("docker sandbox backend manager", () => {
       configLabelMatch: true,
     });
   });
+
+  it("reports Docker runtime removal failures", async () => {
+    dockerMocks.execDocker.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "permission denied",
+    });
+
+    await expect(
+      dockerSandboxBackendManager.removeRuntime({
+        entry: {
+          containerName: "sandbox-1",
+          backendId: "docker",
+          runtimeLabel: "sandbox-1",
+          sessionKey: "agent:coder:main",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "openclaw-sandbox:bookworm-slim",
+        },
+        config: createConfig(),
+      }),
+    ).rejects.toThrow("Failed to remove Docker sandbox runtime sandbox-1: permission denied");
+  });
+
+  it("treats already-missing Docker runtimes as removed", async () => {
+    dockerMocks.execDocker.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "Error response from daemon: No such container: sandbox-1",
+    });
+
+    await expect(
+      dockerSandboxBackendManager.removeRuntime({
+        entry: {
+          containerName: "sandbox-1",
+          backendId: "docker",
+          runtimeLabel: "sandbox-1",
+          sessionKey: "agent:coder:main",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "openclaw-sandbox:bookworm-slim",
+        },
+        config: createConfig(),
+      }),
+    ).resolves.toBeUndefined();
+  });
 });

@@ -78,6 +78,32 @@ describe("resolveConnectAuthState", () => {
 });
 
 describe("resolveConnectAuthDecision", () => {
+  it("sets sharedAuthOk false when auth mode is none (no shared secret provided)", async () => {
+    const state = await resolveConnectAuthState({
+      resolvedAuth: {
+        mode: "none",
+        allowTailscale: false,
+      } satisfies ResolvedGatewayAuth,
+      connectAuth: {},
+      hasDeviceIdentity: false,
+      req: {
+        headers: {},
+        socket: { remoteAddress: "127.0.0.1" },
+      } as never,
+      trustedProxies: [],
+      allowRealIpFallback: false,
+      rateLimiter: createLimiter(),
+      clientIp: "127.0.0.1",
+    });
+
+    expect(state.authOk).toBe(true);
+    expect(state.authMethod).toBe("none");
+    // auth:none does NOT set sharedAuthOk globally — it's not a shared secret.
+    // Only shouldSkipLocalBackendSelfPairing treats auth:none as shared-auth-scoped
+    // for local backend connections specifically.
+    expect(state.sharedAuthOk).toBe(false);
+  });
+
   it("resets the shared-secret limiter after device-token auth succeeds", async () => {
     const rateLimiter = createLimiter();
     await resolveConnectAuthDecision({

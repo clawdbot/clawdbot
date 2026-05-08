@@ -217,7 +217,8 @@ describe("gateway auth compatibility baseline", () => {
       });
       expect(rotated.ok).toBe(true);
       const rotatedToken = rotated.ok ? rotated.entry.token : "";
-      expect(rotatedToken).toBeTruthy();
+      expect(rotatedToken).toEqual(expect.any(String));
+      expect(rotatedToken.length).toBeGreaterThan(0);
 
       const ws = await openWs(port);
       try {
@@ -327,6 +328,52 @@ describe("gateway auth compatibility baseline", () => {
       try {
         const res = await connectReq(ws, { skipDefaultAuth: true });
         expect(res.ok).toBe(true);
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("allows auth-none local backend connects without device identity", async () => {
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          client: { ...BACKEND_GATEWAY_CLIENT },
+          scopes: ["operator.admin"],
+          device: null,
+        });
+        expect(res.ok, JSON.stringify(res)).toBe(true);
+
+        const helloOk = res.payload as
+          | {
+              auth?: {
+                scopes?: unknown;
+              };
+            }
+          | undefined;
+        expect(helloOk?.auth?.scopes).toEqual(["operator.admin"]);
+
+        const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
+        expect(adminRes.ok).toBe(true);
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("rejects auth-none browser-origin backend connects without device identity", async () => {
+      const ws = await openWs(port, { origin: originForPort(port) });
+      try {
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          client: { ...BACKEND_GATEWAY_CLIENT },
+          scopes: ["operator.admin"],
+          device: null,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("device identity required");
+        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
+        );
       } finally {
         ws.close();
       }

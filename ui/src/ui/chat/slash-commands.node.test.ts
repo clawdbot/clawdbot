@@ -320,7 +320,7 @@ describe("parseSlashCommand", () => {
       includeArgs: true,
       scope: "text",
     });
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "pair")).toBeDefined();
+    expect(SLASH_COMMANDS.map((entry) => entry.name)).toContain("pair");
   });
 
   it("falls back safely when the gateway returns malformed command payload shapes", async () => {
@@ -358,7 +358,7 @@ describe("parseSlashCommand", () => {
       agentId: "main",
     });
     expect(SLASH_COMMANDS.find((entry) => entry.name === "pair")).toBeUndefined();
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "help")).toBeDefined();
+    expect(SLASH_COMMANDS.map((entry) => entry.name)).toContain("help");
 
     await refreshSlashCommands({
       client: { request } as never,
@@ -418,7 +418,7 @@ describe("parseSlashCommand", () => {
     }
     await pending;
 
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "pair")).toBeDefined();
+    expect(SLASH_COMMANDS.map((entry) => entry.name)).toContain("pair");
     expect(SLASH_COMMANDS.find((entry) => entry.name === "dreaming")).toBeUndefined();
   });
 });

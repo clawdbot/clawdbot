@@ -74,7 +74,7 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(destPath, "utf8")).toBe("proxy-data\n");
   });
 
-  it("warns when a declared static asset is missing", async () => {
+  it("warns when a declared static asset is missing", () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const warn = vi.fn();
 

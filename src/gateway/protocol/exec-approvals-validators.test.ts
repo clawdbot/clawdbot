@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { validateExecApprovalsNodeSetParams, validateExecApprovalsSetParams } from "./index.js";
+import {
+  validateExecApprovalRequestParams,
+  validateExecApprovalsNodeSetParams,
+  validateExecApprovalsSetParams,
+} from "./index.js";
 
 describe("exec approvals protocol validators", () => {
   it("accepts runtime-owned allowlist metadata on gateway and node set payloads", () => {
@@ -69,6 +73,29 @@ describe("exec approvals protocol validators", () => {
           },
         },
         baseHash: "abc123",
+      }),
+    ).toBe(false);
+  });
+
+  it("requires command spans to have non-negative starts and positive exclusive ends", () => {
+    expect(
+      validateExecApprovalRequestParams({
+        command: "echo hi",
+        commandSpans: [{ startIndex: 0, endIndex: 4 }],
+      }),
+    ).toBe(true);
+
+    expect(
+      validateExecApprovalRequestParams({
+        command: "echo hi",
+        commandSpans: [{ startIndex: 0, endIndex: 0 }],
+      }),
+    ).toBe(false);
+
+    expect(
+      validateExecApprovalRequestParams({
+        command: "echo hi",
+        commandSpans: [{ startIndex: -1, endIndex: 4 }],
       }),
     ).toBe(false);
   });

@@ -8,8 +8,18 @@ type ScenarioFixture = Awaited<ReturnType<typeof createPromptCompositionScenario
 
 function getTurn(scenario: PromptScenario, id: string) {
   const turn = scenario.turns.find((entry) => entry.id === id);
-  expect(turn, `${scenario.scenario}:${id}`).toBeDefined();
-  return turn!;
+  if (!turn) {
+    throw new Error(`expected turn ${scenario.scenario}:${id}`);
+  }
+  return turn;
+}
+
+function getScenario(fixture: ScenarioFixture, id: string): PromptScenario {
+  const scenario = fixture.scenarios.find((entry) => entry.scenario === id);
+  if (!scenario) {
+    throw new Error(`expected prompt scenario ${id}`);
+  }
+  return scenario;
 }
 
 describe("prompt composition invariants", () => {
@@ -32,18 +42,19 @@ describe("prompt composition invariants", () => {
         const current = getTurn(scenario, turnId);
         const index = scenario.turns.findIndex((entry) => entry.id === turnId);
         const previous = scenario.turns[index - 1];
-        expect(previous, `${scenario.scenario}:${turnId}:previous`).toBeDefined();
+        if (!previous) {
+          throw new Error(`expected previous turn ${scenario.scenario}:${turnId}`);
+        }
         expect(current.systemPrompt, `${scenario.scenario}:${turnId}`).toBe(previous.systemPrompt);
       }
     }
   });
 
   it("keeps bootstrap warnings out of the system prompt and preserves the original user prompt prefix", () => {
-    const scenario = fixture.scenarios.find((entry) => entry.scenario === "bootstrap-warning");
-    expect(scenario).toBeDefined();
-    const first = getTurn(scenario!, "t1");
-    const deduped = getTurn(scenario!, "t2");
-    const always = getTurn(scenario!, "t3");
+    const scenario = getScenario(fixture, "bootstrap-warning");
+    const first = getTurn(scenario, "t1");
+    const deduped = getTurn(scenario, "t2");
+    const always = getTurn(scenario, "t3");
 
     expect(first.systemPrompt).not.toContain("[Bootstrap truncation warning]");
     expect(first.systemPrompt).toContain("[...truncated, read AGENTS.md for full content...]");
@@ -56,11 +67,10 @@ describe("prompt composition invariants", () => {
   });
 
   it("keeps the group auto-reply prompt dynamic only across the first-turn intro boundary", () => {
-    const groupScenario = fixture.scenarios.find((entry) => entry.scenario === "auto-reply-group");
-    expect(groupScenario).toBeDefined();
-    const first = getTurn(groupScenario!, "t1");
-    const steady = getTurn(groupScenario!, "t2");
-    const eventTurn = getTurn(groupScenario!, "t3");
+    const groupScenario = getScenario(fixture, "auto-reply-group");
+    const first = getTurn(groupScenario, "t1");
+    const steady = getTurn(groupScenario, "t2");
+    const eventTurn = getTurn(groupScenario, "t3");
 
     expect(first.systemPrompt).toContain("You are in a Slack group chat.");
     expect(first.systemPrompt).toContain("prefer delegating bounded side investigations early");
@@ -77,11 +87,8 @@ describe("prompt composition invariants", () => {
   });
 
   it("includes direct-chat guidance that routes NO_REPLY through the default rewrite path", () => {
-    const directScenario = fixture.scenarios.find(
-      (entry) => entry.scenario === "auto-reply-direct",
-    );
-    expect(directScenario).toBeDefined();
-    const first = getTurn(directScenario!, "t1");
+    const directScenario = getScenario(fixture, "auto-reply-direct");
+    const first = getTurn(directScenario, "t1");
 
     expect(first.systemPrompt).toContain("You are in a Slack direct conversation.");
     expect(first.systemPrompt).toContain('reply with exactly "NO_REPLY"');
@@ -90,12 +97,9 @@ describe("prompt composition invariants", () => {
   });
 
   it("keeps maintenance prompts out of the normal stable-turn invariant set", () => {
-    const maintenanceScenario = fixture.scenarios.find(
-      (entry) => entry.scenario === "maintenance-prompts",
-    );
-    expect(maintenanceScenario).toBeDefined();
-    const flush = getTurn(maintenanceScenario!, "t1");
-    const refresh = getTurn(maintenanceScenario!, "t2");
+    const maintenanceScenario = getScenario(fixture, "maintenance-prompts");
+    const flush = getTurn(maintenanceScenario, "t1");
+    const refresh = getTurn(maintenanceScenario, "t2");
 
     expect(flush.systemPrompt).not.toBe(refresh.systemPrompt);
     expect(flush.bodyPrompt).toContain("Pre-compaction memory flush.");

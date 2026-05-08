@@ -86,10 +86,10 @@ describe("describeGeminiVideo", () => {
     });
     const { url: seenUrl, init: seenInit } = getRequest();
 
-    expect(result.model).toBe("gemini-3-pro-preview");
+    expect(result.model).toBe("gemini-3.1-pro-preview");
     expect(result.text).toBe("first\nsecond");
     expect(seenUrl).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent",
     );
     expect(seenInit?.method).toBe("POST");
     expect(seenInit?.signal).toBeInstanceOf(AbortSignal);

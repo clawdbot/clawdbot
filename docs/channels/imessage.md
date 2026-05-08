@@ -1,5 +1,5 @@
 ---
-summary: "Native iMessage support via imsg (JSON-RPC over stdio). Preferred for new OpenClaw iMessage setups when host requirements fit."
+summary: "Native iMessage support via imsg (JSON-RPC over stdio), with private API actions for replies, tapbacks, effects, attachments, and group management. Preferred for new OpenClaw iMessage setups when host requirements fit."
 read_when:
   - Setting up iMessage support
   - Debugging iMessage send/receive
@@ -7,17 +7,26 @@ title: "iMessage"
 ---
 
 <Note>
-For new OpenClaw iMessage deployments, start here when you can run `imsg` on a signed-in macOS Messages host. BlueBubbles remains available as a legacy fallback for existing setups that depend on its HTTP server, webhooks, or richer private-API actions.
+For OpenClaw iMessage deployments, use `imsg` on a signed-in macOS Messages host. If your Gateway runs on Linux or Windows, point `channels.imessage.cliPath` at an SSH wrapper that runs `imsg` on the Mac.
+
+**Known gap: no gateway-downtime catchup.** Messages that arrive while the gateway is down (crash, restart, Mac sleep, machine off) are not delivered to the agent once the gateway comes back up — `imsg watch` resumes from the current state and ignores anything that landed in `chat.db` during the gap. Tracked at [openclaw#78649](https://github.com/openclaw/openclaw/issues/78649).
 </Note>
 
-Status: native external CLI integration. Gateway spawns `imsg rpc` and communicates over JSON-RPC on stdio (no separate daemon/port).
+<Warning>
+BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw supports iMessage through `imsg` only.
+</Warning>
+
+Status: native external CLI integration. Gateway spawns `imsg rpc` and communicates over JSON-RPC on stdio (no separate daemon/port). Advanced actions require `imsg launch` and a successful private API probe.
 
 <CardGroup cols={3}>
-  <Card title="BlueBubbles (legacy fallback)" icon="message-circle" href="/channels/bluebubbles">
-    Keep using it for existing BlueBubbles-backed routing; avoid it for new setups when imsg fits.
+  <Card title="Private API actions" icon="wand-sparkles" href="#private-api-actions">
+    Replies, tapbacks, effects, attachments, and group management.
   </Card>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     iMessage DMs default to pairing mode.
+  </Card>
+  <Card title="Remote Mac" icon="terminal" href="#remote-mac-over-ssh">
+    Use an SSH wrapper when the Gateway is not running on the Messages Mac.
   </Card>
   <Card title="Configuration reference" icon="settings" href="/gateway/config-channels#imessage">
     Full iMessage field reference.
@@ -34,6 +43,8 @@ Status: native external CLI integration. Gateway spawns `imsg rpc` and communica
 ```bash
 brew install steipete/tap/imsg
 imsg rpc --help
+imsg launch
+openclaw channels status --probe
 ```
 
       </Step>
@@ -115,6 +126,7 @@ exec ssh -T gateway-host imsg "$@"
 - Messages must be signed in on the Mac running `imsg`.
 - Full Disk Access is required for the process context running OpenClaw/`imsg` (Messages DB access).
 - Automation permission is required to send messages through Messages.app.
+- For advanced actions (react / edit / unsend / threaded reply / effects / group ops), System Integrity Protection must be disabled — see [Enabling the imsg private API](#enabling-the-imsg-private-api) below. Basic text and media send/receive work without it.
 
 <Tip>
 Permissions are granted per process context. If gateway runs headless (LaunchAgent/SSH), run a one-time interactive command in that same context to trigger prompts:
@@ -126,6 +138,71 @@ imsg send <handle> "test"
 ```
 
 </Tip>
+
+## Enabling the imsg private API
+
+`imsg` ships in two operational modes:
+
+- **Basic mode** (default, no SIP changes needed): outbound text and media via `send`, inbound watch/history, chat list. This is what you get out of the box from a fresh `brew install steipete/tap/imsg` plus the standard macOS permissions above.
+- **Private API mode**: `imsg` injects a helper dylib into `Messages.app` to call internal `IMCore` functions. This is what unlocks `react`, `edit`, `unsend`, `reply` (threaded), `sendWithEffect`, `renameGroup`, `setGroupIcon`, `addParticipant`, `removeParticipant`, `leaveGroup`, plus typing indicators and read receipts.
+
+To reach the advanced action surface that this channel page documents, you need Private API mode. The `imsg` README is explicit about the requirement:
+
+> Advanced features such as `read`, `typing`, `launch`, bridge-backed rich send, message mutation, and chat management are opt-in. They require SIP to be disabled and a helper dylib to be injected into `Messages.app`. `imsg launch` refuses to inject when SIP is enabled.
+
+The helper-injection technique uses `imsg`'s own dylib to reach Messages private APIs. There is no third-party server or BlueBubbles runtime in the OpenClaw iMessage path.
+
+<Warning>
+**Disabling SIP is a real security tradeoff.** SIP is one of macOS's core protections against running modified system code; turning it off system-wide opens up additional attack surface and side effects. Notably, **disabling SIP on Apple Silicon Macs also disables the ability to install and run iOS apps on your Mac**.
+
+Treat this as a deliberate operational choice, not a default. If your threat model can't tolerate SIP being off, bundled iMessage is limited to basic mode — text and media send/receive only, no reactions / edit / unsend / effects / group ops.
+</Warning>
+
+### Setup
+
+1. **Install (or upgrade) `imsg`** on the Mac that runs Messages.app:
+
+   ```bash
+   brew install steipete/tap/imsg
+   imsg --version
+   imsg status --json
+   ```
+
+   The `imsg status --json` output reports `bridge_version`, `rpc_methods`, and per-method `selectors` so you can see what the current build supports before you start.
+
+2. **Disable System Integrity Protection.** This is macOS-version-specific because the underlying Apple requirement depends on the OS and hardware:
+   - **macOS 10.13–10.15 (Sierra–Catalina):** disable Library Validation via Terminal, reboot to Recovery Mode, run `csrutil disable`, restart.
+   - **macOS 11+ (Big Sur and later), Intel:** Recovery Mode (or Internet Recovery), `csrutil disable`, restart.
+   - **macOS 11+, Apple Silicon:** power-button startup sequence to enter Recovery; on recent macOS versions hold the **Left Shift** key when you click Continue, then `csrutil disable`. Virtual-machine setups follow a separate flow — take a VM snapshot first.
+   - **macOS 26 / Tahoe:** library-validation policies and `imagent` private-entitlement checks have tightened further; `imsg` may need an updated build to keep up. If `imsg launch` injection or specific `selectors` start returning false after a macOS major upgrade, check `imsg`'s release notes before assuming the SIP step succeeded.
+
+   Follow Apple's Recovery-mode flow for your Mac to disable SIP before running `imsg launch`.
+
+3. **Inject the helper.** With SIP disabled and Messages.app signed in:
+
+   ```bash
+   imsg launch
+   ```
+
+   `imsg launch` refuses to inject when SIP is still enabled, so this also doubles as a confirmation that step 2 took.
+
+4. **Verify the bridge from OpenClaw:**
+
+   ```bash
+   openclaw channels status --probe
+   ```
+
+   The iMessage entry should report `works`, and `imsg status --json | jq '.selectors'` should show `retractMessagePart: true` plus whichever edit / typing / read selectors your macOS build exposes. The OpenClaw plugin per-method gating in `actions.ts` only advertises actions whose underlying selector is `true`, so the action surface you see in the agent's tool list reflects what the bridge can actually do on this host.
+
+If `openclaw channels status --probe` reports the channel as `works` but specific actions throw "iMessage `<action>` requires the imsg private API bridge" at dispatch time, run `imsg launch` again — the helper can fall out (Messages.app restart, OS update, etc.) and the cached `available: true` status will keep advertising actions until the next probe refreshes.
+
+### When you can't disable SIP
+
+If SIP-disabled isn't acceptable for your threat model:
+
+- `imsg` falls back to basic mode — text + media + receive only.
+- The OpenClaw plugin still advertises text/media send and inbound monitoring; it just hides `react`, `edit`, `unsend`, `reply`, `sendWithEffect`, and group ops from the action surface (per the per-method capability gate).
+- You can run a separate non-Apple-Silicon Mac (or a dedicated bot Mac) with SIP off for the iMessage workload, while keeping SIP enabled on your primary devices. See [Dedicated bot macOS user (separate iMessage identity)](#deployment-patterns) below.
 
 ## Access control and routing
 
@@ -155,6 +232,36 @@ imsg send <handle> "test"
 
     Runtime fallback: if `groupAllowFrom` is unset, iMessage group sender checks fall back to `allowFrom` when available.
     Runtime note: if `channels.imessage` is completely missing, runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
+
+    <Warning>
+    Group routing has **two** allowlist gates running back-to-back, and both must pass:
+
+    1. **Sender / chat-target allowlist** (`channels.imessage.groupAllowFrom`) — handle, `chat_guid`, `chat_identifier`, or `chat_id`.
+    2. **Group registry** (`channels.imessage.groups`) — with `groupPolicy: "allowlist"`, this gate requires either a `groups: { "*": { ... } }` wildcard entry (sets `allowAll = true`), or an explicit per-`chat_id` entry under `groups`.
+
+    If gate 2 has nothing in it, every group message is dropped. The plugin emits two `warn`-level signals at the default log level:
+
+    - one-time per account at startup: `imessage: groupPolicy="allowlist" but channels.imessage.groups is empty for account "<id>"`
+    - one-time per `chat_id` at runtime: `imessage: dropping group message from chat_id=<id> ...`
+
+    DMs continue to work because they take a different code path.
+
+    Minimum config to keep groups flowing under `groupPolicy: "allowlist"`:
+
+    ```json5
+    {
+      channels: {
+        imessage: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15555550123"],
+          groups: { "*": { "requireMention": true } },
+        },
+      },
+    }
+    ```
+
+    If those `warn` lines appear in the gateway log, gate 2 is dropping — add the `groups` block.
+    </Warning>
 
     Mention gating for groups:
 
@@ -260,24 +367,24 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
 
     Example:
 
-```json5
-{
-  channels: {
-    imessage: {
-      enabled: true,
-      cliPath: "~/.openclaw/scripts/imsg-ssh",
-      remoteHost: "bot@mac-mini.tailnet-1234.ts.net",
-      includeAttachments: true,
-      dbPath: "/Users/bot/Library/Messages/chat.db",
-    },
-  },
-}
-```
+    ```json5
+    {
+      channels: {
+        imessage: {
+          enabled: true,
+          cliPath: "~/.openclaw/scripts/imsg-ssh",
+          remoteHost: "bot@mac-mini.tailnet-1234.ts.net",
+          includeAttachments: true,
+          dbPath: "/Users/bot/Library/Messages/chat.db",
+        },
+      },
+    }
+    ```
 
-```bash
-#!/usr/bin/env bash
-exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
-```
+    ```bash
+    #!/usr/bin/env bash
+    exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
+    ```
 
     Use SSH keys so both SSH and SCP are non-interactive.
     Ensure the host key is trusted first (for example `ssh bot@mac-mini.tailnet-1234.ts.net`) so `known_hosts` is populated.
@@ -328,9 +435,75 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
     - `sms:+1555...`
     - `user@example.com`
 
-```bash
-imsg chats --limit 20
+    ```bash
+    imsg chats --limit 20
+    ```
+
+  </Accordion>
+</AccordionGroup>
+
+## Private API actions
+
+When `imsg launch` is running and `openclaw channels status --probe` reports `privateApi.available: true`, the message tool can use iMessage-native actions in addition to normal text sends.
+
+```json5
+{
+  channels: {
+    imessage: {
+      actions: {
+        reactions: true,
+        edit: true,
+        unsend: true,
+        reply: true,
+        sendWithEffect: true,
+        sendAttachment: true,
+        renameGroup: true,
+        setGroupIcon: true,
+        addParticipant: true,
+        removeParticipant: true,
+        leaveGroup: true,
+      },
+    },
+  },
+}
 ```
+
+<AccordionGroup>
+  <Accordion title="Available actions">
+    - **react**: Add/remove iMessage tapbacks (`messageId`, `emoji`, `remove`). Supported tapbacks map to love, like, dislike, laugh, emphasize, and question.
+    - **reply**: Send a threaded reply to an existing message (`messageId`, `text` or `message`, plus `chatGuid`, `chatId`, `chatIdentifier`, or `to`).
+    - **sendWithEffect**: Send text with an iMessage effect (`text` or `message`, `effect` or `effectId`).
+    - **edit**: Edit a sent message on supported macOS/private API versions (`messageId`, `text` or `newText`).
+    - **unsend**: Retract a sent message on supported macOS/private API versions (`messageId`).
+    - **upload-file**: Send media/files (`buffer` as base64 or a hydrated `media`/`path`/`filePath`, `filename`, optional `asVoice`). Legacy alias: `sendAttachment`.
+    - **renameGroup**, **setGroupIcon**, **addParticipant**, **removeParticipant**, **leaveGroup**: Manage group chats when the current target is a group conversation.
+
+  </Accordion>
+
+  <Accordion title="Message IDs">
+    Inbound iMessage context includes both short `MessageSid` values and full message GUIDs when available. Short IDs are scoped to the recent in-memory reply cache and are checked against the current chat before use. If a short ID has expired or belongs to another chat, retry with the full `MessageSidFull`.
+
+  </Accordion>
+
+  <Accordion title="Capability detection">
+    OpenClaw hides private API actions only when the cached probe status says the bridge is unavailable. If the status is unknown, actions remain visible and dispatch probes lazily so the first action can succeed after `imsg launch` without a separate manual status refresh.
+
+  </Accordion>
+
+  <Accordion title="Read receipts and typing">
+    When the private API bridge is up, accepted inbound chats are marked read before dispatch and a typing bubble is shown to the sender while the agent generates. Disable read-marking with:
+
+    ```json5
+    {
+      channels: {
+        imessage: {
+          sendReadReceipts: false,
+        },
+      },
+    }
+    ```
+
+    Older `imsg` builds that pre-date the per-method capability list will gate off typing/read silently; OpenClaw logs a one-time warning per restart so the missing receipt is attributable.
 
   </Accordion>
 </AccordionGroup>
@@ -351,18 +524,114 @@ Disable:
 }
 ```
 
+<a id="coalescing-split-send-dms-command--url-in-one-composition"></a>
+
+## Coalescing split-send DMs (command + URL in one composition)
+
+When a user types a command and a URL together — e.g. `Dump https://example.com/article` — Apple's Messages app splits the send into **two separate `chat.db` rows**:
+
+1. A text message (`"Dump"`).
+2. A URL-preview balloon (`"https://..."`) with OG-preview images as attachments.
+
+The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalescing, the agent receives the command alone on turn 1, replies (often "send me the URL"), and only sees the URL on turn 2 — at which point the command context is already lost. This is Apple's send pipeline, not anything OpenClaw or `imsg` introduces.
+
+`channels.imessage.coalesceSameSenderDms` opts a DM into merging consecutive same-sender rows into a single agent turn. Group chats continue to dispatch per-message so multi-user turn structure is preserved.
+
+<Tabs>
+  <Tab title="When to enable">
+    Enable when:
+
+    - You ship skills that expect `command + payload` in one message (dump, paste, save, queue, etc.).
+    - Your users paste URLs, images, or long content alongside commands.
+    - You can accept the added DM turn latency (see below).
+
+    Leave disabled when:
+
+    - You need minimum command latency for single-word DM triggers.
+    - All your flows are one-shot commands without payload follow-ups.
+
+  </Tab>
+  <Tab title="Enabling">
+    ```json5
+    {
+      channels: {
+        imessage: {
+          coalesceSameSenderDms: true, // opt in (default: false)
+        },
+      },
+    }
+    ```
+
+    With the flag on and no explicit `messages.inbound.byChannel.imessage`, the debounce window widens to **2500 ms** (the legacy default is 0 ms — no debouncing). The wider window is required because Apple's split-send cadence of 0.8-2.0 s does not fit in a tighter default.
+
+    To tune the window yourself:
+
+    ```json5
+    {
+      messages: {
+        inbound: {
+          byChannel: {
+            // 2500 ms works for most setups; raise to 4000 ms if your Mac is
+            // slow or under memory pressure (observed gap can stretch past 2 s
+            // then).
+            imessage: 2500,
+          },
+        },
+      },
+    }
+    ```
+
+  </Tab>
+  <Tab title="Trade-offs">
+    - **Added latency for DM messages.** With the flag on, every DM (including standalone control commands and single-text follow-ups) waits up to the debounce window before dispatching, in case a payload row is coming. Group-chat messages keep instant dispatch.
+    - **Merged output is bounded.** Merged text caps at 4000 chars with an explicit `…[truncated]` marker; attachments cap at 20; source entries cap at 10 (first-plus-latest retained beyond that). Every source GUID is tracked in `coalescedMessageGuids` for downstream telemetry.
+    - **DM-only.** Group chats fall through to per-message dispatch so the bot stays responsive when multiple people are typing.
+    - **Opt-in, per-channel.** Other channels (Telegram, WhatsApp, Slack, …) are unaffected. Legacy BlueBubbles configs that set `channels.bluebubbles.coalesceSameSenderDms` should migrate that value to `channels.imessage.coalesceSameSenderDms`.
+
+  </Tab>
+</Tabs>
+
+### Scenarios and what the agent sees
+
+| User composes                                                      | `chat.db` produces    | Flag off (default)                      | Flag on + 2500 ms window                                                |
+| ------------------------------------------------------------------ | --------------------- | --------------------------------------- | ----------------------------------------------------------------------- |
+| `Dump https://example.com` (one send)                              | 2 rows ~1 s apart     | Two agent turns: "Dump" alone, then URL | One turn: merged text `Dump https://example.com`                        |
+| `Save this 📎image.jpg caption` (attachment + text)                | 2 rows                | Two turns (attachment dropped on merge) | One turn: text + image preserved                                        |
+| `/status` (standalone command)                                     | 1 row                 | Instant dispatch                        | **Wait up to window, then dispatch**                                    |
+| URL pasted alone                                                   | 1 row                 | Instant dispatch                        | Instant dispatch (only one entry in bucket)                             |
+| Text + URL sent as two deliberate separate messages, minutes apart | 2 rows outside window | Two turns                               | Two turns (window expires between them)                                 |
+| Rapid flood (>10 small DMs inside window)                          | N rows                | N turns                                 | One turn, bounded output (first + latest, text/attachment caps applied) |
+| Two people typing in a group chat                                  | N rows from M senders | M+ turns (one per sender bucket)        | M+ turns — group chats are not coalesced                                |
+
 ## Troubleshooting
 
 <AccordionGroup>
   <Accordion title="imsg not found or RPC unsupported">
     Validate the binary and RPC support:
 
+    ```bash
+    imsg rpc --help
+    imsg status --json
+    openclaw channels status --probe
+    ```
+
+    If probe reports RPC unsupported, update `imsg`. If private API actions are unavailable, run `imsg launch` in the logged-in macOS user session and probe again. If the Gateway is not running on macOS, use the Remote Mac over SSH setup above instead of the default local `imsg` path.
+
+  </Accordion>
+
+  <Accordion title="Gateway is not running on macOS">
+    The default `cliPath: "imsg"` must run on the Mac signed into Messages. On Linux or Windows, set `channels.imessage.cliPath` to a wrapper script that SSHes to that Mac and runs `imsg "$@"`.
+
 ```bash
-imsg rpc --help
-openclaw channels status --probe
+#!/usr/bin/env bash
+exec ssh -T messages-mac imsg "$@"
 ```
 
-    If probe reports RPC unsupported, update `imsg`.
+    Then run:
+
+```bash
+openclaw channels status --probe --channel imessage
+```
 
   </Accordion>
 
@@ -399,10 +668,10 @@ openclaw channels status --probe
   <Accordion title="macOS permission prompts were missed">
     Re-run in an interactive GUI terminal in the same user/session context and approve prompts:
 
-```bash
-imsg chats --limit 1
-imsg send <handle> "test"
-```
+    ```bash
+    imsg chats --limit 1
+    imsg send <handle> "test"
+    ```
 
     Confirm Full Disk Access + Automation are granted for the process context that runs OpenClaw/`imsg`.
 
@@ -414,11 +683,11 @@ imsg send <handle> "test"
 - [Configuration reference - iMessage](/gateway/config-channels#imessage)
 - [Gateway configuration](/gateway/configuration)
 - [Pairing](/channels/pairing)
-- [BlueBubbles](/channels/bluebubbles)
 
 ## Related
 
 - [Channels Overview](/channels) — all supported channels
+- [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) — config translation table and step-by-step cutover
 - [Pairing](/channels/pairing) — DM authentication and pairing flow
 - [Groups](/channels/groups) — group chat behavior and mention gating
 - [Channel Routing](/channels/channel-routing) — session routing for messages

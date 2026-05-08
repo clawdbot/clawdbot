@@ -16,6 +16,7 @@ const {
   transcribeAudioFileMock,
   textToSpeechStreamMock,
   textToSpeechMock,
+  logVerboseMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -111,6 +112,7 @@ const {
       async (): Promise<unknown> => ({ success: false, error: "stream unavailable" }),
     ),
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
+    logVerboseMock: vi.fn(),
   };
 });
 
@@ -151,6 +153,16 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   return {
     ...actual,
     agentCommandFromIngress: agentCommandMock,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    logVerbose: logVerboseMock,
   };
 });
 
@@ -218,6 +230,7 @@ describe("DiscordVoiceManager", () => {
     textToSpeechStreamMock.mockResolvedValue({ success: false, error: "stream unavailable" });
     textToSpeechMock.mockReset();
     textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
+    logVerboseMock.mockClear();
     createAudioResourceMock.mockClear();
   });
 
@@ -250,9 +263,29 @@ describe("DiscordVoiceManager", () => {
     ]);
   };
 
+  const getSessionEntry = (
+    manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
+    guildId = "g1",
+  ) => {
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get(guildId);
+    if (!entry) {
+      throw new Error(`expected Discord voice session for guild ${guildId}`);
+    }
+    return entry;
+  };
+
+  const getLastAudioPlayer = () => {
+    const player = createAudioPlayerMock.mock.results.at(-1)?.value as
+      | { state: { status: string }; stop: ReturnType<typeof vi.fn> }
+      | undefined;
+    if (!player) {
+      throw new Error("expected Discord voice audio player to be created");
+    }
+    return player;
+  };
+
   const emitDecryptFailure = (manager: InstanceType<typeof managerModule.DiscordVoiceManager>) => {
-    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1");
-    expect(entry).toBeDefined();
+    const entry = getSessionEntry(manager);
     (
       manager as unknown as { handleReceiveError: (e: unknown, err: unknown) => void }
     ).handleReceiveError(
@@ -356,6 +389,29 @@ describe("DiscordVoiceManager", () => {
     expectConnectedStatus(manager, "1001");
   });
 
+  it("autoJoin uses the last configured channel for duplicate guild entries", async () => {
+    const manager = createManager({
+      voice: {
+        enabled: true,
+        autoJoin: [
+          { guildId: "g1", channelId: "1001" },
+          { guildId: "g1", channelId: "1002" },
+        ],
+      },
+    });
+
+    await manager.autoJoin();
+
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+    expect(joinVoiceChannelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        guildId: "g1",
+        channelId: "1002",
+      }),
+    );
+    expectConnectedStatus(manager, "1002");
+  });
+
   it("does not throw when stale tracked voice connections are already destroyed", async () => {
     const staleConnection = createConnectionMock();
     staleConnection.state.status = "destroyed";
@@ -411,10 +467,8 @@ describe("DiscordVoiceManager", () => {
 
     await manager.join({ guildId: "g1", channelId: "1001" });
 
-    const player = createAudioPlayerMock.mock.results.at(-1)?.value;
-    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1");
-    expect(entry).toBeDefined();
-    expect(player).toBeDefined();
+    const player = getLastAudioPlayer();
+    const entry = getSessionEntry(manager);
     player.state.status = "playing";
 
     await (
@@ -554,29 +608,24 @@ describe("DiscordVoiceManager", () => {
 
       await manager.join({ guildId: "g1", channelId: "1001" });
 
-      const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get(
-        "g1",
-      ) as
-        | {
-            guildId: string;
-            channelId: string;
-            capture: {
-              activeSpeakers: Set<string>;
-              activeCaptureStreams: Map<
-                string,
-                { generation: number; stream: { destroy: () => void } }
-              >;
-              captureFinalizeTimers: Map<string, unknown>;
-              captureGenerations: Map<string, number>;
-            };
-          }
-        | undefined;
-      expect(entry).toBeDefined();
+      const entry = getSessionEntry(manager) as {
+        guildId: string;
+        channelId: string;
+        capture: {
+          activeSpeakers: Set<string>;
+          activeCaptureStreams: Map<
+            string,
+            { generation: number; stream: { destroy: () => void } }
+          >;
+          captureFinalizeTimers: Map<string, unknown>;
+          captureGenerations: Map<string, number>;
+        };
+      };
 
       const firstStream = { destroy: vi.fn() };
-      entry?.capture.activeSpeakers.add("u1");
-      entry?.capture.captureGenerations.set("u1", 1);
-      entry?.capture.activeCaptureStreams.set("u1", { generation: 1, stream: firstStream });
+      entry.capture.activeSpeakers.add("u1");
+      entry.capture.captureGenerations.set("u1", 1);
+      entry.capture.activeCaptureStreams.set("u1", { generation: 1, stream: firstStream });
 
       (
         manager as unknown as {
@@ -758,6 +807,34 @@ describe("DiscordVoiceManager", () => {
         text: "hello back",
       }),
     );
+  });
+
+  it("logs a bounded inbound transcript preview for voice debugging", async () => {
+    transcribeAudioFileMock.mockResolvedValueOnce({
+      text: `hello from voice\n\n${"x".repeat(700)}`,
+    });
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Debug Speaker",
+      user: {
+        id: "u-debug",
+        username: "debug",
+        globalName: "Debug",
+        discriminator: "0001",
+      },
+    });
+    const manager = createManager({ groupPolicy: "open" }, client, {
+      commands: { useAccessGroups: false },
+    });
+
+    await processVoiceSegment(manager, "u-debug");
+
+    const transcriptLog = logVerboseMock.mock.calls
+      .map((call) => String(call[0]))
+      .find((message) => message.includes("transcript from Debug Speaker (u-debug)"));
+    expect(transcriptLog).toContain("hello from voice ");
+    expect(transcriptLog).not.toContain("\n");
+    expect(transcriptLog?.length).toBeLessThan(650);
   });
 
   it("plays streaming TTS audio before falling back to a synthesized file", async () => {

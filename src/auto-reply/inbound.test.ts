@@ -1027,7 +1027,7 @@ describe("resolveGroupRequireMention", () => {
   it("preserves plugin-backed channel requireMention resolution", async () => {
     const cfg: OpenClawConfig = {
       channels: {
-        bluebubbles: {
+        imessage: {
           groups: {
             "chat:primary": { requireMention: false },
           },
@@ -1035,12 +1035,12 @@ describe("resolveGroupRequireMention", () => {
       },
     };
     const ctx: TemplateContext = {
-      Provider: "bluebubbles",
-      From: "bluebubbles:group:chat:primary",
+      Provider: "imessage",
+      From: "imessage:group:chat:primary",
     };
     const groupResolution: GroupKeyResolution = {
-      key: "bluebubbles:group:chat:primary",
-      channel: "bluebubbles",
+      key: "imessage:group:chat:primary",
+      channel: "imessage",
       id: "chat:primary",
       chatType: "group",
     };

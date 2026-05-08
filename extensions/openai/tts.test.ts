@@ -32,6 +32,17 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
 }));
 
+const officialEndpointValidationCases = [
+  {
+    label: "voice validator",
+    isAccepted: () => isValidOpenAIVoice("kokoro-custom-voice", "https://api.openai.com/v1/"),
+  },
+  {
+    label: "model validator",
+    isAccepted: () => isValidOpenAIModel("kokoro-custom-model", "https://api.openai.com/v1/"),
+  },
+];
+
 describe("openai tts", () => {
   const proxyReset = installDebugProxyTestResetHooks();
   const originalFetch = globalThis.fetch;
@@ -59,10 +70,6 @@ describe("openai tts", () => {
       expect(isValidOpenAIVoice("alloy ")).toBe(false);
       expect(isValidOpenAIVoice(" alloy")).toBe(false);
     });
-
-    it("treats the default endpoint with trailing slash as the default endpoint", () => {
-      expect(isValidOpenAIVoice("kokoro-custom-voice", "https://api.openai.com/v1/")).toBe(false);
-    });
   });
 
   describe("isValidOpenAIModel", () => {
@@ -85,10 +92,15 @@ describe("openai tts", () => {
         expect(isValidOpenAIModel(testCase.model), testCase.model).toBe(testCase.expected);
       }
     });
+  });
 
-    it("treats the default endpoint with trailing slash as the default endpoint", () => {
-      expect(isValidOpenAIModel("kokoro-custom-model", "https://api.openai.com/v1/")).toBe(false);
-    });
+  describe("official OpenAI TTS endpoint validation", () => {
+    it.each(officialEndpointValidationCases)(
+      "$label treats the default endpoint with trailing slash as the default endpoint",
+      ({ isAccepted }) => {
+        expect(isAccepted()).toBe(false);
+      },
+    );
   });
 
   describe("resolveOpenAITtsInstructions", () => {

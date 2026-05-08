@@ -8,6 +8,7 @@ type ResolveConfigPathMock = Mock<() => string>;
 type StatusScanSharedMocks = {
   resolveConfigPath: ResolveConfigPathMock;
   hasPotentialConfiguredChannels: UnknownMock;
+  hasConfiguredChannelsForReadOnlyScope: UnknownMock;
   readBestEffortConfig: UnknownMock;
   resolveCommandSecretRefsViaGateway: UnknownMock;
   getUpdateCheckResult: UnknownMock;
@@ -26,6 +27,7 @@ export function createStatusScanSharedMocks(configPathLabel: string): StatusScan
   return {
     resolveConfigPath: vi.fn(() => `/tmp/openclaw-${configPathLabel}-missing-${process.pid}.json`),
     hasPotentialConfiguredChannels: vi.fn(),
+    hasConfiguredChannelsForReadOnlyScope: vi.fn(),
     readBestEffortConfig: vi.fn(),
     resolveCommandSecretRefsViaGateway: vi.fn(),
     getUpdateCheckResult: vi.fn(),
@@ -187,16 +189,7 @@ export async function loadStatusScanModuleForTest(
       config: OpenClawConfig;
       env?: NodeJS.ProcessEnv;
       includePersistedAuthState?: boolean;
-    }) =>
-      Boolean(
-        mocks.hasPotentialConfiguredChannels(
-          params.config,
-          params.env,
-          params.includePersistedAuthState === undefined
-            ? undefined
-            : { includePersistedAuthState: params.includePersistedAuthState },
-        ),
-      ),
+    }) => mocks.hasConfiguredChannelsForReadOnlyScope(params),
     listConfiguredChannelIdsForReadOnlyScope: (params: {
       config: OpenClawConfig;
       env?: NodeJS.ProcessEnv;
@@ -409,6 +402,22 @@ export function applyStatusScanDefaults(
   const resolvedConfig = options.resolvedConfig ?? sourceConfig;
 
   mocks.hasPotentialConfiguredChannels.mockReturnValue(options.hasConfiguredChannels ?? false);
+  mocks.hasConfiguredChannelsForReadOnlyScope.mockImplementation((rawParams: unknown) => {
+    const params = rawParams as {
+      config: OpenClawConfig;
+      env?: NodeJS.ProcessEnv;
+      includePersistedAuthState?: boolean;
+    };
+    return Boolean(
+      mocks.hasPotentialConfiguredChannels(
+        params.config,
+        params.env,
+        params.includePersistedAuthState === undefined
+          ? undefined
+          : { includePersistedAuthState: params.includePersistedAuthState },
+      ),
+    );
+  });
   mocks.readBestEffortConfig.mockResolvedValue(sourceConfig);
   mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
     resolvedConfig,

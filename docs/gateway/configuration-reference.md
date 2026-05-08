@@ -198,8 +198,75 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, `before_model_resolve`, `before_agent_reply`, `before_agent_run`, `before_agent_finalize`, and `agent_end`.
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
+- `plugins.entries.<id>.llm.allowModelOverride`: explicitly trust this plugin to request model overrides for `api.runtime.llm.complete`.
+- `plugins.entries.<id>.llm.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted plugin LLM completion overrides. Use `"*"` only when you intentionally want to allow any model.
+- `plugins.entries.<id>.llm.allowAgentIdOverride`: explicitly trust this plugin to run `api.runtime.llm.complete` against a non-default agent id.
 - `plugins.entries.<id>.config`: plugin-defined config object (validated by native OpenClaw plugin schema when available).
 - Channel plugin account/runtime settings live under `channels.<id>` and should be described by the owning plugin's manifest `channelConfigs` metadata, not by a central OpenClaw option registry.
+
+### Codex harness plugin config
+
+The bundled `codex` plugin owns native Codex app-server harness settings under
+`plugins.entries.codex.config`. See [Codex harness](/plugins/codex-harness) for
+the full runtime model.
+
+`codexPlugins` applies only to sessions that select the native Codex harness.
+It does not enable Codex plugins for Pi, normal OpenAI provider runs, ACP
+conversation bindings, or any non-Codex harness.
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          codexPlugins: {
+            enabled: true,
+            allow_destructive_actions: false,
+            plugins: {
+              "google-calendar": {
+                enabled: true,
+                marketplaceName: "openai-curated",
+                pluginName: "google-calendar",
+                allow_destructive_actions: false,
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+- `plugins.entries.codex.config.codexPlugins.enabled`: enables native Codex
+  plugin/app support for the Codex harness. Default: `false`.
+- `plugins.entries.codex.config.codexPlugins.allow_destructive_actions`:
+  default destructive-action policy for migrated plugin app elicitations.
+  Default: `false`.
+- `plugins.entries.codex.config.codexPlugins.plugins.<key>.enabled`: enables a
+  migrated plugin entry when global `codexPlugins.enabled` is also true.
+  Default: `true` for explicit entries.
+- `plugins.entries.codex.config.codexPlugins.plugins.<key>.marketplaceName`:
+  stable marketplace identity. V1 only supports `"openai-curated"`.
+- `plugins.entries.codex.config.codexPlugins.plugins.<key>.pluginName`: stable
+  Codex plugin identity from migration, for example `"google-calendar"`.
+- `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
+  per-plugin destructive-action override. When omitted, the global
+  `allow_destructive_actions` value is used.
+
+`codexPlugins.enabled` is the global enablement directive. Explicit plugin
+entries written by migration are the durable install and repair eligibility set.
+`plugins["*"]` is not supported, there is no `install` switch, and local
+`marketplacePath` values are intentionally not config fields because they are
+host-specific.
+
+`app/list` readiness checks are cached for one hour and refreshed
+asynchronously when stale. Codex thread app config is computed at Codex harness
+session establishment, not on every turn; use `/new`, `/reset`, or a gateway
+restart after changing native plugin config.
+
 - `plugins.entries.firecrawl.config.webFetch`: Firecrawl web-fetch provider settings.
   - `apiKey`: Firecrawl API key (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey`, legacy `tools.web.fetch.firecrawl.apiKey`, or `FIRECRAWL_API_KEY` env var.
   - `baseUrl`: Firecrawl API base URL (default: `https://api.firecrawl.dev`; self-hosted overrides must target private/internal endpoints).

@@ -342,7 +342,8 @@ describe("createMattermostDirectChannelWithRetry", () => {
     await expect(resolveRetryRun(run)).rejects.toThrow();
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(abortSignal).toBeDefined();
+    expect(abortSignal).toBeInstanceOf(AbortSignal);
+    expect(abortSignal?.aborted).toBe(true);
     expect(abortListenerCalled).toBe(true);
   });
 
@@ -480,8 +481,8 @@ describe("createMattermostDirectChannelWithRetry", () => {
       }),
     );
 
-    expect(capturedSignal).toBeDefined();
     expect(capturedSignal).toBeInstanceOf(AbortSignal);
+    expect(capturedSignal?.aborted).toBe(false);
   });
 
   it("retries on 5xx even if error message contains 4xx substring", async () => {

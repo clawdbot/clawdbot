@@ -74,9 +74,7 @@ describe("auditGatewayServiceConfig", () => {
         environment: { PATH: "/usr/bin:/bin" },
       },
     });
-    expect(audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(
-      true,
-    );
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(true);
   });
 
   it("flags version-managed node paths", async () => {

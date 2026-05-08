@@ -24,7 +24,7 @@ describe("channel registry helpers", () => {
 
   it("includes MS Teams in the bundled channel list", () => {
     const channels = listChatChannels();
-    expect(channels.some((channel) => channel.id === "msteams")).toBe(true);
+    expect(channels.map((channel) => channel.id)).toContain("msteams");
   });
 
   it("formats Telegram selection lines without a docs prefix and with website extras", () => {

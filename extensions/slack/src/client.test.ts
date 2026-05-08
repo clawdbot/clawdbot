@@ -23,6 +23,13 @@ let SLACK_DEFAULT_RETRY_OPTIONS: typeof import("./client.js").SLACK_DEFAULT_RETR
 let SLACK_WRITE_RETRY_OPTIONS: typeof import("./client.js").SLACK_WRITE_RETRY_OPTIONS;
 let WebClient: ReturnType<typeof vi.fn>;
 
+function requireAgent<T extends { agent?: unknown }>(options: T): NonNullable<T["agent"]> {
+  if (!options.agent) {
+    throw new Error("expected proxy agent");
+  }
+  return options.agent as NonNullable<T["agent"]>;
+}
+
 beforeAll(async () => {
   const slackWebApi = await import("@slack/web-api");
   ({
@@ -167,16 +174,16 @@ describe("slack proxy agent", () => {
   it("sets agent from HTTPS_PROXY env var", () => {
     process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
     const options = resolveSlackWebClientOptions();
+    const agent = requireAgent(options);
 
-    expect(options.agent).toBeDefined();
-    expect(options.agent!.constructor.name).toBe("HttpsProxyAgent");
+    expect(agent.constructor.name).toBe("HttpsProxyAgent");
   });
 
   it("falls back to HTTP_PROXY when HTTPS_PROXY is not set", () => {
     process.env.HTTP_PROXY = "http://proxy.example.com:3128";
     const options = resolveSlackWebClientOptions();
 
-    expect(options.agent).toBeDefined();
+    expect(requireAgent(options).constructor.name).toBe("HttpsProxyAgent");
   });
 
   it("does not set agent when no proxy env var is configured", () => {
@@ -197,10 +204,10 @@ describe("slack proxy agent", () => {
     process.env.https_proxy = "http://lower.example.com:3128";
     process.env.HTTPS_PROXY = "http://upper.example.com:3128";
     const options = resolveSlackWebClientOptions();
+    const agent = requireAgent(options);
 
-    expect(options.agent).toBeDefined();
     // HttpsProxyAgent stores the proxy URL — verify it picked the lower-case one
-    expect((options.agent as unknown as { proxy: { href: string } }).proxy.href).toContain(
+    expect((agent as unknown as { proxy: { href: string } }).proxy.href).toContain(
       "lower.example.com",
     );
   });
@@ -216,9 +223,9 @@ describe("slack proxy agent", () => {
   it("also applies proxy agent to write client options", () => {
     process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
     const options = resolveSlackWriteClientOptions();
+    const agent = requireAgent(options);
 
-    expect(options.agent).toBeDefined();
-    expect(options.agent!.constructor.name).toBe("HttpsProxyAgent");
+    expect(agent.constructor.name).toBe("HttpsProxyAgent");
   });
 
   it("respects NO_PROXY excluding slack.com", () => {
@@ -258,7 +265,7 @@ describe("slack proxy agent", () => {
     process.env.NO_PROXY = "localhost,.internal.corp";
     const options = resolveSlackWebClientOptions();
 
-    expect(options.agent).toBeDefined();
+    expect(requireAgent(options).constructor.name).toBe("HttpsProxyAgent");
   });
 
   it("degrades gracefully on malformed proxy URL", () => {

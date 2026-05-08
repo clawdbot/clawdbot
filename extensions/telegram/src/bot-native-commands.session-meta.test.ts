@@ -292,8 +292,10 @@ function registerAndResolveCommandHandlerBase(params: {
   });
 
   const handler = commandHandlers.get(commandName);
-  expect(handler).toBeTruthy();
-  return { handler: handler as TelegramCommandHandler, sendMessage };
+  if (!handler) {
+    throw new Error(`expected ${commandName} command handler to be registered`);
+  }
+  return { handler, sendMessage };
 }
 
 function registerAndResolveCommandHandler(params: {
@@ -778,7 +780,9 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       | DeliverRepliesParams
       | undefined;
     const deliveredPayload = deliveredCall?.replies?.[0];
-    expect(deliveredPayload).toBeTruthy();
+    if (!deliveredPayload) {
+      throw new Error("expected approval reply payload to be delivered");
+    }
     expect(deliveredPayload?.["text"]).toContain("/approve 7f423fdc allow-once");
     expect(deliveredPayload?.["channelData"]).toBeUndefined();
   });

@@ -1,3 +1,4 @@
+import { rmSync } from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -460,6 +461,7 @@ beforeEach(() => {
   getRuntimeConfig.mockReset();
   getRuntimeConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   sessionStoreEntries.value = {};
+  rmSync(`${sessionStorePath}.telegram-messages.json`, { force: true });
   loadSessionStoreMock.mockReset();
   loadSessionStoreMock.mockImplementation(() => sessionStoreEntries.value);
   resolveStorePathMock.mockReset();

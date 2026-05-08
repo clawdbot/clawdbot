@@ -19,9 +19,10 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
-  it("does not throw when the offset file does not exist", async () => {
+  it("keeps a missing offset file absent after delete", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
-      await expect(deleteTelegramUpdateOffset({ accountId: "nonexistent" })).resolves.not.toThrow();
+      await deleteTelegramUpdateOffset({ accountId: "nonexistent" });
+      expect(await readTelegramUpdateOffset({ accountId: "nonexistent" })).toBeNull();
     });
   });
 

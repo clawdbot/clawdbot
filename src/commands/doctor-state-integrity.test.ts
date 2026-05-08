@@ -532,8 +532,10 @@ describe("doctor state integrity oauth dir checks", () => {
       key.startsWith("agent:main:heartbeat-recovered-"),
     );
     expect(store["agent:main:main"]).toBeUndefined();
-    expect(recoveredKey).toBeDefined();
-    expect(store[recoveredKey ?? ""]?.sessionId).toBe("heartbeat-session");
+    if (recoveredKey === undefined) {
+      throw new Error("expected recovered heartbeat session key");
+    }
+    expect(store[recoveredKey]?.sessionId).toBe("heartbeat-session");
 
     const tuiStore = JSON.parse(fs.readFileSync(tuiLastSessionPath, "utf8")) as Record<
       string,

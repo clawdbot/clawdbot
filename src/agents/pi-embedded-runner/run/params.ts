@@ -31,6 +31,24 @@ export type CurrentTurnPromptContext = {
     senderLabel?: string;
     isQuote?: boolean;
   };
+  replyChain?: Array<{
+    messageId?: string;
+    threadId?: string;
+    sender?: string;
+    senderId?: string;
+    senderUsername?: string;
+    timestamp?: number;
+    body?: string;
+    isQuote?: boolean;
+    mediaType?: string;
+    mediaPath?: string;
+    mediaRef?: string;
+    replyToId?: string;
+    forwardedFrom?: string;
+    forwardedFromId?: string;
+    forwardedFromUsername?: string;
+    forwardedDate?: number;
+  }>;
 };
 
 export type RunEmbeddedPiAgentParams = {

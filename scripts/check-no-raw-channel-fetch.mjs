@@ -14,8 +14,6 @@ const sourceRoots = ["src/channels", "src/routing", "src/line", "extensions"];
 // Temporary allowlist for legacy callsites. New raw fetch callsites in channel/plugin runtime
 // code should be rejected and migrated to fetchWithSsrFGuard/shared channel helpers.
 const allowedRawFetchCallsites = new Set([
-  bundledPluginCallsite("bluebubbles", "src/test-harness.ts", 132),
-  bundledPluginCallsite("bluebubbles", "src/types.ts", 204),
   bundledPluginCallsite("browser", "src/browser/cdp.helpers.ts", 268),
   bundledPluginCallsite("browser", "src/browser/client-fetch.ts", 192),
   bundledPluginCallsite("chutes", "models.ts", 536),

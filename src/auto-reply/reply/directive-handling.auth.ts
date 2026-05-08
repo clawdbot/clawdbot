@@ -1,5 +1,6 @@
 import { formatRemainingShort } from "../../agents/auth-health.js";
 import {
+  isConfiguredAwsSdkAuthProfileForProvider,
   isProfileInCooldown,
   resolveAuthProfileDisplayLabel,
   resolveAuthStorePathForDisplay,
@@ -78,6 +79,13 @@ export const resolveAuthLabel = async (
       }
       const profile = store.profiles[profileId];
       const configProfile = cfg.auth?.profiles?.[profileId];
+      const configOnlyAwsSdk = !profile
+        ? isConfiguredAwsSdkAuthProfileForProvider({ cfg, provider, profileId })
+        : false;
+      const more = order.length > 1 ? ` (+${order.length - 1})` : "";
+      if (configOnlyAwsSdk) {
+        return { label: `${profileId} aws-sdk${more}`, source: "" };
+      }
       const missing =
         !profile ||
         (configProfile?.provider && configProfile.provider !== profile.provider) ||
@@ -85,7 +93,6 @@ export const resolveAuthLabel = async (
           configProfile.mode !== profile.type &&
           !(configProfile.mode === "oauth" && profile.type === "token"));
 
-      const more = order.length > 1 ? ` (+${order.length - 1})` : "";
       if (missing) {
         return { label: `${profileId} missing${more}`, source: "" };
       }
@@ -113,12 +120,6 @@ export const resolveAuthLabel = async (
           source: "",
         };
       }
-      if (profile.type === "aws-sdk") {
-        return {
-          label: `${profileId} aws-sdk${more}`,
-          source: "",
-        };
-      }
       const display = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
       const label = display === profileId ? profileId : display;
       const exp = formatExpirationLabel(profile.expires, now, formatUntil);
@@ -142,6 +143,10 @@ export const resolveAuthLabel = async (
         } else {
           flags.push("cooldown");
         }
+      }
+      if (!profile && isConfiguredAwsSdkAuthProfileForProvider({ cfg, provider, profileId })) {
+        const suffix = formatFlagsSuffix(flags);
+        return `${profileId}=aws-sdk${suffix}`;
       }
       if (
         !profile ||
@@ -174,10 +179,6 @@ export const resolveAuthLabel = async (
         }
         const suffix = formatFlagsSuffix(flags);
         return `${profileId}=token:${tokenLabel}${suffix}`;
-      }
-      if (profile.type === "aws-sdk") {
-        const suffix = formatFlagsSuffix(flags);
-        return `${profileId}=aws-sdk${suffix}`;
       }
       const display = resolveAuthProfileDisplayLabel({
         cfg,

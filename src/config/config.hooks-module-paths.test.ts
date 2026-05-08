@@ -8,7 +8,7 @@ describe("config hooks module paths", () => {
     if (res.ok) {
       throw new Error("expected validation failure");
     }
-    expect(res.issues.some((iss) => iss.path === expectedPath)).toBe(true);
+    expect(res.issues.map((issue) => issue.path)).toContain(expectedPath);
   };
 
   it("rejects absolute hooks.mappings[].transform.module", () => {

@@ -59,8 +59,10 @@ async function triggerInvite(
   inviteEvent: unknown = {},
 ) {
   const inviteHandler = getInviteHandler();
-  expect(inviteHandler).toBeTruthy();
-  await inviteHandler!("!room:example.org", inviteEvent);
+  if (!inviteHandler) {
+    throw new Error("expected Matrix invite handler");
+  }
+  await inviteHandler("!room:example.org", inviteEvent);
 }
 
 describe("registerMatrixAutoJoin", () => {
@@ -83,7 +85,7 @@ describe("registerMatrixAutoJoin", () => {
     expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
   });
 
-  it("does not auto-join invites by default", async () => {
+  it("does not auto-join invites by default", () => {
     const { getInviteHandler, joinRoom } = registerAutoJoinHarness({});
 
     expect(getInviteHandler()).toBeNull();
@@ -144,8 +146,10 @@ describe("registerMatrixAutoJoin", () => {
     resolveRoom.mockRejectedValue(new Error("temporary homeserver failure"));
 
     const inviteHandler = getInviteHandler();
-    expect(inviteHandler).toBeTruthy();
-    await expect(inviteHandler!("!room:example.org", {})).resolves.toBeUndefined();
+    if (!inviteHandler) {
+      throw new Error("expected Matrix invite handler");
+    }
+    await expect(inviteHandler("!room:example.org", {})).resolves.toBeUndefined();
 
     expect(joinRoom).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(

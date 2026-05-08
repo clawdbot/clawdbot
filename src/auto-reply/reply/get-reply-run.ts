@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import type { CurrentTurnPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
@@ -349,6 +351,18 @@ type RunPreparedReplyParams = {
 function resolveCurrentTurnPromptContext(
   ctx: TemplateContext,
 ): CurrentTurnPromptContext | undefined {
+  const replyChain = Array.isArray(ctx.ReplyChain)
+    ? ctx.ReplyChain.filter(
+        (entry) =>
+          entry.body?.trim() ||
+          entry.mediaType?.trim() ||
+          entry.mediaPath?.trim() ||
+          entry.mediaRef?.trim(),
+      )
+    : undefined;
+  if (replyChain && replyChain.length > 0) {
+    return { replyChain };
+  }
   const replyBody = normalizeOptionalString(ctx.ReplyToBody);
   if (!replyBody) {
     return undefined;
@@ -874,12 +888,29 @@ export async function runPreparedReply(
     );
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
+  const agentHarnessPolicy = useFastReplyRuntime
+    ? undefined
+    : resolveAgentHarnessPolicy({
+        provider,
+        modelId: model,
+        config: cfg,
+        agentId,
+        sessionKey: runtimePolicySessionKey,
+      });
+  const resolveAcceptedAuthProfileProviders = () =>
+    agentHarnessPolicy
+      ? listOpenAIAuthProfileProvidersForAgentRuntime({
+          provider,
+          harnessRuntime: agentHarnessPolicy.runtime,
+        })
+      : [provider];
   let authProfileId = useFastReplyRuntime
     ? preparedSessionState.sessionEntry?.authProfileOverride
     : await traceRunPhase("reply.resolve_auth_profile", () =>
         resolveSessionAuthProfileOverride({
           cfg,
           provider,
+          acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
           agentDir,
           sessionEntry: preparedSessionState.sessionEntry,
           sessionStore,
@@ -938,6 +969,7 @@ export async function runPreparedReply(
           : await resolveSessionAuthProfileOverride({
               cfg,
               provider,
+              acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
               agentDir,
               sessionEntry: preparedSessionState.sessionEntry,
               sessionStore,

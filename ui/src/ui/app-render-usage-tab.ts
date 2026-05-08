@@ -62,6 +62,7 @@ export function renderUsageTab(state: AppViewState) {
     filters: {
       startDate: state.usageStartDate,
       endDate: state.usageEndDate,
+      scope: state.usageScope,
       selectedSessions: state.usageSelectedSessions,
       selectedDays: state.usageSelectedDays,
       selectedHours: state.usageSelectedHours,
@@ -112,6 +113,15 @@ export function renderUsageTab(state: AppViewState) {
           state.usageSelectedHours = [];
           state.usageSelectedSessions = [];
           debouncedLoadUsage(state);
+        },
+        onScopeChange: (scope) => {
+          state.usageScope = scope;
+          state.usageSelectedDays = [];
+          state.usageSelectedHours = [];
+          state.usageSelectedSessions = [];
+          state.usageTimeSeries = null;
+          state.usageSessionLogs = null;
+          void loadUsage(state);
         },
         onRefresh: () => loadUsage(state),
         onTimeZoneChange: (zone) => {

@@ -6,7 +6,7 @@ import {
   formatChannelAllowFrom,
 } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import { resolveReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { formatChannelStatusState } from "../../channels/plugins/status-state.js";
 import type {
   ChannelAccountSnapshot,
@@ -14,6 +14,8 @@ import type {
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
 import { asRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -272,10 +274,11 @@ export async function buildChannelsTable(
 
   const sourceConfig = opts?.sourceConfig ?? cfg;
   const includeSetupFallbackPlugins = opts?.includeSetupFallbackPlugins ?? true;
-  for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
+  const readOnlyPlugins = resolveReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
     includeSetupFallbackPlugins,
-  })) {
+  });
+  for (const plugin of readOnlyPlugins.plugins) {
     const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId = resolveChannelDefaultAccountId({
       plugin,
@@ -479,6 +482,36 @@ export async function buildChannelsTable(
         }),
       });
     }
+  }
+
+  const visibleChannelIds = new Set(rows.map((row) => row.id));
+  const missingCandidateChannelIds = [
+    ...new Set([
+      ...readOnlyPlugins.missingConfiguredChannelIds,
+      ...listExplicitConfiguredChannelIdsForConfig(sourceConfig),
+      ...listExplicitConfiguredChannelIdsForConfig(cfg),
+    ]),
+  ].toSorted((left, right) => left.localeCompare(right));
+  for (const channelId of missingCandidateChannelIds) {
+    if (visibleChannelIds.has(channelId)) {
+      continue;
+    }
+    const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
+      config: cfg,
+      activationSourceConfig: sourceConfig,
+      channelId,
+    });
+    if (!hint || hint.channelId !== channelId) {
+      continue;
+    }
+    rows.push({
+      id: channelId,
+      label: hint.label,
+      enabled: true,
+      state: "warn",
+      detail: `plugin not installed - run ${hint.installCommand} or ${hint.doctorFixCommand}`,
+    });
+    visibleChannelIds.add(channelId);
   }
 
   return {

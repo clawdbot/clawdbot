@@ -226,8 +226,10 @@ function resolveProviderOwnersFixture(params: { providerId: string }): readonly 
 
 function getLastRuntimeRegistryCall(): Record<string, unknown> {
   const call = resolveRuntimePluginRegistryMock.mock.calls.at(-1)?.[0];
-  expect(call).toBeDefined();
-  return (call ?? {}) as Record<string, unknown>;
+  if (!call) {
+    throw new Error("expected runtime plugin registry to be resolved");
+  }
+  return call as Record<string, unknown>;
 }
 
 function cloneOptions<T>(value: T): T {
@@ -279,8 +281,10 @@ function getLastResolvedPluginConfig() {
 
 function getLastSetupLoadedPluginConfig() {
   const call = loadOpenClawPluginsMock.mock.calls.at(-1)?.[0];
-  expect(call).toBeDefined();
-  return (call?.config ?? undefined) as
+  if (!call) {
+    throw new Error("expected OpenClaw plugin setup loader to be called");
+  }
+  return (call.config ?? undefined) as
     | {
         plugins?: {
           allow?: string[];

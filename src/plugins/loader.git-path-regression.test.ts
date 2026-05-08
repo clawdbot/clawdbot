@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe("plugin loader git path regression", () => {
-  it("loads git-style package extension entries when they import plugin-sdk subpaths (#49806)", async () => {
+  it("loads git-style package extension entries when they import plugin-sdk subpaths (#49806)", () => {
     const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "imessage");
     const copiedSourceDir = path.join(copiedExtensionRoot, "src");
     const copiedPluginSdkDir = path.join(copiedExtensionRoot, "plugin-sdk");

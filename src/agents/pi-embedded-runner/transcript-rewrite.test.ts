@@ -132,6 +132,20 @@ function findAssistantEntryByText(sessionManager: SessionManager, text: string) 
     );
 }
 
+function requireValue<T>(value: T | undefined, label: string): T {
+  if (value === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
+function requireString(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 beforeAll(async () => {
   ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
   ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
@@ -179,9 +193,11 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
 
   it("preserves active-branch labels after rewritten entries are re-appended", () => {
     const { sessionManager, toolResultEntryId } = createReadRewriteSession();
-    const summaryEntry = findAssistantEntryByText(sessionManager, "summarized");
-    expect(summaryEntry).toBeDefined();
-    sessionManager.appendLabelChange(summaryEntry!.id, "bookmark");
+    const summaryEntry = requireValue(
+      findAssistantEntryByText(sessionManager, "summarized"),
+      "summary entry",
+    );
+    sessionManager.appendLabelChange(summaryEntry.id, "bookmark");
 
     const result = rewriteTranscriptEntriesInSessionManager({
       sessionManager,
@@ -194,9 +210,11 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     });
 
     expect(result.changed).toBe(true);
-    const rewrittenSummaryEntry = findAssistantEntryByText(sessionManager, "summarized");
-    expect(rewrittenSummaryEntry).toBeDefined();
-    expect(sessionManager.getLabel(rewrittenSummaryEntry!.id)).toBe("bookmark");
+    const rewrittenSummaryEntry = requireValue(
+      findAssistantEntryByText(sessionManager, "summarized"),
+      "rewritten summary entry",
+    );
+    expect(sessionManager.getLabel(rewrittenSummaryEntry.id)).toBe("bookmark");
     expect(sessionManager.getBranch().some((entry) => entry.type === "label")).toBe(true);
   });
 
@@ -229,10 +247,13 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     );
     const compactionEntry = branch.find((entry) => entry.type === "compaction");
 
-    expect(keptAssistantEntry).toBeDefined();
-    expect(compactionEntry).toBeDefined();
-    expect(compactionEntry?.firstKeptEntryId).toBe(keptAssistantEntry?.id);
-    expect(compactionEntry?.firstKeptEntryId).not.toBe(keptAssistantEntryId);
+    const keptAssistant = requireValue(keptAssistantEntry, "kept assistant entry");
+    const compaction = requireValue(compactionEntry, "compaction entry");
+    if (compaction.type !== "compaction") {
+      throw new Error("expected compaction entry");
+    }
+    expect(compaction.firstKeptEntryId).toBe(keptAssistant.id);
+    expect(compaction.firstKeptEntryId).not.toBe(keptAssistantEntryId);
   });
 
   it("bypasses persistence hooks when replaying rewritten messages", () => {
@@ -297,11 +318,7 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
         timestamp: 3,
       }),
     ]);
-    const sessionFile = sessionManager.getSessionFile();
-    expect(sessionFile).toBeTruthy();
-    if (!sessionFile) {
-      throw new Error("expected persisted session file");
-    }
+    const sessionFile = requireString(sessionManager.getSessionFile(), "persisted session file");
     const toolResultEntryId = entryIds[1];
 
     const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {

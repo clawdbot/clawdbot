@@ -226,8 +226,9 @@ describe("backup commands", () => {
 
       const stateAsset = result.assets.find((asset) => asset.kind === "state");
       const workspaceAsset = result.assets.find((asset) => asset.kind === "workspace");
-      expect(stateAsset).toBeDefined();
-      expect(workspaceAsset).toBeDefined();
+      if (!stateAsset || !workspaceAsset) {
+        throw new Error("expected state and workspace backup assets");
+      }
       expect(capturedEntryPaths).toHaveLength(result.assets.length + 1);
 
       const manifestPath = capturedEntryPaths[0];
@@ -237,23 +238,23 @@ describe("backup commands", () => {
         path.posix.join(buildBackupArchiveRoot(nowMs), "manifest.json"),
       );
 
-      const remappedStateEntry = { path: stateAsset!.sourcePath };
+      const remappedStateEntry = { path: stateAsset.sourcePath };
       onWriteEntry(remappedStateEntry);
       expect(remappedStateEntry.path).toBe(
         path.posix.join(
           buildBackupArchiveRoot(nowMs),
           "payload",
-          encodeAbsolutePathForBackupArchive(stateAsset!.sourcePath),
+          encodeAbsolutePathForBackupArchive(stateAsset.sourcePath),
         ),
       );
 
-      const remappedWorkspaceEntry = { path: workspaceAsset!.sourcePath };
+      const remappedWorkspaceEntry = { path: workspaceAsset.sourcePath };
       onWriteEntry(remappedWorkspaceEntry);
       expect(remappedWorkspaceEntry.path).toBe(
         path.posix.join(
           buildBackupArchiveRoot(nowMs),
           "payload",
-          encodeAbsolutePathForBackupArchive(workspaceAsset!.sourcePath),
+          encodeAbsolutePathForBackupArchive(workspaceAsset.sourcePath),
         ),
       );
     } finally {
@@ -384,7 +385,7 @@ describe("backup commands", () => {
       });
 
       expect(result.includeWorkspace).toBe(false);
-      expect(result.assets.some((asset) => asset.kind === "workspace")).toBe(false);
+      expect(result.assets.map((asset) => asset.kind)).not.toContain("workspace");
 
       const configOnly = await backupCreateCommand(runtime, {
         dryRun: true,

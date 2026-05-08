@@ -170,7 +170,7 @@ describe("saveAuthProfileStore", () => {
         lastGood?: unknown;
         usageStats?: unknown;
       };
-      expect(authProfiles.profiles["anthropic:default"]).toBeDefined();
+      expect(authProfiles.profiles["anthropic:default"]).toEqual(expect.any(Object));
       expect(authProfiles.order).toBeUndefined();
       expect(authProfiles.lastGood).toBeUndefined();
       expect(authProfiles.usageStats).toBeUndefined();

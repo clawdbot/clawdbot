@@ -18,8 +18,10 @@ function createGatewayInfoBody(overrides?: {
 }
 
 function resolveGatewayInfoFetch(resolve: ((value: Response) => void) | undefined): void {
-  expect(resolve).toBeDefined();
-  resolve!({
+  if (!resolve) {
+    throw new Error("expected pending gateway info fetch resolver");
+  }
+  resolve({
     ok: true,
     status: 200,
     text: async () => createGatewayInfoBody(),
@@ -449,7 +451,7 @@ describe("createDiscordGatewayPlugin", () => {
     );
   });
 
-  it("uses proxy agent for gateway WebSocket when configured", async () => {
+  it("uses proxy agent for gateway WebSocket when configured", () => {
     const runtime = createRuntime();
 
     const plugin = createDiscordGatewayPlugin({
@@ -473,7 +475,7 @@ describe("createDiscordGatewayPlugin", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("falls back to the default gateway plugin when proxy is invalid", async () => {
+  it("falls back to the default gateway plugin when proxy is invalid", () => {
     const runtime = createRuntime();
 
     const plugin = createDiscordGatewayPlugin({
@@ -535,7 +537,7 @@ describe("createDiscordGatewayPlugin", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("falls back to the default gateway plugin when proxy is remote", async () => {
+  it("falls back to the default gateway plugin when proxy is remote", () => {
     const runtime = createRuntime();
 
     const plugin = createDiscordGatewayPlugin({

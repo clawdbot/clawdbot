@@ -183,7 +183,7 @@ describe("line setup wizard", () => {
     expect(result.cfg.channels?.line?.channelSecret).toBe("line-secret");
   });
 
-  it("reads the named-account DM policy instead of the channel root", async () => {
+  it("reads the named-account DM policy instead of the channel root", () => {
     expect(
       lineSetupWizard.dmPolicy?.getCurrent(
         {
@@ -205,14 +205,14 @@ describe("line setup wizard", () => {
     ).toBe("allowlist");
   });
 
-  it("reports account-scoped config keys for named accounts", async () => {
+  it("reports account-scoped config keys for named accounts", () => {
     expect(lineSetupWizard.dmPolicy?.resolveConfigKeys?.({} as OpenClawConfig, "work")).toEqual({
       policyKey: "channels.line.accounts.work.dmPolicy",
       allowFromKey: "channels.line.accounts.work.allowFrom",
     });
   });
 
-  it("uses configured defaultAccount for omitted DM policy account context", async () => {
+  it("uses configured defaultAccount for omitted DM policy account context", () => {
     const cfg = {
       channels: {
         line: {
@@ -246,7 +246,7 @@ describe("line setup wizard", () => {
     expect(workAccount?.dmPolicy).toBe("open");
   });
 
-  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {
+  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
     const next = lineSetupWizard.dmPolicy?.setPolicy(
       {
         channels: {

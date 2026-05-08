@@ -28,6 +28,16 @@ function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
   return startedServer.ws;
 }
 
+function requireConfigObject(
+  value: Record<string, unknown> | undefined,
+  label: string,
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 beforeAll(async () => {
   sharedTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-config-"));
   startedServer = await startServerWithClient(undefined, { controlUiEnabled: true });
@@ -108,9 +118,9 @@ describe("gateway config methods", () => {
     }>(requireWs(), "config.get", {});
     expect(current.ok).toBe(true);
     expect(typeof current.payload?.hash).toBe("string");
-    expect(current.payload?.config).toBeTruthy();
+    const currentConfig = requireConfigObject(current.payload?.config, "current config");
 
-    const nextConfig = structuredClone(current.payload?.config ?? {});
+    const nextConfig = structuredClone(currentConfig);
     const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
     gateway.auth = {
       mode: "token",
@@ -141,20 +151,20 @@ describe("gateway config methods", () => {
     }>(requireWs(), "config.get", {});
     expect(current.ok).toBe(true);
     expect(typeof current.payload?.hash).toBe("string");
-    expect(current.payload?.config).toBeTruthy();
+    const currentConfig = requireConfigObject(current.payload?.config, "current config");
 
     const res = await rpcReq<{
       ok?: boolean;
       path?: string;
       config?: Record<string, unknown>;
     }>(requireWs(), "config.set", {
-      raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
+      raw: JSON.stringify(currentConfig, null, 2),
       baseHash: current.payload?.hash,
     });
 
     expect(res.ok).toBe(true);
     expect(res.payload?.path).toBe(createConfigIO().configPath);
-    expect(res.payload?.config).toBeTruthy();
+    requireConfigObject(res.payload?.config, "updated config");
   });
 
   it("redacts browser cdpUrl credentials from config.get responses", async () => {
@@ -223,13 +233,13 @@ describe("gateway config methods", () => {
     }>(requireWs(), "config.get", {});
     expect(current.ok).toBe(true);
     expect(typeof current.payload?.hash).toBe("string");
-    expect(current.payload?.config).toBeTruthy();
+    const currentConfig = requireConfigObject(current.payload?.config, "current config");
 
     const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
       requireWs(),
       "config.set",
       {
-        raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
+        raw: JSON.stringify(currentConfig, null, 2),
         baseHash: current.payload?.hash,
       },
     );
@@ -432,10 +442,10 @@ describe("gateway config.apply", () => {
       hash?: string;
     }>(requireWs(), "config.get", {});
     expect(current.ok).toBe(true);
-    expect(current.payload?.config).toBeTruthy();
+    const currentConfig = requireConfigObject(current.payload?.config, "current config");
 
     const res = await sendConfigApply({
-      raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
+      raw: JSON.stringify(currentConfig, null, 2),
       baseHash: current.payload?.hash,
     });
     expect(res.ok).toBe(true);

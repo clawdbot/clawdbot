@@ -607,7 +607,9 @@ describe("matrix thread bindings", () => {
         placement: "current",
       });
       const original = manager.listBySessionKey("agent:ops:subagent:child")[0];
-      expect(original).toBeDefined();
+      if (original === undefined) {
+        throw new Error("expected original matrix thread binding");
+      }
 
       const idleUpdated = setMatrixThreadBindingIdleTimeoutBySessionKey({
         accountId: "ops",
@@ -625,7 +627,7 @@ describe("matrix thread bindings", () => {
       expect(idleUpdated[0]?.metadata?.idleTimeoutMs).toBe(2 * 60 * 60 * 1000);
       expect(maxAgeUpdated).toHaveLength(1);
       expect(maxAgeUpdated[0]?.metadata?.maxAgeMs).toBe(6 * 60 * 60 * 1000);
-      expect(maxAgeUpdated[0]?.boundAt).toBe(original?.boundAt);
+      expect(maxAgeUpdated[0]?.boundAt).toBe(original.boundAt);
       expect(maxAgeUpdated[0]?.metadata?.lastActivityAt).toBe(
         Date.parse("2026-03-06T12:00:00.000Z"),
       );

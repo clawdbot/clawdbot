@@ -10,13 +10,11 @@ import { appendRegularFile, pathExists } from "openclaw/plugin-sdk/security-runt
 import { parse as parseYaml } from "yaml";
 
 export function resolveHomePath(input: string): string {
-  if (input === "~") {
-    return os.homedir();
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return trimmed;
   }
-  if (input.startsWith("~/")) {
-    return path.join(os.homedir(), input.slice(2));
-  }
-  return path.resolve(input);
+  return path.resolve(trimmed.replace(/^~(?=$|[\\/])/u, os.homedir()));
 }
 
 export async function exists(filePath: string): Promise<boolean> {

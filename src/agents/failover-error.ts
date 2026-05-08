@@ -27,6 +27,7 @@ export class FailoverError extends Error {
   // See #42713.
   readonly sessionId?: string;
   readonly lane?: string;
+  readonly suspend?: boolean;
 
   constructor(
     message: string,
@@ -41,6 +42,7 @@ export class FailoverError extends Error {
       sessionId?: string;
       lane?: string;
       cause?: unknown;
+      suspend?: boolean;
     },
   ) {
     super(message, { cause: params.cause });
@@ -54,6 +56,7 @@ export class FailoverError extends Error {
     this.rawError = params.rawError;
     this.sessionId = params.sessionId;
     this.lane = params.lane;
+    this.suspend = params.suspend;
   }
 }
 
@@ -486,6 +489,10 @@ export function coerceToFailoverError(
   const status = signal.status ?? resolveFailoverStatus(reason);
   const code = signal.code;
 
+  // Suspend when hitting rate limits or billing issues in an attributed session
+  const shouldSuspend =
+    Boolean(context?.sessionId) && (reason === "rate_limit" || reason === "billing");
+
   return new FailoverError(message, {
     reason,
     provider: context?.provider ?? signal.provider,
@@ -497,5 +504,6 @@ export function coerceToFailoverError(
     code,
     rawError: message,
     cause: err instanceof Error ? err : undefined,
+    suspend: shouldSuspend,
   });
 }

@@ -127,6 +127,10 @@ type DispatchInboundParams = {
       phase?: string;
       summary?: string;
       title?: string;
+      name?: string;
+      added?: string[];
+      modified?: string[];
+      deleted?: string[];
     }) => Promise<void> | void;
     onReplyStart?: () => Promise<void> | void;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -1650,6 +1654,66 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• done");
+  });
+
+  it("keeps Discord progress labels as rolling lines", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "first", phase: "start" });
+      await params?.replyOptions?.onToolStart?.({ name: "second", phase: "start" });
+      await params?.replyOptions?.onToolStart?.({ name: "third", phase: "start" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+            maxLines: 3,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith("🧩 First\n🧩 Second\n🧩 Third");
+  });
+
+  it("skips empty apply_patch starts and renders the patch summary", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "apply_patch", phase: "start" });
+      await params?.replyOptions?.onPatchSummary?.({
+        phase: "end",
+        name: "apply_patch",
+        summary: "1 modified",
+        modified: ["extensions/discord/src/monitor/message-handler.draft-preview.ts"],
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-prev…",
+    );
+    expect(draftStream.update).not.toHaveBeenCalledWith(expect.stringContaining("Apply Patch"));
   });
 
   it("shows reasoning text instead of a bare Reasoning progress line", async () => {

@@ -705,7 +705,7 @@ describe("promptParsedAllowFromForAccount", () => {
     const next = await promptParsedAllowFromForAccount({
       cfg: {
         channels: {
-          bluebubbles: {
+          imessage: {
             accounts: {
               alt: {
                 allowFrom: ["old"],
@@ -717,7 +717,7 @@ describe("promptParsedAllowFromForAccount", () => {
       accountId: "alt",
       defaultAccountId: DEFAULT_ACCOUNT_ID,
       prompter,
-      noteTitle: "BlueBubbles allowlist",
+      noteTitle: "iMessage allowlist",
       noteLines: ["line"],
       message: "msg",
       placeholder: "placeholder",
@@ -725,7 +725,7 @@ describe("promptParsedAllowFromForAccount", () => {
         parseSetupEntriesWithParser(raw, (entry) => ({ value: entry.toLowerCase() })),
       getExistingAllowFrom: ({ cfg, accountId }) => [
         ...((
-          cfg.channels?.bluebubbles?.accounts?.[accountId] as
+          cfg.channels?.imessage?.accounts?.[accountId] as
             | { allowFrom?: ReadonlyArray<string | number> }
             | undefined
         )?.allowFrom ?? []),
@@ -733,7 +733,7 @@ describe("promptParsedAllowFromForAccount", () => {
       applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
         patchChannelConfigForAccount({
           cfg,
-          channel: "bluebubbles",
+          channel: "imessage",
           accountId,
           patch: { allowFrom },
         }),
@@ -741,12 +741,12 @@ describe("promptParsedAllowFromForAccount", () => {
 
     expect(
       (
-        next.channels?.bluebubbles?.accounts?.alt as
+        next.channels?.imessage?.accounts?.alt as
           | { allowFrom?: ReadonlyArray<string | number> }
           | undefined
       )?.allowFrom,
     ).toEqual(["alice"]);
-    expect(prompter.note).toHaveBeenCalledWith("line", "BlueBubbles allowlist");
+    expect(prompter.note).toHaveBeenCalledWith("line", "iMessage allowlist");
   });
 
   it("can merge parsed values with existing entries", async () => {
@@ -788,7 +788,7 @@ describe("createPromptParsedAllowFromForAccount", () => {
       parseEntries: (raw) => ({ entries: [raw.trim().toLowerCase()] }),
       getExistingAllowFrom: ({ cfg, accountId }) => [
         ...((
-          cfg.channels?.bluebubbles?.accounts?.[accountId] as
+          cfg.channels?.imessage?.accounts?.[accountId] as
             | { allowFrom?: ReadonlyArray<string | number> }
             | undefined
         )?.allowFrom ?? []),
@@ -796,7 +796,7 @@ describe("createPromptParsedAllowFromForAccount", () => {
       applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
         patchChannelConfigForAccount({
           cfg,
-          channel: "bluebubbles",
+          channel: "imessage",
           accountId,
           patch: { allowFrom },
         }),
@@ -806,7 +806,7 @@ describe("createPromptParsedAllowFromForAccount", () => {
     const next = await promptAllowFrom({
       cfg: {
         channels: {
-          bluebubbles: {
+          imessage: {
             accounts: {
               work: {
                 allowFrom: ["old"],
@@ -820,7 +820,7 @@ describe("createPromptParsedAllowFromForAccount", () => {
 
     expect(
       (
-        next.channels?.bluebubbles?.accounts?.work as
+        next.channels?.imessage?.accounts?.work as
           | { allowFrom?: ReadonlyArray<string | number> }
           | undefined
       )?.allowFrom,

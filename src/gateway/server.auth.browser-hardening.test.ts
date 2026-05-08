@@ -335,10 +335,12 @@ describe("gateway auth browser hardening", () => {
         const snapshot = payload.snapshot as
           | { configPath?: unknown; stateDir?: unknown; authMode?: unknown }
           | undefined;
-        expect(snapshot).toBeDefined();
-        expect(snapshot?.configPath).toBeUndefined();
-        expect(snapshot?.stateDir).toBeUndefined();
-        expect(snapshot?.authMode).toBeUndefined();
+        if (!snapshot) {
+          throw new Error("expected hello-ok snapshot for low-privilege browser session");
+        }
+        expect(snapshot.configPath).toBeUndefined();
+        expect(snapshot.stateDir).toBeUndefined();
+        expect(snapshot.authMode).toBeUndefined();
       } finally {
         ws.close();
       }
@@ -373,8 +375,10 @@ describe("gateway auth browser hardening", () => {
 
         const pairing = await listDevicePairing();
         const pending = pairing.pending.find((entry) => entry.deviceId === identity.deviceId);
-        expect(pending).toBeTruthy();
-        expect(pending?.silent).toBe(false);
+        if (!pending) {
+          throw new Error("expected non-control browser client to create pending pairing request");
+        }
+        expect(pending.silent).toBe(false);
       } finally {
         browserWs.close();
       }

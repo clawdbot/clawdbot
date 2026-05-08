@@ -58,6 +58,7 @@ describe("fal video generation provider", () => {
     responseUrl: string;
     videoUrl: string;
     bytes: string;
+    contentType?: string;
     responseExtras?: Record<string, unknown>;
   }) {
     fetchGuardMock
@@ -78,7 +79,9 @@ describe("fal video generation provider", () => {
           },
         }),
       )
-      .mockResolvedValueOnce(releasedVideo({ contentType: "video/mp4", bytes: params.bytes }));
+      .mockResolvedValueOnce(
+        releasedVideo({ contentType: params.contentType ?? "video/mp4", bytes: params.bytes }),
+      );
   }
 
   function getSubmitBody(): Record<string, unknown> {
@@ -119,7 +122,8 @@ describe("fal video generation provider", () => {
       statusUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
       responseUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
       videoUrl: "https://fal.run/files/video.mp4",
-      bytes: "mp4-bytes",
+      bytes: "webm-bytes",
+      contentType: "video/webm",
     });
 
     const provider = buildFalVideoGenerationProvider();
@@ -158,7 +162,8 @@ describe("fal video generation provider", () => {
       }),
     );
     expect(result.videos).toHaveLength(1);
-    expect(result.videos[0]?.mimeType).toBe("video/mp4");
+    expect(result.videos[0]?.mimeType).toBe("video/webm");
+    expect(result.videos[0]?.fileName).toBe("video-1.webm");
     expect(result.videos[0]?.url).toBe("https://fal.run/files/video.mp4");
     expect(result.metadata).toEqual({
       requestId: "req-123",

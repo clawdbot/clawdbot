@@ -1,6 +1,5 @@
 import { WebSocket } from "ws";
-
-const PROTOCOL_VERSION = 3;
+import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
 
 const url = process.env.GW_URL;
 const token = process.env.GW_TOKEN;

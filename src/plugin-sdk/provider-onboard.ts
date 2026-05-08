@@ -3,6 +3,7 @@
 
 import { ensureStaticModelAllowlistEntry } from "../agents/model-allowlist-entry.js";
 import { findNormalizedProviderKey } from "../agents/provider-id.js";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type {
   ModelApi,
@@ -207,6 +208,9 @@ export function applyAgentDefaultModelPrimary(
   primary: string,
 ): OpenClawConfig {
   const existingFallbacks = extractAgentDefaultModelFallbacks(cfg.agents?.defaults?.model);
+  const normalizedFallbacks = existingFallbacks?.map((fallback) =>
+    normalizeAgentModelRefForConfig(fallback),
+  );
   return {
     ...cfg,
     agents: {
@@ -214,8 +218,8 @@ export function applyAgentDefaultModelPrimary(
       defaults: {
         ...cfg.agents?.defaults,
         model: {
-          ...(existingFallbacks ? { fallbacks: existingFallbacks } : undefined),
-          primary,
+          ...(normalizedFallbacks ? { fallbacks: normalizedFallbacks } : undefined),
+          primary: normalizeAgentModelRefForConfig(primary),
         },
       },
     },

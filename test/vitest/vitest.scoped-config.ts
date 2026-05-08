@@ -62,7 +62,6 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "cron",
     "daemon",
     "extension-acpx",
-    "extension-bluebubbles",
     "extension-channels",
     "extension-diffs",
     "extension-discord",

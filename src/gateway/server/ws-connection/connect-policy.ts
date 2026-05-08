@@ -111,6 +111,7 @@ export function evaluateMissingDeviceIdentity(params: {
   isControlUi: boolean;
   controlUiAuthPolicy: ControlUiAuthPolicy;
   trustedProxyAuthOk?: boolean;
+  localBackendSelfPairingOk?: boolean;
   sharedAuthOk: boolean;
   authOk: boolean;
   hasSharedAuth: boolean;
@@ -128,6 +129,9 @@ export function evaluateMissingDeviceIdentity(params: {
     // sessions only; node-role sessions must still satisfy device identity so
     // that the break-glass flag cannot be abused to admit device-less node
     // registrations (see #45405 review).
+    return { kind: "allow" };
+  }
+  if (params.localBackendSelfPairingOk && params.role === "operator") {
     return { kind: "allow" };
   }
   if (params.isControlUi && !params.controlUiAuthPolicy.allowBypass) {

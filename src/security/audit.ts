@@ -30,6 +30,7 @@ import type {
   SecurityAuditSummary,
 } from "./audit.types.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
+import { collectExecFilesystemPolicyDriftHits } from "./exec-filesystem-policy.js";
 import type { ExecFn } from "./windows-acl.js";
 
 type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
@@ -578,6 +579,20 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
         `Exec-enabled scopes:\n${execEnabledScopes.map((entry) => `- ${entry.id}: security=${entry.security}, host=${entry.host}`).join("\n")}`,
       remediation:
         "Tighten dmPolicy/groupPolicy to pairing or allowlist, or disable exec for agents reachable from shared/public channels.",
+    });
+  }
+
+  const execFilesystemPolicyHits = collectExecFilesystemPolicyDriftHits(cfg);
+  if (execFilesystemPolicyHits.length > 0) {
+    findings.push({
+      checkId: "tools.exec.fs_tools_disabled_but_exec_enabled",
+      severity: "warn",
+      title: "Filesystem tool policy does not make exec read-only",
+      detail:
+        `Found scopes where write/edit/apply_patch are unavailable but exec remains available:\n${execFilesystemPolicyHits.map((hit) => `- ${hit.scopeLabel}: runtime=[${hit.runtimeTools.join(", ")}], disabledFs=[${hit.disabledFilesystemTools.join(", ")}], exec.host=${hit.execHost}, sandbox=${hit.sandboxMode}, workspaceAccess=${hit.sandboxWorkspaceAccess}`).join("\n")}\n` +
+        "The exec tool is a shell and can still write files wherever the selected host or sandbox filesystem permits it.",
+      remediation:
+        'For read-only agents, deny exec and process too. If shell access is intentional, constrain the filesystem boundary with sandbox mode "all" and workspaceAccess "ro" or "none".',
     });
   }
 

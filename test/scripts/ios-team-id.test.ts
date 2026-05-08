@@ -215,13 +215,13 @@ printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
     expect(fallback).toBe("BBBBB22222");
   });
 
-  it("resolves a fallback team ID from Xcode team listings (smoke)", async () => {
+  it("resolves a fallback team ID from Xcode team listings (smoke)", () => {
     const fallbackResult = runScript(sharedHomeDir, { IOS_PYTHON_BIN: sharedFakePythonPath });
     expect(fallbackResult.ok).toBe(true);
     expect(fallbackResult.stdout).toBe("AAAAA11111");
   });
 
-  it("prints actionable guidance when Xcode account exists but no Team ID is resolvable", async () => {
+  it("prints actionable guidance when Xcode account exists but no Team ID is resolvable", () => {
     const result = runScript(sharedHomeDir);
     expect(result.ok).toBe(false);
     expect(

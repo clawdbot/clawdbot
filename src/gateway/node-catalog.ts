@@ -47,13 +47,16 @@ type KnownNodeCatalog = {
   entriesById: Map<string, KnownNodeEntry>;
 };
 
-function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): string[] {
+function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): string[] {
   const values = new Set<string>();
   for (const item of items) {
-    if (!item) {
+    if (!Array.isArray(item)) {
       continue;
     }
     for (const value of item) {
+      if (typeof value !== "string") {
+        continue;
+      }
       const trimmed = value.trim();
       if (trimmed) {
         values.add(trimmed);
@@ -115,7 +118,12 @@ function resolveEffectiveLastSeen(params: {
       ? { atMs: params.devicePairing.lastSeenAtMs, reason: params.devicePairing.lastSeenReason }
       : undefined,
   ].filter((entry) => entry !== undefined);
-  const newest = candidates.toSorted((left, right) => right.atMs - left.atMs)[0];
+  let newest: { atMs: number; reason?: string } | undefined;
+  for (const candidate of candidates) {
+    if (!newest || candidate.atMs > newest.atMs) {
+      newest = candidate;
+    }
+  }
   if (!newest) {
     return {};
   }

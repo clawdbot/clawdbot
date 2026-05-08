@@ -2244,6 +2244,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             },
           } satisfies PluginRuntime["state"];
         }
+        if (prop === "llm") {
+          const llm = Reflect.get(target, prop, receiver);
+          return {
+            complete: (params) =>
+              withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
+          } satisfies PluginRuntime["llm"];
+        }
         if (prop !== "subagent") {
           return Reflect.get(target, prop, receiver);
         }

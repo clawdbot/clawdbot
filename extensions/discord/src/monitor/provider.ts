@@ -279,6 +279,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     token,
     guildEntries,
     allowFrom,
+    discordConfig: discordCfg,
     fetcher: discordRestFetch,
     runtime,
   });

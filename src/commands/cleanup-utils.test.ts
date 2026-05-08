@@ -1,10 +1,7 @@
 import path from "node:path";
 import { describe, expect, it, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  applyAgentDefaultPrimaryModel,
-  applyPrimaryModel,
-} from "../plugins/provider-model-primary.js";
+import { applyAgentDefaultPrimaryModel } from "../plugins/provider-model-primary.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   buildCleanupPlan,
@@ -57,42 +54,17 @@ describe("applyAgentDefaultPrimaryModel", () => {
     expect(result.changed).toBe(false);
     expect(result.next).toBe(cfg);
   });
-});
 
-describe("applyPrimaryModel", () => {
-  it("leaves OpenAI model selections on the existing runtime", () => {
-    const next = applyPrimaryModel({ agents: { defaults: {} } }, "openai/gpt-5.5");
-
-    expect(next.agents?.defaults?.model).toMatchObject({ primary: "openai/gpt-5.5" });
-    expect(next.agents?.defaults?.agentRuntime).toBeUndefined();
-  });
-
-  it("pins OpenAI Codex model selections to the Codex runtime", () => {
-    const next = applyPrimaryModel({ agents: { defaults: {} } }, "openai-codex/gpt-5.5");
-
-    expect(next.agents?.defaults?.model).toMatchObject({ primary: "openai-codex/gpt-5.5" });
-    expect(next.agents?.defaults?.agentRuntime).toEqual({ id: "codex" });
-  });
-
-  it("does not pin custom OpenAI-compatible selections to Codex", () => {
-    const next = applyPrimaryModel(
-      {
-        agents: { defaults: {} },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://compatible.example.test/v1",
-              api: "openai-responses",
-              models: [],
-            },
-          },
-        },
-      },
-      "openai/custom-gpt",
-    );
-
-    expect(next.agents?.defaults?.model).toMatchObject({ primary: "openai/custom-gpt" });
-    expect(next.agents?.defaults?.agentRuntime).toBeUndefined();
+  it("normalizes retired Google Gemini primary models before writing config", () => {
+    const cfg = { agents: { defaults: {} } } as OpenClawConfig;
+    const result = applyAgentDefaultPrimaryModel({
+      cfg,
+      model: "google/gemini-3-pro-preview",
+    });
+    expect(result.changed).toBe(true);
+    expect(result.next.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+    });
   });
 });
 

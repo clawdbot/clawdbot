@@ -44,7 +44,10 @@ describe("package withRemoteHttpResponse", () => {
       ...deps,
     });
 
-    expect(deps.calls[0]).toBeDefined();
-    expect(deps.calls[0]).not.toHaveProperty("mode");
+    expect(deps.calls).toEqual([
+      expect.not.objectContaining({
+        mode: expect.any(String),
+      }),
+    ]);
   });
 });

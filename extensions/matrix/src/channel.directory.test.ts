@@ -7,6 +7,25 @@ import { resolveMatrixConfigForAccount } from "./matrix/client/config.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
+function requireMatrixDirectory() {
+  const directory = matrixPlugin.directory;
+  if (!directory?.listPeers || !directory.listGroups) {
+    throw new Error("expected Matrix directory listPeers/listGroups");
+  }
+  return {
+    listPeers: directory.listPeers,
+    listGroups: directory.listGroups,
+  };
+}
+
+function requireMatrixReplyToModeResolver() {
+  const resolveReplyToMode = matrixPlugin.threading?.resolveReplyToMode;
+  if (!resolveReplyToMode) {
+    throw new Error("expected Matrix replyToMode resolver");
+  }
+  return resolveReplyToMode;
+}
+
 describe("matrix directory", () => {
   const runtimeEnv: RuntimeEnv = createRuntimeEnv();
 
@@ -28,12 +47,10 @@ describe("matrix directory", () => {
       },
     } as unknown as CoreConfig;
 
-    expect(matrixPlugin.directory).toBeTruthy();
-    expect(matrixPlugin.directory?.listPeers).toBeTruthy();
-    expect(matrixPlugin.directory?.listGroups).toBeTruthy();
+    const directory = requireMatrixDirectory();
 
     await expect(
-      matrixPlugin.directory!.listPeers!({
+      directory.listPeers({
         cfg,
         accountId: undefined,
         query: undefined,
@@ -50,7 +67,7 @@ describe("matrix directory", () => {
     );
 
     await expect(
-      matrixPlugin.directory!.listGroups!({
+      directory.listGroups({
         cfg,
         accountId: undefined,
         query: undefined,
@@ -79,16 +96,16 @@ describe("matrix directory", () => {
       },
     } as unknown as CoreConfig;
 
-    expect(matrixPlugin.threading?.resolveReplyToMode).toBeTruthy();
+    const resolveReplyToMode = requireMatrixReplyToModeResolver();
     expect(
-      matrixPlugin.threading?.resolveReplyToMode?.({
+      resolveReplyToMode({
         cfg,
         accountId: "assistant",
         chatType: "direct",
       }),
     ).toBe("all");
     expect(
-      matrixPlugin.threading?.resolveReplyToMode?.({
+      resolveReplyToMode({
         cfg,
         accountId: "default",
         chatType: "direct",

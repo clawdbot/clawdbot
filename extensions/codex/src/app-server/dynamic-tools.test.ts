@@ -14,7 +14,10 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import {
+  CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+  createCodexDynamicToolBridge,
+} from "./dynamic-tools.js";
 import type { JsonValue } from "./protocol.js";
 
 function createTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
@@ -85,6 +88,85 @@ afterEach(() => {
 });
 
 describe("createCodexDynamicToolBridge", () => {
+  it("defers OpenClaw dynamic tools behind Codex tool search by default", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({ name: "web_search" }),
+        createTool({ name: "message" }),
+        createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME }),
+        createTool({ name: "sessions_yield" }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const webSearch = bridge.specs.find((tool) => tool.name === "web_search");
+    const message = bridge.specs.find((tool) => tool.name === "message");
+    const heartbeat = bridge.specs.find((tool) => tool.name === HEARTBEAT_RESPONSE_TOOL_NAME);
+    const sessionsYield = bridge.specs.find((tool) => tool.name === "sessions_yield");
+
+    expect(webSearch).toEqual(
+      expect.objectContaining({
+        name: "web_search",
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        deferLoading: true,
+      }),
+    );
+    expect(message).toEqual(
+      expect.objectContaining({
+        name: "message",
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        deferLoading: true,
+      }),
+    );
+    expect(heartbeat).toEqual(
+      expect.objectContaining({
+        name: HEARTBEAT_RESPONSE_TOOL_NAME,
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        deferLoading: true,
+      }),
+    );
+    expect(sessionsYield).not.toHaveProperty("namespace");
+    expect(sessionsYield).not.toHaveProperty("deferLoading");
+  });
+
+  it("keeps configured direct tools in the initial Codex tool context", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "message" }), createTool({ name: "web_search" })],
+      signal: new AbortController().signal,
+      directToolNames: ["message"],
+    });
+
+    expect(bridge.specs).toEqual([
+      expect.objectContaining({
+        name: "message",
+      }),
+      expect.objectContaining({
+        name: "web_search",
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        deferLoading: true,
+      }),
+    ]);
+    expect(bridge.specs[0]).not.toHaveProperty("namespace");
+    expect(bridge.specs[0]).not.toHaveProperty("deferLoading");
+  });
+
+  it("can expose all dynamic tools directly for compatibility", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "web_search" }), createTool({ name: "message" })],
+      signal: new AbortController().signal,
+      loading: "direct",
+    });
+
+    expect(bridge.specs).toEqual([
+      expect.objectContaining({ name: "web_search" }),
+      expect.objectContaining({ name: "message" }),
+    ]);
+    expect(bridge.specs).toEqual([
+      expect.not.objectContaining({ namespace: expect.any(String) }),
+      expect.not.objectContaining({ namespace: expect.any(String) }),
+    ]);
+  });
+
   it.each([
     { toolName: "tts", mediaUrl: "/tmp/reply.opus", audioAsVoice: true },
     { toolName: "image_generate", mediaUrl: "/tmp/generated.png" },
@@ -829,10 +911,17 @@ describe("createCodexDynamicToolBridge", () => {
       },
       { signal: callController.signal },
     );
-    await vi.waitFor(() => expect(capturedSignal).toBeDefined());
+    await vi.waitFor(() => {
+      if (!capturedSignal) {
+        throw new Error("expected dynamic tool call signal");
+      }
+    });
+    if (!capturedSignal) {
+      throw new Error("expected dynamic tool call signal");
+    }
 
     callController.abort(new Error("deadline"));
-    expect(capturedSignal?.aborted).toBe(true);
+    expect(capturedSignal.aborted).toBe(true);
     resolveTool?.(textToolResult("done"));
 
     await expect(result).resolves.toEqual(expectInputText("done"));

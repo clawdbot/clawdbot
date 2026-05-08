@@ -42,10 +42,23 @@ export type ResolveCronModelSelectionResult =
       error: string;
     };
 
-function formatCronPayloadModelRejection(modelOverride: string, error: string): string {
+function formatAllowedModelRefs(params: { cfg: OpenClawConfig }): string {
+  const configured = params.cfg.agents?.defaults?.models;
+  if (configured && typeof configured === "object" && Object.keys(configured).length > 0) {
+    return Object.keys(configured).toSorted().join(", ");
+  }
+  return "(none configured)";
+}
+
+function formatCronPayloadModelRejection(params: {
+  cfg: OpenClawConfig;
+  modelOverride: string;
+  error: string;
+}): string {
+  const { modelOverride, error } = params;
   if (error.startsWith("model not allowed:")) {
     const modelRef = error.slice("model not allowed:".length).trim();
-    return `cron payload.model '${modelOverride}' rejected by agents.defaults.models allowlist: ${modelRef}`;
+    return `cron payload.model '${modelOverride}' rejected by agents.defaults.models allowlist: ${modelRef} is not in [${formatAllowedModelRefs({ cfg: params.cfg })}]`;
   }
   return `cron payload.model '${modelOverride}' rejected: ${error}`;
 }
@@ -122,7 +135,11 @@ export async function resolveCronModelSelection(
     if ("error" in resolvedOverride) {
       return {
         ok: false,
-        error: formatCronPayloadModelRejection(modelOverride, resolvedOverride.error),
+        error: formatCronPayloadModelRejection({
+          cfg: params.cfgWithAgentDefaults,
+          modelOverride,
+          error: resolvedOverride.error,
+        }),
       };
     }
     provider = resolvedOverride.ref.provider;

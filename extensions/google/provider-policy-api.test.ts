@@ -25,7 +25,7 @@ describe("google provider policy public artifact", () => {
       }),
     ).toMatchObject({
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      models: [{ id: "gemini-3-pro-preview" }],
+      models: [{ id: "gemini-3.1-pro-preview" }],
     });
   });
 

@@ -22,6 +22,7 @@ export type GatewayServiceManageArgs = {
 export type GatewayServiceControlArgs = {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
+  disable?: boolean;
 };
 
 export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };

@@ -1,3 +1,4 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as translate from "../lib/translate.ts";
@@ -21,6 +22,35 @@ import { vi as viLocale } from "../locales/vi.ts";
 import { zh_CN } from "../locales/zh-CN.ts";
 import { zh_TW } from "../locales/zh-TW.ts";
 
+const shippedLocales = {
+  ar,
+  de,
+  es,
+  fa,
+  fr,
+  id,
+  it: itLocale,
+  ja_JP,
+  ko,
+  nl,
+  pl,
+  pt_BR,
+  th,
+  tr,
+  uk,
+  vi: viLocale,
+  zh_CN,
+  zh_TW,
+} as const;
+let translateImportCase = 0;
+
+async function importFreshTranslate() {
+  return importFreshModule<typeof import("../lib/translate.ts")>(
+    import.meta.url,
+    `../lib/translate.ts?case=${++translateImportCase}`,
+  );
+}
+
 describe("i18n", () => {
   function flatten(value: Record<string, string | Record<string, unknown>>, prefix = ""): string[] {
     return Object.entries(value).flatMap(([key, nested]) => {
@@ -30,6 +60,17 @@ describe("i18n", () => {
       }
       return flatten(nested as Record<string, string | Record<string, unknown>>, fullKey);
     });
+  }
+
+  function readString(value: unknown, path: string): string {
+    let cursor = value;
+    for (const part of path.split(".")) {
+      cursor =
+        cursor && typeof cursor === "object"
+          ? (cursor as Record<string, unknown>)[part]
+          : undefined;
+    }
+    return typeof cursor === "string" ? cursor : "";
   }
 
   beforeEach(async () => {
@@ -56,12 +97,9 @@ describe("i18n", () => {
   });
 
   it("should fallback to English if key is missing in another locale", async () => {
-    // We haven't registered other locales in the test environment yet,
-    // but the logic should fallback to 'en' map which is always there.
+    translate.i18n.registerTranslation("zh-CN", { common: {} } as never);
     await translate.i18n.setLocale("zh-CN");
-    // Since we don't mock the import, it might fail to load zh-CN,
-    // but let's assume it falls back to English for now.
-    expect(translate.t("common.health")).toBeDefined();
+    expect(translate.t("common.health")).toBe("Health");
   });
 
   it("loads translations even when setting the same locale again", async () => {
@@ -77,11 +115,10 @@ describe("i18n", () => {
   });
 
   it("loads saved non-English locale on startup", async () => {
-    vi.resetModules();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
     localStorage.setItem("openclaw.i18n.locale", "zh-CN");
-    const fresh = await import("../lib/translate.ts");
+    const fresh = await importFreshTranslate();
     await vi.waitFor(() => {
       expect(fresh.i18n.getLocale()).toBe("zh-CN");
     });
@@ -90,12 +127,11 @@ describe("i18n", () => {
   });
 
   it("skips node localStorage accessors that warn without a storage file", async () => {
-    vi.resetModules();
     vi.unstubAllGlobals();
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
     const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
 
-    const fresh = await import("../lib/translate.ts");
+    const fresh = await importFreshTranslate();
 
     expect(fresh.i18n.getLocale()).toBe("en");
     expect(warningSpy).not.toHaveBeenCalledWith(
@@ -106,24 +142,10 @@ describe("i18n", () => {
   });
 
   it("keeps the version label available in shipped locales", () => {
-    expect((ar.common as { version?: string }).version).toBeTruthy();
-    expect((de.common as { version?: string }).version).toBeTruthy();
-    expect((es.common as { version?: string }).version).toBeTruthy();
-    expect((fa.common as { version?: string }).version).toBeTruthy();
-    expect((fr.common as { version?: string }).version).toBeTruthy();
-    expect((id.common as { version?: string }).version).toBeTruthy();
-    expect((itLocale.common as { version?: string }).version).toBeTruthy();
-    expect((ja_JP.common as { version?: string }).version).toBeTruthy();
-    expect((ko.common as { version?: string }).version).toBeTruthy();
-    expect((nl.common as { version?: string }).version).toBeTruthy();
-    expect((pl.common as { version?: string }).version).toBeTruthy();
-    expect((pt_BR.common as { version?: string }).version).toBeTruthy();
-    expect((th.common as { version?: string }).version).toBeTruthy();
-    expect((tr.common as { version?: string }).version).toBeTruthy();
-    expect((uk.common as { version?: string }).version).toBeTruthy();
-    expect((viLocale.common as { version?: string }).version).toBeTruthy();
-    expect((zh_CN.common as { version?: string }).version).toBeTruthy();
-    expect((zh_TW.common as { version?: string }).version).toBeTruthy();
+    for (const [locale, value] of Object.entries(shippedLocales)) {
+      expect((value.common as { version?: string }).version, locale).toEqual(expect.any(String));
+      expect((value.common as { version?: string }).version?.trim(), locale).not.toBe("");
+    }
   });
 
   it("keeps newly exposed locales from shipping as English fallback bundles", () => {
@@ -139,8 +161,12 @@ describe("i18n", () => {
     }
   });
 
-  it("keeps shipped locales structurally aligned with English", () => {
-    const englishKeys = flatten(en);
+  it("keeps login failure guidance localized in shipped locale bundles", () => {
+    const checkedKeys = flatten(
+      (en.login as { failure: Record<string, string | Record<string, unknown>> }).failure,
+      "login.failure",
+    );
+    expect(checkedKeys.length).toBeGreaterThan(0);
     for (const [locale, value] of Object.entries({
       ar,
       de,
@@ -161,6 +187,15 @@ describe("i18n", () => {
       zh_CN,
       zh_TW,
     })) {
+      for (const key of checkedKeys) {
+        expect(readString(value, key), `${locale}:${key}`).not.toBe(readString(en, key));
+      }
+    }
+  });
+
+  it("keeps shipped locales structurally aligned with English", () => {
+    const englishKeys = flatten(en);
+    for (const [locale, value] of Object.entries(shippedLocales)) {
       expect(flatten(value as Record<string, string | Record<string, unknown>>), locale).toEqual(
         englishKeys,
       );

@@ -9,7 +9,7 @@ import {
 } from "./channel-policy.js";
 
 describe("createRestrictSendersChannelSecurity", () => {
-  it("builds dm policy resolution and open-group warnings from one descriptor", async () => {
+  it("builds dm policy resolution and open-group warnings from one descriptor", () => {
     const security = createRestrictSendersChannelSecurity<{
       accountId: string;
       allowFrom?: string[];

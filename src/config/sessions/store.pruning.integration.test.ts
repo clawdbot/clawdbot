@@ -20,6 +20,7 @@ import { runSessionsCleanup } from "./cleanup-service.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
+  runQuotaSuspensionMaintenance,
   saveSessionStore,
   updateSessionStore,
 } from "./store.js";
@@ -70,6 +71,10 @@ function applyCappedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) 
 
 async function createCaseDir(prefix: string): Promise<string> {
   return await suiteRootTracker.make(prefix);
+}
+
+async function expectPathExists(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).resolves.toBeUndefined();
 }
 
 function createStaleAndFreshStore(now = Date.now()): Record<string, SessionEntry> {
@@ -123,7 +128,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const loaded = loadSessionStore(storePath, { skipCache: true });
     expect(loaded.stale).toBeUndefined();
-    expect(loaded.fresh).toBeDefined();
+    expect(loaded).toHaveProperty("fresh");
   });
 
   it("archives transcript files for stale sessions pruned on write", async () => {
@@ -145,9 +150,9 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const loaded = loadSessionStore(storePath);
     expect(loaded.stale).toBeUndefined();
-    expect(loaded.fresh).toBeDefined();
+    expect(loaded).toHaveProperty("fresh");
     await expect(fs.stat(staleTranscript)).rejects.toThrow();
-    await expect(fs.stat(freshTranscript)).resolves.toBeDefined();
+    await expectPathExists(freshTranscript);
     const dirEntries = await fs.readdir(testDir);
     const archived = dirEntries.filter((entry) =>
       entry.startsWith(`${staleSessionId}.jsonl.deleted.`),
@@ -208,8 +213,8 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     await expect(fs.stat(staleRuntime)).rejects.toThrow();
     await expect(fs.stat(stalePointer)).rejects.toThrow();
-    await expect(fs.stat(freshRuntime)).resolves.toBeDefined();
-    await expect(fs.stat(freshPointer)).resolves.toBeDefined();
+    await expectPathExists(freshRuntime);
+    await expectPathExists(freshPointer);
   });
 
   it("sessions cleanup prunes old unreferenced session artifacts without touching referenced files", async () => {
@@ -282,10 +287,10 @@ describe("Integration: saveSessionStore with pruning", () => {
         removedFiles: 4,
       }),
     );
-    await expect(fs.stat(oldOrphanTranscript)).resolves.toBeDefined();
-    await expect(fs.stat(orphanRuntime)).resolves.toBeDefined();
-    await expect(fs.stat(orphanPointer)).resolves.toBeDefined();
-    await expect(fs.stat(orphanCheckpoint)).resolves.toBeDefined();
+    await expectPathExists(oldOrphanTranscript);
+    await expectPathExists(orphanRuntime);
+    await expectPathExists(orphanPointer);
+    await expectPathExists(orphanCheckpoint);
 
     const applied = await runSessionsCleanup({
       cfg: {},
@@ -302,9 +307,9 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expect(fs.stat(orphanRuntime)).rejects.toThrow();
     await expect(fs.stat(orphanPointer)).rejects.toThrow();
     await expect(fs.stat(orphanCheckpoint)).rejects.toThrow();
-    await expect(fs.stat(referencedTranscript)).resolves.toBeDefined();
-    await expect(fs.stat(referencedCheckpointPath)).resolves.toBeDefined();
-    await expect(fs.stat(freshOrphanTranscript)).resolves.toBeDefined();
+    await expectPathExists(referencedTranscript);
+    await expectPathExists(referencedCheckpointPath);
+    await expectPathExists(freshOrphanTranscript);
   });
 
   it("sessions cleanup previews stale direct DM rows after dmScope returns to main", async () => {
@@ -346,7 +351,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(preview?.summary.afterCount).toBe(1);
     expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram:direct:6101296751")).toBe(true);
     expect(preview?.summary.unreferencedArtifacts.removedFiles).toBe(0);
-    await expect(fs.stat(directTranscript)).resolves.toBeDefined();
+    await expectPathExists(directTranscript);
   });
 
   it("sessions cleanup retires stale direct DM rows and archives their transcripts", async () => {
@@ -386,7 +391,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     expect(applied.appliedSummaries[0]?.dmScopeRetired).toBe(1);
     const persisted = loadSessionStore(storePath, { skipCache: true });
-    expect(persisted["agent:main:main"]).toBeDefined();
+    expect(persisted).toHaveProperty("agent:main:main");
     expect(persisted["agent:main:telegram:direct:6101296751"]).toBeUndefined();
     await expect(fs.stat(directTranscript)).rejects.toThrow();
     const files = await fs.readdir(testDir);
@@ -431,7 +436,7 @@ describe("Integration: saveSessionStore with pruning", () => {
         removedFiles: 0,
       }),
     );
-    await expect(fs.stat(oldOrphanTranscript)).resolves.toBeDefined();
+    await expectPathExists(oldOrphanTranscript);
   });
 
   it("sessions cleanup dry-run excludes stale and capped entry transcripts from orphan counts", async () => {
@@ -477,9 +482,9 @@ describe("Integration: saveSessionStore with pruning", () => {
         }),
       }),
     );
-    await expect(fs.stat(staleTranscript)).resolves.toBeDefined();
-    await expect(fs.stat(cappedTranscript)).resolves.toBeDefined();
-    await expect(fs.stat(freshTranscript)).resolves.toBeDefined();
+    await expectPathExists(staleTranscript);
+    await expectPathExists(cappedTranscript);
+    await expectPathExists(freshTranscript);
   });
 
   it("cleans up archived transcripts older than the prune window", async () => {
@@ -514,8 +519,8 @@ describe("Integration: saveSessionStore with pruning", () => {
     await saveSessionStore(storePath, store);
 
     await expect(fs.stat(oldArchived)).rejects.toThrow();
-    await expect(fs.stat(recentArchived)).resolves.toBeDefined();
-    await expect(fs.stat(bakArchived)).resolves.toBeDefined();
+    await expectPathExists(recentArchived);
+    await expectPathExists(bakArchived);
   });
 
   it("cleans up reset archives using resetArchiveRetention", async () => {
@@ -548,7 +553,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     await saveSessionStore(storePath, store);
 
     await expect(fs.stat(oldReset)).rejects.toThrow();
-    await expect(fs.stat(freshReset)).resolves.toBeDefined();
+    await expectPathExists(freshReset);
   });
 
   it("saveSessionStore skips enforcement when maintenance mode is warn", async () => {
@@ -567,8 +572,8 @@ describe("Integration: saveSessionStore with pruning", () => {
     await saveSessionStore(storePath, store);
 
     const loaded = loadSessionStore(storePath);
-    expect(loaded.stale).toBeDefined();
-    expect(loaded.fresh).toBeDefined();
+    expect(loaded).toHaveProperty("stale");
+    expect(loaded).toHaveProperty("fresh");
     expect(Object.keys(loaded)).toHaveLength(2);
   });
 
@@ -591,9 +596,9 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     expect(Object.keys(loaded)).toHaveLength(3);
-    expect(loaded.stale).toBeDefined();
-    expect(loaded.recent).toBeDefined();
-    expect(loaded.newest).toBeDefined();
+    expect(loaded).toHaveProperty("stale");
+    expect(loaded).toHaveProperty("recent");
+    expect(loaded).toHaveProperty("newest");
   });
 
   it("loadSessionStore applies maintenance only when explicitly requested", async () => {
@@ -617,7 +622,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     expect(loaded.stale).toBeUndefined();
     expect(loaded.recent).toBeUndefined();
-    expect(loaded.newest).toBeDefined();
+    expect(loaded).toHaveProperty("newest");
   });
 
   it("loadSessionStore does not cap oversized stores during normal reads", async () => {
@@ -639,9 +644,9 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     expect(Object.keys(loaded)).toHaveLength(3);
-    expect(loaded.oldest).toBeDefined();
-    expect(loaded.recent).toBeDefined();
-    expect(loaded.newest).toBeDefined();
+    expect(loaded).toHaveProperty("oldest");
+    expect(loaded).toHaveProperty("recent");
+    expect(loaded).toHaveProperty("newest");
   });
 
   it("explicit loadSessionStore maintenance batches entry-count cleanup until the high-water mark", async () => {
@@ -682,7 +687,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     expect(Object.keys(loaded)).toHaveLength(50);
-    expect(loaded["session-0"]).toBeDefined();
+    expect(loaded).toHaveProperty("session-0");
     expect(loaded["session-74"]).toBeUndefined();
   });
 
@@ -710,10 +715,61 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     expect(Object.keys(loaded)).toHaveLength(50);
-    expect(loaded[channelKey]).toBeDefined();
-    expect(loaded[threadKey]).toBeDefined();
-    expect(loaded[topicKey]).toBeDefined();
+    expect(loaded).toHaveProperty(channelKey);
+    expect(loaded).toHaveProperty(threadKey);
+    expect(loaded).toHaveProperty(topicKey);
     expect(loaded["session-74"]).toBeUndefined();
+  });
+
+  it("persists quota suspension TTL transitions through writer maintenance", async () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      suspended: {
+        ...makeEntry(now),
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now - 30_000,
+          expectedResumeBy: now - 1,
+          state: "suspended",
+          reason: "quota_exhausted",
+          failedProvider: "anthropic",
+          failedModel: "claude-opus-4-6",
+          laneId: "main",
+        },
+      },
+      active: {
+        ...makeEntry(now),
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now - 61_000,
+          expectedResumeBy: now - 31_000,
+          state: "active",
+          reason: "circuit_open",
+          failedProvider: "anthropic",
+          failedModel: "claude-opus-4-6",
+          laneId: "main",
+        },
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const result = await runQuotaSuspensionMaintenance({
+      storePath,
+      now,
+      ttlMs: 30_000,
+      log: false,
+    });
+
+    expect(result).toEqual({ resumed: [{ sessionKey: "suspended", laneId: "main" }], cleared: 1 });
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded.suspended?.quotaSuspension?.state).toBe("resuming");
+    expect(loaded.active?.quotaSuspension).toBeUndefined();
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted.suspended?.quotaSuspension?.state).toBe("resuming");
+    expect(persisted.active?.quotaSuspension).toBeUndefined();
   });
 
   it("updateSessionStore batches cap-hit maintenance instead of pruning every new session", async () => {
@@ -738,7 +794,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const loaded = loadSessionStore(storePath, { skipCache: true });
     expect(Object.keys(loaded)).toHaveLength(51);
-    expect(loaded["session-50"]).toBeDefined();
+    expect(loaded).toHaveProperty("session-50");
   });
 
   it("loadSessionStore honors configured maxEntries without an explicit override", async () => {
@@ -784,8 +840,8 @@ describe("Integration: saveSessionStore with pruning", () => {
     const loaded = loadSessionStore(storePath, { skipCache: true });
 
     expect(Object.keys(loaded)).toHaveLength(2);
-    expect(loaded.oldest).toBeDefined();
-    expect(loaded.newest).toBeDefined();
+    expect(loaded).toHaveProperty("oldest");
+    expect(loaded).toHaveProperty("newest");
   });
 
   it("archives transcript files for entries evicted by maxEntries capping", async () => {
@@ -807,9 +863,9 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const loaded = loadSessionStore(storePath);
     expect(loaded.oldest).toBeUndefined();
-    expect(loaded.newest).toBeDefined();
+    expect(loaded).toHaveProperty("newest");
     await expect(fs.stat(oldestTranscript)).rejects.toThrow();
-    await expect(fs.stat(newestTranscript)).resolves.toBeDefined();
+    await expectPathExists(newestTranscript);
     const files = await fs.readdir(testDir);
     expect(files.some((name) => name.startsWith(`${oldestSessionId}.jsonl.deleted.`))).toBe(true);
   });
@@ -835,10 +891,10 @@ describe("Integration: saveSessionStore with pruning", () => {
       await saveSessionStore(storePath, store);
       const loaded = loadSessionStore(storePath);
       expect(loaded.oldest).toBeUndefined();
-      expect(loaded.newest).toBeDefined();
-      await expect(fs.stat(externalTranscript)).resolves.toBeDefined();
+      expect(loaded).toHaveProperty("newest");
+      await expectPathExists(externalTranscript);
     } finally {
-      await expect(fs.stat(externalTranscript)).resolves.toBeDefined();
+      await expectPathExists(externalTranscript);
     }
   });
 
@@ -869,9 +925,9 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const loaded = loadSessionStore(storePath);
     expect(Object.keys(loaded).length).toBe(1);
-    expect(loaded.recent).toBeDefined();
+    expect(loaded).toHaveProperty("recent");
     await expect(fs.stat(path.join(testDir, `${oldSessionId}.jsonl`))).rejects.toThrow();
-    await expect(fs.stat(path.join(testDir, `${newSessionId}.jsonl`))).resolves.toBeDefined();
+    await expectPathExists(path.join(testDir, `${newSessionId}.jsonl`));
   });
 
   it("uses projected sessions.json size to avoid over-eviction", async () => {
@@ -901,8 +957,8 @@ describe("Integration: saveSessionStore with pruning", () => {
     await saveSessionStore(storePath, store);
 
     const loaded = loadSessionStore(storePath);
-    expect(loaded.older).toBeDefined();
-    expect(loaded.newer).toBeDefined();
+    expect(loaded).toHaveProperty("older");
+    expect(loaded).toHaveProperty("newer");
   });
 
   it("does not create rotation backups for hot oversized store writes", async () => {
@@ -979,7 +1035,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(backups).toHaveLength(0);
     const loaded = loadSessionStore(storePath, { skipCache: true });
     expect(loaded.old).toBeUndefined();
-    expect(loaded.fresh).toBeDefined();
+    expect(loaded).toHaveProperty("fresh");
   });
 
   it("never deletes transcripts outside the agent sessions directory during budget cleanup", async () => {
@@ -1015,9 +1071,9 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     try {
       await saveSessionStore(storePath, store);
-      await expect(fs.stat(externalTranscript)).resolves.toBeDefined();
+      await expectPathExists(externalTranscript);
     } finally {
-      await expect(fs.stat(externalTranscript)).resolves.toBeDefined();
+      await expectPathExists(externalTranscript);
     }
   });
 });

@@ -442,18 +442,16 @@ describe("toSanitizedMarkdownHtml", () => {
   });
 
   describe("ReDoS protection", () => {
-    it("does not throw on deeply nested emphasis markers (#36213)", () => {
+    it("renders deeply nested emphasis markers without dropping text (#36213)", () => {
       const nested = "*".repeat(500) + "text" + "*".repeat(500);
-      let html = "";
-      expect(() => {
-        html = toSanitizedMarkdownHtml(nested);
-      }).not.toThrow();
+      const html = toSanitizedMarkdownHtml(nested);
       expect(html).toContain("text");
     });
 
-    it("does not throw on deeply nested brackets (#36213)", () => {
+    it("renders deeply nested brackets without dropping text (#36213)", () => {
       const nested = "[".repeat(200) + "link" + "]".repeat(200) + "(" + "x".repeat(200) + ")";
-      expect(() => toSanitizedMarkdownHtml(nested)).not.toThrow();
+      const html = toSanitizedMarkdownHtml(nested);
+      expect(html).toContain("link");
     });
 
     it("does not hang on backtick + bracket ReDoS pattern", { timeout: 2_000 }, () => {

@@ -73,8 +73,10 @@ function readDiagnosticsConfirmationToken(
 ): string {
   const text = result.text ?? "";
   const token = new RegExp(`${escapeRegExp(commandPrefix)} confirm ([a-f0-9]{12})`).exec(text)?.[1];
-  expect(token).toBeTruthy();
-  return token as string;
+  if (!token) {
+    throw new Error(`expected ${commandPrefix} confirmation token in command output`);
+  }
+  return token;
 }
 
 function escapeRegExp(value: string): string {

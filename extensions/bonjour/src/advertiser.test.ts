@@ -290,8 +290,11 @@ describe("gateway bonjour advertiser", () => {
 
       await started.stop();
       childProcessModule.exec('arp -a | findstr /C:"---"', () => {});
-      const afterStopOptions = execMock.mock.calls.at(-1)?.[1];
-      expect(afterStopOptions).toEqual(expect.any(Function));
+      const afterStopCallback = execMock.mock.calls.at(-1)?.[1];
+      if (typeof afterStopCallback !== "function") {
+        throw new Error("expected restored exec callback overload");
+      }
+      afterStopCallback(null, "", "");
     } finally {
       childProcessModule.exec = originalExec;
     }
@@ -775,8 +778,10 @@ describe("gateway bonjour advertiser", () => {
     const disableLog = logger.warn.mock.calls.find(
       (call) => typeof call[0] === "string" && call[0].includes("disabling advertiser after"),
     );
-    expect(disableLog).toBeDefined();
-    expect(String(disableLog?.[0])).toMatch(/restarts within \d+ minutes/);
+    if (!disableLog) {
+      throw new Error("expected advertiser disable warning after repeated restarts");
+    }
+    expect(String(disableLog[0])).toMatch(/restarts within \d+ minutes/);
 
     const advertiseCallsAtDisable = advertise.mock.calls.length;
     const createServiceCallsAtDisable = createService.mock.calls.length;

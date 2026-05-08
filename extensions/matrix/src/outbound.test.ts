@@ -37,7 +37,6 @@ describe("matrixOutbound cfg threading", () => {
       throw new Error("matrixOutbound.chunker missing");
     }
 
-    expect(() => chunker("hello world", 5)).not.toThrow();
     expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
   });
 

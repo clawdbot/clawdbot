@@ -324,10 +324,12 @@ describe("createChildAdapter", () => {
       "/usr/bin/node",
     ]);
     expect(spawnArgs.argv?.slice(4)).toEqual(["-e", "process.exit(0)"]);
-    expect(spawnArgs.options?.env).toBeDefined();
-    expect(spawnArgs.options?.env?.BASH_ENV).toBeUndefined();
-    expect(spawnArgs.options?.env?.ENV).toBeUndefined();
-    expect(spawnArgs.options?.env?.CDPATH).toBeUndefined();
+    if (!spawnArgs.options?.env) {
+      throw new Error("expected child process env options");
+    }
+    expect(spawnArgs.options.env.BASH_ENV).toBeUndefined();
+    expect(spawnArgs.options.env.ENV).toBeUndefined();
+    expect(spawnArgs.options.env.CDPATH).toBeUndefined();
   });
 
   it("passes explicit env overrides as strings", async () => {

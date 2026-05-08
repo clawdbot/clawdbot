@@ -122,8 +122,8 @@ describe("cli program (nodes media)", () => {
     try {
       // Content bytes are covered by single-output camera/file tests; here we
       // only verify dual snapshot behavior and that both paths were written.
-      await expect(fs.stat(mediaPaths[0])).resolves.toBeTruthy();
-      await expect(fs.stat(mediaPaths[1])).resolves.toBeTruthy();
+      expect((await fs.stat(mediaPaths[0])).isFile()).toBe(true);
+      expect((await fs.stat(mediaPaths[1])).isFile()).toBe(true);
     } finally {
       await Promise.all(mediaPaths.map((p) => fs.unlink(p).catch(() => {})));
     }

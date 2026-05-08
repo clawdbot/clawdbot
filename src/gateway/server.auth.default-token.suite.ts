@@ -361,7 +361,9 @@ export function registerDefaultAuthTokenSuite(): void {
       const presence = helloOk?.snapshot?.presence;
       expect(Array.isArray(presence)).toBe(true);
       const mine = presence?.find((entry) => entry.deviceId === identity.deviceId);
-      expect(mine).toBeTruthy();
+      if (!mine) {
+        throw new Error(`expected presence entry for device ${identity.deviceId}`);
+      }
       const presenceScopes = Array.isArray(mine?.scopes) ? mine?.scopes : [];
       expect(presenceScopes).toEqual([]);
       expect(presenceScopes).not.toContain("operator.admin");

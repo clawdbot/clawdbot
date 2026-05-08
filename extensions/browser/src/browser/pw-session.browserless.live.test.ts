@@ -18,6 +18,7 @@ describeLive("browser (live): remote CDP tab persistence", () => {
     await pw.closePlaywrightBrowserConnection().catch(() => {});
 
     const created = await pw.createPageViaPlaywright({ cdpUrl: CDP_URL, url: "about:blank" });
+    expect(created.targetId).toEqual(expect.any(String));
     try {
       await waitFor(
         async () => {

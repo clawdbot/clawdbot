@@ -271,6 +271,6 @@ function expectCopilotProviderFromPlan(
     plan.action === "write"
       ? (JSON.parse(plan.contents) as { providers?: Record<string, unknown> })
       : {};
-  expect(parsed.providers?.["github-copilot"]).toBeDefined();
+  expect(parsed.providers?.["github-copilot"]).toEqual(expect.any(Object));
   return expect(parsed.providers?.["github-copilot"]);
 }

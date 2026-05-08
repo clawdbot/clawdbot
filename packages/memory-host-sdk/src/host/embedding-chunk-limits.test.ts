@@ -25,6 +25,28 @@ function createProviderWithoutMaxInputTokens(params: {
   };
 }
 
+type EmbeddingChunks = ReturnType<typeof enforceEmbeddingMaxInputTokens>;
+
+function expectChunksWithinUtf8Bytes(chunks: EmbeddingChunks, maxBytes: number) {
+  const oversized = chunks
+    .map((chunk, index) => ({ index, bytes: estimateUtf8Bytes(chunk.text) }))
+    .filter((entry) => entry.bytes > maxBytes);
+  expect(oversized).toEqual([]);
+}
+
+function expectChunksLineRange(chunks: EmbeddingChunks, startLine: number, endLine: number) {
+  expect(chunks.map((chunk) => ({ startLine: chunk.startLine, endLine: chunk.endLine }))).toEqual(
+    chunks.map(() => ({ startLine, endLine })),
+  );
+}
+
+function expectChunksHaveHashes(chunks: EmbeddingChunks) {
+  const invalidHashes = chunks
+    .map((chunk, index) => ({ index, hash: chunk.hash }))
+    .filter((entry) => typeof entry.hash !== "string" || entry.hash.length === 0);
+  expect(invalidHashes).toEqual([]);
+}
+
 describe("embedding chunk limits", () => {
   it("splits oversized chunks so each embedding input stays <= maxInputTokens bytes", () => {
     const provider = createProvider(8192);
@@ -38,11 +60,9 @@ describe("embedding chunk limits", () => {
     const out = enforceEmbeddingMaxInputTokens(provider, [input]);
     expect(out.length).toBeGreaterThan(1);
     expect(out.map((chunk) => chunk.text).join("")).toBe(input.text);
-    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 8192)).toBe(true);
-    expect(out.every((chunk) => chunk.startLine === 1 && chunk.endLine === 1)).toBe(true);
-    expect(out.every((chunk) => typeof chunk.hash === "string" && chunk.hash.length > 0)).toBe(
-      true,
-    );
+    expectChunksWithinUtf8Bytes(out, 8192);
+    expectChunksLineRange(out, 1, 1);
+    expectChunksHaveHashes(out);
   });
 
   it("does not split inside surrogate pairs (emoji)", () => {
@@ -56,7 +76,7 @@ describe("embedding chunk limits", () => {
 
     expect(out.length).toBeGreaterThan(1);
     expect(out.map((chunk) => chunk.text).join("")).toBe(inputText);
-    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 8192)).toBe(true);
+    expectChunksWithinUtf8Bytes(out, 8192);
 
     // If we split inside surrogate pairs we'd likely end up with replacement chars.
     expect(out.map((chunk) => chunk.text).join("")).not.toContain("\uFFFD");
@@ -78,7 +98,7 @@ describe("embedding chunk limits", () => {
     ]);
 
     expect(out.length).toBeGreaterThan(1);
-    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 2048)).toBe(true);
+    expectChunksWithinUtf8Bytes(out, 2048);
   });
 
   it("honors hard safety caps lower than provider maxInputTokens", () => {
@@ -97,6 +117,6 @@ describe("embedding chunk limits", () => {
     );
 
     expect(out.length).toBeGreaterThan(1);
-    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 8000)).toBe(true);
+    expectChunksWithinUtf8Bytes(out, 8000);
   });
 });

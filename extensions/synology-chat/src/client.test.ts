@@ -103,6 +103,28 @@ function installFakeTimerHarness() {
   });
 }
 
+const tlsVerificationDefaultCases = [
+  {
+    name: "sendMessage",
+    invoke: () => sendMessage("https://nas.example.com/incoming", "Hello"),
+  },
+  {
+    name: "sendFileUrl",
+    invoke: () => sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+  },
+];
+
+describe("Synology Chat TLS verification defaults", () => {
+  installFakeTimerHarness();
+
+  it.each(tlsVerificationDefaultCases)("$name verifies TLS by default", async ({ invoke }) => {
+    mockSuccessResponse();
+    await settleTimers(invoke());
+    const httpsRequest = vi.mocked(https.request);
+    expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
+  });
+});
+
 describe("sendMessage", () => {
   installFakeTimerHarness();
 
@@ -125,13 +147,6 @@ describe("sendMessage", () => {
     expect(httpsRequest).toHaveBeenCalled();
     const callArgs = httpsRequest.mock.calls[0];
     expect(callArgs[0]).toBe("https://nas.example.com/incoming");
-  });
-
-  it("verifies TLS by default", async () => {
-    mockSuccessResponse();
-    await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
-    const httpsRequest = vi.mocked(https.request);
-    expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
   });
 
   it("only disables TLS verification when explicitly requested", async () => {
@@ -159,15 +174,6 @@ describe("sendFileUrl", () => {
       sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
     );
     expect(result).toBe(false);
-  });
-
-  it("verifies TLS by default", async () => {
-    mockSuccessResponse();
-    await settleTimers(
-      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
-    );
-    const httpsRequest = vi.mocked(https.request);
-    expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
   });
 
   it("respects the shared send interval before posting a file URL", async () => {

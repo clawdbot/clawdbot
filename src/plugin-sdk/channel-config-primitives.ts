@@ -12,5 +12,6 @@ export {
   GroupPolicySchema,
   MarkdownConfigSchema,
   ReplyRuntimeConfigSchemaShape,
+  requireAllowlistAllowFrom,
   requireOpenAllowFrom,
 } from "../config/zod-schema.core.js";

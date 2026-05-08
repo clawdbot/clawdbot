@@ -380,7 +380,7 @@ describe("clearExpiredCooldowns", () => {
     expect(stats?.errorCount).toBe(0);
     expect(stats?.failureCounts).toBeUndefined();
     // lastFailureAt preserved for failureWindowMs decay
-    expect(stats?.lastFailureAt).toBeDefined();
+    expect(stats?.lastFailureAt).toEqual(expect.any(Number));
   });
 
   it("clears expired disabledUntil and disabledReason", () => {

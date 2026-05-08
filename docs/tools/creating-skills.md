@@ -116,5 +116,5 @@ The YAML frontmatter supports these fields:
 
 - [Skills reference](/tools/skills) — loading, precedence, and gating rules
 - [Skills config](/tools/skills-config) — `skills.*` config schema
-- [ClawHub](/tools/clawhub) — public skill registry
+- [ClawHub](/clawhub) — public skill registry
 - [Building Plugins](/plugins/building-plugins) — plugins can ship skills

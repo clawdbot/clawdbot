@@ -119,10 +119,12 @@ describe("Ollama provider", () => {
     await withOllamaApiKey(async () => {
       const provider = await runOllamaCatalog({});
 
-      expect(provider).toBeDefined();
-      expect(provider?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
-      expect(provider?.api).toBe("ollama");
-      expect(provider?.baseUrl).toBe("http://127.0.0.1:11434");
+      if (!provider) {
+        throw new Error("expected injected Ollama provider");
+      }
+      expect(provider.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
+      expect(provider.api).toBe("ollama");
+      expect(provider.baseUrl).toBe("http://127.0.0.1:11434");
       expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 0 });
     });
   });

@@ -780,9 +780,11 @@ describe("setupChannels", () => {
       if (message === "Select a channel") {
         const entries = options as Array<{ value: string; hint?: string }>;
         const msteams = entries.find((entry) => entry.value === "external-chat");
-        expect(msteams).toBeDefined();
-        expect(msteams?.hint ?? "").not.toContain("plugin");
-        expect(msteams?.hint ?? "").not.toContain("install");
+        if (msteams === undefined) {
+          throw new Error("expected Teams catalog entry");
+        }
+        expect(msteams.hint ?? "").not.toContain("plugin");
+        expect(msteams.hint ?? "").not.toContain("install");
         return "__done__";
       }
       return "__done__";

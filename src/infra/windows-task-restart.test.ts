@@ -110,7 +110,10 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(unref).toHaveBeenCalledOnce();
 
     const scriptPath = [...createdScriptPaths][0];
-    expect(scriptPath).toBeTruthy();
+    if (scriptPath === undefined) {
+      throw new Error("expected restart helper script path");
+    }
+    expect(fs.statSync(scriptPath).isFile()).toBe(true);
     const script = fs.readFileSync(scriptPath, "utf8");
     expect(script).toContain("timeout /t 1 /nobreak >nul");
     expect(script).toContain("gateway-restart.log");

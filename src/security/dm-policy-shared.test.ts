@@ -342,7 +342,7 @@ describe("security/dm-policy-shared", () => {
   });
 
   const channels = [
-    "bluebubbles",
+    "imessage",
     "imessage",
     "signal",
     "telegram",

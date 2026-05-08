@@ -79,13 +79,15 @@ describe("formatPluginSourceForTable", () => {
       OPENCLAW_STATE_DIR: "~/state",
     } as NodeJS.ProcessEnv;
     const stock = withPathResolutionEnv(homeDir, rawEnv, (env) => resolveBundledPluginsDir(env));
-    expect(stock).toBeDefined();
+    if (!stock) {
+      throw new Error("expected bundled plugin source root");
+    }
     expectResolvedSourceRoots({
       homeDir,
       env: rawEnv,
       workspaceDir: "~/ws",
       expected: {
-        stock: stock!,
+        stock,
         global: path.join(homeDir, "state", "extensions"),
         workspace: path.join(homeDir, "ws", ".openclaw", "extensions"),
       },

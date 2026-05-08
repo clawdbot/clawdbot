@@ -131,7 +131,9 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(pages).toHaveLength(1);
     expect(pages[0]?.pdf).toHaveBeenCalledTimes(1);
     const pdfCall = pages[0]?.pdf.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
-    expect(pdfCall).toBeDefined();
+    if (!pdfCall) {
+      throw new Error("expected PDF render call");
+    }
     expect(pdfCall).not.toHaveProperty("pageRanges");
     expect(pages[0]?.screenshot).toHaveBeenCalledTimes(0);
     await expect(fs.readFile(pdfPath, "utf8")).resolves.toContain("%PDF-1.7");

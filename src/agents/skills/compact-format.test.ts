@@ -55,6 +55,14 @@ function buildPrompt(
   });
 }
 
+function requireIncludedCounts(prompt: string): [included: number, total: number] {
+  const match = prompt.match(/included (\d+) of (\d+)/);
+  if (!match) {
+    throw new Error(`expected included count in prompt: ${prompt}`);
+  }
+  return [Number(match[1]), Number(match[2])];
+}
+
 describe("formatSkillsCompact", () => {
   it("keeps the full-format XML output aligned with the upstream formatter for visible skills", () => {
     const skills = [
@@ -167,10 +175,9 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).toContain("compact format, descriptions omitted");
     expect(prompt).not.toContain("<description>");
     expect(prompt).toContain("skill-0");
-    const match = prompt.match(/included (\d+) of (\d+)/);
-    expect(match).toBeTruthy();
-    expect(Number(match![1])).toBeLessThan(Number(match![2]));
-    expect(Number(match![1])).toBeGreaterThan(0);
+    const [included, total] = requireIncludedCounts(prompt);
+    expect(included).toBeLessThan(total);
+    expect(included).toBeGreaterThan(0);
   });
 
   it("compact preserves all skills where full format would drop some", () => {
@@ -208,9 +215,8 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     // Budget so small that even one compact skill can't fit
     const prompt = buildPrompt(skills, { maxChars: 10 });
     expect(prompt).not.toContain("only-one");
-    const match = prompt.match(/included (\d+) of (\d+)/);
-    expect(match).toBeTruthy();
-    expect(Number(match![1])).toBe(0);
+    const [included] = requireIncludedCounts(prompt);
+    expect(included).toBe(0);
   });
 
   it("count truncation only: shows included X of Y without compact note", () => {
@@ -296,8 +302,8 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     // Prompt should use compacted paths
     expect(snapshot.prompt).toContain("~/");
     // resolvedSkills should preserve canonical (absolute) paths
-    expect(snapshot.resolvedSkills).toBeDefined();
-    for (const skill of snapshot.resolvedSkills!) {
+    expect(snapshot.resolvedSkills).toHaveLength(5);
+    for (const skill of snapshot.resolvedSkills ?? []) {
       expect(skill.filePath).toContain(home);
       expect(skill.filePath).not.toMatch(/^~\//);
     }

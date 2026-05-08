@@ -30,6 +30,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
+import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { formatSlackFileReference } from "../../file-reference.js";
@@ -303,8 +304,26 @@ export async function prepareSlackMessage(params: {
           log: logVerbose,
         })))),
   );
+  // Channels with `requireMention: false` and a non-`off` reply mode produce
+  // a Slack-side thread on every top-level bot reply (because `replyToMode`
+  // creates one). Seed thread routing for the root turn too, so the inbound
+  // root and its later thread replies share one parent session — same way
+  // app_mention / explicitly mentioned roots already do. Without this gate,
+  // the root lands on the channel session while later thread replies land on
+  // a fresh `:thread:<root_ts>` session, breaking continuity.
+  const channelRequireMention = channelConfig?.requireMention ?? ctx.defaultRequireMention ?? true;
+  const channelChatType: "direct" | "group" | "channel" = isDirectMessage
+    ? "direct"
+    : isGroupDm
+      ? "group"
+      : "channel";
+  const willImplicitlyThreadReply =
+    isRoom && !channelRequireMention && resolveSlackReplyToMode(account, channelChatType) !== "off";
   const seedTopLevelRoomThreadBySource =
-    opts.source === "app_mention" || opts.wasMentioned === true || explicitlyMentioned;
+    opts.source === "app_mention" ||
+    opts.wasMentioned === true ||
+    explicitlyMentioned ||
+    willImplicitlyThreadReply;
   let routing = resolveSlackRoutingContext({
     ctx,
     account,

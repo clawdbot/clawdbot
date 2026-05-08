@@ -131,14 +131,15 @@ describe("command-poll-backoff", () => {
       expect(state.commandPollCounts?.has("cmd-123")).toBe(false);
     });
 
-    it("is safe to call on untracked command", () => {
+    it("leaves tracking empty for an untracked command", () => {
       const state: SessionState = {
         lastActivity: Date.now(),
         state: "processing",
         queueDepth: 0,
       };
 
-      expect(() => resetCommandPollCount(state, "unknown")).not.toThrow();
+      resetCommandPollCount(state, "unknown");
+      expect(state.commandPollCounts?.has("unknown") ?? false).toBe(false);
     });
   });
 
@@ -160,14 +161,15 @@ describe("command-poll-backoff", () => {
       expect(state.commandPollCounts?.has("cmd-new")).toBe(true);
     });
 
-    it("handles empty state gracefully", () => {
+    it("keeps an empty state without creating poll tracking", () => {
       const state: SessionState = {
         lastActivity: Date.now(),
         state: "idle",
         queueDepth: 0,
       };
 
-      expect(() => pruneStaleCommandPolls(state)).not.toThrow();
+      pruneStaleCommandPolls(state);
+      expect(state.commandPollCounts).toBeUndefined();
     });
   });
 });

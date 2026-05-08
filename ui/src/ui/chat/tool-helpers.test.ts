@@ -1,7 +1,18 @@
 import { describe, it, expect } from "vitest";
 import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
+const emptyStringHelperCases = [
+  { name: "formatToolOutputForSidebar", resolve: formatToolOutputForSidebar },
+  { name: "getTruncatedPreview", resolve: getTruncatedPreview },
+];
+
 describe("tool-helpers", () => {
+  describe("empty string handling", () => {
+    it.each(emptyStringHelperCases)("$name handles empty string", ({ resolve }) => {
+      expect(resolve("")).toBe("");
+    });
+  });
+
   describe("formatToolOutputForSidebar", () => {
     it("formats valid JSON object as code block", () => {
       const input = '{"name":"test","value":123}';
@@ -66,11 +77,6 @@ describe("tool-helpers", () => {
       expect(result).toContain('"trimmed"');
     });
 
-    it("handles empty string", () => {
-      const result = formatToolOutputForSidebar("");
-      expect(result).toBe("");
-    });
-
     it("handles whitespace-only string", () => {
       const result = formatToolOutputForSidebar("   ");
       expect(result).toBe("   ");
@@ -121,11 +127,6 @@ describe("tool-helpers", () => {
       const result = getTruncatedPreview(input);
 
       expect(result).toBe("Single line");
-    });
-
-    it("handles empty string", () => {
-      const result = getTruncatedPreview("");
-      expect(result).toBe("");
     });
 
     it("truncates by chars even within line limit", () => {

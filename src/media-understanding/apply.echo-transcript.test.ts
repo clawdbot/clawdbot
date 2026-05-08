@@ -107,7 +107,9 @@ function createAudioConfigWithEcho(opts?: {
 function expectSingleEchoDeliveryCall() {
   expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
   const callArgs = mockDeliverOutboundPayloads.mock.calls[0]?.[0];
-  expect(callArgs).toBeDefined();
+  if (!callArgs) {
+    throw new Error("Expected one echo transcript delivery call");
+  }
   return callArgs as {
     to?: string;
     channel?: string;

@@ -83,7 +83,6 @@ describe("provider public artifacts", () => {
     vi.doMock("./public-surface-loader.js", () => ({
       loadBundledPluginPublicArtifactModuleSync,
     }));
-    vi.resetModules();
 
     try {
       const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
@@ -155,7 +154,6 @@ describe("provider public artifacts", () => {
     }));
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
     process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-    vi.resetModules();
 
     try {
       writePlugin("first", ["fixture-provider"], 1);
@@ -206,7 +204,6 @@ describe("provider public artifacts", () => {
     vi.doMock("./public-surface-loader.js", () => ({
       loadBundledPluginPublicArtifactModuleSync,
     }));
-    vi.resetModules();
 
     const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
       typeof import("./provider-public-artifacts.js")
@@ -244,7 +241,6 @@ describe("provider public artifacts", () => {
     vi.doMock("./public-surface-loader.js", () => ({
       loadBundledPluginPublicArtifactModuleSync,
     }));
-    vi.resetModules();
 
     const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
       typeof import("./provider-public-artifacts.js")

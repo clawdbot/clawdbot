@@ -66,7 +66,7 @@ describe("logging/logger browser-safe import", () => {
       file: "/tmp/openclaw/openclaw.log",
     });
     expect(module.isFileLogLevelEnabled("info")).toBe(false);
-    expect(() => module.getLogger().info("browser-safe")).not.toThrow();
+    expect(module.getLogger().info("browser-safe")).toBeUndefined();
     expect(resolvePreferredOpenClawTmpDir).not.toHaveBeenCalled();
   });
 });

@@ -147,7 +147,7 @@ describe("before_tool_call terminal block semantics", () => {
     expect(second).not.toHaveBeenCalled();
   });
 
-  it("stops before lower-priority throwing hooks when catchErrors is false", async () => {
+  it("stops before lower-priority before-tool-call hooks when catchErrors is false", async () => {
     const low = vi.fn().mockImplementation(() => {
       throw new Error("should not run");
     });
@@ -295,7 +295,7 @@ describe("message_sending terminal cancel semantics", () => {
     expect(result?.content).toBe("second");
   });
 
-  it("stops before lower-priority throwing hooks when catchErrors is false", async () => {
+  it("stops before lower-priority message-sending hooks when catchErrors is false", async () => {
     const low = vi.fn().mockImplementation(() => {
       throw new Error("should not run");
     });

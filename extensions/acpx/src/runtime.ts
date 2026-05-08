@@ -133,7 +133,13 @@ function selectCurrentSessionLease(params: {
   if (params.rootPid) {
     return candidates.find((lease) => lease.rootPid === params.rootPid);
   }
-  return candidates.toSorted((a, b) => b.startedAt - a.startedAt)[0];
+  let selected: AcpxProcessLease | undefined;
+  for (const lease of candidates) {
+    if (!selected || lease.startedAt > selected.startedAt) {
+      selected = lease;
+    }
+  }
+  return selected;
 }
 
 function createResetAwareSessionStore(

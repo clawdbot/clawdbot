@@ -7,9 +7,6 @@
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
-  "dependencies": {
-    "zod": "^4.4.3"
-  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"

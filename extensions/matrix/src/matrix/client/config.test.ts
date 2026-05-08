@@ -633,6 +633,9 @@ describe("Matrix auth/config live surfaces", () => {
       "Matrix homeserver must use https:// unless it targets a private or loopback host",
     );
     expect(validateMatrixHomeserverUrl("http://127.0.0.1:8008")).toBe("http://127.0.0.1:8008");
+    expect(validateMatrixHomeserverUrl("http://[::ffff:127.0.0.1]:8008")).toBe(
+      "http://[::ffff:127.0.0.1]:8008",
+    );
   });
 
   it("accepts internal http homeservers only when private-network access is enabled", () => {

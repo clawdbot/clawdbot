@@ -709,6 +709,16 @@ export const nl: TranslationMap = {
       today: "Vandaag",
       last7d: "7d",
       last30d: "30d",
+      last90d: "90d",
+      last1y: "1j",
+      all: "Alle",
+    },
+    scope: {
+      instance: "Huidige instantie",
+      instanceHint: "Toon alleen de actieve sessie-id voor elke logische sessie.",
+      family: "Historische afstamming",
+      familyHint: "Voeg bekende geroteerde sessie-id's met transcriptbacking samen.",
+      familyIncluded: "Historische afstamming omvat {count} sessie-instanties.",
     },
     filters: {
       title: "Filters",
@@ -930,6 +940,97 @@ export const nl: TranslationMap = {
     showPassword: "Wachtwoord weergeven",
     hidePassword: "Wachtwoord verbergen",
     togglePasswordVisibility: "Wachtwoordzichtbaarheid schakelen",
+    failure: {
+      rawError: "Ruwe fout",
+      docsAuth: "Control UI-authdocumentatie",
+      docsPairing: "Documentatie voor apparaatkoppeling",
+      docsInsecure: "Documentatie voor onveilige HTTP",
+      authRequired: {
+        title: "Authenticatie vereist",
+        summary:
+          "De Gateway is bereikbaar, maar heeft een overeenkomend token of wachtwoord nodig voordat deze browser kan verbinden.",
+        stepPaste:
+          "Plak het token uit openclaw dashboard --no-open of voer het geconfigureerde wachtwoord in.",
+        stepGenerate:
+          "Als er geen token is geconfigureerd, voer dan openclaw doctor --generate-gateway-token uit op de Gateway-host.",
+        stepConnect: "Klik opnieuw op Connect nadat je de referentie hebt bijgewerkt.",
+      },
+      authFailed: {
+        title: "Authenticatie komt niet overeen",
+        summary:
+          "De opgegeven referentie is geweigerd. De meest voorkomende oorzaak is een verlopen token of een token dat van een andere Gateway-URL is gekopieerd.",
+        stepDashboard:
+          "Voer openclaw dashboard --no-open uit en open de nieuwe URL of plak het token.",
+        stepReplace:
+          "Vervang verlopen token-/wachtwoordwaarden; hergebruik geen token van een andere Gateway-URL.",
+        stepMode:
+          "Gebruik één overeenkomende auth-modus tegelijk: gateway-token voor tokenmodus, wachtwoord voor wachtwoordmodus.",
+      },
+      rateLimited: {
+        title: "Te veel mislukte pogingen",
+        summary: "De Gateway beperkt tijdelijk authenticatiepogingen voor deze client.",
+        stepStop: "Stop even met opnieuw proberen vanuit dit tabblad.",
+        stepWait:
+          "Wacht tot de auth-limiter is afgekoeld en verbind opnieuw met de gecorrigeerde referentie.",
+        stepCheckClients:
+          "Als dit een gedeelde host is, controleer andere clients op herhaalde verkeerde pogingen.",
+      },
+      pairing: {
+        title: "Apparaatkoppeling vereist",
+        scopeTitle: "Scope-upgrade in behandeling",
+        roleTitle: "Rol-upgrade in behandeling",
+        metadataTitle: "Apparaatverversing in behandeling",
+        summary:
+          "Deze browser heeft een eenmalige goedkeuring van de Gateway-host nodig voordat Control UI kan worden gebruikt.",
+        upgradeSummary:
+          "Deze browser is al bekend, maar de gevraagde toegang is gewijzigd en vereist nieuwe goedkeuring.",
+        stepList: "Voer openclaw devices list uit op de Gateway-host.",
+        stepApproveId: "Keur deze aanvraag goed: openclaw devices approve {requestId}.",
+        stepApprove: "Keur de openstaande browser-/apparaat aanvraag uit die lijst goed.",
+        stepReconnect: "Verbind opnieuw nadat de goedkeuring is voltooid.",
+      },
+      insecure: {
+        title: "Veilige browsercontext vereist",
+        summary:
+          "Deze pagina draait via gewone HTTP, waardoor de browser de apparaatidentiteit die de Gateway verwacht niet kan maken.",
+        stepHttps:
+          "Gebruik HTTPS/Tailscale Serve, of open http://127.0.0.1:18789 op de Gateway-host.",
+        stepLocalCompat:
+          "Stel voor lokale token-only compatibiliteit gateway.controlUi.allowInsecureAuth: true in.",
+        stepAvoidDisable:
+          "Schakel apparaatauthenticatie voor externe HTTP-toegang liever niet uit.",
+      },
+      origin: {
+        title: "Browser-origin niet toegestaan",
+        summary:
+          "De Gateway heeft deze pagina-origin geweigerd voordat de Control UI-verbinding werd geaccepteerd.",
+        stepAllowedOrigins: "Voeg deze browser-origin toe aan gateway.controlUi.allowedOrigins.",
+        stepFullOrigin:
+          "Gebruik volledige origins zoals http://localhost:5173, geen wildcardpatronen.",
+        stepRestart: "Herstart of herlaad de Gateway na het wijzigen van toegestane origins.",
+      },
+      protocol: {
+        title: "Protocol komt niet overeen",
+        summary:
+          "De geserveerde Control UI en de draaiende Gateway zijn het niet eens over het ondersteunde verbindingsprotocol.",
+        stepDashboard:
+          "Open het geserveerde dashboard opnieuw met openclaw dashboard zodat UI en Gateway uit dezelfde installatie komen.",
+        stepDevUi:
+          "Als je pnpm ui:dev gebruikt, bouw of herstart de dev-UI tegen de huidige checkout.",
+        stepRestart:
+          "Herstart de Gateway na het bijwerken van OpenClaw zodat het huidige protocol wordt geserveerd.",
+      },
+      network: {
+        title: "Kan niet verbinden",
+        summary:
+          "De browser kon de Gateway-verbinding niet voltooien. Controleer doel en transport voordat je referenties opnieuw probeert.",
+        stepGateway: "Bevestig dat de Gateway draait met openclaw status of openclaw gateway run.",
+        stepUrl:
+          "Controleer de WebSocket-URL en gebruik wss:// wanneer de Gateway achter HTTPS/Tailscale Serve staat.",
+        stepDashboard:
+          "Open het dashboard opnieuw met openclaw dashboard --no-open om de huidige URL en authdetails opnieuw te kopiëren.",
+      },
+    },
   },
   chat: {
     disconnected: "Verbinding met Gateway verbroken.",

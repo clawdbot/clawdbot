@@ -5,6 +5,7 @@ import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
+import { VERSION } from "../version.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import type { StatusSummary } from "./status.types.js";
 
@@ -25,6 +26,21 @@ function isGatewayCallTimeout(message: string): boolean {
   return /^gateway timeout after \d+ms(?:\n|$)/.test(message);
 }
 
+function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {
+  const gatewayVersion = status?.runtimeVersion?.trim();
+  if (!gatewayVersion || gatewayVersion === VERSION) {
+    return;
+  }
+  note(
+    [
+      `This command is OpenClaw ${VERSION}; the running Gateway is OpenClaw ${gatewayVersion}.`,
+      "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`.",
+      "If this mismatch is unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
+    ].join("\n"),
+    "OpenClaw version mismatch",
+  );
+}
+
 export async function checkGatewayHealth(params: {
   runtime: RuntimeEnv;
   cfg: OpenClawConfig;
@@ -43,6 +59,7 @@ export async function checkGatewayHealth(params: {
       config: params.cfg,
     });
     healthOk = true;
+    noteCliGatewayVersionSkew(status);
   } catch (err) {
     const message = String(err);
     if (message.includes("gateway closed")) {

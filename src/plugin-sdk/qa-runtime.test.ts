@@ -36,8 +36,12 @@ describe("plugin-sdk qa-runtime", () => {
     const module = await import("./qa-runtime.js");
 
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
-    expect(typeof module.loadQaRuntimeModule).toBe("function");
-    expect(typeof module.isQaRuntimeAvailable).toBe("function");
+    expect(module).toEqual(
+      expect.objectContaining({
+        loadQaRuntimeModule: expect.any(Function),
+        isQaRuntimeAvailable: expect.any(Function),
+      }),
+    );
   });
 
   it("loads the qa-lab runtime public surface through the generic seam", async () => {

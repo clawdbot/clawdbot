@@ -233,7 +233,6 @@ describe("openai codex provider", () => {
       configPatch: {
         agents: {
           defaults: {
-            agentRuntime: { id: "codex" },
             models: {
               "openai/gpt-5.5": {},
             },
@@ -247,6 +246,9 @@ describe("openai codex provider", () => {
   async function runRemoteDeviceCodeAuthFlow() {
     const provider = buildOpenAICodexProviderPlugin();
     const deviceCodeMethod = provider.auth?.find((method) => method.id === "device-code");
+    if (!deviceCodeMethod) {
+      throw new Error("expected OpenAI Codex device-code auth method");
+    }
     const note = vi.fn(async () => {});
     const progress = { update: vi.fn(), stop: vi.fn() };
     const runtime = {
@@ -269,7 +271,7 @@ describe("openai codex provider", () => {
     });
 
     await expect(
-      deviceCodeMethod?.run({
+      deviceCodeMethod.run({
         config: {},
         env: process.env,
         prompter: {
@@ -281,7 +283,11 @@ describe("openai codex provider", () => {
         openUrl: async () => {},
         oauth: { createVpsAwareHandlers: (() => ({})) as never },
       }),
-    ).resolves.toBeDefined();
+    ).resolves.toMatchObject({
+      profiles: expect.arrayContaining([
+        expect.objectContaining({ profileId: "openai-codex:default" }),
+      ]),
+    });
 
     return { note, runtime };
   }

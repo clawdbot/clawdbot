@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   jsonResult,
@@ -7,6 +9,18 @@ import {
 import { Type } from "typebox";
 import { runTavilyExtract } from "./tavily-client.js";
 import { optionalStringEnum } from "./tavily-tool-schema.js";
+
+type TavilyToolConfigContext = Pick<
+  OpenClawPluginToolContext,
+  "config" | "runtimeConfig" | "getRuntimeConfig"
+>;
+
+function resolveTavilyToolConfig(
+  api: OpenClawPluginApi,
+  ctx?: TavilyToolConfigContext,
+): OpenClawConfig {
+  return ctx?.getRuntimeConfig?.() ?? ctx?.runtimeConfig ?? ctx?.config ?? api.config;
+}
 
 const TavilyExtractToolSchema = Type.Object(
   {
@@ -39,7 +53,7 @@ const TavilyExtractToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export function createTavilyExtractTool(api: OpenClawPluginApi) {
+export function createTavilyExtractTool(api: OpenClawPluginApi, ctx?: TavilyToolConfigContext) {
   return {
     name: "tavily_extract",
     label: "Tavily Extract",
@@ -65,7 +79,7 @@ export function createTavilyExtractTool(api: OpenClawPluginApi) {
 
       return jsonResult(
         await runTavilyExtract({
-          cfg: api.config,
+          cfg: resolveTavilyToolConfig(api, ctx),
           urls,
           query,
           extractDepth,

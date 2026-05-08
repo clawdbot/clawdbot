@@ -96,9 +96,9 @@ add Node's sync I/O trace flag through the source runner:
 OPENCLAW_TRACE_SYNC_IO=1 pnpm openclaw gateway --force
 ```
 
-`pnpm gateway:watch` enables this flag by default for the watched Gateway child.
-Set `OPENCLAW_TRACE_SYNC_IO=0` to suppress Node sync I/O trace output in watch
-mode.
+`pnpm gateway:watch` leaves this flag disabled by default for the watched
+Gateway child. Set `OPENCLAW_TRACE_SYNC_IO=1` when you explicitly want Node
+sync I/O trace output in watch mode.
 
 ## Gateway watch mode
 

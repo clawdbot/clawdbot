@@ -55,6 +55,7 @@ describe("scanStatusJsonFast", () => {
 
     await scanStatusJsonFast({}, {} as never);
 
+    expect(mocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
   });

@@ -1,6 +1,5 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
-import { parseCanvasSnapshotPayload } from "../../extensions/canvas/runtime-api.js";
 import { registerDnsCli } from "./dns-cli.js";
 import { parseByteSize } from "./parse-bytes.js";
 import { parseDurationMs } from "./parse-duration.js";
@@ -62,21 +61,6 @@ describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
     { argv: ["node", "openclaw", "status"] },
   ] as const)("allows startup env respawn for argv %j", ({ argv }) => {
     expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
-  });
-});
-
-describe("nodes canvas helpers", () => {
-  it("parses canvas.snapshot payload", () => {
-    expect(parseCanvasSnapshotPayload({ format: "png", base64: "aGk=" })).toEqual({
-      format: "png",
-      base64: "aGk=",
-    });
-  });
-
-  it("rejects invalid canvas.snapshot payload", () => {
-    expect(() => parseCanvasSnapshotPayload({ format: "png" })).toThrow(
-      /invalid canvas\.snapshot payload/i,
-    );
   });
 });
 

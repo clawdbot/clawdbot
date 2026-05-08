@@ -287,11 +287,11 @@ describe("subagent registry persistence", () => {
 
     // announce should NOT be called since cleanupHandled was true
     const calls = (announceSpy.mock.calls as unknown as Array<[unknown]>).map((call) => call[0]);
-    const match = calls.find(
-      (params) =>
-        (params as { childSessionKey?: string }).childSessionKey === "agent:main:subagent:two",
+    expect(calls).not.toContainEqual(
+      expect.objectContaining({
+        childSessionKey: "agent:main:subagent:two",
+      }),
     );
-    expect(match).toBeFalsy();
   });
 
   it("maps legacy announce fields into cleanup state", async () => {
@@ -519,7 +519,7 @@ describe("subagent registry persistence", () => {
     const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
       runs: Record<string, { cleanupCompletedAt?: number }>;
     };
-    expect(afterSecond.runs["run-3"].cleanupCompletedAt).toBeDefined();
+    expect(afterSecond.runs["run-3"].cleanupCompletedAt).toEqual(expect.any(Number));
   });
 
   it("retries cleanup announce after announce flow rejects", async () => {
@@ -565,7 +565,7 @@ describe("subagent registry persistence", () => {
     const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
       runs: Record<string, { cleanupCompletedAt?: number }>;
     };
-    expect(afterSecond.runs["run-reject"].cleanupCompletedAt).toBeDefined();
+    expect(afterSecond.runs["run-reject"].cleanupCompletedAt).toEqual(expect.any(Number));
   });
 
   it("keeps delete-mode runs retryable when announce is deferred", async () => {
@@ -879,7 +879,7 @@ describe("subagent registry persistence", () => {
     expect(persisted.has(runId)).toBe(false);
   });
 
-  it("uses isolated temp state when OPENCLAW_STATE_DIR is unset in tests", async () => {
+  it("uses isolated temp state when OPENCLAW_STATE_DIR is unset in tests", () => {
     delete process.env.OPENCLAW_STATE_DIR;
     const registryPath = resolveSubagentRegistryPath();
     expect(registryPath).toContain(path.join(os.tmpdir(), "openclaw-test-state"));

@@ -549,8 +549,10 @@ describe("createVideoGenerateTool", () => {
         taskId: "task-123",
       },
     });
-    expect(typeof scheduledWork).toBe("function");
-    await scheduledWork?.();
+    if (!scheduledWork) {
+      throw new Error("expected scheduled video generation work");
+    }
+    await scheduledWork();
     expect(saveSpy).not.toHaveBeenCalled();
     expect(taskExecutorMocks.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -277,7 +277,9 @@ describe("qa agentic parity report", () => {
     // Metric comparisons are relative, so a same-on-both-sides failure
     // must not appear as a relative metric failure. The required-scenario
     // failure line is the only thing keeping the gate honest here.
-    expect(comparison.failures.some((failure) => failure.includes("completion rate"))).toBe(false);
+    expect(comparison.failures.filter((failure) => failure.includes("completion rate"))).toEqual(
+      [],
+    );
   });
 
   it("fails the parity gate when a required parity scenario fails on the candidate only", () => {

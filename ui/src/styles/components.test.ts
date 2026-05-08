@@ -1,14 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-
-function readStyleSheet(path: string): string {
-  const cssPath = [resolve(process.cwd(), path), resolve(process.cwd(), "..", path)].find(
-    (candidate) => existsSync(candidate),
-  );
-  expect(cssPath).toBeTruthy();
-  return readFileSync(cssPath!, "utf8");
-}
+import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 
 function readComponentsCss(): string {
   return readStyleSheet("ui/src/styles/components.css");

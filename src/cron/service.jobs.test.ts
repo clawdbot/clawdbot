@@ -350,7 +350,7 @@ describe("applyJobPatch", () => {
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/trim" });
   });
 
-  it("rejects failureDestination on main jobs without webhook delivery mode", () => {
+  it("rejects failureDestination on existing main jobs without webhook delivery mode", () => {
     const job = createMainSystemEventJob("job-main-failure-dest", {
       mode: "announce",
       channel: "telegram",
@@ -495,7 +495,7 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
     ).toThrow("invalid cron sessionTarget session id");
   });
 
-  it("rejects failureDestination on main jobs without webhook delivery mode", () => {
+  it("rejects failureDestination on created main jobs without webhook delivery mode", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
     expect(() =>
       createJob(state, {

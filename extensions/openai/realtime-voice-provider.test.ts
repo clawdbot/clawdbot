@@ -87,6 +87,19 @@ type SentRealtimeEvent = {
     turn_detection?: {
       create_response?: boolean;
     };
+    output_modalities?: string[];
+    audio?: {
+      input?: {
+        format?: Record<string, unknown>;
+        turn_detection?: {
+          create_response?: boolean;
+          interrupt_response?: boolean;
+        };
+      };
+      output?: {
+        format?: Record<string, unknown>;
+      };
+    };
   };
 };
 
@@ -117,6 +130,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   it("declares realtime Talk capabilities for catalog selection", () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
 
+    expect(provider.defaultModel).toBe("gpt-realtime-2");
     expect(provider.capabilities).toEqual({
       transports: ["webrtc", "gateway-relay"],
       inputAudioFormats: [
@@ -151,6 +165,35 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       originator: "openclaw",
       version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
+    });
+    expect(options?.headers).not.toHaveProperty("OpenAI-Beta");
+  });
+
+  it("keeps Azure deployment realtime bridge requests on the deployment-compatible session shape", () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "sk-test", // pragma: allowlist secret
+        azureEndpoint: "https://example.openai.azure.com",
+        azureDeployment: "realtime-prod",
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    void bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    bridge.close();
+
+    expect(parseSent(socket)[0]?.session).toMatchObject({
+      modalities: ["text", "audio"],
+      input_audio_format: "g711_ulaw",
+      output_audio_format: "g711_ulaw",
     });
   });
 
@@ -193,6 +236,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       | undefined;
     const body = JSON.parse(request?.init?.body ?? "{}") as {
       session?: {
+        model?: string;
         audio?: {
           input?: {
             turn_detection?: Record<string, unknown>;
@@ -201,6 +245,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         };
       };
     };
+    expect(body.session?.model).toBe("gpt-realtime-2");
     expect(body.session?.audio?.input).toEqual({
       turn_detection: {
         type: "server_vad",
@@ -214,6 +259,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       transport: "webrtc",
       clientSecret: "client-secret-123",
       offerUrl: "https://api.openai.com/v1/realtime/calls",
+      model: "gpt-realtime-2",
     });
     // originator, version, and User-Agent are server-side attribution headers; they
     // must not be forwarded to the browser so that the browser's direct SDP POST to
@@ -320,7 +366,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       rawConfig: {
         providers: {
           openai: {
-            model: "gpt-realtime-1.5",
+            model: "gpt-realtime-2",
             voice: "verse",
             temperature: 0.6,
             silenceDurationMs: 850,
@@ -331,7 +377,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
 
     expect(resolved).toEqual({
-      model: "gpt-realtime-1.5",
+      model: "gpt-realtime-2",
       voice: "verse",
       temperature: 0.6,
       silenceDurationMs: 850,
@@ -370,9 +416,20 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(onReady).not.toHaveBeenCalled();
     expect(parseSent(socket).map((event) => event.type)).toEqual(["session.update"]);
     expect(parseSent(socket)[0]?.session).toMatchObject({
-      input_audio_format: "g711_ulaw",
-      output_audio_format: "g711_ulaw",
+      type: "realtime",
+      model: "gpt-realtime-2",
+      output_modalities: ["audio"],
+      audio: {
+        input: {
+          format: { type: "audio/pcmu" },
+          transcription: { model: "whisper-1" },
+        },
+        output: {
+          format: { type: "audio/pcmu" },
+        },
+      },
     });
+    expect(parseSent(socket)[0]?.session).not.toHaveProperty("temperature");
     expect(bridge.isConnected()).toBe(false);
 
     socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
@@ -457,9 +514,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     await connecting;
 
     expect(parseSent(socket)[0]?.session).toMatchObject({
-      turn_detection: expect.objectContaining({
-        create_response: false,
-      }),
+      audio: {
+        input: {
+          turn_detection: expect.objectContaining({
+            create_response: false,
+            interrupt_response: false,
+          }),
+        },
+      },
     });
   });
 
@@ -532,8 +594,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     await connecting;
 
     expect(parseSent(socket)[0]?.session).toMatchObject({
-      input_audio_format: "pcm16",
-      output_audio_format: "pcm16",
+      audio: {
+        input: {
+          format: { type: "audio/pcm", rate: 24000 },
+        },
+        output: {
+          format: { type: "audio/pcm", rate: 24000 },
+        },
+      },
     });
   });
 

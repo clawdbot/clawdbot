@@ -1,6 +1,11 @@
+import fsSync from "node:fs";
+import path from "node:path";
+
 export type NpmProjectInstallEnvOptions = {
   cacheDir?: string;
 };
+
+const NPM_CONFIG_SCRIPT_SHELL_KEYS = ["NPM_CONFIG_SCRIPT_SHELL", "npm_config_script_shell"];
 
 const NPM_CONFIG_KEYS_TO_RESET = new Set([
   "npm_config_cache",
@@ -26,7 +31,7 @@ export function createNpmProjectInstallEnv(
       delete nextEnv[key];
     }
   }
-  return {
+  const installEnv: NodeJS.ProcessEnv = {
     ...nextEnv,
     npm_config_dry_run: "false",
     npm_config_fetch_retries: nextEnv.npm_config_fetch_retries ?? "5",
@@ -39,4 +44,31 @@ export function createNpmProjectInstallEnv(
     npm_config_save: "false",
     ...(options.cacheDir ? { npm_config_cache: options.cacheDir } : {}),
   };
+  applyPosixNpmScriptShellEnv(installEnv);
+  return installEnv;
+}
+
+export function hasNpmScriptShellSetting(env: NodeJS.ProcessEnv): boolean {
+  return NPM_CONFIG_SCRIPT_SHELL_KEYS.some((key) => Boolean(env[key]?.trim()));
+}
+
+export function resolvePosixNpmScriptShell(env: NodeJS.ProcessEnv): string | null {
+  if (process.platform === "win32") {
+    return null;
+  }
+  if (fsSync.existsSync("/bin/sh")) {
+    return "/bin/sh";
+  }
+  const shell = env.SHELL?.trim();
+  return shell && path.isAbsolute(shell) && fsSync.existsSync(shell) ? shell : null;
+}
+
+export function applyPosixNpmScriptShellEnv(env: NodeJS.ProcessEnv): void {
+  if (hasNpmScriptShellSetting(env)) {
+    return;
+  }
+  const scriptShell = resolvePosixNpmScriptShell(env);
+  if (scriptShell) {
+    env.NPM_CONFIG_SCRIPT_SHELL = scriptShell;
+  }
 }

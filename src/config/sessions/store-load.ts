@@ -153,27 +153,29 @@ export function loadSessionStore(
   if (opts.runMaintenance) {
     const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
     const beforeCount = Object.keys(store).length;
+    let pruned = 0;
+    let capped = 0;
     if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
-      const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
+      pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
       const countAfterPrune = Object.keys(store).length;
-      const capped = shouldRunSessionEntryMaintenance({
+      capped = shouldRunSessionEntryMaintenance({
         entryCount: countAfterPrune,
         maxEntries: maintenance.maxEntries,
       })
         ? capEntryCount(store, maintenance.maxEntries, { log: false })
         : 0;
-      const afterCount = Object.keys(store).length;
-      if (pruned > 0 || capped > 0) {
-        serializedFromDisk = undefined;
-        log.info("applied load-time maintenance to oversized session store", {
-          storePath,
-          before: beforeCount,
-          after: afterCount,
-          pruned,
-          capped,
-          maxEntries: maintenance.maxEntries,
-        });
-      }
+    }
+    const afterCount = Object.keys(store).length;
+    if (pruned > 0 || capped > 0) {
+      serializedFromDisk = undefined;
+      log.info("applied load-time maintenance to session store", {
+        storePath,
+        before: beforeCount,
+        after: afterCount,
+        pruned,
+        capped,
+        maxEntries: maintenance.maxEntries,
+      });
     }
   }
 

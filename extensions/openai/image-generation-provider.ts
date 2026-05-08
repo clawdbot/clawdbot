@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/image-generation";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
   ensureAuthProfileStore,
   isProviderApiKeyConfigured,
@@ -387,7 +388,7 @@ function inferImageUploadFileName(params: {
     return path.basename(fileName);
   }
   const mimeType = params.mimeType?.trim().toLowerCase() || DEFAULT_OUTPUT_MIME;
-  const ext = mimeType === "image/jpeg" ? "jpg" : mimeType.replace(/^image\//, "") || "png";
+  const ext = extensionForMime(mimeType)?.slice(1) ?? "png";
   return `image-${params.index + 1}.${ext}`;
 }
 

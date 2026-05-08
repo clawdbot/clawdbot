@@ -82,6 +82,12 @@ export function createIMessagePluginBase(params: {
     capabilities: {
       chatTypes: ["direct", "group"],
       media: true,
+      reactions: true,
+      edit: true,
+      unsend: true,
+      reply: true,
+      effects: true,
+      groupManagement: true,
     },
     reload: { configPrefixes: ["channels.imessage"] },
     configSchema: IMessageChannelConfigSchema,

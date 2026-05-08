@@ -21,6 +21,7 @@ export function normalizeAcpProvenanceMode(
 export type AcpSession = {
   sessionId: SessionId;
   sessionKey: string;
+  ledgerSessionId?: string;
   cwd: string;
   createdAt: number;
   lastTouchedAt: number;

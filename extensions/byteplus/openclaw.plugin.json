@@ -34,13 +34,14 @@
           {
             "id": "kimi-k2-5-260127",
             "name": "Kimi K2.5",
+            "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 256000,
-            "maxTokens": 4096,
+            "maxTokens": 32768,
             "cost": {
-              "input": 0.0001,
-              "output": 0.0002,
-              "cacheRead": 0,
+              "input": 0.6,
+              "output": 2.5,
+              "cacheRead": 0.12,
               "cacheWrite": 0
             }
           },
@@ -105,26 +106,28 @@
           {
             "id": "kimi-k2-thinking",
             "name": "Kimi K2 Thinking",
+            "reasoning": true,
             "input": ["text"],
             "contextWindow": 256000,
-            "maxTokens": 4096,
+            "maxTokens": 32768,
             "cost": {
-              "input": 0.0001,
-              "output": 0.0002,
-              "cacheRead": 0,
+              "input": 0.6,
+              "output": 2.5,
+              "cacheRead": 0.12,
               "cacheWrite": 0
             }
           },
           {
             "id": "kimi-k2.5",
             "name": "Kimi K2.5 Coding",
+            "reasoning": true,
             "input": ["text"],
             "contextWindow": 256000,
-            "maxTokens": 4096,
+            "maxTokens": 32768,
             "cost": {
-              "input": 0.0001,
-              "output": 0.0002,
-              "cacheRead": 0,
+              "input": 0.6,
+              "output": 2.5,
+              "cacheRead": 0.12,
               "cacheWrite": 0
             }
           }

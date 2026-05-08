@@ -1,6 +1,10 @@
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  type OfficialExternalPluginRepairHint,
+  resolveMissingOfficialExternalChannelPluginRepairHint,
+} from "../../plugins/official-external-plugin-repair-hints.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   listDeliverableMessageChannels,
@@ -51,6 +55,51 @@ function resolveAvailableKnownChannel(params: {
   })
     ? normalized
     : undefined;
+}
+
+function isConfiguredChannel(cfg: OpenClawConfig, channelId: string): boolean {
+  const channels = cfg.channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return false;
+  }
+  const entry = (channels as Record<string, unknown>)[channelId];
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return false;
+  }
+  return (entry as { enabled?: unknown }).enabled !== false;
+}
+
+function listConfiguredOfficialExternalRepairHints(
+  cfg: OpenClawConfig,
+): OfficialExternalPluginRepairHint[] {
+  const channels = cfg.channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return [];
+  }
+  return Object.keys(channels)
+    .filter((channelId) => isConfiguredChannel(cfg, channelId))
+    .map((channelId) =>
+      resolveMissingOfficialExternalChannelPluginRepairHint({
+        config: cfg,
+        channelId,
+      }),
+    )
+    .filter((hint): hint is OfficialExternalPluginRepairHint => Boolean(hint));
+}
+
+function formatMissingOfficialExternalChannelsMessage(
+  hints: readonly OfficialExternalPluginRepairHint[],
+): string {
+  if (hints.length === 1) {
+    const hint = hints[0];
+    if (!hint) {
+      return "";
+    }
+    return `Configured official external channel ${hint.label} is missing its plugin. ${hint.repairHint}`;
+  }
+  const labels = hints.map((hint) => hint.label).join(", ");
+  const installCommands = hints.map((hint) => hint.installCommand).join("; ");
+  return `Configured official external channels ${labels} are missing their plugins. Run: openclaw doctor --fix, or install individually: ${installCommands}.`;
 }
 
 function isAccountEnabled(account: unknown): boolean {
@@ -173,6 +222,15 @@ export async function resolveMessageChannelSelection(params: {
       if (!isKnownChannel(normalized)) {
         throw new Error(`Unknown channel: ${normalized}`);
       }
+      const repairHint = isConfiguredChannel(params.cfg, normalized)
+        ? resolveMissingOfficialExternalChannelPluginRepairHint({
+            config: params.cfg,
+            channelId: normalized,
+          })
+        : null;
+      if (repairHint?.channelId === normalized) {
+        throw new Error(`Channel is unavailable: ${normalized}. ${repairHint.repairHint}`);
+      }
       throw new Error(`Channel is unavailable: ${normalized}`);
     }
     return {
@@ -199,6 +257,12 @@ export async function resolveMessageChannelSelection(params: {
     return { channel: configured[0], configured, source: "single-configured" };
   }
   if (configured.length === 0) {
+    const repairHints = listConfiguredOfficialExternalRepairHints(params.cfg);
+    if (repairHints.length > 0) {
+      throw new Error(
+        `Channel is required (no available channels detected). ${formatMissingOfficialExternalChannelsMessage(repairHints)}`,
+      );
+    }
     throw new Error("Channel is required (no configured channels detected).");
   }
   throw new Error(

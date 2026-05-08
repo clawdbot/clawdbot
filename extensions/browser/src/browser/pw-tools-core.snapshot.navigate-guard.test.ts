@@ -144,5 +144,38 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledTimes(
       1,
     );
+    // Navigate-style entry points OWN the navigation lifecycle, so when the
+    // post-navigation safety check rejects with an SSRF policy error the
+    // caller is responsible for closing the tab it just navigated. This is
+    // the counterpart to the read-only paths (snapshot/screenshot/
+    // interactions), which must NOT close the tab on the same error.
+    expect(getPwToolsCoreSessionMocks().closeBlockedNavigationTarget).toHaveBeenCalledTimes(1);
+    expect(getPwToolsCoreSessionMocks().closeBlockedNavigationTarget).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page: expect.anything(),
+      targetId: undefined,
+    });
+  });
+
+  it("does not close the tab when post-navigation rejection is not a policy deny", async () => {
+    // Non-policy errors (e.g. transient playwright failures) must not be
+    // treated as "we navigated to a blocked URL" — the tab stays open.
+    const goto = vi.fn(async () => ({ request: () => undefined }));
+    setPwToolsCoreCurrentPage({
+      goto,
+      url: vi.fn(() => "https://example.com/final"),
+    });
+    getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mockRejectedValueOnce(
+      new Error("transient playwright error"),
+    );
+
+    await expect(
+      mod.navigateViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://example.com/final",
+      }),
+    ).rejects.toThrow("transient playwright error");
+
+    expect(getPwToolsCoreSessionMocks().closeBlockedNavigationTarget).not.toHaveBeenCalled();
   });
 });

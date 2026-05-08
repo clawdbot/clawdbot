@@ -244,7 +244,9 @@ async function expectBuiltArtifactNodeRequireFastPath(
     const profileLine = errorSpy.mock.calls
       .map((args) => String(args[0] ?? ""))
       .find((line) => line.startsWith("[plugin-load-profile] phase=bundled-entry-module-load"));
-    expect(profileLine, "expected a bundled-entry-module-load profile line").toBeDefined();
+    if (profileLine === undefined) {
+      throw new Error("expected a bundled-entry-module-load profile line");
+    }
     expect(profileLine).toMatch(/sourceLoaderCreateMs=\d/u);
     expect(profileLine).toMatch(/sourceLoaderCallMs=\d/u);
     expect(profileLine).not.toMatch(/sourceLoaderCreateMs=-/);

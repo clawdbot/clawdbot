@@ -183,7 +183,7 @@ while [ "$#" -gt 0 ]; do
         model_reasoning_effort=\"high\")
           saw_effort=1
           ;;
-        service_tier=\"fast\")
+        service_tier=\"priority\")
           saw_service=1
           ;;
       esac

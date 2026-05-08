@@ -116,8 +116,10 @@ describe("sanitizeSessionMessagesImages", () => {
     const out = await sanitizeSessionMessagesImages(input, "test");
     const assistant = out[0] as { content?: Array<Record<string, unknown>> };
     const toolCall = assistant.content?.find((b) => b.type === "toolCall");
-    expect(toolCall).toBeTruthy();
-    expect("input" in (toolCall ?? {})).toBe(false);
+    if (toolCall === undefined) {
+      throw new Error("expected preserved tool call");
+    }
+    expect("input" in toolCall).toBe(false);
   });
 
   it("removes empty assistant text blocks but preserves tool calls", async () => {

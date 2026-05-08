@@ -168,8 +168,10 @@ vi.mock("../../runtime.js", () => ({
 function expectFirstInstallPlanCallOmitsToken() {
   const [firstArg] =
     (buildGatewayInstallPlanMock.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
-  expect(firstArg).toBeDefined();
-  expect(firstArg && "token" in firstArg).toBe(false);
+  if (firstArg === undefined) {
+    throw new Error("expected first install-plan call");
+  }
+  expect("token" in firstArg).toBe(false);
 }
 
 function mockResolvedGatewayTokenSecretRef() {

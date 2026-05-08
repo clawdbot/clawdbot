@@ -455,7 +455,9 @@ describe("googlechatPlugin outbound resolveTarget", () => {
     if (result.ok) {
       throw new Error("Expected invalid target to fail");
     }
-    expect(result.error).toBeDefined();
+    expect(result.error.message).toBe(
+      "Google Chat target is required (<spaces/{space}|users/{user}>)",
+    );
   });
 
   it("errors when no target is provided", () => {
@@ -467,7 +469,9 @@ describe("googlechatPlugin outbound resolveTarget", () => {
     if (result.ok) {
       throw new Error("Expected missing target to fail");
     }
-    expect(result.error).toBeDefined();
+    expect(result.error.message).toBe(
+      "Google Chat target is required (<spaces/{space}|users/{user}>)",
+    );
   });
 });
 

@@ -49,7 +49,9 @@ describe("vercel ai gateway thinking profile", () => {
       levels: expect.arrayContaining([{ id: "adaptive" }]),
       defaultLevel: "adaptive",
     });
-    expect(profile?.levels.some((level) => level.id === "xhigh" || level.id === "max")).toBe(false);
+    expect(
+      profile?.levels.map((level) => level.id).filter((id) => id === "xhigh" || id === "max"),
+    ).toEqual([]);
   });
 
   it("falls through for unsupported OpenAI or untrusted namespaced refs", async () => {

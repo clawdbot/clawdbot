@@ -83,10 +83,13 @@ export { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 export {
   assertAbsolutePathInput,
   canonicalPathFromExistingAncestor,
+  ensureAbsoluteDirectory,
   findExistingAncestor,
   resolveAbsolutePathForRead,
   resolveAbsolutePathForWrite,
   type AbsolutePathSymlinkPolicy,
+  type EnsureAbsoluteDirectoryOptions,
+  type EnsureAbsoluteDirectoryResult,
   type ResolvedAbsolutePath,
   type ResolvedWritableAbsolutePath,
 } from "../infra/fs-safe.js";

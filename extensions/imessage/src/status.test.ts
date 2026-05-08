@@ -169,6 +169,24 @@ describe("probeIMessage", () => {
     expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
   });
 
+  it("fails fast for default local imsg probes on non-mac hosts", async () => {
+    const createIMessageRpcClientMock = vi
+      .spyOn(clientModule, "createIMessageRpcClient")
+      .mockResolvedValue({
+        request: vi.fn(),
+        stop: vi.fn(),
+      } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    const result = await probeIMessage(1000, { cliPath: "imsg", platform: "linux" });
+
+    expect(result.ok).toBe(false);
+    expect(result.fatal).toBe(true);
+    expect(result.error).toMatch(/macOS/i);
+    expect(result.error).toMatch(/SSH wrapper/i);
+    expect(setupRuntime.detectBinary).not.toHaveBeenCalled();
+    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  });
+
   it("status probe uses account-scoped cliPath and dbPath", async () => {
     const probeSpy = vi.spyOn(channelRuntimeModule, "probeIMessageAccount").mockResolvedValue({
       ok: true,

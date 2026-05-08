@@ -286,7 +286,7 @@ describe("wrapFetchWithAbortSignal", () => {
       preconnect: (url: string, init?: { credentials?: RequestCredentials }) => unknown;
     };
 
-    expect(() => wrapped.preconnect("https://example.com")).not.toThrow();
+    expect(wrapped.preconnect("https://example.com")).toBeUndefined();
   });
 
   it.each([

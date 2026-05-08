@@ -3,32 +3,28 @@ import { formatDecisionSummary } from "./runner.entries.js";
 import type { MediaUnderstandingDecision } from "./types.js";
 
 describe("media-understanding formatDecisionSummary guards", () => {
-  it("does not throw when decision.attachments is undefined", () => {
-    const run = () =>
+  it("formats skipped summary when decision.attachments is undefined", () => {
+    expect(
       formatDecisionSummary({
         capability: "image",
         outcome: "skipped",
         attachments: undefined as unknown as MediaUnderstandingDecision["attachments"],
-      });
-
-    expect(run).not.toThrow();
-    expect(run()).toBe("image: skipped");
+      }),
+    ).toBe("image: skipped");
   });
 
-  it("does not throw when attachment attempts is malformed", () => {
-    const run = () =>
+  it("counts malformed attachment attempts as unchosen", () => {
+    expect(
       formatDecisionSummary({
         capability: "video",
         outcome: "skipped",
         attachments: [{ attachmentIndex: 0, attempts: { bad: true } }],
-      } as unknown as MediaUnderstandingDecision);
-
-    expect(run).not.toThrow();
-    expect(run()).toBe("video: skipped (0/1)");
+      } as unknown as MediaUnderstandingDecision),
+    ).toBe("video: skipped (0/1)");
   });
 
   it("ignores non-string provider/model/reason fields", () => {
-    const run = () =>
+    expect(
       formatDecisionSummary({
         capability: "audio",
         outcome: "failed",
@@ -43,9 +39,7 @@ describe("media-understanding formatDecisionSummary guards", () => {
             attempts: [{ reason: { malformed: true } }],
           },
         ],
-      } as unknown as MediaUnderstandingDecision);
-
-    expect(run).not.toThrow();
-    expect(run()).toBe("audio: failed (0/1)");
+      } as unknown as MediaUnderstandingDecision),
+    ).toBe("audio: failed (0/1)");
   });
 });

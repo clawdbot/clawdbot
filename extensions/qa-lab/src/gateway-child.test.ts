@@ -518,7 +518,10 @@ describe("buildQaRuntimeEnv", () => {
     const qaStore = JSON.parse(
       await readFile(path.join(stateDir, "agents", "qa", "agent", "auth-profiles.json"), "utf8"),
     ) as { profiles: Record<string, unknown> };
-    expect(qaStore.profiles["qa-mock-openai"]).toBeDefined();
+    expect(qaStore.profiles["qa-mock-openai"]).toMatchObject({
+      provider: "openai",
+      type: "api_key",
+    });
     expect(qaStore.profiles["qa-mock-anthropic"]).toBeUndefined();
 
     // main/agent should not exist because it wasn't in the agentIds list.
@@ -986,18 +989,17 @@ describe("qa bundled plugin dir", () => {
     expect((await lstat(path.join(bundledPluginsDir, "qa-channel"))).isDirectory()).toBe(true);
     expect((await lstat(path.join(bundledPluginsDir, "memory-core"))).isDirectory()).toBe(true);
     expect((await lstat(path.join(bundledPluginsDir, "speech-core"))).isDirectory()).toBe(true);
-    await expect(
-      lstat(
-        path.join(
-          repoRoot,
-          ".artifacts",
-          "qa-runtime",
-          path.basename(tempRoot),
-          "dist",
-          "shared-chunk-abc123.js",
-        ),
+    const sharedChunkStat = await lstat(
+      path.join(
+        repoRoot,
+        ".artifacts",
+        "qa-runtime",
+        path.basename(tempRoot),
+        "dist",
+        "shared-chunk-abc123.js",
       ),
-    ).resolves.toBeTruthy();
+    );
+    expect(sharedChunkStat.isFile() || sharedChunkStat.isSymbolicLink()).toBe(true);
   });
 
   it("preserves dist-runtime-only root chunks when dist also exists", async () => {
@@ -1062,18 +1064,17 @@ describe("qa bundled plugin dir", () => {
     ).resolves.toMatchObject({
       marker: "runtime",
     });
-    await expect(
-      lstat(
-        path.join(
-          repoRoot,
-          ".artifacts",
-          "qa-runtime",
-          path.basename(tempRoot),
-          "dist",
-          "runtime-chunk.js",
-        ),
+    const runtimeChunkStat = await lstat(
+      path.join(
+        repoRoot,
+        ".artifacts",
+        "qa-runtime",
+        path.basename(tempRoot),
+        "dist",
+        "runtime-chunk.js",
       ),
-    ).resolves.toBeTruthy();
+    );
+    expect(runtimeChunkStat.isFile() || runtimeChunkStat.isSymbolicLink()).toBe(true);
   });
 
   it("rejects invalid bundled plugin ids before staging paths are built", async () => {

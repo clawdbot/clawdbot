@@ -6,6 +6,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
+  type ProviderRuntimePluginHandle,
   resolveProviderExtraParamsForTransport as resolveProviderExtraParamsForTransportRuntime,
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
@@ -21,6 +22,7 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
+  createOpenAICompletionsToolsCompatWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIStringContentWrapper,
 } from "./openai-stream-wrappers.js";
@@ -206,6 +208,7 @@ export function resolvePreparedExtraParams(params: {
   resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
   resolvedTransport?: SupportedTransport;
+  providerRuntimeHandle?: ProviderRuntimePluginHandle;
 }): Record<string, unknown> {
   const resolvedExtraParams =
     params.resolvedExtraParams ??
@@ -252,6 +255,7 @@ export function resolvePreparedExtraParams(params: {
       provider: params.provider,
       config: params.cfg,
       workspaceDir: params.workspaceDir,
+      runtimeHandle: params.providerRuntimeHandle,
       context: {
         config: params.cfg,
         agentDir: params.agentDir,
@@ -266,6 +270,7 @@ export function resolvePreparedExtraParams(params: {
     provider: params.provider,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
+    runtimeHandle: params.providerRuntimeHandle,
     context: {
       config: params.cfg,
       agentDir: params.agentDir,
@@ -687,6 +692,7 @@ function applyPostPluginStreamWrappers(
 ): void {
   ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAIStringContentWrapper(ctx.agent.streamFn);
+  ctx.agent.streamFn = createOpenAICompletionsToolsCompatWrapper(ctx.agent.streamFn);
 
   if (!ctx.providerWrapperHandled) {
     // Guard Google-family payloads against invalid negative thinking budgets

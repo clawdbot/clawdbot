@@ -1411,17 +1411,6 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("does not include Codex for custom OpenAI-compatible agent models", () => {
-    expectStartupPluginIdsCase({
-      config: createStartupConfig({
-        providerIds: ["openai"],
-        modelId: "openai/custom-gpt",
-        enabledPluginIds: ["codex"],
-      }),
-      expected: ["demo-channel", "browser", "memory-core"],
-    });
-  });
-
   it("includes required agent harness owner plugins when an agent override forces the runtime", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({

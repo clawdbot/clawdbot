@@ -4,6 +4,10 @@ import {
   resolveProviderWebSearchPluginConfig,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 export const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 export const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
@@ -59,14 +63,6 @@ export function resolvePerplexityWebSearchRuntimeMetadata(
   };
 }
 
-function trimToUndefined(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return trimToUndefined(value)?.toLowerCase() ?? "";
-}
-
 export function inferPerplexityBaseUrlFromApiKey(
   apiKey?: string,
 ): "direct" | "openrouter" | undefined {
@@ -101,8 +97,8 @@ function resolvePerplexityRuntimeTransport(
     perplexity && typeof perplexity === "object" && !Array.isArray(perplexity)
       ? (perplexity as { baseUrl?: string; model?: string })
       : undefined;
-  const configuredBaseUrl = trimToUndefined(scoped?.baseUrl) ?? "";
-  const configuredModel = trimToUndefined(scoped?.model) ?? "";
+  const configuredBaseUrl = normalizeOptionalString(scoped?.baseUrl) ?? "";
+  const configuredModel = normalizeOptionalString(scoped?.model) ?? "";
   const baseUrl = (() => {
     if (configuredBaseUrl) {
       return configuredBaseUrl;

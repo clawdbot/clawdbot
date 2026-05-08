@@ -246,6 +246,14 @@ function findCandidateById<T extends { idHint?: string }>(candidates: T[], idHin
   return candidates.find((candidate) => candidate.idHint === idHint);
 }
 
+function requireCandidateById<T extends { idHint?: string }>(candidates: T[], idHint: string): T {
+  const candidate = findCandidateById(candidates, idHint);
+  if (!candidate) {
+    throw new Error(`expected plugin candidate ${idHint}`);
+  }
+  return candidate;
+}
+
 function expectCandidateSource(
   candidates: Array<{ idHint?: string; source?: string }>,
   idHint: string,
@@ -293,8 +301,7 @@ function expectBundleCandidateMatch(params: {
   source: string;
   expectRootDir?: boolean;
 }) {
-  const bundle = findCandidateById(params.candidates, params.idHint);
-  expect(bundle).toBeDefined();
+  const bundle = requireCandidateById(params.candidates, params.idHint);
   expect(bundle).toEqual(
     expect.objectContaining({
       idHint: params.idHint,
@@ -776,7 +783,7 @@ describe("discoverOpenClawPlugins", () => {
     ).toBe(true);
   });
 
-  it("lets a valid bundled plugin win when a managed package is source-only TypeScript", async () => {
+  it("lets a valid bundled plugin win when a managed package is source-only TypeScript", () => {
     const stateDir = makeTempDir();
     const bundledDir = path.join(stateDir, "bundled");
     const bundledPluginDir = path.join(bundledDir, "discord");
@@ -936,10 +943,9 @@ describe("discoverOpenClawPlugins", () => {
     writePluginEntry(path.join(pluginDir, "src", "setup-entry.ts"));
 
     const result = await discoverWithStateDir(stateDir, {});
-    const candidate = findCandidateById(result.candidates, "missing-runtime-setup-pack");
+    const candidate = requireCandidateById(result.candidates, "missing-runtime-setup-pack");
 
-    expect(candidate).toBeDefined();
-    expect(candidate?.setupSource).toBeUndefined();
+    expect(candidate.setupSource).toBeUndefined();
     expect(
       result.diagnostics.some(
         (entry) =>
@@ -1614,10 +1620,9 @@ describe("discoverOpenClawPlugins", () => {
     fs.writeFileSync(path.join(globalExt, "dist", "setup-entry.js"), "export default {}", "utf-8");
 
     const result = await discoverWithStateDir(stateDir, {});
-    const candidate = findCandidateById(result.candidates, "escape-pack");
+    const candidate = requireCandidateById(result.candidates, "escape-pack");
 
-    expect(candidate).toBeDefined();
-    expect(candidate?.setupSource).toBeUndefined();
+    expect(candidate.setupSource).toBeUndefined();
     expectEscapesPackageDiagnostic(result.diagnostics);
   });
 
@@ -1785,7 +1790,7 @@ describe("discoverOpenClawPlugins", () => {
     },
   );
 
-  it("reflects plugin root changes on the next discovery call", async () => {
+  it("reflects plugin root changes on the next discovery call", () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions");
     mkdirSafe(globalExt);

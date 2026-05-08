@@ -110,12 +110,12 @@ The onboarding preset sets `arcee/trinity-large-thinking` as the default model.
 
 ## Supported features
 
-| Feature                                       | Supported                    |
-| --------------------------------------------- | ---------------------------- |
-| Streaming                                     | Yes                          |
-| Tool use / function calling                   | Yes                          |
-| Structured output (JSON mode and JSON schema) | Yes                          |
-| Extended thinking                             | Yes (Trinity Large Thinking) |
+| Feature                                       | Supported                                    |
+| --------------------------------------------- | -------------------------------------------- |
+| Streaming                                     | Yes                                          |
+| Tool use / function calling                   | Yes (Trinity Mini, Trinity Large Preview)    |
+| Structured output (JSON mode and JSON schema) | Yes                                          |
+| Extended thinking                             | Yes (Trinity Large Thinking; tools disabled) |
 
 <AccordionGroup>
   <Accordion title="Environment note">

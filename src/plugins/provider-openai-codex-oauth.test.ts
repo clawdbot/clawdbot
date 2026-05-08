@@ -229,7 +229,9 @@ describe("loginOpenAICodexOAuth", () => {
       await startCodexAuth(opts);
       const manualPromise = opts.onManualCodeInput?.();
       await vi.advanceTimersByTimeAsync(14_000);
-      expect(manualPromise).toBeDefined();
+      if (manualPromise === undefined) {
+        throw new Error("expected manual code input promise");
+      }
       expect(prompter.text).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1_000);
       expect(prompter.text).not.toHaveBeenCalled();

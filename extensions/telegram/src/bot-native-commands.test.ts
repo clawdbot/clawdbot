@@ -21,7 +21,6 @@ let parseTelegramNativeCommandCallbackData: typeof import("./bot-native-commands
 let resolveTelegramNativeCommandDisableBlockStreaming: typeof import("./bot-native-commands.js").resolveTelegramNativeCommandDisableBlockStreaming;
 
 type CommandBotHarness = ReturnType<typeof createCommandBot>;
-type CommandHandler = (ctx: unknown) => Promise<void>;
 type PlugCommandHarnessParams = {
   botHarness?: CommandBotHarness;
   cfg?: OpenClawConfig;
@@ -61,10 +60,12 @@ function registerPlugCommand(params: PlugCommandHarnessParams = {}) {
     }),
   });
   const handler = botHarness.commandHandlers.get("plug");
-  expect(handler).toBeTruthy();
+  if (!handler) {
+    throw new Error("expected plug command handler to be registered");
+  }
   return {
     ...botHarness,
-    handler: handler as CommandHandler,
+    handler,
   };
 }
 
@@ -249,8 +250,10 @@ describe("registerTelegramNativeCommands", () => {
     });
 
     const handler = commandHandlers.get("fast");
-    expect(handler).toBeTruthy();
-    await handler?.(createPrivateCommandContext());
+    if (!handler) {
+      throw new Error("expected fast command handler to be registered");
+    }
+    await handler(createPrivateCommandContext());
 
     const replyMarkup = sendMessage.mock.calls[0]?.[2]?.reply_markup as
       | { inline_keyboard?: Array<Array<{ callback_data?: string }>> }
