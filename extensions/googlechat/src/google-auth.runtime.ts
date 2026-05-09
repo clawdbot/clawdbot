@@ -15,12 +15,13 @@ type TlsCert = ConnectionOptions["cert"];
 type TlsKey = ConnectionOptions["key"];
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type GoogleAuthModule = typeof import("google-auth-library");
+type GaxiosModule = typeof import("gaxios");
 type GoogleAuthRuntime = {
-  Gaxios: GoogleAuthModule["gaxios"]["Gaxios"];
+  Gaxios: GaxiosModule["Gaxios"];
   GoogleAuth: GoogleAuthModule["GoogleAuth"];
   OAuth2Client: GoogleAuthModule["OAuth2Client"];
 };
-type GoogleAuthTransport = InstanceType<GoogleAuthModule["gaxios"]["Gaxios"]>;
+type GoogleAuthTransport = InstanceType<GaxiosModule["Gaxios"]>;
 type GoogleAuthRequestWithUnknownHeaders = RequestInit & {
   headers?: unknown;
 };
@@ -517,9 +518,22 @@ export async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {
   if (!googleAuthRuntimePromise) {
     googleAuthRuntimePromise = (async () => {
       try {
-        const googleAuthModule = await import("google-auth-library");
+        const [googleAuthModule, gaxiosModule] = await Promise.all([
+          import("google-auth-library"),
+          import("gaxios"),
+        ]);
+        const directGaxios = gaxiosModule.Gaxios;
+        const bundledGaxios = googleAuthModule.gaxios?.Gaxios as unknown as
+          | GaxiosModule["Gaxios"]
+          | undefined;
+        // Source checkouts can resolve a root gaxios version; prefer the version
+        // bundled with google-auth-library when it differs from the direct import.
+        const Gaxios =
+          bundledGaxios && (bundledGaxios as unknown) !== (directGaxios as unknown)
+            ? bundledGaxios
+            : directGaxios;
         return {
-          Gaxios: googleAuthModule.gaxios.Gaxios,
+          Gaxios,
           GoogleAuth: googleAuthModule.GoogleAuth,
           OAuth2Client: googleAuthModule.OAuth2Client,
         };
