@@ -52,11 +52,11 @@ describe("resolveTsdownBuildInvocation", () => {
       throw new Error("locked");
     });
 
-    expect(() =>
+    expect(
       pruneSourceCheckoutBundledPluginNodeModules({
         cwd: process.cwd(),
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     expect(warn).toHaveBeenCalledWith(
       "tsdown: could not prune bundled plugin source node_modules: Error: locked",
@@ -97,13 +97,15 @@ describe("resolveTsdownBuildInvocation", () => {
     await expect(
       fsPromises.readFile(path.join(distRuntimeDir, "heartbeat-runner.runtime.js"), "utf8"),
     ).resolves.toBe("alias\n");
-    await expect(fsPromises.stat(path.join(distDir, "delegate-BPjCe4gC.js"))).rejects.toThrow();
+    await expect(fsPromises.stat(path.join(distDir, "delegate-BPjCe4gC.js"))).rejects.toMatchObject(
+      { code: "ENOENT" },
+    );
     await expect(
       fsPromises.stat(path.join(distDir, "compact.runtime-2DiEmVcA.js")),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
       fsPromises.stat(path.join(distRuntimeDir, "heartbeat-runner.runtime-fspOEj_1.js")),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("cleans tsdown output roots before using tsdown --no-clean", async () => {
@@ -123,9 +125,11 @@ describe("resolveTsdownBuildInvocation", () => {
 
     cleanTsdownOutputRoots({ cwd: rootDir });
 
-    await expect(fsPromises.stat(distFile)).rejects.toThrow();
-    await expect(fsPromises.stat(pluginGeneratedFile)).rejects.toThrow();
-    await expect(fsPromises.stat(path.join(rootDir, "dist-runtime"))).rejects.toThrow();
+    await expect(fsPromises.stat(distFile)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fsPromises.stat(pluginGeneratedFile)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fsPromises.stat(path.join(rootDir, "dist-runtime"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
   });
 });

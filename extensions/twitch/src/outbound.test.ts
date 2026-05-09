@@ -33,7 +33,7 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("./utils/markdown.js", () => ({
-  chunkTextForTwitch: vi.fn((text) => text.split(/(.{500})/).filter(Boolean)),
+  chunkTextForTwitch: vi.fn(chunkMockTextForTwitch),
 }));
 
 vi.mock("./utils/twitch.js", () => ({
@@ -41,6 +41,16 @@ vi.mock("./utils/twitch.js", () => ({
   missingTargetError: (channel: string, hint: string) =>
     new Error(`Missing target for ${channel}. Provide ${hint}`),
 }));
+
+function chunkMockTextForTwitch(text: string): string[] {
+  const chunks: string[] = [];
+  for (const chunk of text.split(/(.{500})/)) {
+    if (chunk.length > 0) {
+      chunks.push(chunk);
+    }
+  }
+  return chunks;
+}
 
 function assertResolvedTarget(
   result: ReturnType<NonNullable<typeof twitchOutbound.resolveTarget>>,

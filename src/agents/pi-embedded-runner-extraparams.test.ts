@@ -1738,7 +1738,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.config).toEqual({});
+    expect(payloads[0]?.config).toStrictEqual({});
   });
 
   it("preserves explicit Gemma 4 thinking level when thinkingBudget=0", () => {

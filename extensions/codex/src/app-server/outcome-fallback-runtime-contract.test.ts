@@ -105,7 +105,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     const result = projector.buildResult(buildToolTelemetry());
 
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
     expect(result.promptError).toBeNull();
   });
@@ -155,7 +155,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     const result = projector.buildResult(buildToolTelemetry());
 
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
     expect(result.promptError).toBeNull();
     expect(result.messagesSnapshot).toEqual(
@@ -199,7 +199,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     const result = projector.buildResult(buildToolTelemetry());
 
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
     expect(result.promptError).toBeNull();
     expect(result.messagesSnapshot).toEqual(
@@ -227,7 +227,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
       }),
     );
 
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.messagingToolSentTexts).toEqual(["sent out of band"]);
   });

@@ -138,11 +138,6 @@ describe("pw-session role refs cache", () => {
 describe("pw-session ensurePageState", () => {
   it("stores unmanaged downloads under unique managed paths", async () => {
     const { page, handlers } = fakePage();
-    const mkdirActual = fs.mkdir.bind(fs);
-    const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (target, options) => {
-      await mkdirActual(target, options);
-      return undefined;
-    });
     ensurePageState(page);
 
     const saveAsA = vi.fn(async (outPath: string) => {
@@ -173,9 +168,20 @@ describe("pw-session ensurePageState", () => {
     expect(path.basename(managedPathB ?? "")).toMatch(/-report\.pdf$/);
     expect(saveAsA.mock.calls[0]?.[0]).not.toBe(managedPathA);
     expect(saveAsB.mock.calls[0]?.[0]).not.toBe(managedPathB);
+    for (const call of [saveAsA.mock.calls[0], saveAsB.mock.calls[0]]) {
+      const savedPath = call?.[0];
+      if (typeof savedPath !== "string") {
+        throw new Error("Expected saved download path");
+      }
+      expect(savedPath.length).toBeGreaterThan(0);
+      const savedParentName = path.basename(path.dirname(savedPath));
+      expect(
+        savedParentName.includes("fs-safe-output") ||
+          savedParentName === path.basename(DEFAULT_DOWNLOAD_DIR),
+      ).toBe(true);
+    }
     await expect(fs.readFile(managedPathA ?? "", "utf8")).resolves.toBe("download-a");
     await expect(fs.readFile(managedPathB ?? "", "utf8")).resolves.toBe("download-b");
-    expect(mkdirSpy).toHaveBeenCalled();
   });
 
   it("suppresses unmanaged download save rejections until path is awaited", async () => {

@@ -210,7 +210,7 @@ describe("followup queue drain restart after idle window", () => {
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
 
     const allProcessed = createDeferred<void>();
-    let runFollowupResolve!: () => void;
+    let runFollowupResolve: (() => void) | undefined;
     const runFollowupGate = new Promise<void>((res) => {
       runFollowupResolve = res;
     });
@@ -225,6 +225,9 @@ describe("followup queue drain restart after idle window", () => {
     enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
     scheduleFollowupDrain(key, runFollowup);
     enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
+    if (!runFollowupResolve) {
+      throw new Error("Expected followup run release callback to be initialized");
+    }
     runFollowupResolve();
 
     await allProcessed.promise;

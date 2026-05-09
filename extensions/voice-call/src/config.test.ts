@@ -116,7 +116,7 @@ describe("validateProviderConfig", () => {
       const result = validateProviderConfig(config);
 
       expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
+      expect(result.errors).toStrictEqual([]);
     });
 
     it("resolves the Twilio from number from environment", () => {
@@ -219,7 +219,7 @@ describe("validateProviderConfig", () => {
       const result = validateProviderConfig(config);
 
       expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
+      expect(result.errors).toStrictEqual([]);
     });
   });
 
@@ -385,7 +385,7 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.serve.path).toBe("/voice/webhook");
     expect(normalized.streaming.streamPath).toBe("/custom-stream");
     expect(normalized.streaming.provider).toBeUndefined();
-    expect(normalized.streaming.providers).toEqual({});
+    expect(normalized.streaming.providers).toStrictEqual({});
     expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
     expect(normalized.realtime.toolPolicy).toBe("safe-read-only");
     expect(normalized.realtime.consultPolicy).toBe("auto");
@@ -406,7 +406,7 @@ describe("normalizeVoiceCallConfig", () => {
     });
     expect(normalized.realtime.instructions).toContain("openclaw_agent_consult");
     expect(normalized.tunnel.provider).toBe("none");
-    expect(normalized.webhookSecurity.allowedHosts).toEqual([]);
+    expect(normalized.webhookSecurity.allowedHosts).toStrictEqual([]);
   });
 
   it("derives the realtime stream path from a custom webhook path", () => {

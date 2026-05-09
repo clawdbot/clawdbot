@@ -272,12 +272,17 @@ describe("browser server-context tab selection state", () => {
       },
     });
 
+    let timeout: NodeJS.Timeout | undefined;
     const opened = await Promise.race([
       openManagedTabWithRunningProfile({ fetchMock }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("openTab timed out waiting for cleanup")), 300),
-      ),
-    ]);
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("openTab timed out waiting for cleanup")), 300);
+      }),
+    ]).finally(() => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    });
 
     expect(opened.targetId).toBe("NEW");
   });

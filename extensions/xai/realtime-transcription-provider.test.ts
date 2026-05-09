@@ -21,6 +21,10 @@ async function createRealtimeSttServer(params?: {
   const wss = new WebSocketServer({ noServer: true });
   const clients = new Set<WebSocket>();
   const done = vi.fn();
+  let resolveDone: (() => void) | undefined;
+  const donePromise = new Promise<void>((resolve) => {
+    resolveDone = resolve;
+  });
 
   server.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -59,6 +63,7 @@ async function createRealtimeSttServer(params?: {
         if (event.type === "audio.done") {
           ws.send(JSON.stringify({ type: "transcript.done", text: "hello openclaw final" }));
           done();
+          resolveDone?.();
         }
       });
     });
@@ -73,22 +78,7 @@ async function createRealtimeSttServer(params?: {
     await new Promise<void>((resolve) => wss.close(() => resolve()));
     await new Promise<void>((resolve) => server.close(() => resolve()));
   };
-  return { baseUrl: `http://127.0.0.1:${port}/v1`, done };
-}
-
-async function waitFor(expectation: () => void) {
-  const started = Date.now();
-  let lastError: unknown;
-  while (Date.now() - started < 3000) {
-    try {
-      expectation();
-      return;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-  }
-  throw lastError;
+  return { baseUrl: `http://127.0.0.1:${port}/v1`, done, donePromise };
 }
 
 describe("xai realtime transcription provider", () => {
@@ -132,7 +122,15 @@ describe("xai realtime transcription provider", () => {
     });
     const provider = buildXaiRealtimeTranscriptionProvider();
     const onPartial = vi.fn();
-    const onTranscript = vi.fn();
+    let resolveFinalTranscript: (() => void) | undefined;
+    const finalTranscript = new Promise<void>((resolve) => {
+      resolveFinalTranscript = resolve;
+    });
+    const onTranscript = vi.fn((text: string) => {
+      if (text === "hello openclaw final") {
+        resolveFinalTranscript?.();
+      }
+    });
     const onSpeechStart = vi.fn();
 
     const session = provider.createSession({
@@ -151,9 +149,9 @@ describe("xai realtime transcription provider", () => {
     session.sendAudio(Buffer.from("queued-before-ready"));
     await session.connect();
     session.sendAudio(Buffer.from("after-ready"));
-    await waitFor(() => expect(onTranscript).toHaveBeenCalledWith("hello openclaw final"));
+    await finalTranscript;
     session.close();
-    await waitFor(() => expect(server.done).toHaveBeenCalled());
+    await server.donePromise;
 
     expect(requestUrls[0]?.pathname).toBe("/v1/stt");
     expect(requestUrls[0]?.searchParams.get("sample_rate")).toBe("24000");
@@ -188,8 +186,9 @@ describe("xai realtime transcription provider", () => {
 
     await expect(session.connect()).rejects.toThrow("Streaming ASR unavailable");
     expect(session.isConnected()).toBe(false);
-    expect(onError).toHaveBeenCalledWith(expect.any(Error));
-    expect(onError.mock.calls[0]?.[0].message).toBe("Streaming ASR unavailable");
+    const error = onError.mock.calls[0]?.[0];
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe("Streaming ASR unavailable");
   });
 
   it("accepts xAI realtime aliases", () => {

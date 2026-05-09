@@ -293,6 +293,22 @@ describe("shouldRunMemoryFlush", () => {
     ).toBe(true);
   });
 
+  it("runs on consecutive compaction cycles when flush records the pre-increment count", () => {
+    const params = {
+      contextWindowTokens: 100_000,
+      reserveTokensFloor: 5_000,
+      softThresholdTokens: 2_000,
+    };
+
+    for (const entry of [
+      { totalTokens: 95_000, compactionCount: 1 },
+      { totalTokens: 95_000, compactionCount: 2, memoryFlushCompactionCount: 1 },
+      { totalTokens: 95_000, compactionCount: 3, memoryFlushCompactionCount: 2 },
+    ]) {
+      expect(shouldRunMemoryFlush({ entry, ...params })).toBe(true);
+    }
+  });
+
   it("ignores stale cached totals", () => {
     expect(
       shouldRunMemoryFlush({

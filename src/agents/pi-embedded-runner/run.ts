@@ -2003,11 +2003,6 @@ export async function runEmbeddedPiAgent(
               promptErrorDetails.reason ?? classifyFailoverReason(errorText, { provider });
             const promptProfileFailureReason =
               resolveRunAuthProfileFailureReason(promptFailoverReason);
-            await maybeMarkAuthProfileFailure({
-              profileId: lastProfileId,
-              reason: promptProfileFailureReason,
-              modelId,
-            });
             const promptFailoverFailure =
               promptFailoverReason !== null || isFailoverErrorMessage(errorText, { provider });
             // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
@@ -2046,6 +2041,15 @@ export async function runEmbeddedPiAgent(
               promptFailoverDecision.action === "rotate_profile" &&
               (await advanceAuthProfile())
             ) {
+              if (failedPromptProfileId && promptProfileFailureReason) {
+                maybeMarkAuthProfileFailure({
+                  profileId: failedPromptProfileId,
+                  reason: promptProfileFailureReason,
+                  modelId,
+                }).catch((err) =>
+                  log.warn(`deferred prompt profile failure mark failed: ${String(err)}`),
+                );
+              }
               traceAttempts.push({
                 provider,
                 model: modelId,
@@ -2071,6 +2075,15 @@ export async function runEmbeddedPiAgent(
                 failoverReason: promptFailoverReason,
                 profileRotated: true,
               });
+            }
+            if (failedPromptProfileId && promptProfileFailureReason) {
+              maybeMarkAuthProfileFailure({
+                profileId: failedPromptProfileId,
+                reason: promptProfileFailureReason,
+                modelId,
+              }).catch((err) =>
+                log.warn(`deferred prompt profile failure mark failed: ${String(err)}`),
+              );
             }
             const fallbackThinking = pickFallbackThinkingLevel({
               message: errorText,

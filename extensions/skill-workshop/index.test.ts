@@ -67,8 +67,9 @@ describe("skill-workshop", () => {
     plugin.register(api);
 
     expect(tool).toBeNull();
-    expect(on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
-    expect(on).toHaveBeenCalledWith("agent_end", expect.any(Function));
+    expect(on.mock.calls.map(([hook]) => hook)).toEqual(["before_prompt_build", "agent_end"]);
+    expect(typeof on.mock.calls[0]?.[1]).toBe("function");
+    expect(typeof on.mock.calls[1]?.[1]).toBe("function");
   });
 
   it("detects user corrections and creates an animated GIF proposal", async () => {

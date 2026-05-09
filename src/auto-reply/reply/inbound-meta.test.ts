@@ -389,7 +389,7 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+    expect(conversationInfo["timestamp"]).toMatch(/^Sun 2026-02-15 13:35 (?:GMT|UTC)$/);
   });
 
   it("honors envelope user timezone for conversation timestamps", () => {
@@ -412,14 +412,6 @@ describe("buildInboundUserContextPrefix", () => {
   });
 
   it("omits invalid timestamps instead of throwing", () => {
-    expect(() =>
-      buildInboundUserContextPrefix({
-        ChatType: "group",
-        MessageSid: "msg-with-bad-ts",
-        Timestamp: 1e20,
-      } as TemplateContext),
-    ).not.toThrow();
-
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
       MessageSid: "msg-with-bad-ts",

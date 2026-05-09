@@ -266,12 +266,9 @@ describe("ollama setup", () => {
       allowSecretRefPrompt: false,
     });
 
-    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).includes("127.0.0.1"))).toBe(
-      false,
-    );
-    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).includes("ollama.com"))).toBe(
-      true,
-    );
+    const requestUrls = fetchMock.mock.calls.map((call) => requestUrl(call[0]));
+    expect(requestUrls).not.toEqual(expect.arrayContaining([expect.stringContaining("127.0.0.1")]));
+    expect(requestUrls).toEqual(expect.arrayContaining([expect.stringContaining("ollama.com")]));
   });
 
   it("rejects the local marker during cloud-only setup", async () => {
@@ -303,8 +300,8 @@ describe("ollama setup", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0]?.[0]).toContain("/api/tags");
-    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).includes("/api/me"))).toBe(
-      false,
+    expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("/api/me")]),
     );
   });
 
@@ -431,12 +428,9 @@ describe("ollama setup", () => {
       "qwen3-coder:480b-cloud",
       "gpt-oss:120b-cloud",
     ]);
-    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).endsWith("/api/show"))).toBe(
-      false,
-    );
-    expect(
-      fetchMock.mock.calls.some((call) => requestUrl(call[0]) === "https://ollama.com/api/tags"),
-    ).toBe(true);
+    const requestUrls = fetchMock.mock.calls.map((call) => requestUrl(call[0]));
+    expect(requestUrls.some((url) => url.endsWith("/api/show"))).toBe(false);
+    expect(requestUrls).toContain("https://ollama.com/api/tags");
   });
 
   it("uses /api/show context windows when building Ollama model configs", async () => {
@@ -702,9 +696,8 @@ describe("ollama setup", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).endsWith("/api/pull"))).toBe(
-      false,
-    );
+    const requestUrls = fetchMock.mock.calls.map((call) => requestUrl(call[0]));
+    expect(requestUrls.some((url) => url.endsWith("/api/pull"))).toBe(false);
     expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toEqual([
       "gemma4:latest",
     ]);

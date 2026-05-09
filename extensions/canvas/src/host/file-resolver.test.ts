@@ -4,11 +4,23 @@ import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plug
 import { describe, expect, it } from "vitest";
 import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
 
+type ResolvedFile = NonNullable<Awaited<ReturnType<typeof resolveFileWithinRoot>>>;
+
 async function withCanvasTemp<T>(prefix: string, run: (dir: string) => Promise<T>): Promise<T> {
   return await withTempWorkspace(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix },
     async ({ dir }) => await run(dir),
   );
+}
+
+function expectResolvedFile(
+  result: Awaited<ReturnType<typeof resolveFileWithinRoot>>,
+): ResolvedFile {
+  expect(result).toEqual(expect.objectContaining({ handle: expect.any(Object) }));
+  if (result === null) {
+    throw new Error("Expected resolved file within root");
+  }
+  return result;
 }
 
 describe("resolveFileWithinRoot", () => {
@@ -23,11 +35,11 @@ describe("resolveFileWithinRoot", () => {
       await fs.writeFile(path.join(root, "docs", "index.html"), "<h1>docs</h1>");
 
       const result = await resolveFileWithinRoot(root, "/docs");
-      expect(result).not.toBeNull();
+      const resolved = expectResolvedFile(result);
       try {
-        await expect(result?.handle.readFile({ encoding: "utf8" })).resolves.toBe("<h1>docs</h1>");
+        await expect(resolved.handle.readFile({ encoding: "utf8" })).resolves.toBe("<h1>docs</h1>");
       } finally {
-        await result?.handle.close().catch(() => {});
+        await resolved.handle.close().catch(() => {});
       }
     });
   });

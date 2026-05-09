@@ -420,7 +420,7 @@ describe("gateway run option collisions", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(runtimeErrors).toContain(
-      'Invalid --auth (use "none", "token", "password", or "trusted-proxy")',
+      'Invalid --auth. Use "none", "token", "password", or "trusted-proxy".',
     );
   });
 

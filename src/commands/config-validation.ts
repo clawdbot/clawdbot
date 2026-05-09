@@ -21,8 +21,9 @@ export async function requireValidConfigFileSnapshot(
       snapshot.issues.length > 0
         ? formatConfigIssueLines(snapshot.issues, "-").join("\n")
         : "Unknown validation issue.";
-    runtime.error(`Config invalid:\n${issues}`);
-    runtime.error(`Fix the config or run ${formatCliCommand("openclaw doctor")}.`);
+    runtime.error(`OpenClaw config is invalid: ${snapshot.path}\n${issues}`);
+    runtime.error(`Fix: ${formatCliCommand("openclaw doctor --fix")}`);
+    runtime.error(`Inspect: ${formatCliCommand("openclaw config validate")}`);
     runtime.exit(1);
     return null;
   }

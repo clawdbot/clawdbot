@@ -31,6 +31,10 @@ function pointerFile(sessionId: string, runtimeFile: string): string {
   })}\n`;
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("trajectory cleanup", () => {
   it("removes adjacent trajectory sidecars for a deleted session", async () => {
     await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
@@ -50,8 +54,8 @@ describe("trajectory cleanup", () => {
       });
 
       expect(removed.map((entry) => entry.kind).toSorted()).toEqual(["pointer", "runtime"]);
-      await expect(fs.stat(runtimeFile)).rejects.toThrow();
-      await expect(fs.stat(pointerPath)).rejects.toThrow();
+      await expectPathMissing(runtimeFile);
+      await expectPathMissing(pointerPath);
     });
   });
 
@@ -101,8 +105,8 @@ describe("trajectory cleanup", () => {
         restrictToStoreDir: true,
       });
 
-      await expect(fs.stat(safeExternalRuntime)).rejects.toThrow();
-      await expect(fs.stat(pointerPath)).rejects.toThrow();
+      await expectPathMissing(safeExternalRuntime);
+      await expectPathMissing(pointerPath);
 
       await fs.writeFile(pointerPath, pointerFile(sessionId, unsafeExternalRuntime), "utf8");
       await removeSessionTrajectoryArtifacts({

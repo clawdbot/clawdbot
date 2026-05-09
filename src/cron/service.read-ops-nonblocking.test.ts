@@ -128,8 +128,10 @@ describe("CronService read ops while job is running", () => {
       await isolatedRun.runStarted;
       expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
-      await expect(cron.list({ includeDisabled: true })).resolves.toBeTypeOf("object");
-      await expect(cron.status()).resolves.toBeTypeOf("object");
+      await expect(cron.list({ includeDisabled: true })).resolves.toHaveLength(1);
+      await expect(cron.status()).resolves.toEqual(
+        expect.objectContaining({ enabled: true, storePath: store.storePath }),
+      );
 
       const running = await cron.list({ includeDisabled: true });
       expect(running[0]?.state.runningAtMs).toBeTypeOf("number");
@@ -197,7 +199,7 @@ describe("CronService read ops while job is running", () => {
 
       await expect(
         withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during cron.run"),
-      ).resolves.toBeTypeOf("object");
+      ).resolves.toHaveLength(1);
       await expect(withTimeout(cron.status(), 300, "cron.status during cron.run")).resolves.toEqual(
         expect.objectContaining({ enabled: true, storePath: store.storePath }),
       );
@@ -258,7 +260,7 @@ describe("CronService read ops while job is running", () => {
 
       await expect(
         withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during startup"),
-      ).resolves.toBeTypeOf("object");
+      ).resolves.toHaveLength(1);
       await expect(withTimeout(cron.status(), 300, "cron.status during startup")).resolves.toEqual(
         expect.objectContaining({ enabled: true, storePath: store.storePath }),
       );

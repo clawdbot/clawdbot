@@ -56,6 +56,14 @@
           "preference-only"
         ]
       },
+      "toolsAllow": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^(?!\\*$)(?![Gg][Rr][Oo][Uu][Pp]:).+"
+        },
+        "maxItems": 32
+      },
       "promptOverride": { "type": "string" },
       "promptAppend": { "type": "string" },
       "maxSummaryChars": { "type": "integer", "minimum": 40, "maximum": 1000 },
@@ -128,6 +136,10 @@
     "promptStyle": {
       "label": "Prompt Style",
       "help": "Choose how eager or strict the blocking memory sub-agent should be when deciding whether to return memory."
+    },
+    "toolsAllow": {
+      "label": "Allowed Memory Tools",
+      "help": "Advanced: tool names the blocking memory sub-agent may use. Defaults to memory_search and memory_get, or memory_recall when plugins.slots.memory selects memory-lancedb; configure this for other non-core memory providers. Wildcards, group entries, and core agent tools are ignored."
     },
     "thinking": {
       "label": "Thinking Override",

@@ -116,7 +116,7 @@ describe("matrix reply context", () => {
       eventId: "$missing",
     });
 
-    expect(result).toEqual({});
+    expect(result).toStrictEqual({});
   });
 
   it("returns empty context for redacted events", async () => {
@@ -144,7 +144,7 @@ describe("matrix reply context", () => {
       eventId: "$redacted",
     });
 
-    expect(result).toEqual({});
+    expect(result).toStrictEqual({});
     expect(getMemberDisplayName).not.toHaveBeenCalled();
   });
 
@@ -176,7 +176,7 @@ describe("matrix reply context", () => {
       roomId: "!room:example.org",
       eventId: "$original",
     });
-    expect(first).toEqual({});
+    expect(first).toStrictEqual({});
 
     // Second call succeeds (should retry, not use cached failure)
     const second = await resolveReplyContext({

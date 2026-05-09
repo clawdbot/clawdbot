@@ -16,13 +16,17 @@ afterEach(async () => {
 
 describe("resolve-openclaw-package-candidate", () => {
   it("accepts only OpenClaw release package specs for npm candidates", () => {
-    expect(() => validateOpenClawPackageSpec("openclaw@beta")).not.toThrow();
-    expect(() => validateOpenClawPackageSpec("openclaw@alpha")).not.toThrow();
-    expect(() => validateOpenClawPackageSpec("openclaw@latest")).not.toThrow();
-    expect(() => validateOpenClawPackageSpec("openclaw@2026.4.27")).not.toThrow();
-    expect(() => validateOpenClawPackageSpec("openclaw@2026.4.27-1")).not.toThrow();
-    expect(() => validateOpenClawPackageSpec("openclaw@2026.4.27-beta.2")).not.toThrow();
-    expect(() => validateOpenClawPackageSpec("openclaw@2026.4.27-alpha.2")).not.toThrow();
+    for (const spec of [
+      "openclaw@beta",
+      "openclaw@alpha",
+      "openclaw@latest",
+      "openclaw@2026.4.27",
+      "openclaw@2026.4.27-1",
+      "openclaw@2026.4.27-beta.2",
+      "openclaw@2026.4.27-alpha.2",
+    ]) {
+      expect(validateOpenClawPackageSpec(spec), spec).toBeUndefined();
+    }
 
     expect(() => validateOpenClawPackageSpec("@evil/openclaw@1.0.0")).toThrow(
       "package_spec must be openclaw@alpha",

@@ -116,9 +116,14 @@ describe("deepinfra image generation provider", () => {
         },
       }),
     );
-    expect(result.images[0]?.mimeType).toBe("image/jpeg");
-    expect(result.images[0]?.fileName).toBe("image-1.jpg");
-    expect(result.images[0]?.revisedPrompt).toBe("red square");
+    expect(result.images).toHaveLength(1);
+    const [firstImage] = result.images;
+    if (!firstImage) {
+      throw new Error("Expected generated DeepInfra image");
+    }
+    expect(firstImage.mimeType).toBe("image/jpeg");
+    expect(firstImage.fileName).toBe("image-1.jpg");
+    expect(firstImage.revisedPrompt).toBe("red square");
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -152,11 +157,20 @@ describe("deepinfra image generation provider", () => {
         url: "https://api.deepinfra.com/v1/openai/images/edits",
       }),
     );
-    const form = postMultipartRequestMock.mock.calls[0]?.[0].body as FormData;
+    const firstCall = postMultipartRequestMock.mock.calls[0];
+    if (!firstCall) {
+      throw new Error("Expected DeepInfra multipart request");
+    }
+    const form = firstCall[0].body as FormData;
     expect(form.get("model")).toBe("black-forest-labs/FLUX-1-schnell");
     expect(form.get("prompt")).toBe("make it neon");
     expect(form.get("response_format")).toBe("b64_json");
     expect(form.get("image")).toBeInstanceOf(File);
-    expect(result.images[0]?.mimeType).toBe("image/png");
+    expect(result.images).toHaveLength(1);
+    const [image] = result.images;
+    if (!image) {
+      throw new Error("Expected edited DeepInfra image");
+    }
+    expect(image.mimeType).toBe("image/png");
   });
 });

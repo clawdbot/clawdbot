@@ -470,6 +470,38 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("drops a stale transcript path when a stale session rotates ids", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    dateOnlyFakeClockActive = true;
+    vi.setSystemTime(new Date("2026-05-07T12:00:00.000Z"));
+    const staleEntry = {
+      sessionId: "old-session-id",
+      sessionFile: "/tmp/openclaw/agents/main/sessions/old-session-id.jsonl",
+      updatedAt: 0,
+      sessionStartedAt: 0,
+    };
+    mockMainSessionEntry(staleEntry);
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": { ...staleEntry },
+      };
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await runMainAgent("test", "test-idem-stale-transcript");
+
+    expect(capturedEntry?.sessionId).not.toBe("old-session-id");
+    expect(capturedEntry?.sessionFile).toBeUndefined();
+  });
+
   it("keeps stored group metadata when a trusted group session receives caller-supplied selectors", async () => {
     const sessionKey = "agent:main:slack:group:C123";
     const existingEntry = buildExistingMainStoreEntry({
@@ -1027,6 +1059,49 @@ describe("gateway agent handler", () => {
     expect(callArgs.message).not.toContain("[Wed 2026-01-28 20:30 EST]");
 
     resetTimeConfig();
+  });
+
+  it("suppresses persisted prompts for subagent announce task-completion handoffs", async () => {
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "runtime-only announce bookkeeping",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceTool: "subagent_announce",
+        },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey: "agent:main:subagent:child",
+            childSessionId: "child-session-id",
+            announceType: "completion",
+            taskLabel: "child task",
+            status: "ok",
+            statusLabel: "completed",
+            result: "child result",
+            statsLine: "tokens=10",
+            replyInstruction: "Deliver the child result.",
+          },
+        ],
+        idempotencyKey: "test-subagent-announce-suppress-prompt",
+      },
+      { reqId: "subagent-announce-suppress-prompt" },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{
+      suppressPromptPersistence?: boolean;
+      message?: string;
+    }>();
+    expect(callArgs.suppressPromptPersistence).toBe(true);
+    expect(callArgs.message).toMatch(/^\[Inter-session message\]/);
+    expect(callArgs.message).toContain("sourceTool=subagent_announce");
   });
 
   it("rejects public transcriptMessage overrides", async () => {
@@ -3289,7 +3364,7 @@ describe("gateway agent handler chat.abort integration", () => {
     );
   });
 
-  it("does not overwrite or evict a pre-existing chatAbortControllers entry with the same runId", async () => {
+  it("does not dispatch a duplicate agent run when dedupe was evicted but the run is active", async () => {
     prime();
     mocks.agentCommand.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -3308,6 +3383,8 @@ describe("gateway agent handler chat.abort integration", () => {
       ownerDeviceId: undefined,
     };
     context.chatAbortControllers.set(runId, preExisting);
+    context.dedupe.delete(`agent:${runId}`);
+    const respond = vi.fn();
 
     await invokeAgent(
       {
@@ -3316,16 +3393,14 @@ describe("gateway agent handler chat.abort integration", () => {
         sessionKey: "agent:main:main",
         idempotencyKey: runId,
       },
-      { context, reqId: runId },
+      { context, reqId: runId, respond },
     );
 
     expect(context.chatAbortControllers.get(runId)).toBe(preExisting);
-    // Cleanup after the agent run completes must not evict the pre-existing
-    // entry owned by a concurrent chat.send.
-    await waitForAssertion(() => {
-      expect(mocks.agentCommand).toHaveBeenCalled();
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, { runId, status: "in_flight" }, undefined, {
+      cached: true,
+      runId,
     });
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(context.chatAbortControllers.get(runId)).toBe(preExisting);
   });
 });

@@ -10,7 +10,13 @@ type PersistedEchoEntry = {
   timestamp: number;
 };
 
-const PERSISTED_ECHO_TTL_MS = 2 * 60 * 1000;
+// 12h covers the maximum `channels.imessage.catchup.maxAgeMinutes` clamp (720
+// minutes). Without this, the live path's previous 2-minute window was
+// shorter than any realistic catchup window — own outbound rows from before
+// a gateway gap would fall out of the dedupe set before catchup could replay
+// the inbound rows around them, and the agent's own messages would land back
+// in the inbound pipeline as if they were external sends.
+const PERSISTED_ECHO_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_PERSISTED_ECHO_ENTRIES = 256;
 
 // sent-echoes.jsonl carries scope keys + outbound message text + messageIds.

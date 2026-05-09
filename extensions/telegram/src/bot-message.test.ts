@@ -3,9 +3,21 @@ import type { TelegramBotDeps } from "./bot-deps.js";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
 const dispatchTelegramMessage = vi.hoisted(() => vi.fn());
+const telegramInboundInfo = vi.hoisted(() => vi.fn());
 const upsertChannelPairingRequest = vi.hoisted(() =>
   vi.fn(async () => ({ code: "PAIRCODE", created: true })),
 );
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => ({
+    child: () => ({
+      info: telegramInboundInfo,
+    }),
+  }),
+  danger: (message: string) => message,
+  logVerbose: vi.fn(),
+  shouldLogVerbose: () => false,
+}));
 
 vi.mock("./bot-message-context.js", () => ({
   buildTelegramMessageContext,
@@ -16,15 +28,18 @@ vi.mock("./bot-message-dispatch.js", () => ({
 }));
 
 let createTelegramMessageProcessor: typeof import("./bot-message.js").createTelegramMessageProcessor;
+let formatTelegramInboundLogLine: typeof import("./bot-message.js").formatTelegramInboundLogLine;
 
 describe("telegram bot message processor", () => {
   beforeAll(async () => {
-    ({ createTelegramMessageProcessor } = await import("./bot-message.js"));
+    ({ createTelegramMessageProcessor, formatTelegramInboundLogLine } =
+      await import("./bot-message.js"));
   });
 
   beforeEach(() => {
     buildTelegramMessageContext.mockClear();
     dispatchTelegramMessage.mockClear();
+    telegramInboundInfo.mockClear();
     upsertChannelPairingRequest.mockClear();
   });
 
@@ -76,10 +91,7 @@ describe("telegram bot message processor", () => {
     sendMessage: ReturnType<typeof vi.fn>,
   ) {
     const runtimeError = vi.fn();
-    buildTelegramMessageContext.mockResolvedValue({
-      sendTyping: vi.fn().mockResolvedValue(undefined),
-      ...context,
-    });
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext(context));
     dispatchTelegramMessage.mockRejectedValue(new Error("dispatch exploded"));
     const processMessage = createTelegramMessageProcessor({
       ...baseDeps,
@@ -89,13 +101,29 @@ describe("telegram bot message processor", () => {
     return { processMessage, runtimeError };
   }
 
+  function createMessageContext(context: Record<string, unknown> = {}) {
+    return {
+      chatId: 123,
+      ctxPayload: {
+        From: "telegram:123",
+        To: "telegram:123",
+        ChatType: "direct",
+        RawBody: "hello there",
+      },
+      primaryCtx: { me: { username: "openclaw_bot" } },
+      route: { sessionKey: "agent:main:main" },
+      sendTyping: vi.fn().mockResolvedValue(undefined),
+      ...context,
+    };
+  }
+
   it("dispatches when context is available", async () => {
     const sendTyping = vi.fn().mockResolvedValue(undefined);
-    buildTelegramMessageContext.mockResolvedValue({
-      chatId: 123,
-      route: { sessionKey: "agent:main:main" },
-      sendTyping,
-    });
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        sendTyping,
+      }),
+    );
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
     await processSampleMessage(processMessage);
@@ -105,6 +133,9 @@ describe("telegram bot message processor", () => {
     expect(sendTyping.mock.invocationCallOrder[0]).toBeLessThan(
       dispatchTelegramMessage.mock.invocationCallOrder[0],
     );
+    expect(telegramInboundInfo).toHaveBeenCalledWith(
+      "Inbound message telegram:123 -> @openclaw_bot (direct, 11 chars)",
+    );
   });
 
   it("skips dispatch when no context is produced", async () => {
@@ -112,15 +143,36 @@ describe("telegram bot message processor", () => {
     const processMessage = createTelegramMessageProcessor(baseDeps);
     await processSampleMessage(processMessage);
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
+    expect(telegramInboundInfo).not.toHaveBeenCalled();
+  });
+
+  it("formats Telegram inbound summaries without message content", () => {
+    expect(
+      formatTelegramInboundLogLine({
+        from: "telegram:123",
+        to: "@openclaw_bot",
+        chatType: "direct",
+        body: "secret message",
+      }),
+    ).toBe("Inbound message telegram:123 -> @openclaw_bot (direct, 14 chars)");
+    expect(
+      formatTelegramInboundLogLine({
+        from: "telegram:group:-100",
+        to: "@openclaw_bot",
+        chatType: "group",
+        body: "<media:image>",
+        mediaType: "image/jpeg",
+      }),
+    ).toBe("Inbound message telegram:group:-100 -> @openclaw_bot (group, image/jpeg, 13 chars)");
   });
 
   it("keeps dispatch running when the early typing cue fails", async () => {
     const sendTyping = vi.fn().mockRejectedValue(new Error("typing failed"));
-    buildTelegramMessageContext.mockResolvedValue({
-      chatId: 123,
-      route: { sessionKey: "agent:main:main" },
-      sendTyping,
-    });
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        sendTyping,
+      }),
+    );
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
     await processSampleMessage(processMessage);

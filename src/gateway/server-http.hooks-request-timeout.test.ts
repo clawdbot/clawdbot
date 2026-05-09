@@ -96,7 +96,7 @@ describe("createHooksRequestHandler timeout status mapping", () => {
   });
 
   test.each(["0.0.0.0", "::"])(
-    "does not throw when bindHost=%s while parsing non-hook request URL",
+    "returns unhandled when bindHost=%s sees a non-hook request URL",
     async (bindHost) => {
       const handler = createHooksHandler({ bindHost });
       const req = createHookRequest({ url: "/" });

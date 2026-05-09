@@ -139,7 +139,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       roundOneReply: "Worker completed successfully",
     });
 
-    expect(gatewayCalls.some((call) => call.method === "sessions.list")).toBe(true);
+    requireGatewayCall("sessions.list");
     const sendCall = requireGatewayCall("send");
     expect(sendCall.params).toMatchObject({
       channel: "discord",

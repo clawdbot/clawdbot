@@ -156,7 +156,7 @@ describe("AgentRuntimePlan", () => {
 
     expect(normalized).toHaveLength(1);
     expect(normalized[0]?.name).toBe("ping");
-    expect(normalized[0]?.parameters).toBeTypeOf("object");
+    expect(normalized[0]?.parameters).toStrictEqual({});
   });
 
   it("does not forward OpenAI API-key profiles into the Codex harness auth slot", () => {

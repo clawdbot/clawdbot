@@ -59,7 +59,7 @@ describe("provider-catalog-shared native streaming usage compat", () => {
 });
 
 describe("provider-catalog-shared configured catalog entries", () => {
-  it("preserves configured audio and video input modalities", () => {
+  it("preserves configured audio and video input modalities while normalizing nested Gemini ids", () => {
     expect(
       readConfiguredProviderCatalogEntries({
         providerId: "kilocode",
@@ -88,7 +88,7 @@ describe("provider-catalog-shared configured catalog entries", () => {
     ).toEqual([
       {
         provider: "kilocode",
-        id: "google/gemini-3-pro-preview",
+        id: "google/gemini-3.1-pro-preview",
         name: "Gemini 3 Pro Preview",
         input: ["text", "image", "video", "audio"],
         reasoning: true,

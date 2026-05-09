@@ -98,6 +98,15 @@ describe("bundle plugin hooks", () => {
     };
   }
 
+  function requireOnlyHookEntry(entries: ReturnType<typeof loadWorkspaceHookEntries>) {
+    expect(entries).toHaveLength(1);
+    const [entry] = entries;
+    if (!entry) {
+      throw new Error("Expected bundled hook entry");
+    }
+    return entry;
+  }
+
   it("exposes enabled bundle hook dirs as plugin-managed hook entries", async () => {
     const bundleRoot = await writeBundleHookFixture();
 
@@ -105,14 +114,14 @@ describe("bundle plugin hooks", () => {
       config: createConfig(true),
     });
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.hook.name).toBe("bundle-hook");
-    expect(entries[0]?.hook.source).toBe("openclaw-plugin");
-    expect(entries[0]?.hook.pluginId).toBe("sample-bundle");
-    expect(entries[0]?.hook.baseDir).toBe(
+    const entry = requireOnlyHookEntry(entries);
+    expect(entry.hook.name).toBe("bundle-hook");
+    expect(entry.hook.source).toBe("openclaw-plugin");
+    expect(entry.hook.pluginId).toBe("sample-bundle");
+    expect(entry.hook.baseDir).toBe(
       fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
     );
-    expect(entries[0]?.metadata?.events).toEqual(["command:new"]);
+    expect(entry.metadata?.events).toEqual(["command:new"]);
   });
 
   it("loads and executes enabled bundle hooks through the internal hook loader", async () => {

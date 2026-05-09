@@ -584,7 +584,7 @@ describe("security: path traversal protection (CWE-22)", () => {
         return;
       }
       // Path with null byte should be rejected or handled safely.
-      expect(() => resolve(obj, {}), includePath).toThrow();
+      expectResolveIncludeError(() => resolve(obj, {}));
     });
 
     it("allows child include when config is at filesystem root", () => {

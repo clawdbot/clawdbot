@@ -214,7 +214,7 @@ describe("markdownToMatrixHtml", () => {
 
     expect(result.html).toContain("@alice:example.org/path");
     expect(result.html).not.toContain("matrix.to");
-    expect(result.mentions).toEqual({});
+    expect(result.mentions).toStrictEqual({});
   });
 
   it("accepts bracketed homeservers in matrix mentions", async () => {
@@ -251,7 +251,7 @@ describe("markdownToMatrixHtml", () => {
     });
 
     expect(result.html).not.toContain("matrix.to");
-    expect(result.mentions).toEqual({});
+    expect(result.mentions).toStrictEqual({});
   });
 
   it("does not convert escaped qualified mentions", async () => {
@@ -262,7 +262,7 @@ describe("markdownToMatrixHtml", () => {
 
     expect(result.html).toContain("@alice:example.org");
     expect(result.html).not.toContain("matrix.to");
-    expect(result.mentions).toEqual({});
+    expect(result.mentions).toStrictEqual({});
   });
 
   it("does not convert escaped room mentions", async () => {
@@ -272,7 +272,7 @@ describe("markdownToMatrixHtml", () => {
     });
 
     expect(result.html).toContain("@room");
-    expect(result.mentions).toEqual({});
+    expect(result.mentions).toStrictEqual({});
   });
 
   it("keeps escaped mentions literal after escaped backticks", async () => {
@@ -283,7 +283,7 @@ describe("markdownToMatrixHtml", () => {
 
     expect(result.html).toContain("`literal then @alice:example.org");
     expect(result.html).not.toContain("matrix.to");
-    expect(result.mentions).toEqual({});
+    expect(result.mentions).toStrictEqual({});
   });
 
   it("restores escaped mentions in markdown link labels without linking them", async () => {
@@ -294,7 +294,7 @@ describe("markdownToMatrixHtml", () => {
 
     expect(result.html).toContain('<a href="https://example.com">@alice:example.org</a>');
     expect(result.html).not.toContain("matrix.to");
-    expect(result.mentions).toEqual({});
+    expect(result.mentions).toStrictEqual({});
   });
 
   it("keeps backslashes inside code spans", async () => {
@@ -304,7 +304,7 @@ describe("markdownToMatrixHtml", () => {
     });
 
     expect(result.html).toContain("<code>\\@alice:example.org</code>");
-    expect(result.mentions).toEqual({});
+    expect(result.mentions).toStrictEqual({});
   });
 
   it("does not convert mentions inside code spans", async () => {
@@ -315,7 +315,7 @@ describe("markdownToMatrixHtml", () => {
 
     expect(result.html).toContain("<code>@alice:example.org</code>");
     expect(result.html).not.toContain("matrix.to");
-    expect(result.mentions).toEqual({});
+    expect(result.mentions).toStrictEqual({});
   });
 
   it("keeps backslashes inside tilde fenced code blocks", async () => {
@@ -325,7 +325,7 @@ describe("markdownToMatrixHtml", () => {
     });
 
     expect(result.html).toContain("<pre><code>\\@alice:example.org\n</code></pre>");
-    expect(result.mentions).toEqual({});
+    expect(result.mentions).toStrictEqual({});
   });
 
   it("keeps backslashes inside indented code blocks", async () => {
@@ -335,6 +335,6 @@ describe("markdownToMatrixHtml", () => {
     });
 
     expect(result.html).toContain("<pre><code>\\@alice:example.org\n</code></pre>");
-    expect(result.mentions).toEqual({});
+    expect(result.mentions).toStrictEqual({});
   });
 });

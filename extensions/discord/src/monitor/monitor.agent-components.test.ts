@@ -155,7 +155,7 @@ describe("agent components", () => {
       idLine: "Your Discord user id: 123456789",
     });
     expect(pairingText).toContain(`openclaw pairing approve discord ${code}`);
-    expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
   });
 
@@ -174,7 +174,7 @@ describe("agent components", () => {
       content: "You are not authorized to use this button.",
       ephemeral: true,
     });
-    expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -218,8 +218,8 @@ describe("agent components", () => {
       content: "You are not authorized to use this button.",
       ephemeral: true,
     });
-    expect(peekSystemEvents(defaultGroupDmSessionKey)).toEqual([]);
-    expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
+    expect(peekSystemEvents(defaultGroupDmSessionKey)).toStrictEqual([]);
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -247,7 +247,7 @@ describe("agent components", () => {
         sessionKey: defaultGroupDmSessionKey,
       }),
     );
-    expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -302,7 +302,7 @@ describe("agent components", () => {
       content: "DM interactions are disabled.",
       ephemeral: true,
     });
-    expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 

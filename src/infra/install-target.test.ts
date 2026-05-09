@@ -42,7 +42,8 @@ describe("resolveCanonicalInstallTarget", () => {
         }),
       ).resolves.toEqual({ ok: false, error: "bad id" });
 
-      await expect(fs.stat(baseDir)).resolves.toMatchObject({ isDirectory: expect.any(Function) });
+      const baseDirStat = await fs.stat(baseDir);
+      expect(baseDirStat.isDirectory()).toBe(true);
       expect(assertCanonicalPathWithinBaseMock).not.toHaveBeenCalled();
     });
   });

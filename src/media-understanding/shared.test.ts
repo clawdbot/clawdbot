@@ -47,7 +47,7 @@ afterEach(() => {
 });
 
 function getFirstGuardedFetchCall() {
-  const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+  const [call] = fetchWithSsrFGuardMock.mock.calls[0] ?? [];
   if (!call) {
     throw new Error("Expected fetchWithSsrFGuard to be called");
   }

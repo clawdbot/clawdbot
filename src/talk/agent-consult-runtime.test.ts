@@ -73,7 +73,7 @@ describe("realtime voice agent consult runtime", () => {
     expect(resolveRealtimeVoiceAgentConsultTools("safe-read-only")).toEqual([
       expect.objectContaining({ name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME }),
     ]);
-    expect(resolveRealtimeVoiceAgentConsultTools("none")).toEqual([]);
+    expect(resolveRealtimeVoiceAgentConsultTools("none")).toStrictEqual([]);
     expect(resolveRealtimeVoiceAgentConsultToolsAllow("safe-read-only")).toEqual([
       "read",
       "web_search",
@@ -83,7 +83,7 @@ describe("realtime voice agent consult runtime", () => {
       "memory_get",
     ]);
     expect(resolveRealtimeVoiceAgentConsultToolsAllow("owner")).toBeUndefined();
-    expect(resolveRealtimeVoiceAgentConsultToolsAllow("none")).toEqual([]);
+    expect(resolveRealtimeVoiceAgentConsultToolsAllow("none")).toStrictEqual([]);
   });
 
   it("runs an embedded agent using the shared session and prompt contract", async () => {
@@ -110,7 +110,11 @@ describe("realtime voice agent consult runtime", () => {
     });
 
     expect(result).toEqual({ text: "Speak this." });
-    expect(sessionStore["voice:15550001234"]?.sessionId).toEqual(expect.stringMatching(/\S/));
+    const voiceSession = sessionStore["voice:15550001234"];
+    if (!voiceSession) {
+      throw new Error("Expected voice consult session entry");
+    }
+    expect(voiceSession.sessionId).toEqual(expect.stringMatching(/\S/));
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "voice:15550001234",

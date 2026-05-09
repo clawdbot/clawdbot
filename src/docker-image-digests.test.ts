@@ -114,6 +114,14 @@ function requireDependabotDockerUpdate(config: DependabotConfig): DependabotUpda
   return dockerUpdate;
 }
 
+function requireDockerImageGroup(update: DependabotUpdate): DependabotDockerGroup {
+  const group = update.groups?.["docker-images"];
+  if (!group) {
+    throw new Error("expected Dependabot docker-images group");
+  }
+  return group;
+}
+
 describe("docker base image pinning", () => {
   it("pins selected Dockerfile FROM lines to immutable sha256 digests", async () => {
     for (const dockerfilePath of DIGEST_PINNED_DOCKERFILES) {
@@ -141,8 +149,9 @@ describe("docker base image pinning", () => {
     const raw = await readFile(resolve(repoRoot, ".github/dependabot.yml"), "utf8");
     const config = parse(raw) as DependabotConfig;
     const dockerUpdate = requireDependabotDockerUpdate(config);
+    const dockerImagesGroup = requireDockerImageGroup(dockerUpdate);
 
     expect(dockerUpdate.schedule?.interval).toBe("weekly");
-    expect(dockerUpdate.groups?.["docker-images"]?.patterns).toContain("*");
+    expect(dockerImagesGroup.patterns).toContain("*");
   });
 });

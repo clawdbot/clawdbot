@@ -32,8 +32,16 @@ vi.mock("./commands-subagents-control.runtime.js", () => ({
   listControlledSubagentRuns: listControlledSubagentRunsMock,
 }));
 
-const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-  allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) => {
+  const values: string[] = [];
+  for (const entry of allowFrom) {
+    const value = String(entry).trim();
+    if (value) {
+      values.push(value);
+    }
+  }
+  return values;
+};
 
 let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 

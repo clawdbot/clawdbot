@@ -202,7 +202,7 @@ describe("plugin gateway gauntlet helpers", () => {
       },
     );
 
-    expect(observations).toEqual([]);
+    expect(observations).toStrictEqual([]);
   });
 
   it("flags QA gateway regressions relative to an explicit baseline", () => {

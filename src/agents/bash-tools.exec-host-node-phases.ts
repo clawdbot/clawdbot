@@ -247,9 +247,10 @@ function buildLocalPreparedNodeRun(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
 }): PreparedNodeRun {
+  const rawCommand = formatExecCommand(params.target.argv);
   const command = resolveSystemRunCommandRequest({
     command: params.target.argv,
-    rawCommand: params.request.command,
+    rawCommand,
   });
   if (!command.ok) {
     throw new Error(command.message);
@@ -258,7 +259,7 @@ function buildLocalPreparedNodeRun(params: {
     throw new Error("command required");
   }
   const commandText = formatExecCommand(command.argv);
-  const previewText = command.previewText?.trim();
+  const previewText = params.request.command.trim() || command.previewText?.trim();
   const commandPreview = previewText && previewText !== commandText ? previewText : null;
   const plan = {
     argv: [...command.argv],

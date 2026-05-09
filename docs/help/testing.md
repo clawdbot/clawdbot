@@ -311,6 +311,7 @@ gh workflow run package-acceptance.yml --ref main \
   - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
   - Requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`, `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`. The group id must be the numeric Telegram chat id.
   - Supports `--credential-source convex` for shared pooled credentials. Use env mode by default, or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex` to opt into pooled leases.
+  - Defaults cover canary, mention gating, command addressing, `/status`, bot-to-bot mentioned replies, and core native command replies. `mock-openai` defaults also cover deterministic reply-chain and Telegram final-message streaming regressions. Use `--list-scenarios` for optional probes such as `session_status`.
   - Exits non-zero when any scenario fails. Use `--allow-failures` when you
     want artifacts without a failing exit code.
   - Requires two distinct bots in the same private group, with the SUT bot exposing a Telegram username.

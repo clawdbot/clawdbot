@@ -220,9 +220,18 @@ describe("matrix sync helpers", () => {
 
   it("shares one in-flight /sync poll across concurrent waits", async () => {
     let calls = 0;
+    let markFetchStarted: () => void = () => {};
+    const fetchStarted = new Promise<void>((resolve) => {
+      markFetchStarted = resolve;
+    });
+    let releaseFetch: () => void = () => {};
+    const fetchCanComplete = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
     const fetchImpl: typeof fetch = async () => {
       calls += 1;
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      markFetchStarted();
+      await fetchCanComplete;
       return new Response(
         JSON.stringify({
           next_batch: "next-batch-2",
@@ -260,7 +269,7 @@ describe("matrix sync helpers", () => {
       since: "start-batch",
     });
 
-    const [reply, notice] = await Promise.all([
+    const waits = Promise.all([
       observer.waitForRoomEvent({
         predicate: (event) => event.eventId === "$reply",
         roomId: "!room:matrix-qa.test",
@@ -272,6 +281,11 @@ describe("matrix sync helpers", () => {
         timeoutMs: 1_000,
       }),
     ]);
+
+    await fetchStarted;
+    await Promise.resolve();
+    releaseFetch();
+    const [reply, notice] = await waits;
 
     expect(reply.event.eventId).toBe("$reply");
     expect(notice).toMatchObject({

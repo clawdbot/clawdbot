@@ -300,7 +300,7 @@ describe("scripts/test-projects changed-target routing", () => {
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
         "test/helpers/poll.ts",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps the broad changed run available for shared test helpers", () => {
@@ -366,7 +366,7 @@ describe("scripts/test-projects changed-target routing", () => {
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
         "unknown/file.txt",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps the broad changed run available for unknown root surfaces", () => {
@@ -385,13 +385,13 @@ describe("scripts/test-projects changed-target routing", () => {
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
         "docs/help/testing.md",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("skips root agent guidance changes instead of broad-running tests", () => {
     expect(
       buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => ["AGENTS.md"]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("skips app-only changes because app tests are separate from Vitest lanes", () => {
@@ -399,7 +399,7 @@ describe("scripts/test-projects changed-target routing", () => {
       buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
         "apps/macos/OpenClaw/AppDelegate.swift",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps public plugin SDK changes focused by default", () => {
@@ -981,8 +981,8 @@ describe("scripts/test-projects full-suite sharding", () => {
       .map(([file, configs]) => `${file}: ${configs.join(", ")}`)
       .toSorted((left, right) => left.localeCompare(right));
 
-    expect(missing).toEqual([]);
-    expect(duplicated).toEqual([]);
+    expect(missing).toStrictEqual([]);
+    expect(duplicated).toStrictEqual([]);
   });
 
   it("uses the large host-aware local profile on roomy local hosts", () => {

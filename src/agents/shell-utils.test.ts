@@ -48,7 +48,11 @@ describe("getShellConfig", () => {
     it("uses PowerShell on Windows", () => {
       const { shell, args } = getShellConfig();
       const normalized = shell.toLowerCase();
-      expect(normalized.includes("powershell") || normalized.includes("pwsh")).toBe(true);
+      if (normalized.includes("powershell")) {
+        expect(normalized).toContain("powershell");
+      } else {
+        expect(normalized).toContain("pwsh");
+      }
       expect(args).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
     });
     return;

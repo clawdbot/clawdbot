@@ -50,6 +50,8 @@ export type RunCliAgentParams = {
   messageProvider?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
+  /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
+  toolsAllow?: string[];
   disableTools?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;

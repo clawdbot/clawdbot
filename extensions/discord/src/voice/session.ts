@@ -25,6 +25,34 @@ export type VoiceOperationResult = {
   guildId?: string;
 };
 
+export type VoiceRealtimeSpeakerContext = {
+  extraSystemPrompt?: string;
+  senderIsOwner: boolean;
+  speakerLabel: string;
+};
+
+export type VoiceRealtimeAgentTurnParams = {
+  context: VoiceRealtimeSpeakerContext;
+  message: string;
+  toolsAllow?: string[];
+  userId: string;
+};
+
+export type VoiceRealtimeSpeakerTurn = {
+  close: () => void;
+  sendInputAudio: (discordPcm48kStereo: Buffer) => void;
+};
+
+export type VoiceRealtimeSession = {
+  beginSpeakerTurn: (
+    context: VoiceRealtimeSpeakerContext,
+    userId: string,
+  ) => VoiceRealtimeSpeakerTurn;
+  close: () => void;
+  connect: () => Promise<void>;
+  handleBargeIn: () => void;
+};
+
 export type VoiceSessionEntry = {
   guildId: string;
   guildName?: string;
@@ -37,6 +65,7 @@ export type VoiceSessionEntry = {
   playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
   capture: VoiceCaptureState;
+  realtime?: VoiceRealtimeSession;
   receiveRecovery: VoiceReceiveRecoveryState;
   stop: () => void;
 };

@@ -122,7 +122,7 @@ describe("resolveInboundMentionDecision", () => {
       },
     });
     expect(res.implicitMention).toBe(false);
-    expect(res.matchedImplicitMentionKinds).toEqual([]);
+    expect(res.matchedImplicitMentionKinds).toStrictEqual([]);
     expect(res.effectiveWasMentioned).toBe(false);
     expect(res.shouldSkip).toBe(true);
   });
@@ -263,6 +263,6 @@ describe("implicitMentionKindWhen", () => {
   });
 
   it("returns an empty list when disabled", () => {
-    expect(implicitMentionKindWhen("reply_to_bot", false)).toEqual([]);
+    expect(implicitMentionKindWhen("reply_to_bot", false)).toStrictEqual([]);
   });
 });

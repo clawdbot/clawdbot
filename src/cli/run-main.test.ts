@@ -363,7 +363,6 @@ describe("resolveMissingPluginCommandMessage", () => {
       },
       { registry: memoryWikiCommandAliasRegistry },
     );
-    expect(message).not.toBeNull();
     expect(message).toContain('"memory-wiki"');
     expect(message).toContain("plugins.allow");
   });

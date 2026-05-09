@@ -22,8 +22,12 @@ function createDirectTextMediaHarness(params: OutboundPayloadHarnessParams) {
     text: "",
     payload: params.payload,
   };
+  const sendPayload = outbound.sendPayload;
+  if (!sendPayload) {
+    throw new Error("Expected direct text/media outbound sendPayload");
+  }
   return {
-    run: async () => await outbound.sendPayload!(ctx),
+    run: async () => await sendPayload(ctx),
     sendMock: sendFn,
     to: ctx.to,
   };

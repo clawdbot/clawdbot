@@ -1,8 +1,8 @@
 // Group-allowlist visibility helpers. The runtime gate at line ~336 of
 // inbound-processing.ts drops every group message when groupPolicy="allowlist"
 // and channels.imessage.groups is missing. Without these warnings the drop is
-// invisible at default log level — the most common BlueBubbles → bundled-iMessage
-// migration footgun. See https://github.com/openclaw/openclaw/issues/78749.
+// invisible at default log level during iMessage config migration. See
+// https://github.com/openclaw/openclaw/issues/78749.
 
 type GroupsConfig = Record<
   string,

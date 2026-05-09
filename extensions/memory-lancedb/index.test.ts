@@ -196,7 +196,7 @@ describe("memory plugin e2e", () => {
       resolvePath: (filePath: string) => filePath,
     };
 
-    expect(() => memoryPlugin.register(mockApi as any)).not.toThrow();
+    memoryPlugin.register(mockApi as any);
     expect(registerService).toHaveBeenCalledWith({
       id: "memory-lancedb",
       start: expect.any(Function),

@@ -111,6 +111,16 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+function expectMusicGenerateTool(
+  tool: ReturnType<typeof createMusicGenerateTool>,
+): NonNullable<ReturnType<typeof createMusicGenerateTool>> {
+  if (tool === null) {
+    throw new Error("expected music_generate tool");
+  }
+  expect(typeof tool.execute).toBe("function");
+  return tool;
+}
+
 function resetMusicGenerateMocks() {
   vi.restoreAllMocks();
   vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
@@ -137,7 +147,7 @@ describe("createMusicGenerateTool", () => {
   });
 
   it("registers when music-generation config is present", () => {
-    expect(
+    expectMusicGenerateTool(
       createMusicGenerateTool({
         config: asConfig({
           agents: {
@@ -147,7 +157,7 @@ describe("createMusicGenerateTool", () => {
           },
         }),
       }),
-    ).not.toBeNull();
+    );
   });
 
   it("does not load runtime providers while registering an explicitly configured tool", () => {
@@ -157,7 +167,7 @@ describe("createMusicGenerateTool", () => {
         throw new Error("runtime provider list should not run during tool registration");
       });
 
-    expect(
+    expectMusicGenerateTool(
       createMusicGenerateTool({
         config: asConfig({
           agents: {
@@ -167,7 +177,7 @@ describe("createMusicGenerateTool", () => {
           },
         }),
       }),
-    ).not.toBeNull();
+    );
     expect(listProviders).not.toHaveBeenCalled();
   });
 
@@ -207,7 +217,7 @@ describe("createMusicGenerateTool", () => {
         },
       }),
     });
-    expect(tool).not.toBeNull();
+    expect(typeof tool?.execute).toBe("function");
     if (!tool) {
       throw new Error("expected music_generate tool");
     }
@@ -277,7 +287,7 @@ describe("createMusicGenerateTool", () => {
         },
       }),
     });
-    expect(tool).not.toBeNull();
+    expect(typeof tool?.execute).toBe("function");
     if (!tool) {
       throw new Error("expected music_generate tool");
     }

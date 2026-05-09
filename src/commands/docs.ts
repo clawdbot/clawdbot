@@ -32,7 +32,9 @@ function resolveNodeRunner(): NodeRunner {
   if (hasBinary("npx")) {
     return { cmd: "npx", args: ["-y"] };
   }
-  throw new Error("Missing pnpm or npx; install a Node package runner.");
+  throw new Error(
+    `Docs search needs pnpm or npx to run the docs search helper. Install pnpm, or run ${formatCliCommand("npm install -g pnpm")}.`,
+  );
 }
 
 async function runNodeTool(tool: string, toolArgs: string[], options: ToolRunOptions = {}) {

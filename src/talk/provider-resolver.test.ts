@@ -77,6 +77,28 @@ describe("realtime voice provider resolver", () => {
     });
   });
 
+  it("applies caller overrides to the auto-selected realtime voice provider", () => {
+    const resolution = resolveConfiguredRealtimeVoiceProvider({
+      cfg: {},
+      defaultModel: "gpt-realtime",
+      providerConfigOverrides: {
+        model: "gpt-realtime-2",
+        voice: "cedar",
+      },
+      providers,
+      providerConfigs: {
+        second: { enabled: true, model: "provider-default", voice: "marin" },
+      },
+    });
+
+    expect(resolution.providerConfig).toMatchObject({
+      enabled: true,
+      model: "gpt-realtime-2",
+      voice: "cedar",
+      resolved: true,
+    });
+  });
+
   it("throws a caller-specified message when no providers exist", () => {
     expect(() =>
       resolveConfiguredRealtimeVoiceProvider({

@@ -87,6 +87,6 @@ describe("qa suite runtime agent session helpers", () => {
       readRawQaSessionStore({
         gateway: { tempRoot },
       } as never),
-    ).resolves.toEqual({});
+    ).resolves.toStrictEqual({});
   });
 });

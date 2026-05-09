@@ -104,7 +104,7 @@ function expectToolResultWasTrimmed(result: AgentMessage[]) {
 }
 
 describe("pruneContextMessages", () => {
-  it("does not crash on assistant message with malformed thinking block (missing thinking string)", () => {
+  it("keeps assistant messages with malformed thinking blocks", () => {
     const messages: AgentMessage[] = [
       makeUser("hello"),
       makeAssistant([
@@ -112,30 +112,30 @@ describe("pruneContextMessages", () => {
         { type: "text", text: "ok" },
       ]),
     ];
-    expect(() =>
-      pruneContextMessages({
-        messages,
-        settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
-        ctx: CONTEXT_WINDOW_1M,
-      }),
-    ).not.toThrow();
+    const result = pruneContextMessages({
+      messages,
+      settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      ctx: CONTEXT_WINDOW_1M,
+    });
+
+    expect(result).toHaveLength(2);
   });
 
-  it("does not crash on assistant message with null content entries", () => {
+  it("keeps assistant messages with null content entries", () => {
     const messages: AgentMessage[] = [
       makeUser("hello"),
       makeAssistant([null as unknown as AssistantContentBlock, { type: "text", text: "world" }]),
     ];
-    expect(() =>
-      pruneContextMessages({
-        messages,
-        settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
-        ctx: CONTEXT_WINDOW_1M,
-      }),
-    ).not.toThrow();
+    const result = pruneContextMessages({
+      messages,
+      settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      ctx: CONTEXT_WINDOW_1M,
+    });
+
+    expect(result).toHaveLength(2);
   });
 
-  it("does not crash on assistant message with malformed text block (missing text string)", () => {
+  it("keeps assistant messages with malformed text blocks", () => {
     const messages: AgentMessage[] = [
       makeUser("hello"),
       makeAssistant([
@@ -143,16 +143,16 @@ describe("pruneContextMessages", () => {
         { type: "thinking", thinking: "still fine" },
       ]),
     ];
-    expect(() =>
-      pruneContextMessages({
-        messages,
-        settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
-        ctx: CONTEXT_WINDOW_1M,
-      }),
-    ).not.toThrow();
+    const result = pruneContextMessages({
+      messages,
+      settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      ctx: CONTEXT_WINDOW_1M,
+    });
+
+    expect(result).toHaveLength(2);
   });
 
-  it("does not crash on toolResult with malformed text block (missing text string)", () => {
+  it("keeps tool results with malformed text blocks", () => {
     // Regression: a plugin returning undefined produces {type: "text"} with no text property,
     // which crashed estimateTextAndImageChars / collectTextSegments / collectPrunableToolResultSegments.
     // See https://github.com/openclaw/openclaw/issues/34979
@@ -174,16 +174,16 @@ describe("pruneContextMessages", () => {
       makeAssistant([{ type: "text", text: "done" }]),
     ];
 
-    expect(() =>
-      pruneContextMessages({
-        messages,
-        settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
-        ctx: CONTEXT_WINDOW_1M,
-      }),
-    ).not.toThrow();
+    const result = pruneContextMessages({
+      messages,
+      settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      ctx: CONTEXT_WINDOW_1M,
+    });
+
+    expect(result).toHaveLength(5);
   });
 
-  it("does not crash on toolResult with malformed text block during soft-trim (image path)", () => {
+  it("keeps tool results with malformed text blocks during soft-trim image paths", () => {
     // The collectPrunableToolResultSegments path is exercised when the tool result
     // contains image blocks alongside a malformed text block.
     const malformedToolResult = {
@@ -199,28 +199,28 @@ describe("pruneContextMessages", () => {
       makeAssistant([{ type: "text", text: "here it is" }]),
     ];
 
-    expect(() =>
-      pruneContextMessages({
-        messages,
-        settings: {
-          ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
-          keepLastAssistants: 1,
-          softTrimRatio: 0,
-          hardClear: {
-            ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
-            enabled: false,
-          },
-          softTrim: {
-            maxChars: 5_000,
-            headChars: 2_000,
-            tailChars: 2_000,
-          },
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        hardClear: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+          enabled: false,
         },
-        ctx: CONTEXT_WINDOW_1M,
-        isToolPrunable: () => true,
-        contextWindowTokensOverride: 1,
-      }),
-    ).not.toThrow();
+        softTrim: {
+          maxChars: 5_000,
+          headChars: 2_000,
+          tailChars: 2_000,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    expect(result).toHaveLength(3);
   });
 
   it("counts malformed non-string text blocks when deciding to trim tool results", () => {
@@ -264,7 +264,7 @@ describe("pruneContextMessages", () => {
     expect(textBlock.text).toContain("[Tool result trimmed:");
   });
 
-  it("does not crash on toolResult with null content entries", () => {
+  it("keeps tool results with null content entries", () => {
     const malformedToolResult = {
       role: "toolResult",
       toolName: "read",
@@ -278,13 +278,13 @@ describe("pruneContextMessages", () => {
       makeAssistant([{ type: "text", text: "done" }]),
     ];
 
-    expect(() =>
-      pruneContextMessages({
-        messages,
-        settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
-        ctx: CONTEXT_WINDOW_1M,
-      }),
-    ).not.toThrow();
+    const result = pruneContextMessages({
+      messages,
+      settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      ctx: CONTEXT_WINDOW_1M,
+    });
+
+    expect(result).toHaveLength(3);
   });
 
   it("handles well-formed thinking blocks correctly", () => {

@@ -492,7 +492,7 @@ describe("msteams inline image limits", () => {
       },
     ];
     const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 4 });
-    expect(out).toEqual([]);
+    expect(out).toStrictEqual([]);
   });
 
   it("accepts inline data images within limit", () => {

@@ -699,7 +699,7 @@ describe("whatsapp inbound dispatch", () => {
     const deliver = getCapturedDeliver();
     expect(deliver).toBeTypeOf("function");
 
-    await deliver?.({ text: "Reasoning:\n_hidden_", isReasoning: true }, { kind: "block" });
+    await deliver?.({ text: "hidden", isReasoning: true }, { kind: "block" });
     await deliver?.(
       { text: "🧹 Compacting context...", isCompactionNotice: true },
       { kind: "block" },

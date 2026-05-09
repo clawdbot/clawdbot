@@ -98,7 +98,7 @@ vi.mock("../infra/command-analysis/inline-eval.js", () => ({
 }));
 
 vi.mock("../infra/node-shell.js", () => ({
-  buildNodeShellCommand: vi.fn(() => ["bash", "-lc", "bun ./script.ts"]),
+  buildNodeShellCommand: vi.fn(() => ["/bin/sh", "-lc", "bun ./script.ts"]),
 }));
 
 vi.mock("../infra/system-run-approval-context.js", () => ({
@@ -332,9 +332,9 @@ describe("executeNodeHostCommand", () => {
     expect(result.details?.status).toBe("approval-pending");
     expect(parsePreparedSystemRunPayloadMock).not.toHaveBeenCalled();
     const expectedPlan = {
-      argv: ["bash", "-lc", "bun ./script.ts"],
+      argv: ["/bin/sh", "-lc", "bun ./script.ts"],
       cwd: "/tmp/work",
-      commandText: 'bash -lc "bun ./script.ts"',
+      commandText: '/bin/sh -lc "bun ./script.ts"',
       commandPreview: "bun ./script.ts",
       agentId: "requested-agent",
       sessionKey: "requested-session",
@@ -383,7 +383,7 @@ describe("executeNodeHostCommand", () => {
       expect.objectContaining({
         command: "system.run",
         params: expect.objectContaining({
-          command: ["bash", "-lc", "bun ./script.ts"],
+          command: ["/bin/sh", "-lc", "bun ./script.ts"],
           rawCommand: "bun ./script.ts",
           suppressNotifyOnExit: true,
           timeoutMs: 30_000,

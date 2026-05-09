@@ -72,6 +72,16 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
     cancelSession: hoisted.cancelSessionMock,
@@ -1120,7 +1130,7 @@ describe("task-registry", () => {
         deliveryStatus: "pending",
       });
 
-      expect(listTaskRecords().filter((task) => task.runId === "run-shared")).toHaveLength(2);
+      expect(countMatching(listTaskRecords(), (task) => task.runId === "run-shared")).toBe(2);
       expect(findTaskByRunId("run-shared")).toMatchObject({
         runtime: "acp",
         task: "Spawn ACP child",
@@ -1223,7 +1233,7 @@ describe("task-registry", () => {
       await maybeDeliverTaskTerminalUpdate(spawnedTask.taskId);
 
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
-      expect(listTaskRecords().filter((task) => task.runId === "run-shared-delivery")).toHaveLength(
+      expect(countMatching(listTaskRecords(), (task) => task.runId === "run-shared-delivery")).toBe(
         1,
       );
       expect(findTaskByRunId("run-shared-delivery")).toMatchObject({
@@ -1367,7 +1377,7 @@ describe("task-registry", () => {
       });
 
       expect(directTask.taskId).toBe(spawnedTask.taskId);
-      expect(listTaskRecords().filter((task) => task.runId === "run-collapse")).toHaveLength(1);
+      expect(countMatching(listTaskRecords(), (task) => task.runId === "run-collapse")).toBe(1);
       expect(findTaskByRunId("run-collapse")).toMatchObject({
         task: "Spawn ACP child",
       });

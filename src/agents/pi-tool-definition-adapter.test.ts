@@ -154,27 +154,27 @@ describe("toClientToolDefinitions – param coercion", () => {
 
   it("falls back to empty object for invalid JSON string", async () => {
     const { calledWith } = await executeClientTool("not-json");
-    expect(calledWith).toEqual({});
+    expect(calledWith).toStrictEqual({});
   });
 
   it("falls back to empty object for empty string", async () => {
     const { calledWith } = await executeClientTool("");
-    expect(calledWith).toEqual({});
+    expect(calledWith).toStrictEqual({});
   });
 
   it("falls back to empty object for null", async () => {
     const { calledWith } = await executeClientTool(null);
-    expect(calledWith).toEqual({});
+    expect(calledWith).toStrictEqual({});
   });
 
   it("falls back to empty object for undefined", async () => {
     const { calledWith } = await executeClientTool(undefined);
-    expect(calledWith).toEqual({});
+    expect(calledWith).toStrictEqual({});
   });
 
   it("falls back to empty object for a JSON array string", async () => {
     const { calledWith } = await executeClientTool("[1,2,3]");
-    expect(calledWith).toEqual({});
+    expect(calledWith).toStrictEqual({});
   });
 
   it("handles nested JSON string correctly", async () => {

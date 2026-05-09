@@ -18,6 +18,17 @@ import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler, resolveTypingMode } from "./typing-mode.js";
 import { createTypingController } from "./typing.js";
 
+type NormalizedReplyPayload = NonNullable<ReturnType<typeof normalizeReplyPayload>>;
+
+function expectNormalizedReply(
+  result: ReturnType<typeof normalizeReplyPayload>,
+): NormalizedReplyPayload {
+  if (result === null) {
+    throw new Error("Expected normalized reply payload");
+  }
+  return result;
+}
+
 describe("matchesMentionWithExplicit", () => {
   const mentionRegexes = [/\bopenclaw\b/i];
 
@@ -92,9 +103,9 @@ describe("normalizeReplyPayload", () => {
 
     const normalized = normalizeReplyPayload(payload);
 
-    expect(normalized).not.toBeNull();
-    expect(normalized?.text).toBeUndefined();
-    expect(normalized?.channelData).toEqual(payload.channelData);
+    const reply = expectNormalizedReply(normalized);
+    expect(reply.text).toBeUndefined();
+    expect(reply.channelData).toEqual(payload.channelData);
   });
 
   it("records skip reasons for silent/empty payloads", () => {
@@ -114,50 +125,45 @@ describe("normalizeReplyPayload", () => {
 
   it("strips NO_REPLY from mixed emoji message (#30916)", () => {
     const result = normalizeReplyPayload({ text: "😄 NO_REPLY" });
-    expect(result).not.toBeNull();
-    expect(result!.text).toContain("😄");
-    expect(result!.text).not.toContain("NO_REPLY");
+    const reply = expectNormalizedReply(result);
+    expect(reply.text).toContain("😄");
+    expect(reply.text).not.toContain("NO_REPLY");
   });
 
   it("strips NO_REPLY appended after substantive text (#30916)", () => {
     const result = normalizeReplyPayload({
       text: "File's there. Not urgent.\n\nNO_REPLY",
     });
-    expect(result).not.toBeNull();
-    expect(result!.text).toContain("File's there");
-    expect(result!.text).not.toContain("NO_REPLY");
+    const reply = expectNormalizedReply(result);
+    expect(reply.text).toContain("File's there");
+    expect(reply.text).not.toContain("NO_REPLY");
   });
 
   it("strips glued leading NO_REPLY text without leaking the token", () => {
     const result = normalizeReplyPayload({
       text: "NO_REPLYThe user is saying hello",
     });
-    expect(result).not.toBeNull();
-    expect(result!.text).toBe("The user is saying hello");
+    expect(expectNormalizedReply(result).text).toBe("The user is saying hello");
   });
 
   it("strips glued leading NO_REPLY text case-insensitively", () => {
     const result = normalizeReplyPayload({
       text: "no_replyThe user is saying hello",
     });
-    expect(result).not.toBeNull();
-    expect(result!.text).toBe("The user is saying hello");
+    expect(expectNormalizedReply(result).text).toBe("The user is saying hello");
   });
 
   it("keeps NO_REPLY when used as leading substantive text", () => {
     const result = normalizeReplyPayload({ text: "NO_REPLY -- nope" });
-    expect(result).not.toBeNull();
-    expect(result!.text).toBe("NO_REPLY -- nope");
+    expect(expectNormalizedReply(result).text).toBe("NO_REPLY -- nope");
   });
 
   it("keeps punctuation-start content after a leading NO_REPLY token", () => {
     const colonResult = normalizeReplyPayload({ text: "NO_REPLY: explanation" });
-    expect(colonResult).not.toBeNull();
-    expect(colonResult!.text).toBe("NO_REPLY: explanation");
+    expect(expectNormalizedReply(colonResult).text).toBe("NO_REPLY: explanation");
 
     const dashResult = normalizeReplyPayload({ text: "NO_REPLY—note" });
-    expect(dashResult).not.toBeNull();
-    expect(dashResult!.text).toBe("NO_REPLY—note");
+    expect(expectNormalizedReply(dashResult).text).toBe("NO_REPLY—note");
   });
 
   it("suppresses message when stripping NO_REPLY leaves nothing", () => {
@@ -184,8 +190,7 @@ describe("normalizeReplyPayload", () => {
     const result = normalizeReplyPayload({
       text: '{"action":"NO_REPLY","note":"example"}',
     });
-    expect(result).not.toBeNull();
-    expect(result!.text).toBe('{"action":"NO_REPLY","note":"example"}');
+    expect(expectNormalizedReply(result).text).toBe('{"action":"NO_REPLY","note":"example"}');
   });
 
   it("strips NO_REPLY but keeps media payload", () => {
@@ -193,9 +198,9 @@ describe("normalizeReplyPayload", () => {
       text: "NO_REPLY",
       mediaUrl: "https://example.com/img.png",
     });
-    expect(result).not.toBeNull();
-    expect(result!.text).toBe("");
-    expect(result!.mediaUrl).toBe("https://example.com/img.png");
+    const reply = expectNormalizedReply(result);
+    expect(reply.text).toBe("");
+    expect(reply.mediaUrl).toBe("https://example.com/img.png");
   });
 
   it("strips JSON NO_REPLY action text but keeps media payload", () => {
@@ -203,9 +208,9 @@ describe("normalizeReplyPayload", () => {
       text: '{"action":"NO_REPLY"}',
       mediaUrl: "https://example.com/img.png",
     });
-    expect(result).not.toBeNull();
-    expect(result!.text).toBe("");
-    expect(result!.mediaUrl).toBe("https://example.com/img.png");
+    const reply = expectNormalizedReply(result);
+    expect(reply.text).toBe("");
+    expect(reply.mediaUrl).toBe("https://example.com/img.png");
   });
 
   it("strips legacy uppercase TOOL_CALL blocks from normalized replies", () => {
@@ -217,8 +222,7 @@ describe("normalizeReplyPayload", () => {
       ].join("\n"),
     });
 
-    expect(result).not.toBeNull();
-    expect(result!.text).toBe("Before\n\nAfter");
+    expect(expectNormalizedReply(result).text).toBe("Before\n\nAfter");
   });
 
   it("strips legacy uppercase TOOL_RESULT blocks from normalized replies", () => {
@@ -226,8 +230,7 @@ describe("normalizeReplyPayload", () => {
       text: ["Before", '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]', "After"].join("\n"),
     });
 
-    expect(result).not.toBeNull();
-    expect(result!.text).toBe("Before\n\nAfter");
+    expect(expectNormalizedReply(result).text).toBe("Before\n\nAfter");
   });
 
   it("does not compile Slack directives unless interactive replies are enabled", () => {
@@ -235,9 +238,9 @@ describe("normalizeReplyPayload", () => {
       text: "hello [[slack_buttons: Retry:retry, Ignore:ignore]]",
     });
 
-    expect(result).not.toBeNull();
-    expect(result!.text).toBe("hello [[slack_buttons: Retry:retry, Ignore:ignore]]");
-    expect(result!.interactive).toBeUndefined();
+    const reply = expectNormalizedReply(result);
+    expect(reply.text).toBe("hello [[slack_buttons: Retry:retry, Ignore:ignore]]");
+    expect(reply.interactive).toBeUndefined();
   });
 
   it("applies responsePrefix before channel-owned transforms run", () => {
@@ -248,9 +251,9 @@ describe("normalizeReplyPayload", () => {
       { responsePrefix: "[bot]" },
     );
 
-    expect(result).not.toBeNull();
-    expect(result!.text).toBe("[bot] hello [[slack_buttons: Retry:retry, Ignore:ignore]]");
-    expect(result!.interactive).toBeUndefined();
+    const reply = expectNormalizedReply(result);
+    expect(reply.text).toBe("[bot] hello [[slack_buttons: Retry:retry, Ignore:ignore]]");
+    expect(reply.interactive).toBeUndefined();
   });
 
   it("leaves trailing Options lines for channel-owned transforms", () => {
@@ -258,9 +261,9 @@ describe("normalizeReplyPayload", () => {
       text: "Current verbose level: off.\nOptions: on, full, off.",
     });
 
-    expect(result).not.toBeNull();
-    expect(result!.text).toBe("Current verbose level: off.\nOptions: on, full, off.");
-    expect(result!.interactive).toBeUndefined();
+    const reply = expectNormalizedReply(result);
+    expect(reply.text).toBe("Current verbose level: off.\nOptions: on, full, off.");
+    expect(reply.interactive).toBeUndefined();
   });
 
   it("leaves larger Options lists for channel-owned transforms", () => {
@@ -268,11 +271,11 @@ describe("normalizeReplyPayload", () => {
       text: "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
     });
 
-    expect(result).not.toBeNull();
-    expect(result!.text).toBe(
+    const reply = expectNormalizedReply(result);
+    expect(reply.text).toBe(
       "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
     );
-    expect(result!.interactive).toBeUndefined();
+    expect(reply.interactive).toBeUndefined();
   });
 
   it("leaves complex Options lines as plain text", () => {
@@ -280,11 +283,11 @@ describe("normalizeReplyPayload", () => {
       text: "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
     });
 
-    expect(result).not.toBeNull();
-    expect(result!.text).toBe(
+    const reply = expectNormalizedReply(result);
+    expect(reply.text).toBe(
       "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
     );
-    expect(result!.interactive).toBeUndefined();
+    expect(reply.interactive).toBeUndefined();
   });
 });
 
@@ -850,12 +853,12 @@ describe("block reply coalescer", () => {
       },
     });
 
-    coalescer.enqueue({ text: "Reasoning:\n_hidden_", isReasoning: true });
+    coalescer.enqueue({ text: "hidden", isReasoning: true });
     coalescer.enqueue({ text: "Visible answer" });
     await coalescer.flush({ force: true });
 
     expect(flushes).toEqual([
-      { text: "Reasoning:\n_hidden_", isReasoning: true },
+      { text: "hidden", isReasoning: true },
       { text: "Visible answer", isReasoning: undefined },
     ]);
     coalescer.stop();

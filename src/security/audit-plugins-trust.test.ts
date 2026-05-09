@@ -165,6 +165,17 @@ describe("security audit install metadata findings", () => {
     return await collectPluginsTrustFindingsForTest({ cfg, stateDir });
   };
 
+  const requireInstallFinding = (
+    findings: Awaited<ReturnType<typeof runInstallMetadataAudit>>,
+    checkId: string,
+  ) => {
+    const finding = findings.find((entry) => entry.checkId === checkId);
+    if (!finding) {
+      throw new Error(`Expected ${checkId} finding`);
+    }
+    return finding;
+  };
+
   const writePluginIndexInstallRecords = async (
     stateDir: string,
     records: Record<string, PluginInstallRecord>,
@@ -362,12 +373,10 @@ describe("security audit install metadata findings", () => {
       },
       reportedStateDir,
     );
-    const phantomFinding = reportedFindings.find(
-      (finding) => finding.checkId === "plugins.allow_phantom_entries",
-    );
-    expect(phantomFinding?.severity).toBe("warn");
-    expect(phantomFinding?.detail).toContain("ghost-plugin-xyz");
-    expect(phantomFinding?.detail).not.toContain("installed-plugin");
+    const phantomFinding = requireInstallFinding(reportedFindings, "plugins.allow_phantom_entries");
+    expect(phantomFinding.severity).toBe("warn");
+    expect(phantomFinding.detail).toContain("ghost-plugin-xyz");
+    expect(phantomFinding.detail).not.toContain("installed-plugin");
   });
 
   it("ignores install backup and debris dirs when auditing installed plugin roots", async () => {
@@ -387,15 +396,14 @@ describe("security audit install metadata findings", () => {
 
     const findings = await runInstallMetadataAudit({}, stateDir);
 
-    const noAllowlist = findings.find(
-      (finding) => finding.checkId === "plugins.extensions_no_allowlist",
-    );
-    expect(noAllowlist?.detail).toContain("Found 1 extension(s)");
+    const noAllowlist = requireInstallFinding(findings, "plugins.extensions_no_allowlist");
+    expect(noAllowlist.detail).toContain("Found 1 extension(s)");
 
-    const toolsReachable = findings.find(
-      (finding) => finding.checkId === "plugins.tools_reachable_permissive_policy",
+    const toolsReachable = requireInstallFinding(
+      findings,
+      "plugins.tools_reachable_permissive_policy",
     );
-    expect(toolsReachable?.detail).toContain("Enabled extension plugins: live-plugin.");
+    expect(toolsReachable.detail).toContain("Enabled extension plugins: live-plugin.");
     expect(findings.map((finding) => finding.detail).join("\n")).not.toContain(
       ".openclaw-install-backups",
     );

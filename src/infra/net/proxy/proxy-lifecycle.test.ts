@@ -25,12 +25,31 @@ import {
   registerManagedProxyGatewayLoopbackNoProxy,
   startProxy,
   stopProxy,
+  type ProxyHandle,
 } from "./proxy-lifecycle.js";
 
 const mockForceResetGlobalDispatcher = vi.mocked(forceResetGlobalDispatcher);
 const mockBootstrapGlobalAgent = vi.mocked(bootstrapGlobalAgent);
 const mockLogInfo = vi.mocked(logInfo);
 const mockLogWarn = vi.mocked(logWarn);
+
+function expectProxyHandle(handle: Awaited<ReturnType<typeof startProxy>>): ProxyHandle {
+  if (handle === null) {
+    throw new Error("Expected managed proxy handle");
+  }
+  expect(handle.proxyUrl).not.toBe("");
+  return handle;
+}
+
+function expectNoProxyUnregister(
+  unregister: ReturnType<typeof registerManagedProxyGatewayLoopbackNoProxy>,
+): () => void {
+  expect(unregister).toBeTypeOf("function");
+  if (typeof unregister !== "function") {
+    throw new Error("Expected Gateway NO_PROXY unregister callback");
+  }
+  return unregister;
+}
 
 describe("startProxy", () => {
   const savedEnv: Record<string, string | undefined> = {};
@@ -135,9 +154,14 @@ describe("startProxy", () => {
       proxyUrl: "http://127.0.0.1:3128",
     });
 
-    expect(getActiveManagedProxyUrl()?.href).toBe("http://127.0.0.1:3128/");
+    const activeProxyUrl = getActiveManagedProxyUrl();
+    if (activeProxyUrl === undefined) {
+      throw new Error("Expected active managed proxy URL");
+    }
+    expect(activeProxyUrl).toBeInstanceOf(URL);
+    expect(activeProxyUrl.href).toBe("http://127.0.0.1:3128/");
 
-    await stopProxy(handle);
+    await stopProxy(expectProxyHandle(handle));
 
     expect(getActiveManagedProxyUrl()).toBeUndefined();
   });
@@ -147,7 +171,7 @@ describe("startProxy", () => {
 
     const handle = await startProxy({ enabled: true });
 
-    expect(handle?.proxyUrl).toBe("http://127.0.0.1:3128");
+    expect(expectProxyHandle(handle).proxyUrl).toBe("http://127.0.0.1:3128");
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
   });
 
@@ -159,7 +183,7 @@ describe("startProxy", () => {
       proxyUrl: "http://127.0.0.1:3129",
     });
 
-    expect(handle?.proxyUrl).toBe("http://127.0.0.1:3129");
+    expect(expectProxyHandle(handle).proxyUrl).toBe("http://127.0.0.1:3129");
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3129");
   });
 
@@ -178,7 +202,7 @@ describe("startProxy", () => {
       proxyUrl: "http://127.0.0.1:3128",
     });
 
-    expect(handle).not.toBeNull();
+    expectProxyHandle(handle);
     expect(process.env["http_proxy"]).toBe("http://127.0.0.1:3128");
     expect(process.env["https_proxy"]).toBe("http://127.0.0.1:3128");
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
@@ -261,12 +285,12 @@ describe("startProxy", () => {
       proxyUrl: "http://127.0.0.1:3128",
     });
 
-    expect(handle).not.toBeNull();
+    const proxyHandle = expectProxyHandle(handle);
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
     expect(process.env["NO_PROXY"]).toBe("");
     mockForceResetGlobalDispatcher.mockClear();
 
-    await stopProxy(handle);
+    await stopProxy(proxyHandle);
 
     expect(process.env["HTTP_PROXY"]).toBe("http://previous.example.com:8080");
     expect(process.env["NO_PROXY"]).toBe("corp.example.com");
@@ -448,12 +472,12 @@ describe("startProxy", () => {
     });
     const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"] as Record<string, unknown>;
 
-    const unregister = registerManagedProxyGatewayLoopbackNoProxy("ws://127.0.0.1:18789");
-
-    expect(unregister).toBeTypeOf("function");
+    const unregister = expectNoProxyUnregister(
+      registerManagedProxyGatewayLoopbackNoProxy("ws://127.0.0.1:18789"),
+    );
     expect(agent["NO_PROXY"]).toBe("127.0.0.1:18789");
 
-    unregister?.();
+    unregister();
     expect(agent["NO_PROXY"]).toBeNull();
     await stopProxy(handle);
   });
@@ -465,15 +489,17 @@ describe("startProxy", () => {
     });
     const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"] as Record<string, unknown>;
 
-    const unregisterIpv6 = registerManagedProxyGatewayLoopbackNoProxy("ws://[::1]:18789");
-    expect(unregisterIpv6).toBeTypeOf("function");
+    const unregisterIpv6 = expectNoProxyUnregister(
+      registerManagedProxyGatewayLoopbackNoProxy("ws://[::1]:18789"),
+    );
     expect(agent["NO_PROXY"]).toBe("[::1]:18789");
-    unregisterIpv6?.();
+    unregisterIpv6();
 
-    const unregisterLocalhost = registerManagedProxyGatewayLoopbackNoProxy("ws://localhost.:18789");
-    expect(unregisterLocalhost).toBeTypeOf("function");
+    const unregisterLocalhost = expectNoProxyUnregister(
+      registerManagedProxyGatewayLoopbackNoProxy("ws://localhost.:18789"),
+    );
     expect(agent["NO_PROXY"]).toBe("localhost.:18789");
-    unregisterLocalhost?.();
+    unregisterLocalhost();
 
     await stopProxy(handle);
   });
@@ -489,12 +515,12 @@ describe("startProxy", () => {
     });
     const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"] as Record<string, unknown>;
 
-    const unregister = registerManagedProxyGatewayLoopbackNoProxy("ws://127.0.0.1:3000");
-
-    expect(unregister).toBeTypeOf("function");
+    const unregister = expectNoProxyUnregister(
+      registerManagedProxyGatewayLoopbackNoProxy("ws://127.0.0.1:3000"),
+    );
     expect(agent["NO_PROXY"]).toBe("127.0.0.1:3000");
 
-    unregister?.();
+    unregister();
     await stopProxy(handle);
   });
 
@@ -539,12 +565,12 @@ describe("startProxy", () => {
     const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"] as Record<string, unknown>;
     agent["NO_PROXY"] = "corp.example.com";
 
-    const unregister = registerManagedProxyGatewayLoopbackNoProxy("ws://127.0.0.1:18789");
-
-    expect(unregister).toBeTypeOf("function");
+    const unregister = expectNoProxyUnregister(
+      registerManagedProxyGatewayLoopbackNoProxy("ws://127.0.0.1:18789"),
+    );
     expect(agent["NO_PROXY"]).toBe("corp.example.com,127.0.0.1:18789");
 
-    unregister?.();
+    unregister();
     expect(agent["NO_PROXY"]).toBe("corp.example.com");
     await stopProxy(handle);
   });
@@ -556,8 +582,7 @@ describe("startProxy", () => {
       proxyUrl: "http://127.0.0.1:3128",
     });
 
-    expect(handle).not.toBeNull();
-    handle?.kill("SIGTERM");
+    expectProxyHandle(handle).kill("SIGTERM");
 
     expect(process.env["HTTP_PROXY"]).toBeUndefined();
     expect(process.env["NO_PROXY"]).toBe("corp.example.com");

@@ -286,10 +286,12 @@ describe("forkSessionFromParentRuntime", () => {
       sessionsDir,
     });
 
-    expect(fork).not.toBeNull();
-    expect(fork?.sessionFile).toContain(sessionsDir);
-    expect(fork?.sessionId).not.toBe(parentSessionId);
-    const raw = await fs.readFile(fork?.sessionFile ?? "", "utf-8");
+    if (fork === null) {
+      throw new Error("Expected forked session");
+    }
+    expect(fork.sessionFile).toContain(sessionsDir);
+    expect(fork.sessionId).not.toBe(parentSessionId);
+    const raw = await fs.readFile(fork.sessionFile, "utf-8");
     const forkedEntries = raw
       .trim()
       .split(/\r?\n/u)
@@ -297,7 +299,7 @@ describe("forkSessionFromParentRuntime", () => {
     const resolvedParentSessionFile = await fs.realpath(parentSessionFile);
     expect(forkedEntries[0]).toMatchObject({
       type: "session",
-      id: fork?.sessionId,
+      id: fork.sessionId,
       cwd,
       parentSession: resolvedParentSessionFile,
     });
@@ -342,14 +344,16 @@ describe("forkSessionFromParentRuntime", () => {
       sessionsDir,
     });
 
-    expect(fork).not.toBeNull();
-    const raw = await fs.readFile(fork?.sessionFile ?? "", "utf-8");
+    if (!fork) {
+      throw new Error("expected forked session entry");
+    }
+    const raw = await fs.readFile(fork.sessionFile, "utf-8");
     const lines = raw.trim().split(/\r?\n/u);
     expect(lines).toHaveLength(1);
     const resolvedParentSessionFile = await fs.realpath(parentSessionFile);
     expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
       type: "session",
-      id: fork?.sessionId,
+      id: fork.sessionId,
       parentSession: resolvedParentSessionFile,
     });
   });

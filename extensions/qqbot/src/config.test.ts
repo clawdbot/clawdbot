@@ -311,14 +311,14 @@ describe("qqbot config", () => {
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       } as never),
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(
       lightweightSetup.applyAccountConfig?.({
         cfg: {} as OpenClawConfig,
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       } as never),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 
   it("preserves the --use-env add flow across setup paths", () => {
@@ -396,13 +396,13 @@ describe("qqbot config", () => {
         accountId: "bot2",
         input,
       } as never),
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(
       lightweightSetup.applyAccountConfig?.({
         cfg: {} as OpenClawConfig,
         accountId: "bot2",
         input,
       } as never),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 });

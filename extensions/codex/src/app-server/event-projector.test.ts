@@ -473,7 +473,7 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
   });
 
   it("ignores notifications that omit top-level thread and turn ids", async () => {
@@ -491,7 +491,7 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
   });
 

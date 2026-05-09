@@ -138,7 +138,7 @@ describe("channelsResolveCommand", () => {
         runtime,
       ),
     ).rejects.toThrow(
-      'Channel plugin "external-chat" is not installed. Run "openclaw channels add --channel external-chat" first.',
+      /Channel plugin "external-chat" is not installed\. Run .*channels add --channel external-chat.* first\./,
     );
   });
 

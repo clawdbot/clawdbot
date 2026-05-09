@@ -35,6 +35,16 @@ const TS_PATHS = {
 
 const OS_TS_PATHS = [TS_PATHS.linux, TS_PATHS.macos, TS_PATHS.windows];
 
+function countNonEmptyLines(value: string): number {
+  let count = 0;
+  for (const line of value.split("\n")) {
+    if (line) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function runTsEval(source: string, env: Record<string, string> = {}) {
   return execFileSync("node", ["--import", "tsx", "--input-type=module", "--eval", source], {
     encoding: "utf8",
@@ -79,7 +89,7 @@ describe("Parallels smoke model selection", () => {
       } else {
         expect(wrapper, wrapperPath).toContain(TS_PATHS[platform as "linux" | "macos" | "windows"]);
       }
-      expect(wrapper.split("\n").filter(Boolean).length).toBeLessThanOrEqual(5);
+      expect(countNonEmptyLines(wrapper)).toBeLessThanOrEqual(5);
     }
   });
 
@@ -481,7 +491,7 @@ console.log(JSON.stringify(result));
     ) as { status: number; stdout: string };
 
     expect(result.status).toBe(124);
-    expect(result.stdout).toEqual(expect.any(String));
+    expect(result.stdout).toBeTypeOf("string");
   });
 
   it("runs the Windows agent turn through the detached done-file runner", () => {

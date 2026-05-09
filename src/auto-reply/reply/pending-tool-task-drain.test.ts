@@ -2,12 +2,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 
 function deferredTask() {
-  let resolve!: () => void;
-  let reject!: (error: Error) => void;
+  let resolve: (() => void) | undefined;
+  let reject: ((error: Error) => void) | undefined;
   const promise = new Promise<void>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred task callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }
 

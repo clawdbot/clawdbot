@@ -67,7 +67,9 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
       },
     });
 
-    expect(ctx).not.toBeNull();
+    if (!ctx?.ctxPayload) {
+      throw new Error("expected Telegram DM topic context payload");
+    }
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
     expectRecordedRoute({ to: "telegram:1234", threadId: "42" });
@@ -80,7 +82,9 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
       },
     });
 
-    expect(ctx).not.toBeNull();
+    if (!ctx?.ctxPayload) {
+      throw new Error("expected Telegram DM context payload");
+    }
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
     expectRecordedRoute({ to: "telegram:1234" });
@@ -97,7 +101,9 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
       resolveGroupActivation: () => true,
     });
 
-    expect(ctx).not.toBeNull();
+    if (!ctx?.ctxPayload) {
+      throw new Error("expected Telegram forum topic context payload");
+    }
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
     expectRecordedRoute({ to: "telegram:-1001234567890:topic:99", threadId: "99" });
@@ -113,7 +119,9 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
       resolveGroupActivation: () => true,
     });
 
-    expect(ctx).not.toBeNull();
+    if (!ctx?.ctxPayload) {
+      throw new Error("expected Telegram General topic context payload");
+    }
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
     expectRecordedRoute({ to: "telegram:-1001234567890:topic:1", threadId: "1" });

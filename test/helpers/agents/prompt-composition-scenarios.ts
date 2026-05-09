@@ -594,7 +594,8 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
     "Store durable memories only in memory/2026-03-15.md (create memory/ if needed).",
     "Treat workspace bootstrap/reference files such as MEMORY.md, SOUL.md, TOOLS.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.",
     "If nothing to store, reply with NO_REPLY.",
-    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles) / 2026-03-16 04:30 UTC",
+    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles)",
+    "Reference UTC: 2026-03-16 04:30 UTC",
   ].join("\n");
   const memoryFlushSystemPrompt = buildSystemPrompt({
     workspaceDir,
@@ -618,7 +619,8 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
     "## Red Lines",
     "Do not delete production data.",
     "",
-    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles) / 2026-03-16 04:30 UTC",
+    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles)",
+    "Reference UTC: 2026-03-16 04:30 UTC",
   ].join("\n");
   const postCompactionSystemPrompt = buildSystemPrompt({
     workspaceDir,

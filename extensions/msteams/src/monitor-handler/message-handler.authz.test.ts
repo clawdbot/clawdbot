@@ -463,7 +463,7 @@ describe("msteams monitor handler authz", () => {
     );
   });
 
-  it("does not crash when channelData.tenant is missing and stores no tenantId", async () => {
+  it("stores no tenantId when channelData.tenant is missing", async () => {
     const { conversationStore, deps } = createDeps({
       channels: {
         msteams: {

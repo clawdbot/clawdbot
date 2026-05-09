@@ -405,7 +405,7 @@ describe("context-pruning", () => {
     });
 
     const tool = findToolResult(next, "t1");
-    expect(tool.content.some((b) => b.type === "image")).toBe(false);
+    expect(tool.content.some((block) => block.type === "image")).toBe(false);
     expect(toolText(tool)).toContain("[image removed during context pruning]");
     expect(toolText(tool)).toContain("visible tool text");
   });

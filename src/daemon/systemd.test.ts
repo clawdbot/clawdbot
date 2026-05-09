@@ -61,6 +61,14 @@ const createWritableStreamMock = () => {
   };
 };
 
+function requireFirstWrite(write: ReturnType<typeof vi.fn>): string {
+  const value = write.mock.calls[0]?.[0];
+  if (value === undefined) {
+    throw new Error("expected systemd status write");
+  }
+  return String(value);
+}
+
 function pathLikeToString(pathname: unknown): string {
   if (typeof pathname === "string") {
     return pathname;
@@ -123,7 +131,7 @@ const assertRestartSuccess = async (env: NodeJS.ProcessEnv) => {
   const { write, stdout } = createWritableStreamMock();
   await restartSystemdService({ stdout, env });
   expect(write).toHaveBeenCalledTimes(1);
-  expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+  expect(requireFirstWrite(write)).toContain("Restarted systemd service");
 };
 
 describe("systemd availability", () => {
@@ -1188,7 +1196,7 @@ describe("systemd service install and uninstall", () => {
       await uninstallSystemdService({ env, stdout });
 
       await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(String(write.mock.calls[0]?.[0])).toContain("Removed systemd service");
+      expect(requireFirstWrite(write)).toContain("Removed systemd service");
       expect(execFileMock).toHaveBeenCalledTimes(2);
     });
   });
@@ -1216,7 +1224,7 @@ describe("systemd service control", () => {
     await stopSystemdService({ stdout, env: {} });
 
     expect(write).toHaveBeenCalledTimes(1);
-    expect(String(write.mock.calls[0]?.[0])).toContain("Stopped systemd service");
+    expect(requireFirstWrite(write)).toContain("Stopped systemd service");
   });
 
   it("allows stop when systemd status is degraded but available", async () => {

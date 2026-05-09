@@ -57,7 +57,11 @@ describe("together video generation provider", () => {
       }),
     );
     expect(result.videos).toHaveLength(1);
-    expect(result.videos[0]?.fileName).toBe("video-1.webm");
+    const [video] = result.videos;
+    if (!video) {
+      throw new Error("Expected generated Together video");
+    }
+    expect(video.fileName).toBe("video-1.webm");
     expect(result.metadata).toEqual(
       expect.objectContaining({
         videoId: "video_123",

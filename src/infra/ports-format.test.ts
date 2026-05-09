@@ -76,6 +76,7 @@ describe("ports-format", () => {
     });
     expect(lines[0]).toContain("Port 18789 is already in use");
     expect(lines).toContain("- pid 123 alice: ssh -N -L 18789:127.0.0.1:18789");
-    expect(lines.some((line) => line.includes("SSH tunnel"))).toBe(true);
+    const sshTunnelHints = lines.filter((line) => line.includes("SSH tunnel"));
+    expect(sshTunnelHints.length).toBeGreaterThan(0);
   });
 });

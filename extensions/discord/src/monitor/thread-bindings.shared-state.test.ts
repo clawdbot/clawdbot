@@ -30,7 +30,8 @@ describe("thread binding manager state", () => {
       enableSweeper: false,
     });
 
-    expect(getThreadBindingManager("work")).not.toBeNull();
-    expect(viaAlternateLoader.getThreadBindingManager("work")).not.toBeNull();
+    const direct = getThreadBindingManager("work");
+    expect(direct).toBeDefined();
+    expect(viaAlternateLoader.getThreadBindingManager("work")).toBe(direct);
   });
 });

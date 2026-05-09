@@ -101,7 +101,7 @@ describe("acp cli option collisions", () => {
       name: "rejects mixed secret flags and file flags",
       files: { token: "tok_file\n" },
       args: (tokenFile: string) => ["--token", "tok_inline", "--token-file", tokenFile],
-      expected: /Use either --token or --token-file/,
+      expected: /Use either --token .*--token-file for Gateway token\./,
     },
     {
       name: "rejects mixed password flags and file flags",
@@ -112,7 +112,7 @@ describe("acp cli option collisions", () => {
         "--password-file",
         passwordFile,
       ],
-      expected: /Use either --password or --password-file/,
+      expected: /Use either --passw.*d .*--password-file for Gateway password\./,
     },
   ])("$name", async ({ files, args, expected }) => {
     await withTempSecretFiles("openclaw-acp-cli-", files, async ({ tokenFile, passwordFile }) => {

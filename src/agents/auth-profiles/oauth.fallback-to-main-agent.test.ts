@@ -186,9 +186,10 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     // fresh main credentials are used read-through without copying the refresh token.
     const result = await resolveFromSecondaryAgent(profileId);
 
-    expect(result).not.toBeNull();
-    expect(result?.apiKey).toBe("fresh-access-token");
-    expect(result?.provider).toBe("anthropic");
+    expect(result).toMatchObject({
+      apiKey: "fresh-access-token",
+      provider: "anthropic",
+    });
 
     // The secondary store keeps its local credential; inherited OAuth is read-through.
     const secondaryStore = JSON.parse(

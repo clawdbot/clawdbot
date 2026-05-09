@@ -38,6 +38,16 @@ function emptyAuthStore(): AuthProfileStore {
   return { version: 1, profiles: {} };
 }
 
+function requireGatewayAuth(
+  snapshot: Awaited<ReturnType<typeof import("./runtime.js").prepareSecretsRuntimeSnapshot>>,
+) {
+  const auth = snapshot.config.gateway?.auth;
+  if (!auth) {
+    throw new Error("expected gateway auth config");
+  }
+  return auth;
+}
+
 describe("secrets runtime fast path", () => {
   afterEach(() => {
     runtimePrepareImportMock.mockClear();
@@ -67,7 +77,7 @@ describe("secrets runtime fast path", () => {
     });
 
     expect(runtimePrepareImportMock).not.toHaveBeenCalled();
-    expect(snapshot.config.gateway?.auth?.token).toBe("plain-startup-token");
+    expect(requireGatewayAuth(snapshot).token).toBe("plain-startup-token");
     expect(snapshot.authStores).toEqual([
       {
         agentDir: "/tmp/openclaw-agent-main",

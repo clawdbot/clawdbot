@@ -29,6 +29,18 @@ vi.mock("./cli-runner/helpers.js", async () => {
 // also reaches this test after several gateway/plugin restart exercises.
 const E2E_TIMEOUT_MS = 90_000;
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 function installTestClaudeBackend(params: { commandPath: string; liveSession?: "claude-stdio" }) {
   cliBackendsTesting.setDepsForTest({
     resolveRuntimeCliBackends: () => [],
@@ -209,7 +221,7 @@ describe("runCliAgent bundle MCP e2e", () => {
         expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
         const fakeClaudePid = Number.parseInt(await fs.readFile(fakeClaudePidPath, "utf-8"), 10);
         expect(Number.isFinite(fakeClaudePid)).toBe(true);
-        expect(() => process.kill(fakeClaudePid, 0)).toThrow();
+        expect(isProcessAlive(fakeClaudePid)).toBe(false);
       } finally {
         await closeMcpLoopbackServer();
         resetGlobalHookRunner();

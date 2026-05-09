@@ -332,11 +332,15 @@ flowchart LR
   I --> M["Main Reply"]
 ```
 
-The blocking memory sub-agent can use only the available memory recall tools:
+The blocking memory sub-agent can use only the configured memory recall tools.
+By default that is:
 
-- `memory_recall`
 - `memory_search`
 - `memory_get`
+
+When `plugins.slots.memory` is `memory-lancedb`, the default is `memory_recall`
+instead. Set `config.toolsAllow` when another memory provider exposes a
+different recall tool contract.
 
 If the connection is weak, it should return `NONE`.
 
@@ -462,6 +466,110 @@ skips recall for that turn.
 `config.modelFallbackPolicy` is retained only as a deprecated compatibility
 field for older configs. It no longer changes runtime behavior.
 
+## Memory tools
+
+By default Active Memory lets the blocking recall sub-agent call
+`memory_search` and `memory_get`. That matches the built-in `memory-core`
+contract. When `plugins.slots.memory` selects `memory-lancedb` and
+`config.toolsAllow` is unset, Active Memory keeps the existing LanceDB behavior
+and uses `memory_recall` instead.
+
+If you use another memory plugin, set `config.toolsAllow` to the exact tool
+names that plugin registers. Active Memory lists those tools in the recall
+prompt and passes the same list to the embedded sub-agent. If none of the
+configured tools are available, or the memory sub-agent fails, Active Memory
+skips recall for that turn and the main reply continues without memory context.
+`toolsAllow` only accepts concrete memory tool names. Wildcards, `group:*`
+entries, and core agent tools such as `read`, `exec`, `message`, and
+`web_search` are ignored before the hidden memory sub-agent starts.
+
+Default-behavior note: Active Memory no longer includes `memory_recall` in the
+memory-core default allowlist. Existing `memory-lancedb` setups keep working
+when `plugins.slots.memory` is set to `memory-lancedb`. Explicit `toolsAllow`
+always overrides the automatic default.
+
+### Built-in memory-core
+
+The default setup does not need an explicit `toolsAllow`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "active-memory": {
+        enabled: true,
+        config: {
+          agents: ["main"],
+          // Default: ["memory_search", "memory_get"]
+        },
+      },
+    },
+  },
+}
+```
+
+### LanceDB memory
+
+The bundled `memory-lancedb` plugin exposes `memory_recall`. Selecting the
+memory slot is enough for Active Memory to use that recall tool:
+
+```json5
+{
+  plugins: {
+    slots: {
+      memory: "memory-lancedb",
+    },
+    entries: {
+      "memory-lancedb": {
+        enabled: true,
+        config: {
+          embedding: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+          },
+        },
+      },
+      "active-memory": {
+        enabled: true,
+        config: {
+          agents: ["main"],
+          promptAppend: "Use memory_recall for long-term user preferences, past decisions, and previously discussed topics. If recall finds nothing useful, return NONE.",
+        },
+      },
+    },
+  },
+}
+```
+
+### Lossless Claw
+
+Lossless Claw is a context-engine plugin with its own recall tools. Install and
+configure it as a context engine first; see [Context engine](/concepts/context-engine).
+Then let Active Memory use the Lossless Claw recall tools:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "lossless-claw": {
+        enabled: true,
+      },
+      "active-memory": {
+        enabled: true,
+        config: {
+          agents: ["main"],
+          toolsAllow: ["lcm_grep", "lcm_describe", "lcm_expand_query"],
+          promptAppend: "Use lcm_grep first for compacted conversation recall. Use lcm_describe to inspect a specific summary. Use lcm_expand_query only when the latest user message needs exact details that may have been compacted away. Return NONE if the retrieved context is not clearly useful.",
+        },
+      },
+    },
+  },
+}
+```
+
+Do not include `lcm_expand` in `toolsAllow` for the main Active Memory sub-agent.
+Lossless Claw uses that as a lower-level delegated expansion tool.
+
 ## Advanced escape hatches
 
 These options are intentionally not part of the recommended setup.
@@ -487,6 +595,9 @@ Memory prompt and before the conversation context:
 ```json5
 promptAppend: "Prefer stable long-term preferences over one-off events."
 ```
+
+Use `promptAppend` with custom `toolsAllow` when a non-core memory plugin needs
+provider-specific tool order or query-shaping instructions.
 
 `config.promptOverride` replaces the default Active Memory prompt. OpenClaw
 still appends the conversation context afterward:
@@ -558,25 +669,26 @@ plugins.entries.active-memory
 
 The most important fields are:
 
-| Key                          | Type                                                                                                 | Meaning                                                                                                                                                                          |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                    | `boolean`                                                                                            | Enables the plugin itself                                                                                                                                                        |
-| `config.agents`              | `string[]`                                                                                           | Agent ids that may use active memory                                                                                                                                             |
-| `config.model`               | `string`                                                                                             | Optional blocking memory sub-agent model ref; when unset, active memory uses the current session model                                                                           |
-| `config.allowedChatTypes`    | `("direct" \| "group" \| "channel")[]`                                                               | Session types that may run Active Memory; defaults to direct-message style sessions                                                                                              |
-| `config.allowedChatIds`      | `string[]`                                                                                           | Optional per-conversation allowlist applied after `allowedChatTypes`; non-empty lists fail closed                                                                                |
-| `config.deniedChatIds`       | `string[]`                                                                                           | Optional per-conversation denylist that overrides allowed session types and allowed ids                                                                                          |
-| `config.queryMode`           | `"message" \| "recent" \| "full"`                                                                    | Controls how much conversation the blocking memory sub-agent sees                                                                                                                |
-| `config.promptStyle`         | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking memory sub-agent is when deciding whether to return memory                                                                             |
-| `config.thinking`            | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive" \| "max"`                | Advanced thinking override for the blocking memory sub-agent; default `off` for speed                                                                                            |
-| `config.promptOverride`      | `string`                                                                                             | Advanced full prompt replacement; not recommended for normal use                                                                                                                 |
-| `config.promptAppend`        | `string`                                                                                             | Advanced extra instructions appended to the default or overridden prompt                                                                                                         |
-| `config.timeoutMs`           | `number`                                                                                             | Hard timeout for the blocking memory sub-agent, capped at 120000 ms                                                                                                              |
-| `config.setupGraceTimeoutMs` | `number`                                                                                             | Advanced extra setup budget before the recall timeout expires; defaults to 0 and is capped at 30000 ms. See [Cold-start grace](#cold-start-grace) for v2026.4.x upgrade guidance |
-| `config.maxSummaryChars`     | `number`                                                                                             | Maximum total characters allowed in the active-memory summary                                                                                                                    |
-| `config.logging`             | `boolean`                                                                                            | Emits active memory logs while tuning                                                                                                                                            |
-| `config.persistTranscripts`  | `boolean`                                                                                            | Keeps blocking memory sub-agent transcripts on disk instead of deleting temp files                                                                                               |
-| `config.transcriptDir`       | `string`                                                                                             | Relative blocking memory sub-agent transcript directory under the agent sessions folder                                                                                          |
+| Key                          | Type                                                                                                 | Meaning                                                                                                                                                                                                                                                  |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                    | `boolean`                                                                                            | Enables the plugin itself                                                                                                                                                                                                                                |
+| `config.agents`              | `string[]`                                                                                           | Agent ids that may use active memory                                                                                                                                                                                                                     |
+| `config.model`               | `string`                                                                                             | Optional blocking memory sub-agent model ref; when unset, active memory uses the current session model                                                                                                                                                   |
+| `config.allowedChatTypes`    | `("direct" \| "group" \| "channel")[]`                                                               | Session types that may run Active Memory; defaults to direct-message style sessions                                                                                                                                                                      |
+| `config.allowedChatIds`      | `string[]`                                                                                           | Optional per-conversation allowlist applied after `allowedChatTypes`; non-empty lists fail closed                                                                                                                                                        |
+| `config.deniedChatIds`       | `string[]`                                                                                           | Optional per-conversation denylist that overrides allowed session types and allowed ids                                                                                                                                                                  |
+| `config.queryMode`           | `"message" \| "recent" \| "full"`                                                                    | Controls how much conversation the blocking memory sub-agent sees                                                                                                                                                                                        |
+| `config.promptStyle`         | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking memory sub-agent is when deciding whether to return memory                                                                                                                                                     |
+| `config.toolsAllow`          | `string[]`                                                                                           | Concrete memory tool names the blocking memory sub-agent may call; defaults to `["memory_search", "memory_get"]`, or `["memory_recall"]` when `plugins.slots.memory` is `memory-lancedb`; wildcards, `group:*` entries, and core agent tools are ignored |
+| `config.thinking`            | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive" \| "max"`                | Advanced thinking override for the blocking memory sub-agent; default `off` for speed                                                                                                                                                                    |
+| `config.promptOverride`      | `string`                                                                                             | Advanced full prompt replacement; not recommended for normal use                                                                                                                                                                                         |
+| `config.promptAppend`        | `string`                                                                                             | Advanced extra instructions appended to the default or overridden prompt                                                                                                                                                                                 |
+| `config.timeoutMs`           | `number`                                                                                             | Hard timeout for the blocking memory sub-agent, capped at 120000 ms                                                                                                                                                                                      |
+| `config.setupGraceTimeoutMs` | `number`                                                                                             | Advanced extra setup budget before the recall timeout expires; defaults to 0 and is capped at 30000 ms. See [Cold-start grace](#cold-start-grace) for v2026.4.x upgrade guidance                                                                         |
+| `config.maxSummaryChars`     | `number`                                                                                             | Maximum total characters allowed in the active-memory summary                                                                                                                                                                                            |
+| `config.logging`             | `boolean`                                                                                            | Emits active memory logs while tuning                                                                                                                                                                                                                    |
+| `config.persistTranscripts`  | `boolean`                                                                                            | Keeps blocking memory sub-agent transcripts on disk instead of deleting temp files                                                                                                                                                                       |
+| `config.transcriptDir`       | `string`                                                                                             | Relative blocking memory sub-agent transcript directory under the agent sessions folder                                                                                                                                                                  |
 
 Useful tuning fields:
 
@@ -692,8 +804,9 @@ If active memory is too slow:
 
 Active Memory rides on the configured memory plugin's recall pipeline, so most
 recall surprises are embedding-provider problems, not Active Memory bugs. The
-default `memory-core` path uses `memory_search`; `memory-lancedb` uses
-`memory_recall`.
+default `memory-core` path uses `memory_search` and `memory_get`; the
+`memory-lancedb` slot uses `memory_recall`. If you use another memory plugin,
+confirm `config.toolsAllow` names the tools that plugin actually registers.
 
 <AccordionGroup>
   <Accordion title="Embedding provider switched or stopped working">

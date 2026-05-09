@@ -62,11 +62,7 @@ function makeCliResult(text: string): EmbeddedPiRunResult {
 }
 
 async function readSessionMessages(sessionFile: string) {
-  const raw = await fs.readFile(sessionFile, "utf-8");
-  return raw
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as { type?: string; message?: unknown })
+  return (await readSessionFileJsonLines<{ type?: string; message?: unknown }>(sessionFile))
     .filter((entry) => entry.type === "message")
     .map(
       (entry) =>
@@ -75,20 +71,25 @@ async function readSessionMessages(sessionFile: string) {
 }
 
 async function readSessionFileEntries(sessionFile: string) {
+  return await readSessionFileJsonLines<{
+    type?: string;
+    id?: string;
+    parentId?: string | null;
+    cwd?: string;
+    message?: { role?: string };
+  }>(sessionFile);
+}
+
+async function readSessionFileJsonLines<T>(sessionFile: string): Promise<T[]> {
   const raw = await fs.readFile(sessionFile, "utf-8");
-  return raw
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map(
-      (line) =>
-        JSON.parse(line) as {
-          type?: string;
-          id?: string;
-          parentId?: string | null;
-          cwd?: string;
-          message?: { role?: string };
-        },
-    );
+  const entries: T[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.length === 0) {
+      continue;
+    }
+    entries.push(JSON.parse(line) as T);
+  }
+  return entries;
 }
 
 describe("CLI attempt execution", () => {
@@ -509,8 +510,10 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
     const sessionFile = updatedFirst?.sessionFile;
-    if (!sessionFile) {
-      throw new Error("expected embedded gap-fill persistence to create a session file");
+    expect(typeof sessionFile).toBe("string");
+    expect(sessionFile?.length ?? 0).toBeGreaterThan(0);
+    if (typeof sessionFile !== "string" || sessionFile.length === 0) {
+      throw new Error("Expected CLI transcript session file.");
     }
 
     await appendSessionTranscriptMessage({
@@ -632,6 +635,57 @@ describe("CLI attempt execution", () => {
         trigger: "user",
         messageChannel: "discord",
         messageProvider: "discord-voice",
+      }),
+    );
+  });
+
+  it("forwards runtime toolsAllow into CLI attempts so the CLI harness can fail closed", async () => {
+    const sessionKey = "agent:main:direct:claude-tools-allow";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-cli-tools-allow",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("restricted cli"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "route this",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cli-tools-allow",
+      opts: {
+        senderIsOwner: true,
+        toolsAllow: ["read", "web_search"],
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "discord",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        toolsAllow: ["read", "web_search"],
       }),
     );
   });
@@ -979,6 +1033,53 @@ describe("embedded attempt harness pinning", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentHarnessId: undefined,
+      }),
+    );
+  });
+
+  it("forwards runtime toolsAllow into embedded attempts", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "tools-allow-session",
+      updatedAt: Date.now(),
+    };
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedPiRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      originalProvider: "openai",
+      modelOverride: "gpt-5.4",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey: "agent:main:main",
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "read only",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-tools-allow",
+      opts: {
+        senderIsOwner: true,
+        toolsAllow: ["read", "web_search"],
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionHasHistory: false,
+    });
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolsAllow: ["read", "web_search"],
       }),
     );
   });

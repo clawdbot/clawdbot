@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { confirm } from "@clack/prompts";
 import type { Command } from "commander";
 import { danger } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecretsApply } from "../secrets/apply.js";
 import { resolveSecretsAuditExitCode, runSecretsAudit } from "../secrets/audit.js";
@@ -9,6 +10,7 @@ import { runSecretsConfigureInteractive } from "../secrets/configure.js";
 import { isSecretsApplyPlan, type SecretsApplyPlan } from "../secrets/plan.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 
 type SecretsReloadOptions = GatewayRpcOpts & { json?: boolean };
@@ -38,7 +40,9 @@ function readPlanFile(pathname: string): SecretsApplyPlan {
   const raw = fs.readFileSync(pathname, "utf8");
   const parsed = JSON.parse(raw) as unknown;
   if (!isSecretsApplyPlan(parsed)) {
-    throw new Error(`Invalid secrets plan file: ${pathname}`);
+    throw new Error(
+      `Invalid secrets plan file: ${pathname}. Generate a fresh plan with ${formatCliCommand("openclaw secrets configure --plan-out <path>")}.`,
+    );
   }
   return parsed;
 }
@@ -76,7 +80,11 @@ export function registerSecretsCli(program: Command) {
       }
       defaultRuntime.log("Secrets reloaded.");
     } catch (err) {
-      defaultRuntime.error(danger(String(err)));
+      defaultRuntime.error(
+        danger(
+          `Secrets reload failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} to inspect the active gateway.`,
+        ),
+      );
       defaultRuntime.exit(1);
     }
   });
@@ -123,7 +131,11 @@ export function registerSecretsCli(program: Command) {
           defaultRuntime.exit(exitCode);
         }
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(
+          danger(
+            `Secrets audit failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw doctor")} to inspect config and credential state.`,
+          ),
+        );
         defaultRuntime.exit(2);
       }
     });
@@ -232,7 +244,11 @@ export function registerSecretsCli(program: Command) {
           );
         }
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(
+          danger(
+            `Secrets configure failed: ${formatErrorMessage(err)}. Re-run ${formatCliCommand("openclaw secrets audit")} before applying changes.`,
+          ),
+        );
         defaultRuntime.exit(1);
       }
     });
@@ -275,7 +291,11 @@ export function registerSecretsCli(program: Command) {
             : "Secrets apply: no changes.",
         );
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(
+          danger(
+            `Secrets apply failed: ${formatErrorMessage(err)}. Re-run ${formatCliCommand("openclaw secrets apply --from <path> --dry-run")} to inspect the plan without writing.`,
+          ),
+        );
         defaultRuntime.exit(1);
       }
     });

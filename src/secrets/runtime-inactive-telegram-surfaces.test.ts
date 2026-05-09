@@ -4,6 +4,16 @@ import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-s
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
+function requireTelegramConfig(
+  snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>,
+) {
+  const config = snapshot.config.channels?.telegram;
+  if (!config) {
+    throw new Error("expected Telegram runtime config");
+  }
+  return config;
+}
+
 describe("secrets runtime snapshot inactive telegram surfaces", () => {
   it("skips inactive Telegram refs and emits diagnostics", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
@@ -29,7 +39,7 @@ describe("secrets runtime snapshot inactive telegram surfaces", () => {
       loadablePluginOrigins: new Map(),
     });
 
-    expect(snapshot.config.channels?.telegram?.botToken).toEqual({
+    expect(requireTelegramConfig(snapshot).botToken).toEqual({
       source: "env",
       provider: "default",
       id: "DISABLED_TELEGRAM_BASE_TOKEN",

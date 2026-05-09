@@ -6,6 +6,15 @@ import {
   createBlockReplyPipeline,
 } from "./block-reply-pipeline.js";
 
+const waitForAbort = (signal: AbortSignal | undefined): Promise<void> =>
+  new Promise((resolve) => {
+    if (!signal || signal.aborted) {
+      resolve();
+      return;
+    }
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+
 describe("createBlockReplyPayloadKey", () => {
   it("produces different keys for payloads differing only by replyToId", () => {
     const a = createBlockReplyPayloadKey({ text: "hello world", replyToId: "post-1" });
@@ -137,10 +146,10 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
   it("matches final assembled text to successfully streamed text chunks after abort", async () => {
     let callCount = 0;
     const pipeline = createBlockReplyPipeline({
-      onBlockReply: async () => {
+      onBlockReply: async (_payload, options) => {
         callCount += 1;
         if (callCount === 3) {
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await waitForAbort(options?.abortSignal);
         }
       },
       timeoutMs: 1,
@@ -159,10 +168,10 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
   it("does not match final assembled text with content that was not streamed", async () => {
     let callCount = 0;
     const pipeline = createBlockReplyPipeline({
-      onBlockReply: async () => {
+      onBlockReply: async (_payload, options) => {
         callCount += 1;
         if (callCount === 2) {
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await waitForAbort(options?.abortSignal);
         }
       },
       timeoutMs: 1,

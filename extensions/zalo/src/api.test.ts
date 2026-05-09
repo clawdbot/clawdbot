@@ -18,8 +18,11 @@ async function expectPostJsonRequest(run: (token: string, fetcher: ZaloFetch) =>
   await run("test-token", fetcher);
   expect(fetcher).toHaveBeenCalledTimes(1);
   const [, init] = fetcher.mock.calls[0] ?? [];
-  expect(init?.method).toBe("POST");
-  expect(init?.headers).toEqual({ "Content-Type": "application/json" });
+  if (!init) {
+    throw new Error("expected Zalo request init");
+  }
+  expect(init.method).toBe("POST");
+  expect(init.headers).toEqual({ "Content-Type": "application/json" });
 }
 
 describe("Zalo API request methods", () => {
@@ -67,7 +70,13 @@ describe("Zalo API request methods", () => {
 
       await rejected;
       const [, init] = fetcher.mock.calls[0] ?? [];
-      expect(init?.signal?.aborted).toBe(true);
+      if (!init) {
+        throw new Error("expected Zalo chat action request init");
+      }
+      if (!init.signal) {
+        throw new Error("expected Zalo chat action abort signal");
+      }
+      expect(init.signal.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }

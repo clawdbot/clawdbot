@@ -244,7 +244,7 @@ describe("loadEnabledBundleMcpConfig", () => {
           cfg: createEnabledBundleConfig(["malformed-mcp"]),
         });
 
-        expect(loaded.config.mcpServers).toEqual({});
+        expect(loaded.config.mcpServers).toStrictEqual({});
         expect(loaded.diagnostics).toEqual([
           expect.objectContaining({
             pluginId: "malformed-mcp",
@@ -275,7 +275,7 @@ describe("loadEnabledBundleMcpConfig", () => {
           cfg: createEnabledBundleConfig(["malformed-lsp"]),
         });
 
-        expect(loaded.config.lspServers).toEqual({});
+        expect(loaded.config.lspServers).toStrictEqual({});
         expect(loaded.diagnostics).toEqual([
           expect.objectContaining({
             pluginId: "malformed-lsp",

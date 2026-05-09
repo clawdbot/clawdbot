@@ -221,7 +221,7 @@ describe("migration provider runtime", () => {
       env: process.env,
       includeDisabled: true,
     });
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenNthCalledWith(1);
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       onlyPluginIds: ["external-migration"],
     });

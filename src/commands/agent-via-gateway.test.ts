@@ -87,6 +87,14 @@ function mockLocalAgentReply(text = "local") {
   });
 }
 
+function requireFirstCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  const [arg] = mock.mock.calls[0] ?? [];
+  if (arg === undefined) {
+    throw new Error(`expected ${label} call`);
+  }
+  return arg;
+}
+
 function createGatewayTimeoutError() {
   const err = new Error("gateway timeout after 90000ms");
   err.name = "GatewayTransportError";
@@ -142,7 +150,7 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555", timeout: "0" }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = callGateway.mock.calls[0]?.[0] as { timeoutMs?: number };
+      const request = requireFirstCallArg(callGateway, "gateway") as { timeoutMs?: number };
       expect(request.timeoutMs).toBe(2_147_000_000);
     });
   });
@@ -154,7 +162,10 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(callGateway.mock.calls[0]?.[0]?.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
+      const request = requireFirstCallArg(callGateway, "gateway") as {
+        params?: Record<string, unknown>;
+      };
+      expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
       expect(agentCommand).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
     });
@@ -203,7 +214,8 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555", model: "ollama/qwen3.5:9b" }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
+      const request = requireFirstCallArg(callGateway, "gateway");
+      expect(request).toMatchObject({
         params: {
           model: "ollama/qwen3.5:9b",
         },
@@ -242,7 +254,8 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
+      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent");
+      expect(fallbackOpts).toMatchObject({
         resultMetaOverrides: {
           transport: "embedded",
           fallbackFrom: "gateway",
@@ -290,7 +303,7 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const fallbackOpts = agentCommand.mock.calls[0]?.[0] as {
+      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent") as {
         sessionId?: string;
         sessionKey?: string;
         runId?: string;
@@ -329,7 +342,7 @@ describe("agentCliCommand", () => {
         runtime,
       );
 
-      const fallbackOpts = agentCommand.mock.calls[0]?.[0] as {
+      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent") as {
         sessionId?: string;
         sessionKey?: string;
         to?: string;
@@ -375,7 +388,8 @@ describe("agentCliCommand", () => {
       const result = await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime);
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
+      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent");
+      expect(fallbackOpts).toMatchObject({
         resultMetaOverrides: {
           transport: "embedded",
           fallbackFrom: "gateway",
@@ -386,7 +400,8 @@ describe("agentCliCommand", () => {
       );
       expect(loggingState.forceConsoleToStderr).toBe(true);
       expect(jsonRuntime.log).toHaveBeenCalledTimes(1);
-      const payload = JSON.parse(String(jsonRuntime.log.mock.calls[0]?.[0]));
+      const jsonPayload = requireFirstCallArg(jsonRuntime.log, "json runtime log");
+      const payload = JSON.parse(String(jsonPayload));
       expect(payload).toMatchObject({
         payloads: [{ text: "local" }],
         meta: {
@@ -420,11 +435,12 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
+      const localOpts = requireFirstCallArg(agentCommand, "embedded agent");
+      expect(localOpts).toMatchObject({
         cleanupBundleMcpOnRunEnd: true,
         cleanupCliLiveSessionOnRunEnd: true,
       });
-      expect(agentCommand.mock.calls[0]?.[0]).not.toHaveProperty("resultMetaOverrides");
+      expect(localOpts).not.toHaveProperty("resultMetaOverrides");
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });
@@ -437,7 +453,8 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
+      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent");
+      expect(fallbackOpts).toMatchObject({
         cleanupBundleMcpOnRunEnd: true,
         cleanupCliLiveSessionOnRunEnd: true,
       });

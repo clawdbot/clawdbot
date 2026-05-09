@@ -611,8 +611,6 @@ export async function applyPluginUninstallDirectoryRemoval(
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
-        "--prefix",
-        ".",
         removal.cleanup.packageName,
       ],
       {

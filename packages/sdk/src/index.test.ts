@@ -53,6 +53,14 @@ class FakeTransport implements OpenClawTransport {
   }
 }
 
+function requireTransportCall(calls: readonly RequestCall[], index: number): RequestCall {
+  const call = calls[index];
+  if (!call) {
+    throw new Error(`Expected transport call ${index}`);
+  }
+  return call;
+}
+
 describe("OpenClaw SDK", () => {
   it("runs an agent through the Gateway agent method", async () => {
     const transport = new FakeTransport({
@@ -423,8 +431,10 @@ describe("OpenClaw SDK", () => {
       "sessions.abort",
       "models.authStatus",
     ]);
-    expect(transport.calls[1]?.params).toEqual({ runId: "run_without_session" });
-    expect(transport.calls[2]?.params).toEqual({ probe: false });
+    expect(requireTransportCall(transport.calls, 1).params).toEqual({
+      runId: "run_without_session",
+    });
+    expect(requireTransportCall(transport.calls, 2).params).toEqual({ probe: false });
   });
 
   it("replays fast run events emitted before the caller starts iterating", async () => {

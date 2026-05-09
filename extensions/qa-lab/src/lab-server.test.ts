@@ -35,6 +35,15 @@ const captureMock = vi.hoisted(() => {
         return acc;
       }, {}),
     ).map(([value, count]) => ({ value, count }));
+  const countMatching = <T>(values: T[], predicate: (value: T) => boolean) => {
+    let count = 0;
+    for (const value of values) {
+      if (predicate(value)) {
+        count += 1;
+      }
+    }
+    return count;
+  };
 
   const store = {
     upsertSession(session: Record<string, unknown>) {
@@ -46,7 +55,7 @@ const captureMock = vi.hoisted(() => {
     listSessions(limit: number) {
       return sessions.slice(0, limit).map((session) =>
         Object.assign({}, session, {
-          eventCount: events.filter((event) => event.sessionId === session.id).length,
+          eventCount: countMatching(events, (event) => event.sessionId === session.id),
         }),
       );
     },
@@ -59,7 +68,7 @@ const captureMock = vi.hoisted(() => {
       return {
         sessionId,
         totalEvents: selected.length,
-        unlabeledEventCount: metas.filter((meta) => !meta.provider && !meta.model).length,
+        unlabeledEventCount: countMatching(metas, (meta) => !meta.provider && !meta.model),
         providers: countValues(metas.map((meta) => meta.provider as string | undefined)),
         apis: countValues(metas.map((meta) => meta.api as string | undefined)),
         models: countValues(metas.map((meta) => meta.model as string | undefined)),
@@ -180,39 +189,59 @@ async function fetchWithRetry(input: string, init?: RequestInit, attempts = 3) {
 }
 
 async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const response = await fetchWithRetry(`${baseUrl}/api/bootstrap`);
-    const bootstrap = (await response.json()) as {
-      runnerCatalog: {
+  let catalog:
+    | {
         status: "loading" | "ready" | "failed";
         real: Array<{ key: string; name: string }>;
+      }
+    | undefined;
+  await vi.waitFor(
+    async () => {
+      const response = await fetchWithRetry(`${baseUrl}/api/bootstrap`);
+      const bootstrap = (await response.json()) as {
+        runnerCatalog: {
+          status: "loading" | "ready" | "failed";
+          real: Array<{ key: string; name: string }>;
+        };
       };
-    };
-    if (bootstrap.runnerCatalog.status !== "loading") {
-      return bootstrap.runnerCatalog;
-    }
-    await sleep(10);
+      if (bootstrap.runnerCatalog.status === "loading") {
+        throw new Error("runner catalog still loading");
+      }
+      catalog = bootstrap.runnerCatalog;
+    },
+    { interval: 1, timeout: timeoutMs },
+  );
+  if (!catalog) {
+    throw new Error("runner catalog stayed loading");
   }
-  throw new Error("runner catalog stayed loading");
+  return catalog;
 }
 
 async function waitForFileContent(filePath: string, expected: string, timeoutMs = 5_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const content = await readFile(filePath, "utf8");
-      if (content === expected) {
-        return content;
+  let content: string | undefined;
+  await vi.waitFor(
+    async () => {
+      try {
+        content = await readFile(filePath, "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
       }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
+      if (content !== expected) {
+        throw new Error(`file did not reach expected content: ${filePath}`);
       }
-    }
-    await sleep(10);
+    },
+    { interval: 1, timeout: timeoutMs },
+  );
+  if (content === undefined) {
+    throw new Error(`file did not reach expected content: ${filePath}`);
   }
-  throw new Error(`file did not reach expected content: ${filePath}`);
+  return content;
+}
+
+async function expectFileMissing(filePath: string): Promise<void> {
+  await expect(readFile(filePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 async function createQaLabRepoRootFixture(params?: {
@@ -316,7 +345,7 @@ describe("qa-lab server", () => {
     };
     expect(snapshot.messages.map((message) => message.text)).toContain("hello from test");
 
-    await expect(readFile(outputPath, "utf8")).rejects.toThrow();
+    await expectFileMissing(outputPath);
   });
 
   it("returns controlled errors for oversized JSON body reads", async () => {
@@ -585,7 +614,7 @@ describe("qa-lab server", () => {
     });
 
     await sleep(25);
-    await expect(readFile(markerPath, "utf8")).rejects.toThrow();
+    await expectFileMissing(markerPath);
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(bootstrapResponse.status).toBe(200);
@@ -673,7 +702,7 @@ describe("qa-lab server", () => {
     const snapshot = (await (await fetchWithRetry(`${lab.baseUrl}/api/state`)).json()) as {
       messages: Array<{ direction: string }>;
     };
-    expect(snapshot.messages.filter((message) => message.direction === "outbound")).toHaveLength(0);
+    expect(snapshot.messages.some((message) => message.direction === "outbound")).toBe(false);
   });
 
   it("exposes structured outcomes and can attach control-ui after startup", async () => {

@@ -175,18 +175,18 @@ describe("createBackupArchive", () => {
         });
         const entries = await listArchiveEntries(result.archivePath);
 
-        expect(
-          entries.some((entry) => entry.endsWith("/state/extensions/demo/openclaw.plugin.json")),
-        ).toBe(true);
-        expect(entries.some((entry) => entry.endsWith("/state/extensions/demo/src/index.js"))).toBe(
-          true,
+        const entrySuffixes = entries.map((entry) => entry.replace(/^.*\/state\//, "/state/"));
+        expect(entrySuffixes).toEqual(
+          expect.arrayContaining([
+            "/state/extensions/demo/openclaw.plugin.json",
+            "/state/extensions/demo/src/index.js",
+            "/state/node_modules/root-dep/index.js",
+          ]),
         );
-        expect(
-          entries.some((entry) => entry.endsWith("/state/node_modules/root-dep/index.js")),
-        ).toBe(true);
-        expect(
-          entries.some((entry) => entry.includes("/state/extensions/demo/node_modules/")),
-        ).toBe(false);
+        const pluginNodeModuleEntries = entries.filter((entry) =>
+          entry.includes("/state/extensions/demo/node_modules/"),
+        );
+        expect(pluginNodeModuleEntries).toEqual([]);
 
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         await expect(

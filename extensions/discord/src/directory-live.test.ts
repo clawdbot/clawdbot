@@ -45,7 +45,7 @@ describe("discord directory live lookups", () => {
       query: "general",
     });
 
-    expect(rows).toEqual([]);
+    expect(rows).toStrictEqual([]);
   });
 
   it("returns empty peer directory without query and skips guild listing", async () => {
@@ -53,7 +53,7 @@ describe("discord directory live lookups", () => {
 
     const rows = await listDiscordDirectoryPeersLive(makeParams({ query: "  " }));
 
-    expect(rows).toEqual([]);
+    expect(rows).toStrictEqual([]);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

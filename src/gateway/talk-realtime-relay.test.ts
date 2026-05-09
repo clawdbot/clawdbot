@@ -552,6 +552,13 @@ describe("talk realtime gateway relay", () => {
     expect(() => createSession("conn-1")).toThrow(
       "Too many active realtime relay sessions for this connection",
     );
-    expect(() => createSession("conn-2")).not.toThrow();
+    expect(createSession("conn-2")).toMatchObject({
+      provider: "relay-test",
+      transport: "gateway-relay",
+      audio: {
+        inputEncoding: "pcm16",
+        outputEncoding: "pcm16",
+      },
+    });
   });
 });

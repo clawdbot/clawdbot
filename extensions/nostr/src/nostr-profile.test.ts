@@ -256,7 +256,7 @@ describe("validateProfile", () => {
     const result = validateProfile(profile);
 
     expect(result.valid).toBe(false);
-    expect(result.errors!.some((e) => e.includes("256"))).toBe(true);
+    expect(result.errors).toEqual(expect.arrayContaining([expect.stringContaining("256")]));
   });
 
   it("rejects about exceeding 2000 characters", () => {
@@ -267,7 +267,7 @@ describe("validateProfile", () => {
     const result = validateProfile(profile);
 
     expect(result.valid).toBe(false);
-    expect(result.errors!.some((e) => e.includes("2000"))).toBe(true);
+    expect(result.errors).toEqual(expect.arrayContaining([expect.stringContaining("2000")]));
   });
 
   it("accepts empty profile", () => {

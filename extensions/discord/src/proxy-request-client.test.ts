@@ -33,7 +33,10 @@ describe("createDiscordRequestClient", () => {
       timeout: 20,
     });
 
-    await expect(client.get("/channels/123/messages")).rejects.toThrow();
+    await expect(client.get("/channels/123/messages")).rejects.toMatchObject({
+      message: "The operation was aborted.",
+      name: "AbortError",
+    });
   }, 1_000);
 
   it("lets abortAllRequests cancel active proxied fetches", async () => {
@@ -50,8 +53,14 @@ describe("createDiscordRequestClient", () => {
 
     client.abortAllRequests();
 
-    await expect(request).rejects.toThrow();
-    expect(abortable.receivedSignal?.aborted).toBe(true);
+    await expect(request).rejects.toMatchObject({
+      message: "The operation was aborted.",
+      name: "AbortError",
+    });
+    if (!abortable.receivedSignal) {
+      throw new Error("Expected proxied fetch abort signal");
+    }
+    expect(abortable.receivedSignal.aborted).toBe(true);
   });
 
   it("provides the REST client's timeout signal even without a caller signal", async () => {

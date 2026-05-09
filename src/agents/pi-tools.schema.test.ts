@@ -171,7 +171,7 @@ describe("normalizeToolParameters", () => {
 
     const parameters = normalized.parameters as Record<string, unknown>;
     expect(parameters.type).toBe("object");
-    expect(parameters.properties).toEqual({});
+    expect(parameters.properties).toStrictEqual({});
   });
 
   it("does not rewrite non-empty schemas that still lack type/properties", () => {
@@ -201,7 +201,7 @@ describe("normalizeToolParameters", () => {
 
     const parameters = normalized.parameters as Record<string, unknown>;
     expect(parameters.type).toBe("object");
-    expect(parameters.properties).toEqual({});
+    expect(parameters.properties).toStrictEqual({});
   });
 
   it("injects properties:{} when properties key exists but is undefined (MCP SDK edge case #75362)", () => {
@@ -217,7 +217,7 @@ describe("normalizeToolParameters", () => {
 
     const parameters = normalized.parameters as Record<string, unknown>;
     expect(parameters.type).toBe("object");
-    expect(parameters.properties).toEqual({});
+    expect(parameters.properties).toStrictEqual({});
   });
 
   it("injects properties:{} when properties key is null (MCP SDK edge case #75362)", () => {
@@ -233,7 +233,7 @@ describe("normalizeToolParameters", () => {
 
     const parameters = normalized.parameters as Record<string, unknown>;
     expect(parameters.type).toBe("object");
-    expect(parameters.properties).toEqual({});
+    expect(parameters.properties).toStrictEqual({});
   });
 
   it("preserves existing properties on type:object schemas", () => {
@@ -265,7 +265,7 @@ describe("normalizeToolParameters", () => {
 
     const parameters = normalized.parameters as Record<string, unknown>;
     expect(parameters.type).toBe("object");
-    expect(parameters.properties).toEqual({});
+    expect(parameters.properties).toStrictEqual({});
     expect(parameters.additionalProperties).toBe(true);
   });
 
@@ -281,7 +281,7 @@ describe("normalizeToolParameters", () => {
     const normalized = normalizeToolParameters(tool);
     const prepared = normalized.prepareArguments?.(null) as Record<string, never>;
 
-    expect(prepared).toEqual({});
+    expect(prepared).toStrictEqual({});
     expect(
       validateToolArguments(normalized, {
         type: "toolCall",
@@ -289,7 +289,7 @@ describe("normalizeToolParameters", () => {
         name: "wiki_lint",
         arguments: prepared,
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 
   it("leaves null arguments invalid when the object schema has required params", () => {

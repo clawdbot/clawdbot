@@ -384,7 +384,7 @@ describe("native hook relay registry", () => {
 
     const invocations = __testing.getNativeHookRelayInvocationsForTests();
     expect(invocations).toHaveLength(200);
-    expect(invocations.some((invocation) => invocation.toolUseId === "call-0")).toBe(false);
+    expect(invocations.map((invocation) => invocation.toolUseId)).not.toContain("call-0");
     expect(invocations.at(-1)).toEqual(expect.objectContaining({ toolUseId: "call-209" }));
   });
 

@@ -220,7 +220,9 @@ describe("skills cli commands", () => {
       query: "calendar",
       limit: undefined,
     });
-    expect(runtimeLogs.some((line) => line.includes("calendar v1.2.3  Calendar"))).toBe(true);
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("calendar v1.2.3  Calendar")]),
+    );
   });
 
   it("installs a skill from ClawHub into the active workspace", async () => {
@@ -335,8 +337,8 @@ describe("skills cli commands", () => {
       slug: undefined,
       logger: expect.any(Object),
     });
-    expect(runtimeLogs.some((line) => line.includes("Updated calendar: 1.2.2 -> 1.2.3"))).toBe(
-      true,
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("Updated calendar: 1.2.2 -> 1.2.3")]),
     );
     expect(runtimeErrors).toEqual([]);
   });

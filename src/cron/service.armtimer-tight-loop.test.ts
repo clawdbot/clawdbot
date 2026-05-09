@@ -90,7 +90,7 @@ describe("CronService - armTimer tight loop prevention", () => {
 
     armTimer(state);
 
-    expect(state.timer).not.toBeNull();
+    expect(state.timer).toEqual(expect.anything());
     const delays = extractTimeoutDelays(timeoutSpy);
 
     // Before the fix, delay would be 0 (tight loop).
@@ -171,7 +171,7 @@ describe("CronService - armTimer tight loop prevention", () => {
 
     armTimer(state);
 
-    expect(state.timer).not.toBeNull();
+    expect(state.timer).toEqual(expect.anything());
     const delays = extractTimeoutDelays(timeoutSpy);
     expect(delays).toContain(60_000);
 
@@ -208,7 +208,7 @@ describe("CronService - armTimer tight loop prevention", () => {
     await onTimer(state);
 
     expect(state.running).toBe(false);
-    expect(state.timer).not.toBeNull();
+    expect(state.timer).toEqual(expect.anything());
 
     // The re-armed timer must NOT use delay=0. It should use at least
     // MIN_REFIRE_GAP_MS to prevent the hot-loop.

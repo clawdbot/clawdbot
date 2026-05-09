@@ -7,6 +7,12 @@ describe("MarkdownTableModeSchema", () => {
   });
 
   it("rejects unsupported values", () => {
-    expect(() => MarkdownTableModeSchema.parse("plain")).toThrow();
+    const result = MarkdownTableModeSchema.safeParse("plain");
+
+    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error("Expected unsupported markdown table mode to fail schema validation.");
+    }
+    expect(result.error.issues[0]?.code).toBe("invalid_value");
   });
 });

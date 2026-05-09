@@ -363,7 +363,7 @@ describe("createInboundDebouncer", () => {
   it("keeps later same-key work behind a timer-backed flush that already started", async () => {
     const started: string[] = [];
     const finished: string[] = [];
-    let releaseFirst!: () => void;
+    let releaseFirst: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
@@ -404,6 +404,9 @@ describe("createInboundDebouncer", () => {
       expect(started).toEqual(["1"]);
       expect(finished).toEqual([]);
 
+      if (!releaseFirst) {
+        throw new Error("Expected first inbound debounce release callback to be initialized");
+      }
       releaseFirst();
       await Promise.all([firstFlush, secondEnqueue]);
 
@@ -417,7 +420,7 @@ describe("createInboundDebouncer", () => {
   it("keeps fire-and-forget keyed work ahead of a later buffered item", async () => {
     const started: string[] = [];
     const finished: string[] = [];
-    let releaseFirst!: () => void;
+    let releaseFirst: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
@@ -472,6 +475,9 @@ describe("createInboundDebouncer", () => {
       expect(started).toEqual(["1"]);
       expect(finished).toEqual([]);
 
+      if (!releaseFirst) {
+        throw new Error("Expected first inbound debounce release callback to be initialized");
+      }
       releaseFirst();
       await Promise.all([firstFlush, secondEnqueue, thirdFlush, thirdEnqueue]);
 
@@ -484,7 +490,7 @@ describe("createInboundDebouncer", () => {
 
   it("does not serialize keyed turns when debounce is disabled and no keyed chain exists", async () => {
     const started: string[] = [];
-    let releaseFirst!: () => void;
+    let releaseFirst: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
@@ -508,6 +514,9 @@ describe("createInboundDebouncer", () => {
 
     expect(started).toEqual(["1", "2"]);
 
+    if (!releaseFirst) {
+      throw new Error("Expected first inbound debounce release callback to be initialized");
+    }
     releaseFirst();
     await Promise.all([first, second]);
   });
@@ -582,7 +591,7 @@ describe("createInboundDebouncer", () => {
   it("keeps same-key overflow work ordered after falling back to immediate flushes", async () => {
     const started: string[] = [];
     const finished: string[] = [];
-    let releaseOverflow!: () => void;
+    let releaseOverflow: (() => void) | undefined;
     const overflowGate = new Promise<void>((resolve) => {
       releaseOverflow = resolve;
     });
@@ -632,6 +641,9 @@ describe("createInboundDebouncer", () => {
       expect(started).toEqual(["2"]);
       expect(finished).toEqual([]);
 
+      if (!releaseOverflow) {
+        throw new Error("Expected inbound overflow release callback to be initialized");
+      }
       releaseOverflow();
       await Promise.all([overflowEnqueue, bufferedEnqueue, bufferedFlush]);
 
@@ -645,7 +657,7 @@ describe("createInboundDebouncer", () => {
   it("counts tracked debounce keys by union of buffers and active chains", async () => {
     const started: string[] = [];
     const finished: string[] = [];
-    let releaseChainOnly!: () => void;
+    let releaseChainOnly: (() => void) | undefined;
     const chainOnlyGate = new Promise<void>((resolve) => {
       releaseChainOnly = resolve;
     });
@@ -707,6 +719,9 @@ describe("createInboundDebouncer", () => {
         expect(finished).toEqual(["4"]);
       });
 
+      if (!releaseChainOnly) {
+        throw new Error("Expected inbound chain-only release callback to be initialized");
+      }
       releaseChainOnly();
       await Promise.all([secondFlush, overflowEnqueue]);
       expect(finished).toEqual(["4", "2"]);

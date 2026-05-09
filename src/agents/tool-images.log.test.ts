@@ -54,7 +54,7 @@ describe("tool-images log context", () => {
     ];
     await sanitizeContentBlocksImages(blocks, "nodes:camera_snap");
     const messages = infoMock.mock.calls.map((call) => String(call[0] ?? ""));
-    expect(messages.some((message) => message.includes("camera-front.png"))).toBe(true);
+    expect(messages).toEqual(expect.arrayContaining([expect.stringContaining("camera-front.png")]));
   });
 
   it("includes filename from read label", async () => {
@@ -63,6 +63,8 @@ describe("tool-images log context", () => {
     ];
     await sanitizeContentBlocksImages(blocks, "read:/tmp/images/sample-diagram.png");
     const messages = infoMock.mock.calls.map((call) => String(call[0] ?? ""));
-    expect(messages.some((message) => message.includes("sample-diagram.png"))).toBe(true);
+    expect(messages).toEqual(
+      expect.arrayContaining([expect.stringContaining("sample-diagram.png")]),
+    );
   });
 });

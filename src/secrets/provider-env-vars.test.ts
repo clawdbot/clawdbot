@@ -58,8 +58,8 @@ describe("provider env vars", () => {
   });
 
   it("ignores prototype-chain keys when resolving provider env vars", () => {
-    expect(getProviderEnvVars("__proto__")).toEqual([]);
-    expect(getProviderEnvVars("constructor")).toEqual([]);
+    expect(getProviderEnvVars("__proto__")).toStrictEqual([]);
+    expect(getProviderEnvVars("constructor")).toStrictEqual([]);
     expect(getProviderEnvVars("openai")).toEqual(["OPENAI_API_KEY"]);
     expect(getProviderEnvVars("anthropic")).toEqual(["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]);
     expect(getProviderEnvVars("fal")).toEqual(["FAL_KEY", "FAL_API_KEY"]);

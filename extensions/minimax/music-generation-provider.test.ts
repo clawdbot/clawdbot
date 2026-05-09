@@ -66,9 +66,6 @@ describe("minimax music generation provider", () => {
     expect(postJsonRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://api.minimax.io/v1/music_generation",
-        headers: expect.objectContaining({
-          get: expect.any(Function),
-        }),
         body: expect.objectContaining({
           model: "music-2.6",
           lyrics: "our city wakes",
@@ -81,7 +78,9 @@ describe("minimax music generation provider", () => {
         }),
       }),
     );
-    const headers = postJsonRequestMock.mock.calls[0]?.[0]?.headers as Headers | undefined;
+    const request = postJsonRequestMock.mock.calls[0]?.[0];
+    expect(request?.headers).toBeInstanceOf(Headers);
+    const headers = request?.headers as Headers | undefined;
     expect(headers?.get("content-type")).toBe("application/json");
     expect(result.tracks).toHaveLength(1);
     expect(result.lyrics).toEqual(["our city wakes"]);

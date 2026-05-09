@@ -303,7 +303,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     ws.emitMessage(new Blob([JSON.stringify({ setupComplete: {} })]));
 
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(ws.sent).toEqual([]);
+    expect(ws.sent).toStrictEqual([]);
     expect(onStatus).not.toHaveBeenCalled();
   });
 

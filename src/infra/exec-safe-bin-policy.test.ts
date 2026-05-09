@@ -26,14 +26,21 @@ function normalizeGeneratedDocBlock(block: string): string {
   while (lines.at(-1)?.trim() === "") {
     lines.pop();
   }
-  const indents = lines
-    .filter((line) => line.trim().length > 0)
-    .map((line) => line.match(/^ */)?.[0].length ?? 0);
-  const commonIndent = Math.min(...indents);
+  let commonIndent = Infinity;
+  for (const line of lines) {
+    if (line.trim().length === 0) {
+      continue;
+    }
+    commonIndent = Math.min(commonIndent, line.match(/^ */)?.[0].length ?? 0);
+  }
   if (commonIndent <= 0) {
     return lines.join("\n");
   }
-  return lines.map((line) => line.slice(Math.min(line.length, commonIndent))).join("\n");
+  const normalizedLines: string[] = [];
+  for (const line of lines) {
+    normalizedLines.push(line.slice(Math.min(line.length, commonIndent)));
+  }
+  return normalizedLines.join("\n");
 }
 
 function buildDeniedFlagArgvVariants(flag: string): string[][] {

@@ -83,7 +83,10 @@ async function runGatewayPrompt(params: {
   );
 
   const result = await promptGatewayConfig(params.baseConfig ?? {}, makeRuntime());
-  const call = mocks.buildGatewayAuthConfig.mock.calls[0]?.[0];
+  const [call] = mocks.buildGatewayAuthConfig.mock.calls[0] ?? [];
+  if (!call) {
+    throw new Error("expected gateway auth config input");
+  }
   return { result, call };
 }
 
@@ -116,8 +119,8 @@ describe("promptGatewayConfig", () => {
       randomToken: "unused",
       authConfigFactory: ({ mode, token, password }) => ({ mode, token, password }),
     });
-    expect(call?.password).not.toBe("undefined");
-    expect(call?.password).toBe("");
+    expect(call.password).not.toBe("undefined");
+    expect(call.password).toBe("");
   });
 
   it("prompts for trusted-proxy configuration when trusted-proxy mode selected", async () => {
@@ -131,8 +134,8 @@ describe("promptGatewayConfig", () => {
       ],
     });
 
-    expect(call?.mode).toBe("trusted-proxy");
-    expect(call?.trustedProxy).toEqual({
+    expect(call.mode).toBe("trusted-proxy");
+    expect(call.trustedProxy).toEqual({
       userHeader: "x-forwarded-user",
       requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
       allowUsers: ["nick@example.com"],
@@ -146,8 +149,8 @@ describe("promptGatewayConfig", () => {
       textQueue: ["18789", "x-remote-user", "", "", "10.0.0.1"],
     });
 
-    expect(call?.mode).toBe("trusted-proxy");
-    expect(call?.trustedProxy).toEqual({
+    expect(call.mode).toBe("trusted-proxy");
+    expect(call.trustedProxy).toEqual({
       userHeader: "x-remote-user",
       // requiredHeaders and allowUsers should be undefined when empty
     });
@@ -249,7 +252,7 @@ describe("promptGatewayConfig", () => {
         authConfigFactory: ({ mode, token }) => ({ mode, token }),
       });
 
-      expect(call?.token).toEqual({
+      expect(call.token).toEqual({
         source: "env",
         provider: "default",
         id: "OPENCLAW_GATEWAY_TOKEN",

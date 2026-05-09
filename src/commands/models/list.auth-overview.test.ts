@@ -96,7 +96,7 @@ describe("resolveProviderAuthOverview", () => {
     persistedStores.clear();
   });
 
-  it("does not throw when token profile only has tokenRef", () => {
+  it("labels token profiles that only have tokenRef", () => {
     const overview = resolveProviderAuthOverview({
       provider: "github-copilot",
       cfg: {},

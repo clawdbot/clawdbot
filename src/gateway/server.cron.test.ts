@@ -447,7 +447,7 @@ describe("gateway server cron", () => {
       const runRes = await cronState.cron.run(routeJobId, "force");
       expect(runRes).toEqual({ ok: true, ran: true });
       const events = await waitForSystemEvent();
-      expect(events.some((event) => event.includes("cron route check"))).toBe(true);
+      expect(events).toEqual(expect.arrayContaining([expect.stringContaining("cron route check")]));
 
       const wrappedAtMs = Date.now() + 1000;
       const wrappedRes = await directCronReq(cronState, "cron.add", {

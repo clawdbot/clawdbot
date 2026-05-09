@@ -61,6 +61,12 @@ describe("install.ps1 failure handling", () => {
   const source = readFileSync(SCRIPT_PATH, "utf8");
   const powershell = findPowerShell();
   const runIfPowerShell = powershell ? it : it.skip;
+  const runPowerShell = (args: string[]) => {
+    if (!powershell) {
+      throw new Error("PowerShell is not available");
+    }
+    return spawnSync(powershell, args, { encoding: "utf8" });
+  };
 
   it("does not exit directly from inside Main", () => {
     const mainBody = extractFunctionBody(source, "Main");
@@ -103,11 +109,14 @@ describe("install.ps1 failure handling", () => {
     );
     chmodSync(scriptPath, 0o755);
 
-    const result = spawnSync(
-      powershell!,
-      ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
-      { encoding: "utf8" },
-    );
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
@@ -119,11 +128,14 @@ describe("install.ps1 failure handling", () => {
     writeFileSync(scriptPath, createFailingNodeFixture(source));
     chmodSync(scriptPath, 0o755);
 
-    const result = spawnSync(
-      powershell!,
-      ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
-      { encoding: "utf8" },
-    );
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
 
     expect(result.status).toBe(1);
   });
@@ -142,9 +154,7 @@ describe("install.ps1 failure handling", () => {
       "}",
       'Write-Output "alive-after-install"',
     ].join("\n");
-    const result = spawnSync(powershell!, ["-NoLogo", "-NoProfile", "-Command", command], {
-      encoding: "utf8",
-    });
+    const result = runPowerShell(["-NoLogo", "-NoProfile", "-Command", command]);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("caught=OpenClaw installation failed with exit code 1.");
@@ -177,11 +187,14 @@ describe("install.ps1 failure handling", () => {
     );
     chmodSync(scriptPath, 0o755);
 
-    const result = spawnSync(
-      powershell!,
-      ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
-      { encoding: "utf8" },
-    );
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
@@ -219,11 +232,14 @@ describe("install.ps1 failure handling", () => {
     );
     chmodSync(scriptPath, 0o755);
 
-    const result = spawnSync(
-      powershell!,
-      ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
-      { encoding: "utf8" },
-    );
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");

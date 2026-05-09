@@ -43,6 +43,11 @@ describe("heartbeat-wake", () => {
     return handler;
   }
 
+  function expectWakeCall(handler: ReturnType<typeof vi.fn>, index: number, request: WakeRequest) {
+    const [actualRequest] = handler.mock.calls[index] ?? [];
+    expect(actualRequest).toEqual(request);
+  }
+
   async function expectRetryAfterDefaultDelay(params: {
     handler: ReturnType<typeof vi.fn>;
     initialReason: string;
@@ -61,7 +66,7 @@ describe("heartbeat-wake", () => {
 
     await vi.advanceTimersByTimeAsync(500);
     expect(params.handler).toHaveBeenCalledTimes(2);
-    expect(params.handler.mock.calls[1]?.[0]).toEqual(wake(params.expectedRetryReason));
+    expectWakeCall(params.handler, 1, wake(params.expectedRetryReason));
   }
 
   beforeEach(() => {
@@ -138,7 +143,7 @@ describe("heartbeat-wake", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(handler).toHaveBeenCalledTimes(2);
-    expect(handler.mock.calls[1]?.[0]).toEqual(wake("hook:wake"));
+    expectWakeCall(handler, 1, wake("hook:wake"));
   });
 
   it("retries thrown handler errors after the default retry delay", async () => {
@@ -315,7 +320,7 @@ describe("heartbeat-wake", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler.mock.calls[0]?.[0]).toEqual({
+    expectWakeCall(handler, 0, {
       source: "cron",
       intent: "immediate",
       reason: "cron:job-1",
@@ -326,7 +331,7 @@ describe("heartbeat-wake", () => {
 
     await vi.advanceTimersByTimeAsync(1000);
     expect(handler).toHaveBeenCalledTimes(2);
-    expect(handler.mock.calls[1]?.[0]).toEqual({
+    expectWakeCall(handler, 1, {
       source: "cron",
       intent: "immediate",
       reason: "cron:job-1",

@@ -385,7 +385,7 @@ describe("secrets apply", () => {
     expect(dryRunAllowed.mode).toBe("dry-run");
     expect(dryRunAllowed.skippedExecRefs).toBe(0);
     const callLog = await fs.readFile(execLogPath, "utf8");
-    expect(callLog.split("\n").filter((line) => line.trim().length > 0).length).toBeGreaterThan(0);
+    expect(callLog.split("\n").some((line) => line.trim().length > 0)).toBe(true);
   });
 
   it("ignores unrelated auth-profile store refs during allowExec dry-run preflight", async () => {

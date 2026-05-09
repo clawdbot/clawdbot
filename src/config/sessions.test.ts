@@ -104,6 +104,10 @@ describe("sessions", () => {
     return path.join(canonicalParent, path.basename(filePath));
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+
   const deriveSessionKeyCases = [
     {
       name: "returns normalized per-sender key",
@@ -760,12 +764,15 @@ describe("sessions", () => {
     });
 
     const createDeferred = <T>() => {
-      let resolve!: (value: T | PromiseLike<T>) => void;
-      let reject!: (reason?: unknown) => void;
+      let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+      let reject: ((reason?: unknown) => void) | undefined;
       const promise = new Promise<T>((res, rej) => {
         resolve = res;
         reject = rej;
       });
+      if (!resolve || !reject) {
+        throw new Error("Expected deferred callbacks to be initialized");
+      }
       return { promise, resolve, reject };
     };
     const firstStarted = createDeferred<void>();
@@ -796,7 +803,7 @@ describe("sessions", () => {
     const store = loadSessionStore(storePath);
     expect(store[mainSessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-6");
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
-    await expect(fs.stat(`${storePath}.lock`)).rejects.toThrow();
+    await expectPathMissing(`${storePath}.lock`);
   });
 
   it("updateSessionStoreEntry re-reads disk inside the writer slot instead of using stale cache", async () => {

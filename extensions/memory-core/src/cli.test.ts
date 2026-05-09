@@ -21,6 +21,10 @@ const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   })),
 );
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 vi.mock("./cli.host.runtime.js", async () => {
   const [runtimeCli, runtimeCore, runtimeFiles] = await Promise.all([
     import("openclaw/plugin-sdk/memory-core-host-runtime-cli"),
@@ -98,9 +102,12 @@ describe("memory cli", () => {
   const inactiveMemorySecretDiagnostic = "agents.defaults.memorySearch.remote.apiKey inactive"; // pragma: allowlist secret
 
   function expectCliSync(sync: ReturnType<typeof vi.fn>) {
-    expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
-    );
+    const syncCall = sync.mock.calls[0]?.[0] as
+      | { reason?: unknown; force?: unknown; progress?: unknown }
+      | undefined;
+    expect(syncCall?.reason).toBe("cli");
+    expect(syncCall?.force).toBe(false);
+    expect(typeof syncCall?.progress).toBe("function");
   }
 
   function makeMemoryStatus(overrides: Record<string, unknown> = {}) {
@@ -140,6 +147,45 @@ describe("memory cli", () => {
       (call: unknown[]) =>
         typeof call[0] === "string" && call[0].includes(inactiveMemorySecretDiagnostic),
     );
+  }
+
+  function stripAnsi(value: string) {
+    let output = "";
+    for (let index = 0; index < value.length; index += 1) {
+      if (value.charCodeAt(index) !== 0x1b) {
+        output += value[index] ?? "";
+        continue;
+      }
+      if (value[index + 1] !== "[") {
+        continue;
+      }
+      index += 2;
+      while (index < value.length) {
+        const code = value.charCodeAt(index);
+        if (code >= 0x40 && code <= 0x7e) {
+          break;
+        }
+        index += 1;
+      }
+    }
+    return output;
+  }
+
+  function loggedOutput(spy: ReturnType<typeof vi.spyOn>) {
+    return spy.mock.calls
+      .map((call: unknown[]) => (typeof call[0] === "string" ? call[0] : ""))
+      .join("\n")
+      .split("\n")
+      .map(stripAnsi)
+      .join("\n");
+  }
+
+  function expectLogged(spy: ReturnType<typeof vi.spyOn>, expected: string) {
+    expect(loggedOutput(spy)).toContain(expected);
+  }
+
+  function expectNotLogged(spy: ReturnType<typeof vi.spyOn>, expected: string) {
+    expect(loggedOutput(spy)).not.toContain(expected);
   }
 
   async function runMemoryCli(args: string[]) {
@@ -241,14 +287,12 @@ describe("memory cli", () => {
     await runMemoryCli(["status"]);
 
     expect(probeVectorAvailability).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector store: ready"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Semantic vectors: ready"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector dims: 1024"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector path: /opt/sqlite-vec.dylib"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("FTS: ready"));
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("Embedding cache: enabled (123 entries)"),
-    );
+    expectLogged(log, "Vector store: ready");
+    expectLogged(log, "Semantic vectors: ready");
+    expectLogged(log, "Vector dims: 1024");
+    expectLogged(log, "Vector path: /opt/sqlite-vec.dylib");
+    expectLogged(log, "FTS: ready");
+    expectLogged(log, "Embedding cache: enabled (123 entries)");
     expect(close).toHaveBeenCalled();
   });
 
@@ -277,8 +321,8 @@ describe("memory cli", () => {
 
     expect(probeVectorAvailability).not.toHaveBeenCalled();
     expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Provider: auto"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector store: unknown"));
+    expectLogged(log, "Provider: auto");
+    expectLogged(log, "Vector store: unknown");
     expect(close).toHaveBeenCalled();
   });
 
@@ -366,9 +410,9 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status", "--agent", "main"]);
 
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector store: unavailable"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Semantic vectors: unavailable"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector error: load failed"));
+    expectLogged(log, "Vector store: unavailable");
+    expectLogged(log, "Semantic vectors: unavailable");
+    expectLogged(log, "Vector error: load failed");
     expect(close).toHaveBeenCalled();
   });
 
@@ -391,7 +435,7 @@ describe("memory cli", () => {
     expect(probeVectorStoreAvailability).toHaveBeenCalled();
     expect(probeVectorAvailability).toHaveBeenCalled();
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Embeddings: ready"));
+    expectLogged(log, "Embeddings: ready");
     expect(close).toHaveBeenCalled();
   });
 
@@ -427,12 +471,10 @@ describe("memory cli", () => {
     expect(probeVectorStoreAvailability).toHaveBeenCalled();
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
     expect(probeVectorAvailability).toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector store: ready"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Semantic vectors: unavailable"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Embeddings: unavailable"));
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("Embeddings error: No embedding provider available"),
-    );
+    expectLogged(log, "Vector store: ready");
+    expectLogged(log, "Semantic vectors: unavailable");
+    expectLogged(log, "Embeddings: unavailable");
+    expectLogged(log, "Embeddings error: No embedding provider available");
     expect(close).toHaveBeenCalled();
   });
 
@@ -466,8 +508,8 @@ describe("memory cli", () => {
     expect(probeVectorStoreAvailability).not.toHaveBeenCalled();
     expect(probeVectorAvailability).toHaveBeenCalled();
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector: ready"));
-    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Vector store:"));
+    expectLogged(log, "Vector: ready");
+    expectNotLogged(log, "Vector store:");
     expect(close).toHaveBeenCalled();
   });
 
@@ -498,8 +540,8 @@ describe("memory cli", () => {
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["status"]);
 
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Recall store: 1 entries"));
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: off"));
+      expectLogged(log, "Recall store: 1 entries");
+      expectLogged(log, "Dreaming: off");
       expect(close).toHaveBeenCalled();
     });
   });
@@ -553,8 +595,8 @@ describe("memory cli", () => {
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["status", "--fix"]);
 
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Repair: rewrote store"));
-      await expect(fs.stat(lockPath)).rejects.toThrow();
+      expectLogged(log, "Repair: rewrote store");
+      await expectPathMissing(lockPath);
       const repaired = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
         entries: Record<string, { conceptTags?: string[] }>;
       };
@@ -577,9 +619,7 @@ describe("memory cli", () => {
 
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["status"]);
-      expect(log).toHaveBeenCalledWith(
-        expect.stringContaining("Fix: openclaw memory status --fix --agent main"),
-      );
+      expectLogged(log, "Fix: openclaw memory status --fix --agent main");
 
       log.mockClear();
       mockManager({
@@ -588,9 +628,7 @@ describe("memory cli", () => {
         close,
       });
       await runMemoryCli(["status", "--fix"]);
-      expect(log).not.toHaveBeenCalledWith(
-        expect.stringContaining("Fix: openclaw memory status --fix --agent main"),
-      );
+      expectNotLogged(log, "Fix: openclaw memory status --fix --agent main");
     });
   });
 
@@ -623,10 +661,8 @@ describe("memory cli", () => {
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["status", "--fix"]);
 
-      expect(log).toHaveBeenCalledWith(
-        expect.stringContaining("Dream repair: archived session corpus"),
-      );
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Dream archive:"));
+      expectLogged(log, "Dream repair: archived session corpus");
+      expectLogged(log, "Dream archive:");
       await expect(fs.access(sessionCorpusDir)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(
         fs.access(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json")),
@@ -746,7 +782,7 @@ describe("memory cli", () => {
       await runMemoryCli(["index"]);
 
       expectCliSync(sync);
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("QMD index: "));
+      expectLogged(log, "QMD index: ");
       expect(log).toHaveBeenCalledWith("Memory index updated (main).");
       expect(close).toHaveBeenCalled();
     });
@@ -776,8 +812,8 @@ describe("memory cli", () => {
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["status"]);
 
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("QMD audit:"));
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("2 collections"));
+      expectLogged(log, "QMD audit:");
+      expectLogged(log, "2 collections");
       expect(close).toHaveBeenCalled();
     });
   });
@@ -865,12 +901,8 @@ describe("memory cli", () => {
     await runMemoryCli(["status", "--json"]);
 
     const payload = firstWrittenJsonArg<unknown[]>(writeJson);
-    expect(payload).not.toBeNull();
-    if (!payload) {
-      throw new Error("expected json payload");
-    }
     expect(Array.isArray(payload)).toBe(true);
-    expect((payload[0] as Record<string, unknown>)?.agentId).toBe("main");
+    expect((payload?.[0] as Record<string, unknown>)?.agentId).toBe("main");
     expect(probeVectorAvailability).not.toHaveBeenCalled();
     expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalled();
@@ -885,10 +917,6 @@ describe("memory cli", () => {
     await runMemoryCli(["status", "--json"]);
 
     const payload = firstWrittenJsonArg<unknown[]>(writeJson);
-    expect(payload).not.toBeNull();
-    if (!payload) {
-      throw new Error("expected json payload");
-    }
     expect(Array.isArray(payload)).toBe(true);
     expect(hasLoggedInactiveSecretDiagnostic(error)).toBe(true);
   });
@@ -1000,12 +1028,8 @@ describe("memory cli", () => {
     await runMemoryCli(["search", "hello", "--json"]);
 
     const payload = firstWrittenJsonArg<{ results: unknown[] }>(writeJson);
-    expect(payload).not.toBeNull();
-    if (!payload) {
-      throw new Error("expected json payload");
-    }
-    expect(Array.isArray(payload.results)).toBe(true);
-    expect(payload.results).toHaveLength(1);
+    expect(Array.isArray(payload?.results)).toBe(true);
+    expect(payload?.results).toHaveLength(1);
     expect(close).toHaveBeenCalled();
   });
 
@@ -1062,12 +1086,8 @@ describe("memory cli", () => {
       ]);
 
       const payload = firstWrittenJsonArg<{ candidates: unknown[] }>(writeJson);
-      expect(payload).not.toBeNull();
-      if (!payload) {
-        throw new Error("expected json payload");
-      }
-      expect(Array.isArray(payload.candidates)).toBe(true);
-      expect(payload.candidates).toHaveLength(1);
+      expect(Array.isArray(payload?.candidates)).toBe(true);
+      expect(payload?.candidates).toHaveLength(1);
       expect(close).toHaveBeenCalled();
     });
   });
@@ -1719,22 +1739,14 @@ describe("memory cli", () => {
   });
 
   async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
-    const startedAt = Date.now();
-    let lastError: unknown;
-    while (Date.now() - startedAt < timeoutMs) {
-      try {
-        return await task();
-      } catch (error) {
-        lastError = error;
-        await new Promise((resolve) => {
-          setTimeout(resolve, 10);
-        });
-      }
-    }
-    if (lastError instanceof Error) {
-      throw lastError;
-    }
-    throw new Error("Timed out waiting for async test condition");
+    let value: T | undefined;
+    await vi.waitFor(
+      async () => {
+        value = await task();
+      },
+      { interval: 1, timeout: timeoutMs },
+    );
+    return value as T;
   }
 
   it("records short-term recall entries from memory search hits", async () => {

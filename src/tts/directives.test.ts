@@ -168,7 +168,7 @@ describe("parseTtsDirectives provider-aware routing", () => {
     expect(result.overrides.provider).toBe("elevenlabs");
     expect(result.overrides.providerOverrides?.elevenlabs).toEqual({ modelId: "eleven_v3" });
     expect(result.overrides.providerOverrides?.openai).toBeUndefined();
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it("warns instead of routing prefixed tokens to another provider when provider is explicit", () => {
@@ -219,7 +219,7 @@ describe("parseTtsDirectives provider-aware routing", () => {
     expect(result.overrides.providerOverrides?.microsoft).toEqual({
       voice: "en-US-MichelleNeural",
     });
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it("warns once and drops non-provider tokens when the explicit provider is unknown", () => {

@@ -19,6 +19,16 @@ function resolveOpsTarget(cfg: OpenClawConfig, env = process.env) {
   });
 }
 
+type MatrixMigrationTarget = NonNullable<ReturnType<typeof resolveOpsTarget>>;
+
+function expectMigrationTarget(target: ReturnType<typeof resolveOpsTarget>): MatrixMigrationTarget {
+  expect(target).toEqual(expect.objectContaining({ homeserver: expect.any(String) }));
+  if (target === null) {
+    throw new Error("Expected Matrix migration account target");
+  }
+  return target;
+}
+
 describe("resolveMatrixMigrationAccountTarget", () => {
   it("reuses stored user identity for token-only configs when the access token matches", async () => {
     await withTempHome(async (home) => {
@@ -44,9 +54,9 @@ describe("resolveMatrixMigrationAccountTarget", () => {
 
       const target = resolveOpsTarget(cfg);
 
-      expect(target).not.toBeNull();
-      expect(target?.userId).toBe(MATRIX_OPS_USER_ID);
-      expect(target?.storedDeviceId).toBe("DEVICE-OPS");
+      const migrationTarget = expectMigrationTarget(target);
+      expect(migrationTarget.userId).toBe(MATRIX_OPS_USER_ID);
+      expect(migrationTarget.storedDeviceId).toBe("DEVICE-OPS");
     });
   });
 
@@ -76,10 +86,10 @@ describe("resolveMatrixMigrationAccountTarget", () => {
 
       const target = resolveOpsTarget(cfg);
 
-      expect(target).not.toBeNull();
-      expect(target?.userId).toBe("@new-bot:example.org");
-      expect(target?.accessToken).toBe("tok-new");
-      expect(target?.storedDeviceId).toBeNull();
+      const migrationTarget = expectMigrationTarget(target);
+      expect(migrationTarget.userId).toBe("@new-bot:example.org");
+      expect(migrationTarget.accessToken).toBe("tok-new");
+      expect(migrationTarget.storedDeviceId).toBeNull();
     });
   });
 
@@ -138,9 +148,9 @@ describe("resolveMatrixMigrationAccountTarget", () => {
 
       const target = resolveOpsTarget(cfg);
 
-      expect(target).not.toBeNull();
-      expect(target?.userId).toBe(MATRIX_OPS_USER_ID);
-      expect(target?.storedDeviceId).toBe("DEVICE-OPS");
+      const migrationTarget = expectMigrationTarget(target);
+      expect(migrationTarget.userId).toBe(MATRIX_OPS_USER_ID);
+      expect(migrationTarget.storedDeviceId).toBe("DEVICE-OPS");
     });
   });
 
@@ -219,10 +229,10 @@ describe("resolveMatrixMigrationAccountTarget", () => {
         accountId: "ops-prod",
       });
 
-      expect(target).not.toBeNull();
-      expect(target?.homeserver).toBe("https://matrix.example.org");
-      expect(target?.userId).toBe("@ops-prod:example.org");
-      expect(target?.accessToken).toBe("tok-ops-prod");
+      const migrationTarget = expectMigrationTarget(target);
+      expect(migrationTarget.homeserver).toBe("https://matrix.example.org");
+      expect(migrationTarget.userId).toBe("@ops-prod:example.org");
+      expect(migrationTarget.accessToken).toBe("tok-ops-prod");
     });
   });
 });

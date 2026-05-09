@@ -1981,10 +1981,12 @@ describe("prepareSlackMessage sender prefix", () => {
 
     const result = await prepareSenderPrefixMessage(ctx, "<@BOT> hello", "1700000000.0001");
 
-    expect(result).not.toBeNull();
-    const body = result?.ctxPayload.Body ?? "";
+    if (!result) {
+      throw new Error("expected Slack sender prefix message");
+    }
+    const body = result.ctxPayload.Body;
     expect(body).toContain("Alice (U1): <@BOT> (Bek) hello");
-    expect(result?.ctxPayload.RawBody).toBe("<@BOT> (Bek) hello");
+    expect(result.ctxPayload.RawBody).toBe("<@BOT> (Bek) hello");
   });
 
   it("keeps raw Slack mention tokens when user lookup cannot resolve them", async () => {
@@ -1997,10 +1999,12 @@ describe("prepareSlackMessage sender prefix", () => {
 
     const result = await prepareSenderPrefixMessage(ctx, "<@BOT> hello", "1700000000.0001");
 
-    expect(result).not.toBeNull();
-    const body = result?.ctxPayload.Body ?? "";
+    if (!result) {
+      throw new Error("expected Slack sender prefix message");
+    }
+    const body = result.ctxPayload.Body;
     expect(body).toContain("Alice (U1): <@BOT> hello");
-    expect(result?.ctxPayload.RawBody).toBe("<@BOT> hello");
+    expect(result.ctxPayload.RawBody).toBe("<@BOT> hello");
   });
 
   it("caps Slack mention username lookups per inbound message and leaves overflow mentions raw", async () => {
@@ -2103,8 +2107,9 @@ describe("prepareSlackMessage sender prefix", () => {
 
     const result = await prepareSenderPrefixMessage(ctx, "<@BOT> /new", "1700000000.0002");
 
-    expect(result).not.toBeNull();
-    expect(result?.ctxPayload.CommandAuthorized).toBe(true);
+    expect(result).toMatchObject({
+      ctxPayload: { CommandAuthorized: true },
+    });
   });
 });
 
@@ -2182,7 +2187,9 @@ describe("slack thread.requireExplicitMention", () => {
       message,
       opts: { source: "message" },
     });
-    expect(result).not.toBeNull();
+    if (!result) {
+      throw new Error("expected Slack thread reply message");
+    }
   });
 
   it("allows thread reply without explicit mention when requireExplicitMention is false (default)", async () => {
@@ -2209,6 +2216,8 @@ describe("slack thread.requireExplicitMention", () => {
       message,
       opts: { source: "message" },
     });
-    expect(result).not.toBeNull();
+    if (!result) {
+      throw new Error("expected Slack thread reply message");
+    }
   });
 });

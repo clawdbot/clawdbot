@@ -49,7 +49,7 @@ function requirePdfTool(
     ? R
     : never,
 ) {
-  expect(tool).not.toBeNull();
+  expect(typeof tool?.execute).toBe("function");
   if (!tool) {
     throw new Error("expected pdf tool");
   }

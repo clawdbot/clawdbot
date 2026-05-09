@@ -13,7 +13,7 @@ describe("nostr-profile-import", () => {
   describe("mergeProfiles", () => {
     it("returns empty object when both are undefined", () => {
       const result = mergeProfiles(undefined, undefined);
-      expect(result).toEqual({});
+      expect(result).toStrictEqual({});
     });
 
     it("returns imported when local is undefined", () => {

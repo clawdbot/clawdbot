@@ -40,10 +40,8 @@ describe("skills-remote", () => {
 
   it("supports idempotent remote node removal", () => {
     const nodeId = `node-${randomUUID()}`;
-    expect(() => {
-      removeRemoteNodeInfo(nodeId);
-      removeRemoteNodeInfo(nodeId);
-    }).not.toThrow();
+    expect(removeRemoteNodeInfo(nodeId)).toBeUndefined();
+    expect(removeRemoteNodeInfo(nodeId)).toBeUndefined();
   });
 
   it("bumps the skills snapshot version when an eligible remote node disconnects", async () => {
@@ -227,7 +225,7 @@ describe("skills-remote", () => {
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
     let invokeCount = 0;
-    let releaseProbe!: () => void;
+    let releaseProbe: (() => void) | undefined;
     const probeStarted = new Promise<void>((resolve) => {
       setSkillsRemoteRegistry({
         listConnected: () => [],
@@ -288,6 +286,9 @@ describe("skills-remote", () => {
         cfg,
         timeoutMs: 10,
       });
+      if (!releaseProbe) {
+        throw new Error("Expected remote skill probe release callback to be initialized");
+      }
       releaseProbe();
 
       await Promise.all([first, second]);

@@ -146,12 +146,13 @@ function isTypeOnlyClause(clause: string | undefined): boolean {
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
     return false;
   }
-  return trimmed
-    .slice(1, -1)
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .every((part) => part.startsWith("type "));
+  for (const part of trimmed.slice(1, -1).split(",")) {
+    const importName = part.trim();
+    if (importName.length > 0 && !importName.startsWith("type ")) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function collectRuntimeImports(filePath: string): string[] {
@@ -228,7 +229,8 @@ describe("extension runtime dependency manifests", () => {
   it("keeps json5 in memory-core for packaged runtime config parsing", () => {
     const manifest = readPackageManifest("extensions/memory-core/package.json");
 
-    expect(manifest.dependencies?.json5).toEqual(expect.any(String));
+    expect(manifest.dependencies?.json5).toBeTypeOf("string");
+    expect(manifest.dependencies?.json5).not.toBe("");
   });
 
   for (const manifestPath of listPackageManifests(EXTENSION_ROOT)) {
@@ -258,7 +260,7 @@ describe("extension runtime dependency manifests", () => {
         }
       }
 
-      expect(Object.fromEntries(missing)).toEqual({});
+      expect(Object.fromEntries(missing)).toStrictEqual({});
     });
 
     it(`${extensionDir} does not keep unused direct runtime dependencies`, () => {

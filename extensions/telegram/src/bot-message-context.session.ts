@@ -45,6 +45,13 @@ type FinalizedTelegramInboundContext = ReturnType<
   typeof import("./bot-message-context.session.runtime.js").finalizeInboundContext
 >;
 
+export type TelegramInboundContextPayload = FinalizedTelegramInboundContext & {
+  From: string;
+  To: string;
+  ChatType: string;
+  RawBody: string;
+};
+
 type TelegramMessageContextSessionRuntime =
   typeof import("./bot-message-context.session.runtime.js");
 
@@ -175,7 +182,7 @@ export async function buildTelegramInboundContextPayload(params: {
   topicName?: string;
   sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
 }): Promise<{
-  ctxPayload: FinalizedTelegramInboundContext;
+  ctxPayload: TelegramInboundContextPayload;
   skillFilter: string[] | undefined;
   turn: {
     storePath: string;

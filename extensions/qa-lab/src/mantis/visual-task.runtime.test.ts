@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runMantisVisualDriver, runMantisVisualTask } from "./visual-task.runtime.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("mantis visual task runtime", () => {
   let repoRoot: string;
 
@@ -102,8 +106,9 @@ describe("mantis visual task runtime", () => {
       ]),
     );
     expect(stagedVideoPath).not.toBe(finalVideoPath);
-    expect(path.basename(stagedVideoPath ?? "")).toBe(path.basename(finalVideoPath));
-    await expect(fs.stat(stagedVideoPath ?? "")).rejects.toThrow();
+    expect(path.basename(stagedVideoPath ?? "")).toContain(path.basename(finalVideoPath));
+    expect(path.basename(stagedVideoPath ?? "")).toMatch(/\.part$/);
+    await expectPathMissing(stagedVideoPath ?? "");
     await expect(fs.readFile(result.screenshotPath ?? "", "utf8")).resolves.toBe("png");
     await expect(fs.readFile(result.videoPath ?? "", "utf8")).resolves.toBe("mp4");
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
@@ -266,7 +271,7 @@ describe("mantis visual task runtime", () => {
       ),
     );
     await expect(fs.readFile(result.videoPath ?? "", "utf8")).resolves.toBe("mp4");
-    await expect(fs.stat(stagedVideoPath)).rejects.toThrow();
+    await expectPathMissing(stagedVideoPath);
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
       artifacts?: { videoPath?: string };
       error?: string;

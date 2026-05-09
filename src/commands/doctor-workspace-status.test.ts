@@ -163,7 +163,7 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
-      expect(noteSpy.mock.calls.some(([, title]) => title === "Plugin compatibility")).toBe(false);
+      expect(noteSpy.mock.calls.map(([, title]) => title)).not.toContain("Plugin compatibility");
     } finally {
       noteSpy.mockRestore();
     }

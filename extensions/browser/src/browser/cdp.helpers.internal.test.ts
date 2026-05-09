@@ -354,7 +354,7 @@ describe("cdp.helpers internal", () => {
         withCdpSocket("ws://127.0.0.1:1/devtools/browser/NO", async () => {
           return "unreachable";
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/ECONNREFUSED|CDP socket closed/);
     });
 
     it("wraps a non-Error callback throw before closing the socket", async () => {
@@ -438,7 +438,7 @@ describe("cdp.helpers internal", () => {
         withCdpSocket(server.url, async (send) => {
           await send("Test.boom");
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/CDP socket closed|WebSocket was closed/i);
     });
 
     // The non-Error branch of the `err instanceof Error ? ... : new Error(String(err))`

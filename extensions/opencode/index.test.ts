@@ -14,17 +14,12 @@ describe("opencode provider plugin", () => {
       name: "OpenCode Zen Provider",
     });
 
-    expect(mediaProviders).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "opencode",
-          capabilities: ["image"],
-          defaultModels: { image: "gpt-5-nano" },
-          describeImage: expect.any(Function),
-          describeImages: expect.any(Function),
-        }),
-      ]),
-    );
+    const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode");
+    expect(mediaProvider).toBeDefined();
+    expect(mediaProvider?.capabilities).toEqual(["image"]);
+    expect(mediaProvider?.defaultModels).toEqual({ image: "gpt-5-nano" });
+    expect(typeof mediaProvider?.describeImage).toBe("function");
+    expect(typeof mediaProvider?.describeImages).toBe("function");
   });
 
   it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
@@ -51,7 +46,10 @@ describe("opencode provider plugin", () => {
       name: "OpenCode Zen Provider",
     });
     const provider = requireRegisteredProvider(providers, "opencode");
-    const resolveThinkingProfile = provider.resolveThinkingProfile!;
+    const resolveThinkingProfile = provider.resolveThinkingProfile;
+    if (!resolveThinkingProfile) {
+      throw new Error("Expected OpenCode provider resolveThinkingProfile");
+    }
 
     expect(
       resolveThinkingProfile({

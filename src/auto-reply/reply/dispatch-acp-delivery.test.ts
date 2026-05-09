@@ -87,6 +87,26 @@ function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>)
   });
 }
 
+async function raceWithTimeoutResult<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutResult: T,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(timeoutResult), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 function createVisibleChatAcpCoordinator(cfg: OpenClawConfig) {
   return createAcpDispatchDeliveryCoordinator({
     cfg,
@@ -356,12 +376,11 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     );
     const coordinator = createCoordinator(onReplyStart);
 
-    const delivered = await Promise.race([
+    const delivered = await raceWithTimeoutResult(
       coordinator.deliver("final", { text: "hello" }).then(() => "delivered"),
-      new Promise<string>((resolve) => {
-        setTimeout(() => resolve("timed-out"), 50);
-      }),
-    ]);
+      50,
+      "timed-out",
+    );
 
     expect(delivered).toBe("delivered");
     expect(onReplyStart).toHaveBeenCalledTimes(1);

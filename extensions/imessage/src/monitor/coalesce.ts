@@ -1,14 +1,13 @@
 import type { IMessagePayload } from "./types.js";
 
-// Mirrors BlueBubbles' `combineDebounceEntries` semantics (caps, ID tracking,
-// reply-context preference) deliberately, so a future SDK lift into
-// `openclaw/plugin-sdk/channel-inbound` is a mechanical extraction instead of
-// a behavioral redesign. Both bundled Apple-store readers (BlueBubbles and
-// imsg) face the same Apple split-send pipeline.
+// Keep the coalescing contract narrow (caps, ID tracking, reply-context
+// preference) so a future SDK lift into `openclaw/plugin-sdk/channel-inbound`
+// is a mechanical extraction instead of a behavioral redesign. Apple's
+// split-send pipeline is the behavior this protects.
 
 /**
  * Bounds on the merged output when multiple inbound iMessage payloads are
- * folded into one agent turn. Mirrors the BlueBubbles caps so a sender who
+ * folded into one agent turn. Caps each merge so a sender who
  * rapid-fires DMs inside the debounce window cannot amplify the downstream
  * prompt past a safe ceiling. Every source GUID still surfaces via
  * `coalescedMessageGuids` so a future replay path can recognize duplicates.

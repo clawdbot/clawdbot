@@ -34,7 +34,7 @@ describe("check-no-random-messaging-tmp", () => {
       // os.tmpdir()
       const text = "tmpdir()";
     `;
-    expect(findMessagingTmpdirCallLines(source)).toEqual([]);
+    expect(findMessagingTmpdirCallLines(source)).toStrictEqual([]);
   });
 
   it("ignores tmpdir symbols that are not imported from node:os", () => {
@@ -42,7 +42,7 @@ describe("check-no-random-messaging-tmp", () => {
       const tmpdir = () => "/tmp";
       const dir = tmpdir();
     `;
-    expect(findMessagingTmpdirCallLines(source)).toEqual([]);
+    expect(findMessagingTmpdirCallLines(source)).toStrictEqual([]);
   });
 
   it("guards src/media against host tmpdir usage", () => {

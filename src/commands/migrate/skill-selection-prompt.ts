@@ -201,3 +201,5 @@ export function promptMigrationSkillSelectionValues(
 
   return prompt.prompt();
 }
+
+export const promptMigrationSelectionValues = promptMigrationSkillSelectionValues;

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import OpenClaw
 
@@ -64,5 +65,77 @@ struct ConfigStoreTests {
         await ConfigStore._testClearOverrides()
         #expect(localHit)
         #expect(!remoteHit)
+    }
+
+    @Test func `local save does not fall back to direct write after stale gateway rejection`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                    "auth": [
+                        "mode": "token",
+                        "token": "test-token", // pragma: allowlist secret
+                    ],
+                ],
+            ])
+            let before = try String(contentsOf: configPath, encoding: .utf8)
+            await ConfigStore._testSetOverrides(.init(
+                isRemoteMode: { false },
+                saveGateway: { _ in
+                    throw NSError(domain: "Gateway", code: 0, userInfo: [
+                        NSLocalizedDescriptionKey: "config changed since last load; re-run config.get and retry",
+                    ])
+                }))
+
+            var didThrow = false
+            do {
+                try await ConfigStore.save(["browser": ["enabled": false]])
+            } catch {
+                didThrow = true
+            }
+            await ConfigStore._testClearOverrides()
+
+            #expect(didThrow)
+            let after = try String(contentsOf: configPath, encoding: .utf8)
+            #expect(after == before)
+        }
+    }
+
+    @Test func `local save can fall back to protected direct write when gateway is unavailable`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            await ConfigStore._testSetOverrides(.init(
+                isRemoteMode: { false },
+                saveGateway: { _ in
+                    throw NSError(domain: "Gateway", code: 0, userInfo: [
+                        NSLocalizedDescriptionKey: "gateway not configured",
+                    ])
+                }))
+            try await ConfigStore.save([
+                "gateway": ["mode": "local"],
+                "browser": ["enabled": false],
+            ])
+            await ConfigStore._testClearOverrides()
+
+            let data = try Data(contentsOf: configPath)
+            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            #expect(((root?["browser"] as? [String: Any])?["enabled"] as? Bool) == false)
+            #expect((root?["meta"] as? [String: Any]) != nil)
+        }
     }
 }

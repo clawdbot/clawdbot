@@ -65,6 +65,10 @@ async function captureRenameDestinations(action: () => Promise<void>): Promise<s
   return renamedDestinations;
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("resolveCronStorePath", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -198,7 +202,7 @@ describe("cron store", () => {
     await saveCronStore(store.storePath, payload);
     await saveCronStore(store.storePath, payload);
 
-    await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
+    await expectPathMissing(`${store.storePath}.bak`);
   });
 
   it("backs up previous content before replacing the store", async () => {
@@ -215,9 +219,9 @@ describe("cron store", () => {
     const backup = JSON.parse(backupRaw);
     // jobs.json now contains config-only (state stripped to {}).
     expect(current.jobs[0].id).toBe("job-2");
-    expect(current.jobs[0].state).toEqual({});
+    expect(current.jobs[0].state).toStrictEqual({});
     expect(backup.jobs[0].id).toBe("job-1");
-    expect(backup.jobs[0].state).toEqual({});
+    expect(backup.jobs[0].state).toStrictEqual({});
   });
 
   it("skips backup files for runtime-only state churn", async () => {
@@ -242,7 +246,7 @@ describe("cron store", () => {
     // jobs.json should NOT be rewritten (only runtime changed).
     const configRaw = await fs.readFile(store.storePath, "utf-8");
     const config = JSON.parse(configRaw);
-    expect(config.jobs[0].state).toEqual({});
+    expect(config.jobs[0].state).toStrictEqual({});
     expect(config.jobs[0]).not.toHaveProperty("updatedAtMs");
 
     // State file should contain runtime fields.
@@ -254,7 +258,7 @@ describe("cron store", () => {
     );
     expect(typeof stateFile.jobs[first.jobs[0].id].scheduleIdentity).toBe("string");
 
-    await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
+    await expectPathMissing(`${store.storePath}.bak`);
   });
 
   it("drops stale split runtime nextRunAtMs when schedule identity changes across restart", async () => {
@@ -322,7 +326,7 @@ describe("cron store", () => {
     const config = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(Array.isArray(config.jobs)).toBe(true);
     expect(config.jobs[0].id).toBe("job-1");
-    expect(config.jobs[0].state).toEqual({});
+    expect(config.jobs[0].state).toStrictEqual({});
 
     const stateFile = JSON.parse(await fs.readFile(statePath, "utf-8"));
     expect(stateFile.jobs["job-1"].state.nextRunAtMs).toBe(first.jobs[0].createdAtMs + 60_000);
@@ -374,7 +378,7 @@ describe("cron store", () => {
     const stateRawAfter = await fs.readFile(statePath, "utf-8");
 
     expect(config.jobs[0].id).toBe("job-1");
-    expect(config.jobs[0].state).toEqual({});
+    expect(config.jobs[0].state).toStrictEqual({});
     expect(stateRawAfter).toBe(stateRawBefore);
     expect(renamedDestinations).toContain(store.storePath);
     expect(renamedDestinations).not.toContain(statePath);
@@ -399,7 +403,7 @@ describe("cron store", () => {
     const stateFile = JSON.parse(await fs.readFile(statePath, "utf-8"));
 
     expect(config.jobs[0]).not.toHaveProperty("updatedAtMs");
-    expect(config.jobs[0].state).toEqual({});
+    expect(config.jobs[0].state).toStrictEqual({});
     expect(stateFile.jobs["job-1"].updatedAtMs).toBe(legacy.jobs[0].updatedAtMs);
     expect(stateFile.jobs["job-1"].state.nextRunAtMs).toBe(legacy.jobs[0].createdAtMs + 60_000);
   });
@@ -454,7 +458,7 @@ describe("cron store", () => {
     const loaded = await loadCronStore(store.storePath);
 
     expect(loaded.jobs[0]?.updatedAtMs).toBe(payload.jobs[0].createdAtMs);
-    expect(loaded.jobs[0]?.state).toEqual({});
+    expect(loaded.jobs[0]?.state).toStrictEqual({});
   });
 
   it("propagates unreadable state sidecar errors", async () => {

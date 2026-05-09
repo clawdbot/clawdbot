@@ -2,11 +2,21 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { CrossContextDecoration } from "./outbound-policy.js";
 
 let applyCrossContextDecoration: typeof import("./outbound-policy.js").applyCrossContextDecoration;
 let buildCrossContextDecoration: typeof import("./outbound-policy.js").buildCrossContextDecoration;
 let enforceCrossContextPolicy: typeof import("./outbound-policy.js").enforceCrossContextPolicy;
 let shouldApplyCrossContextMarker: typeof import("./outbound-policy.js").shouldApplyCrossContextMarker;
+
+function expectCrossContextDecoration(
+  decoration: CrossContextDecoration | null,
+): CrossContextDecoration {
+  if (decoration === null) {
+    throw new Error("Expected cross-context decoration");
+  }
+  return decoration;
+}
 
 const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn((channel: string) =>
@@ -99,7 +109,7 @@ function expectCrossContextPolicyResult(params: {
       },
     });
   if (params.expected === "allow") {
-    expect(run).not.toThrow();
+    expect(run()).toBeUndefined();
     return;
   }
   expect(run).toThrow(params.expected);
@@ -183,10 +193,10 @@ describe("outbound policy helpers", () => {
       toolContext: { currentChannelId: "C12345678", currentChannelProvider: "richchat" },
     });
 
-    expect(decoration).not.toBeNull();
+    const requiredDecoration = expectCrossContextDecoration(decoration);
     const applied = applyCrossContextDecoration({
       message: "hello",
-      decoration: decoration!,
+      decoration: requiredDecoration,
       preferPresentation: true,
     });
 

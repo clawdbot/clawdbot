@@ -648,9 +648,9 @@ describe("redactConfigSnapshot", () => {
     const result = redactConfigSnapshot(snapshot);
     expect(result.raw).toBeNull();
     expect(result.parsed).toBeNull();
-    expect(result.sourceConfig).toEqual({});
-    expect(result.resolved).toEqual({});
-    expect(result.runtimeConfig).toEqual({});
+    expect(result.sourceConfig).toStrictEqual({});
+    expect(result.resolved).toStrictEqual({});
+    expect(result.runtimeConfig).toStrictEqual({});
     expect(result.sourceConfig).toBe(result.resolved);
     expect(result.runtimeConfig).toBe(result.config);
   });

@@ -4,6 +4,21 @@ vi.mock("./post-json.js", () => ({
   postJson: vi.fn(),
 }));
 
+type RetryOptions = {
+  attempts: number;
+  minDelayMs: number;
+  maxDelayMs: number;
+  shouldRetry: (err: unknown) => boolean;
+};
+
+function requireRetryOptions(call: unknown[] | undefined): RetryOptions {
+  const options = call?.[1] as RetryOptions | undefined;
+  if (!options) {
+    throw new Error("expected retry options");
+  }
+  return options;
+}
+
 describe("postJsonWithRetry", () => {
   let postJsonMock: ReturnType<typeof vi.mocked<typeof import("./post-json.js").postJson>>;
   let postJsonWithRetry: typeof import("./batch-http.js").postJsonWithRetry;
@@ -44,20 +59,13 @@ describe("postJsonWithRetry", () => {
       }),
     );
 
-    const retryOptions = retryAsyncMock.mock.calls[0]?.[1] as
-      | {
-          attempts: number;
-          minDelayMs: number;
-          maxDelayMs: number;
-          shouldRetry: (err: unknown) => boolean;
-        }
-      | undefined;
-    expect(retryOptions?.attempts).toBe(3);
-    expect(retryOptions?.minDelayMs).toBe(300);
-    expect(retryOptions?.maxDelayMs).toBe(2000);
-    expect(retryOptions?.shouldRetry({ status: 429 })).toBe(true);
-    expect(retryOptions?.shouldRetry({ status: 503 })).toBe(true);
-    expect(retryOptions?.shouldRetry({ status: 400 })).toBe(false);
+    const retryOptions = requireRetryOptions(retryAsyncMock.mock.calls[0]);
+    expect(retryOptions.attempts).toBe(3);
+    expect(retryOptions.minDelayMs).toBe(300);
+    expect(retryOptions.maxDelayMs).toBe(2000);
+    expect(retryOptions.shouldRetry({ status: 429 })).toBe(true);
+    expect(retryOptions.shouldRetry({ status: 503 })).toBe(true);
+    expect(retryOptions.shouldRetry({ status: 400 })).toBe(false);
   });
 
   it("attaches status to non-ok errors", async () => {

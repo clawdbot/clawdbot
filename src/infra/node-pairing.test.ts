@@ -27,11 +27,9 @@ async function setupPairedNode(baseDir: string): Promise<string> {
     baseDir,
   );
   const paired = await getPairedNode("node-1", baseDir);
-  expect(paired).not.toBeNull();
-  if (!paired) {
-    throw new Error("expected node to be paired");
-  }
-  return paired.token;
+  expect(typeof paired?.token).toBe("string");
+  expect(paired?.token.length).toBeGreaterThan(0);
+  return paired!.token;
 }
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" });

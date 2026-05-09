@@ -9,7 +9,10 @@ describe("gateway startup benchmark script", () => {
       {
         cwd: process.cwd(),
         encoding: "utf8",
-        env: process.env,
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: "1",
+        },
       },
     );
 

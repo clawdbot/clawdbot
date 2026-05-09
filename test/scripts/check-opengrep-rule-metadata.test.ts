@@ -13,7 +13,7 @@ const validRule = {
 
 describe("check-opengrep-rule-metadata", () => {
   it("accepts GHSA-backed rules with durable source metadata", () => {
-    expect(validateRuleMetadata([validRule])).toEqual([]);
+    expect(validateRuleMetadata([validRule])).toStrictEqual([]);
   });
 
   it("requires source metadata on every compiled rule", () => {
@@ -46,7 +46,7 @@ describe("check-opengrep-rule-metadata", () => {
           },
         },
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps the source id, rule id, and GHSA advisory URL consistent", () => {

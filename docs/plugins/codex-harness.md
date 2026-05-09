@@ -396,12 +396,33 @@ and lets the next turn resolve the harness from current config again.
 
 ## Model discovery
 
-By default, the Codex plugin asks the app-server for available models. If
-discovery fails or times out, it uses a bundled fallback catalog for:
+By default, the Codex plugin asks the app-server for available models. Model
+availability is owned by the Codex app-server harness, so the list can change
+when OpenClaw upgrades the bundled `@openai/codex` version or when a deployment
+points `appServer.command` at a different Codex binary. Availability can also be
+account-scoped. Use `/codex models` on a running gateway to see the live catalog
+for that harness and account.
+
+If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 
 - GPT-5.5
 - GPT-5.4 mini
 - GPT-5.2
+
+The current bundled harness is `@openai/codex` `0.129.0`. A `model/list` probe
+against that bundled app-server returned:
+
+| Model id            | Default | Hidden | Input modalities | Reasoning efforts        |
+| ------------------- | ------- | ------ | ---------------- | ------------------------ |
+| `gpt-5.5`           | Yes     | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.4`           | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.4-mini`      | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.3-codex`     | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.2`           | No      | No     | text, image      | low, medium, high, xhigh |
+| `codex-auto-review` | No      | Yes    | text, image      | low, medium, high, xhigh |
+
+Hidden models are returned by the app-server catalog for internal or specialized
+flows, but they are not normal model-picker choices.
 
 You can tune discovery under `plugins.entries.codex.config.discovery`:
 

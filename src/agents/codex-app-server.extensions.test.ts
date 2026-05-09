@@ -435,9 +435,13 @@ describe("Codex app-server extension factories", () => {
 
   it("initializes async Codex app-server extension factories in registration order", async () => {
     const steps: string[] = [];
+    let releaseFirstFactory: () => void = () => {};
+    const firstFactoryCanContinue = new Promise<void>((resolve) => {
+      releaseFirstFactory = resolve;
+    });
     const runner = createCodexAppServerToolResultExtensionRunner({}, [
       async (codex) => {
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await firstFactoryCanContinue;
         codex.on("tool_result", async ({ result }) => {
           steps.push("first");
           return {
@@ -456,6 +460,7 @@ describe("Codex app-server extension factories", () => {
       },
     ]);
 
+    releaseFirstFactory();
     await runner.applyToolResultExtensions({
       threadId: "thread-1",
       turnId: "turn-1",

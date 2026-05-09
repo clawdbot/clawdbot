@@ -225,7 +225,7 @@ describe("maybeRepairPluginRegistryState", () => {
       prompter: { shouldRepair: true },
     });
 
-    expect(nextConfig).toEqual({});
+    expect(nextConfig).toStrictEqual({});
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
       refreshReason: "migration",
       plugins: [
@@ -248,7 +248,7 @@ describe("maybeRepairPluginRegistryState", () => {
       prompter: { shouldRepair: true },
     });
 
-    expect(nextConfig).toEqual({});
+    expect(nextConfig).toStrictEqual({});
     expect(vi.mocked(note).mock.calls.join("\n")).toContain(DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV);
   });
 

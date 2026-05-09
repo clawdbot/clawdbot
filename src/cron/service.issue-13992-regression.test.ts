@@ -189,7 +189,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
 
     const state = createMockCronStateForJobs({ jobs: [dueJob, malformedJob], nowMs: now });
 
-    expect(() => recomputeNextRunsForMaintenance(state)).not.toThrow();
+    expect(recomputeNextRunsForMaintenance(state)).toBe(true);
     expect(dueJob.state.nextRunAtMs).toBe(pastDue);
     expect(malformedJob.state.nextRunAtMs).toBeUndefined();
     expect(malformedJob.state.scheduleErrorCount).toBe(1);

@@ -63,6 +63,10 @@ function toolResultMessage(content: Extract<Message, { role: "toolResult" }>["co
   };
 }
 
+function eventTypes(events: readonly Pick<TrajectoryEvent, "type">[]): string[] {
+  return events.map((event) => event.type);
+}
+
 function writeSimpleSessionFile(
   sessionFile: string,
   params: { userEntryTimestamp?: string | number } = {},
@@ -216,7 +220,7 @@ describe("exportTrajectoryBundle", () => {
         sessionId: "session-1",
         workspaceDir: tmpDir,
       }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: "EEXIST" });
   });
 
   it("does not synthesize prompt files from export-time fallbacks", async () => {
@@ -332,7 +336,7 @@ describe("exportTrajectoryBundle", () => {
     });
 
     expect(bundle.manifest.runtimeEventCount).toBe(1);
-    expect(bundle.events.some((event) => event.type === "session.started")).toBe(true);
+    expect(eventTypes(bundle.events)).toContain("session.started");
   });
 
   it("uses the recorded runtime pointer before current environment overrides", async () => {
@@ -395,8 +399,8 @@ describe("exportTrajectoryBundle", () => {
       });
 
       expect(bundle.runtimeFile).toBe(recordedRuntimeFile);
-      expect(bundle.events.some((event) => event.type === "recorded-runtime")).toBe(true);
-      expect(bundle.events.some((event) => event.type === "env-runtime")).toBe(false);
+      expect(eventTypes(bundle.events)).toContain("recorded-runtime");
+      expect(eventTypes(bundle.events)).not.toContain("env-runtime");
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_TRAJECTORY_DIR;
@@ -446,7 +450,7 @@ describe("exportTrajectoryBundle", () => {
     });
 
     expect(bundle.runtimeFile).toBeUndefined();
-    expect(bundle.events.some((event) => event.type === "outside-runtime")).toBe(false);
+    expect(eventTypes(bundle.events)).not.toContain("outside-runtime");
   });
 
   it("does not fall back to runtime pointer targets that are not regular files", async () => {
@@ -492,7 +496,7 @@ describe("exportTrajectoryBundle", () => {
     });
 
     expect(bundle.runtimeFile).toBeUndefined();
-    expect(bundle.events.some((event) => event.type === "symlink-runtime")).toBe(false);
+    expect(eventTypes(bundle.events)).not.toContain("symlink-runtime");
   });
 
   it("counts expanded transcript events when enforcing the total event limit", async () => {
@@ -542,7 +546,7 @@ describe("exportTrajectoryBundle", () => {
     });
 
     expect(bundle.manifest.runtimeEventCount).toBe(0);
-    expect(bundle.events.some((event) => event.type === "other-runtime")).toBe(false);
+    expect(eventTypes(bundle.events)).not.toContain("other-runtime");
   });
 
   it("redacts non-workspace paths in strings that also contain workspace paths", async () => {
@@ -744,9 +748,9 @@ describe("exportTrajectoryBundle", () => {
       .trim()
       .split(/\r?\n/u)
       .map((line) => JSON.parse(line) as TrajectoryEvent);
-    expect(exportedEvents.some((event) => event.type === "tool.call")).toBe(true);
-    expect(exportedEvents.some((event) => event.type === "tool.result")).toBe(true);
-    expect(exportedEvents.some((event) => event.type === "context.compiled")).toBe(true);
+    expect(eventTypes(exportedEvents)).toEqual(
+      expect.arrayContaining(["tool.call", "tool.result", "context.compiled"]),
+    );
     expect(JSON.stringify(exportedEvents)).toContain("$WORKSPACE_DIR/inside.txt");
     expect(JSON.stringify(exportedEvents)).not.toContain("$WORKSPACE_DIR2");
 
@@ -767,7 +771,8 @@ describe("exportTrajectoryBundle", () => {
       "system-prompt.txt",
       "tools.json",
     ]);
-    expect(manifest.contents?.every((entry) => entry.bytes > 0)).toBe(true);
+    const emptyContents = (manifest.contents ?? []).filter((entry) => entry.bytes <= 0);
+    expect(emptyContents).toEqual([]);
 
     const metadata = JSON.parse(fs.readFileSync(path.join(outputDir, "metadata.json"), "utf8")) as {
       skills?: { entries?: Array<{ id?: string; invoked?: boolean }> };

@@ -780,20 +780,28 @@ describe("google-meet CLI", () => {
         ],
         { from: "user" },
       );
-      expect(callGatewayFromCli).toHaveBeenCalledWith(
-        "googlemeet.join",
-        { json: true, timeout: expect.any(String) },
-        {
-          url: "https://meet.google.com/abc-defg-hij",
-          transport: "chrome-node",
-          mode: "realtime",
-          message: "Hello meeting",
-          dialInNumber: undefined,
-          pin: undefined,
-          dtmfSequence: undefined,
-        },
-        { progress: false },
-      );
+      const gatewayCall = callGatewayFromCli.mock.calls[0] as unknown as
+        | [
+            string,
+            { json?: boolean; timeout?: unknown },
+            Record<string, unknown>,
+            { progress?: boolean },
+          ]
+        | undefined;
+      expect(gatewayCall?.[0]).toBe("googlemeet.join");
+      expect(gatewayCall?.[1]?.json).toBe(true);
+      expect(typeof gatewayCall?.[1]?.timeout).toBe("string");
+      expect(gatewayCall?.[1]?.timeout).not.toBe("");
+      expect(gatewayCall?.[2]).toEqual({
+        url: "https://meet.google.com/abc-defg-hij",
+        transport: "chrome-node",
+        mode: "realtime",
+        message: "Hello meeting",
+        dialInNumber: undefined,
+        pin: undefined,
+        dtmfSequence: undefined,
+      });
+      expect(gatewayCall?.[3]).toEqual({ progress: false });
       expect(ensureRuntime).not.toHaveBeenCalled();
       expect(JSON.parse(stdout.output())).toMatchObject({
         id: "meet_gateway",

@@ -138,7 +138,7 @@ describe("resolveChannelMatchConfig", () => {
 describe("validateSenderIdentity", () => {
   it("allows direct messages without sender fields", () => {
     const ctx: MsgContext = { ChatType: "direct" };
-    expect(validateSenderIdentity(ctx)).toEqual([]);
+    expect(validateSenderIdentity(ctx)).toStrictEqual([]);
   });
 
   it("requires some sender identity for non-direct chats", () => {

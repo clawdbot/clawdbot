@@ -10,7 +10,7 @@ describe("readSessionStoreReadOnly", () => {
       const storePath = path.join(dir, "sessions.json");
 
       await fs.writeFile(storePath, '["not-an-object"]\n', "utf8");
-      expect(readSessionStoreReadOnly(storePath)).toEqual({});
+      expect(readSessionStoreReadOnly(storePath)).toStrictEqual({});
 
       await fs.writeFile(storePath, '{"session-1":{"sessionId":"s1","updatedAt":1}}\n', "utf8");
       expect(readSessionStoreReadOnly(storePath)).toMatchObject({

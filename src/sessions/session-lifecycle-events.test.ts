@@ -48,12 +48,12 @@ describe("session lifecycle events", () => {
     const unsubscribeNoisy = onSessionLifecycleEvent(noisy.listener);
     const unsubscribeHealthy = onSessionLifecycleEvent(healthy.listener);
 
-    expect(() =>
+    expect(
       emitSessionLifecycleEvent({
         sessionKey: "agent:main:main",
         reason: "resumed",
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     expect(noisy.calls).toHaveLength(1);
     expect(healthy.calls).toHaveLength(1);

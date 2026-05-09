@@ -691,7 +691,7 @@ describe("models list/status", () => {
     ]);
   });
 
-  it("toModelRow does not crash without cfg/authStore when availability is undefined", () => {
+  it("toModelRow marks unavailable when cfg/authStore and availability are undefined", () => {
     const row = toModelRow({
       model: makeGoogleAntigravityTemplate(
         "claude-opus-4-6-thinking",

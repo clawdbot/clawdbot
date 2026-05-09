@@ -53,7 +53,7 @@ describe("createCacheTrace", () => {
       },
     });
 
-    expect(trace).not.toBeNull();
+    expect(typeof trace?.recordStage).toBe("function");
     expect(trace?.filePath).toBe(resolveUserPath("~/.openclaw/logs/cache-trace.jsonl"));
 
     trace?.recordStage("session:loaded", {

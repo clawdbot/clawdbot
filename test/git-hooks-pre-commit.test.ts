@@ -53,6 +53,16 @@ function installPreCommitFixture(dir: string): string {
   return fakeBinDir;
 }
 
+function splitNonEmptyLines(output: string): string[] {
+  const lines: string[] = [];
+  for (const line of output.split("\n")) {
+    if (line) {
+      lines.push(line);
+    }
+  }
+  return lines;
+}
+
 afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
@@ -76,7 +86,7 @@ describe("git-hooks/pre-commit (integration)", () => {
       PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
     });
 
-    const staged = run(dir, "git", ["diff", "--cached", "--name-only"]).split("\n").filter(Boolean);
+    const staged = splitNonEmptyLines(run(dir, "git", ["diff", "--cached", "--name-only"]));
     expect(staged).toEqual(["--all"]);
   });
 
@@ -123,7 +133,7 @@ describe("git-hooks/pre-commit (integration)", () => {
       PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
     });
 
-    const staged = run(dir, "git", ["diff", "--cached", "--name-only"]).split("\n").filter(Boolean);
+    const staged = splitNonEmptyLines(run(dir, "git", ["diff", "--cached", "--name-only"]));
     expect(staged).toEqual([".agents/skills/discord-clawd/SKILL.md", ".gitignore"]);
   });
 

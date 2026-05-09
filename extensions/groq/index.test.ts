@@ -46,6 +46,11 @@ describe("groq provider compat", () => {
       label: "Groq",
       envVars: ["GROQ_API_KEY"],
     });
-    expect(captured.mediaUnderstandingProviders[0]?.id).toBe("groq");
+    expect(captured.mediaUnderstandingProviders).toHaveLength(1);
+    const [mediaProvider] = captured.mediaUnderstandingProviders;
+    if (!mediaProvider) {
+      throw new Error("Expected Groq media understanding provider");
+    }
+    expect(mediaProvider.id).toBe("groq");
   });
 });

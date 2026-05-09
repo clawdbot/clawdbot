@@ -272,7 +272,8 @@ describe("parseLineDirectives", () => {
           expect(flexMessage.contents?.footer?.contents?.length, testCase.name).toBeGreaterThan(0);
         }
         if ("expectBodyContents" in testCase && testCase.expectBodyContents) {
-          expect(flexMessage.contents?.body?.contents, testCase.name).toEqual(expect.any(Array));
+          expect(Array.isArray(flexMessage.contents?.body?.contents), testCase.name).toBe(true);
+          expect(flexMessage.contents?.body?.contents?.length, testCase.name).toBeGreaterThan(0);
         }
       }
     });

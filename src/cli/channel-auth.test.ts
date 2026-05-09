@@ -225,7 +225,7 @@ describe("channel-auth", () => {
     mocks.loadConfig.mockReturnValue({ channels: { whatsapp: { enabled: false } } });
 
     await expect(runChannelLogin({}, runtime)).rejects.toThrow(
-      "Channel is required (no configured channels support login).",
+      "No configured channel supports login.",
     );
     expect(mocks.login).not.toHaveBeenCalled();
   });
@@ -313,7 +313,7 @@ describe("channel-auth", () => {
     );
 
     await expect(runChannelLogin({}, runtime)).rejects.toThrow(
-      "multiple configured channels support login: whatsapp, zalouser",
+      "Multiple configured channels support login: whatsapp, zalouser.",
     );
     expect(mocks.login).not.toHaveBeenCalled();
   });
@@ -340,7 +340,7 @@ describe("channel-auth", () => {
     mocks.normalizeChannelId.mockImplementation(() => undefined);
 
     await expect(runChannelLogin({ channel: "bad-channel" }, runtime)).rejects.toThrow(
-      "Unsupported channel: bad-channel",
+      'Unsupported channel "bad-channel".',
     );
     expect(mocks.login).not.toHaveBeenCalled();
   });
@@ -353,7 +353,7 @@ describe("channel-auth", () => {
     });
 
     await expect(runChannelLogin({ channel: "whatsapp" }, runtime)).rejects.toThrow(
-      "Channel whatsapp does not support login",
+      'Channel "whatsapp" does not support login.',
     );
   });
 
@@ -564,7 +564,7 @@ describe("channel-auth", () => {
     });
 
     await expect(runChannelLogout({ channel: "whatsapp" }, runtime)).rejects.toThrow(
-      "Channel whatsapp does not support logout",
+      'Channel "whatsapp" does not support logout.',
     );
   });
 });

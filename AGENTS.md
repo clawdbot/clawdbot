@@ -157,6 +157,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 ## Docs / Changelog
 
 - Docs change with behavior/API. Use docs list/read_when hints; docs links per `docs/AGENTS.md`.
+- When upgrading the bundled Codex harness (`@openai/codex` in `extensions/codex/package.json`), refresh the model availability snapshot in `docs/plugins/codex-harness.md` from the new harness's `model/list` result.
 - Docs final answers: when doc files changed, end with the relevant full `https://docs.openclaw.ai/...` URL(s).
 - Changelog user-facing only; fixing an issue or landing/merging a PR needs one unless pure test/internal.
 - Changelog placement: active version `### Changes`/`### Fixes`; contributor-facing added entries should include at least one `Thanks @author` attribution, using credited human GitHub username(s). Never add `Thanks @codex`, `Thanks @openclaw`, `Thanks @clawsweeper`, or `Thanks @steipete`; if the real credited human is unknown, leave attribution blank instead of guessing or adding a random person.

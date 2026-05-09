@@ -374,7 +374,7 @@ describe("agentCommand ACP runtime routing", () => {
         { text: "bo", delta: "bo" },
         { text: "book", delta: "ok" },
       ]);
-      expect(repeated.logLines.some((line) => line.includes("book"))).toBe(true);
+      expect(repeated.logLines).toEqual(expect.arrayContaining([expect.stringContaining("book")]));
     });
   });
 
@@ -382,8 +382,8 @@ describe("agentCommand ACP runtime routing", () => {
     await withAcpSessionEnv(async () => {
       const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents(["NO_REPLY"]);
 
-      expect(assistantEvents.map((event) => event.text).filter(Boolean)).toEqual([]);
-      expect(logLines.some((line) => line.includes("NO_REPLY"))).toBe(false);
+      expect(assistantEvents.every((event) => !event.text)).toBe(true);
+      expect(logLines).not.toEqual(expect.arrayContaining([expect.stringContaining("NO_REPLY")]));
       expect(logLines).toEqual([]);
     });
   });

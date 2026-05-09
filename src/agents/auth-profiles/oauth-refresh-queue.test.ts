@@ -113,10 +113,8 @@ describe("OAuth refresh in-process queue", () => {
   it("resetOAuthRefreshQueuesForTest drains pending gates", () => {
     // We can't observe the internal map, but we can assert that calling the
     // reset is idempotent and safe from any state.
-    expect(() => {
-      resetOAuthRefreshQueuesForTest();
-      resetOAuthRefreshQueuesForTest();
-    }).not.toThrow();
+    expect(resetOAuthRefreshQueuesForTest()).toBeUndefined();
+    expect(resetOAuthRefreshQueuesForTest()).toBeUndefined();
   });
 
   it("serializes a 10-caller burst so later arrivals never pass an earlier caller", async () => {

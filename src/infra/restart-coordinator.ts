@@ -149,17 +149,25 @@ export function requestSafeGatewayRestart(
   opts: {
     reason?: string;
     delayMs?: number;
+    skipDeferral?: boolean;
     inspect?: Partial<SafeRestartInspectors>;
   } = {},
 ): SafeGatewayRestartRequestResult {
   const preflight = createSafeGatewayRestartPreflight(opts.inspect);
+  const skipDeferral = opts.skipDeferral === true;
   const restart = scheduleGatewaySigusr1Restart({
     delayMs: opts.delayMs ?? 0,
     reason: opts.reason ?? "gateway.restart.safe",
+    ...(skipDeferral ? { skipDeferral: true } : {}),
   });
+  const status = restart.coalesced
+    ? "coalesced"
+    : skipDeferral || preflight.safe
+      ? "scheduled"
+      : "deferred";
   return {
     ok: true,
-    status: restart.coalesced ? "coalesced" : preflight.safe ? "scheduled" : "deferred",
+    status,
     preflight,
     restart,
   };

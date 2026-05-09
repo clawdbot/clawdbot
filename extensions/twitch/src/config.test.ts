@@ -36,21 +36,18 @@ describe("getAccountConfig", () => {
   it("returns account config for valid account ID (multi-account)", () => {
     const result = getAccountConfig(mockMultiAccountConfig, "default");
 
-    expect(result).not.toBeNull();
     expect(result?.username).toBe("testbot");
   });
 
   it("returns account config for default account (simplified config)", () => {
     const result = getAccountConfig(mockSimplifiedConfig, "default");
 
-    expect(result).not.toBeNull();
     expect(result?.username).toBe("testbot");
   });
 
   it("returns non-default account from multi-account config", () => {
     const result = getAccountConfig(mockMultiAccountConfig, "secondary");
 
-    expect(result).not.toBeNull();
     expect(result?.username).toBe("secondbot");
   });
 

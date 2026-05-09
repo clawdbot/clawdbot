@@ -111,7 +111,8 @@ describe("edgeTTS empty audio validation", () => {
       ),
     ).resolves.toBeUndefined();
     expect(stagedPath).not.toBe(outputPath);
-    expect(path.basename(stagedPath)).toBe(path.basename(outputPath));
+    expect(path.basename(stagedPath)).toContain(path.basename(outputPath));
+    expect(path.basename(stagedPath)).toMatch(/\.part$/);
     expect(readFileSync(outputPath)).toEqual(Buffer.from([0xff, 0xfb, 0x90, 0x00]));
     expect(existsSync(stagedPath)).toBe(false);
   });

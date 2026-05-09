@@ -130,7 +130,6 @@ describe("uploadFile memex upload hardening", () => {
         init: expect.objectContaining({
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: expect.any(String),
         }),
         auditContext: "tlon-memex-upload-url",
         capture: false,
@@ -141,7 +140,6 @@ describe("uploadFile memex upload hardening", () => {
       url: "https://uploads.tlon.network/put",
       init: expect.objectContaining({
         method: "PUT",
-        body: expect.any(Blob),
         headers: expect.objectContaining({
           "Cache-Control": "public, max-age=3600",
           "Content-Type": "image/png",
@@ -161,6 +159,8 @@ describe("uploadFile memex upload hardening", () => {
       contentType: "image/png",
     });
     expect(typeof firstBody.fileName).toBe("string");
+    const secondCall = mockGuardedFetch.mock.calls[1]?.[0];
+    expect(secondCall?.init?.body).toBeInstanceOf(Blob);
     expect(mockRelease).toHaveBeenCalledTimes(2);
   });
 

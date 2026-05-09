@@ -235,7 +235,9 @@ describe("google video generation provider", () => {
     });
 
     const [{ downloadPath }] = downloadMock.mock.calls[0] ?? [{}];
-    expect(path.basename(String(downloadPath))).toBe("video-1.mp4");
+    const downloadBaseName = path.basename(String(downloadPath));
+    expect(downloadBaseName).toContain("video-1.mp4");
+    expect(downloadBaseName).toMatch(/\.part$/);
     expect(result.videos[0]?.buffer).toEqual(Buffer.from("sdk-video"));
     expect(result.videos[0]?.fileName).toBe("video-1.mp4");
   });

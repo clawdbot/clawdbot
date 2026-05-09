@@ -147,6 +147,47 @@ describe("discord config schema", () => {
     expect(cfg.voice?.model).toBe("openai/gpt-5.4-mini");
   });
 
+  it("accepts Discord realtime voice modes", () => {
+    const cfg = expectValidDiscordConfig({
+      voice: {
+        mode: "bidi",
+        model: "openai-codex/gpt-5.5",
+        realtime: {
+          provider: "openai",
+          model: "gpt-realtime-2",
+          voice: "cedar",
+          toolPolicy: "safe-read-only",
+          consultPolicy: "always",
+          providers: {
+            openai: {
+              apiKey: "sk-test",
+              voice: "marin",
+            },
+          },
+        },
+      },
+    });
+
+    expect(cfg.voice?.mode).toBe("bidi");
+    expect(cfg.voice?.model).toBe("openai-codex/gpt-5.5");
+    expect(cfg.voice?.realtime?.provider).toBe("openai");
+    expect(cfg.voice?.realtime?.model).toBe("gpt-realtime-2");
+    expect(cfg.voice?.realtime?.voice).toBe("cedar");
+    expect(cfg.voice?.realtime?.toolPolicy).toBe("safe-read-only");
+    expect(cfg.voice?.realtime?.consultPolicy).toBe("always");
+  });
+
+  it("rejects invalid Discord realtime voice modes", () => {
+    for (const voice of [
+      { mode: "realtime" },
+      { mode: "bidi", realtime: { toolPolicy: "dangerous" } },
+      { mode: "talk-buffer", realtime: { consultPolicy: "substantive" } },
+      { mode: "talk-buffer", realtime: { debounceMs: 10_001 } },
+    ]) {
+      expectInvalidDiscordConfig({ voice });
+    }
+  });
+
   it("accepts Discord voice timing overrides", () => {
     const cfg = expectValidDiscordConfig({
       voice: {

@@ -213,7 +213,8 @@ describe("Cron issue regressions", () => {
     const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
 
     const listed = await cron.list();
-    expect(listed.some((job) => job.id === "missing-enabled-update")).toBe(true);
+    const listedJobIds = listed.map((job) => job.id);
+    expect(listedJobIds).toContain("missing-enabled-update");
 
     const updated = await cron.update("missing-enabled-update", {
       schedule: { kind: "cron", expr: "0 */3 * * *", tz: "UTC" },

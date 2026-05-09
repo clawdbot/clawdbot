@@ -145,12 +145,20 @@ describe("commitment extraction runtime", () => {
     const store = await loadCommitmentStore();
 
     expect(extractBatch).toHaveBeenCalledTimes(1);
-    const batchItems = extractBatch.mock.calls[0]?.[0].items;
+    const [extractCall] = extractBatch.mock.calls;
+    if (!extractCall) {
+      throw new Error("Expected commitment extraction batch call");
+    }
+    const batchItems = extractCall[0].items;
     expect(batchItems).toHaveLength(2);
-    expect(batchItems?.[0]?.itemId).not.toContain("main");
-    expect(batchItems?.[0]?.itemId).not.toContain("telegram");
-    expect(batchItems?.[0]?.itemId).not.toContain("15551234567");
-    expect(batchItems?.[0]?.itemId).not.toContain("m1");
+    const [firstBatchItem] = batchItems;
+    if (!firstBatchItem) {
+      throw new Error("Expected first commitment extraction batch item");
+    }
+    expect(firstBatchItem.itemId).not.toContain("main");
+    expect(firstBatchItem.itemId).not.toContain("telegram");
+    expect(firstBatchItem.itemId).not.toContain("15551234567");
+    expect(firstBatchItem.itemId).not.toContain("m1");
     expect(store.commitments.map((commitment) => commitment.dedupeKey)).toEqual([
       "event:1",
       "event:2",

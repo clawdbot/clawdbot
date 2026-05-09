@@ -188,12 +188,13 @@ describe("announce loop guard (#18264)", () => {
     mocks.loadSubagentRegistryFromDisk.mockReturnValue(new Map([[entry.runId, entry]]));
 
     // Initialization attempts resume once, then gives up for exhausted entries.
+    const beforeInit = Date.now();
     registry.initSubagentRegistry();
     await Promise.resolve();
     await Promise.resolve();
 
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(entry.cleanupCompletedAt).toEqual(expect.any(Number));
+    expect(entry.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeInit);
   });
 
   test("expired completion-message entries are still resumed for announce", async () => {

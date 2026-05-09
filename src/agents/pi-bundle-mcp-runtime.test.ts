@@ -327,7 +327,7 @@ describe("session MCP runtime", () => {
   });
 
   it("disposes catalog startup in-flight without leaving cached runtimes", async () => {
-    let notifyCatalogStarted!: () => void;
+    let notifyCatalogStarted: (() => void) | undefined;
     const catalogStarted = new Promise<void>((resolve) => {
       notifyCatalogStarted = resolve;
     });
@@ -339,6 +339,9 @@ describe("session MCP runtime", () => {
       workspaceDir: params.workspaceDir,
       configFingerprint: params.configFingerprint ?? "fingerprint",
       getCatalog: async () => {
+        if (!notifyCatalogStarted) {
+          throw new Error("Expected bundle MCP catalog start callback to be initialized");
+        }
         notifyCatalogStarted();
         return await new Promise((_, reject) => {
           rejectCatalog = reject;

@@ -54,8 +54,13 @@ describe("vydra video-generation provider", () => {
       "https://www.vydra.ai/api/v1/jobs/job-123",
       expect.objectContaining({ method: "GET" }),
     );
-    expect(result.videos[0]?.mimeType).toBe("video/webm");
-    expect(result.videos[0]?.fileName).toBe("video-1.webm");
+    expect(result.videos).toHaveLength(1);
+    const [video] = result.videos;
+    if (!video) {
+      throw new Error("Expected generated Vydra video");
+    }
+    expect(video.mimeType).toBe("video/webm");
+    expect(video.fileName).toBe("video-1.webm");
     expect(result.metadata).toEqual({
       jobId: "job-123",
       videoUrl: "https://cdn.vydra.ai/generated/test.mp4",
@@ -112,7 +117,12 @@ describe("vydra video-generation provider", () => {
         }),
       }),
     );
-    expect(result.videos[0]?.mimeType).toBe("video/mp4");
+    expect(result.videos).toHaveLength(1);
+    const [video] = result.videos;
+    if (!video) {
+      throw new Error("Expected generated Vydra kling video");
+    }
+    expect(video.mimeType).toBe("video/mp4");
     expect(result.metadata).toEqual({
       jobId: "job-kling",
       videoUrl: "https://cdn.vydra.ai/generated/kling.mp4",

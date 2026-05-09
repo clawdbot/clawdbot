@@ -784,8 +784,8 @@ describe("bundled channel entry shape guards", () => {
   it("keeps plugin-sdk channel-core free of chat metadata bootstrap imports", () => {
     const source = fs.readFileSync(path.resolve("src/plugin-sdk/channel-core.ts"), "utf8");
 
-    expect(source.includes("../channels/chat-meta.js")).toBe(false);
-    expect(source.includes("getChatChannelMeta")).toBe(false);
+    expect(source).not.toContain("../channels/chat-meta.js");
+    expect(source).not.toContain("getChatChannelMeta");
   });
 
   it("keeps bundled hot runtime barrels off the broad core SDK surface", () => {
@@ -816,7 +816,7 @@ describe("bundled channel entry shape guards", () => {
   it("keeps extension-shared off the broad runtime barrel", () => {
     const source = fs.readFileSync(path.resolve("src/plugin-sdk/extension-shared.ts"), "utf8");
 
-    expect(source.includes('from "./runtime.js"')).toBe(false);
+    expect(source).not.toContain('from "./runtime.js"');
   });
 
   it("keeps bundled doctor surfaces off the broad runtime barrel", () => {

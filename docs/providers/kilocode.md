@@ -60,13 +60,13 @@ OpenClaw dynamically discovers available models from the Kilo Gateway at startup
 
 Any model available on the gateway can be used with the `kilocode/` prefix:
 
-| Model ref                              | Notes                              |
-| -------------------------------------- | ---------------------------------- |
-| `kilocode/kilo/auto`                   | Default — smart routing            |
-| `kilocode/anthropic/claude-sonnet-4`   | Anthropic via Kilo                 |
-| `kilocode/openai/gpt-5.5`              | OpenAI via Kilo                    |
-| `kilocode/google/gemini-3-pro-preview` | Google via Kilo                    |
-| ...and many more                       | Use `/models kilocode` to list all |
+| Model ref                                | Notes                              |
+| ---------------------------------------- | ---------------------------------- |
+| `kilocode/kilo/auto`                     | Default — smart routing            |
+| `kilocode/anthropic/claude-sonnet-4`     | Anthropic via Kilo                 |
+| `kilocode/openai/gpt-5.5`                | OpenAI via Kilo                    |
+| `kilocode/google/gemini-3.1-pro-preview` | Google via Kilo                    |
+| ...and many more                         | Use `/models kilocode` to list all |
 
 <Tip>
 At startup, OpenClaw queries `GET https://api.kilo.ai/api/gateway/models` and merges

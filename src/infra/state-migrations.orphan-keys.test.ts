@@ -149,7 +149,9 @@ describe("migrateOrphanedSessionKeys", () => {
       expect(requireStoreEntry(store, "agent:main:work").sessionId).toBe("main-session");
       expect(requireStoreEntry(store, "agent:ops:work").sessionId).toBe("ops-session");
       // The key must NOT have been merged into ops namespace
-      expect(Object.keys(store).filter((k) => k.startsWith("agent:ops:")).length).toBe(1);
+      expect(
+        Object.keys(store).reduce((count, k) => count + (k.startsWith("agent:ops:") ? 1 : 0), 0),
+      ).toBe(1);
     });
   });
 

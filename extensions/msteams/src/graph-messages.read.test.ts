@@ -207,7 +207,7 @@ describe("listPinsMSTeams", () => {
       to: CHAT_ID,
     });
 
-    expect(result.pins).toEqual([]);
+    expect(result.pins).toStrictEqual([]);
   });
 
   it("follows @odata.nextLink pagination", async () => {
@@ -321,7 +321,7 @@ describe("listReactionsMSTeams", () => {
       messageId: "msg-1",
     });
 
-    expect(result.reactions).toEqual([]);
+    expect(result.reactions).toStrictEqual([]);
   });
 
   it("counts reactions from users without an ID", async () => {

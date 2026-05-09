@@ -29,6 +29,6 @@ describe("doctor config analysis helpers", () => {
     } as never);
     expect(result.removed).toContain("unexpected");
     expect((result.config as Record<string, unknown>).unexpected).toBeUndefined();
-    expect((result.config as Record<string, unknown>).hooks).toEqual({});
+    expect((result.config as Record<string, unknown>).hooks).toStrictEqual({});
   });
 });

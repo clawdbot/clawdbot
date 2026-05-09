@@ -82,7 +82,7 @@ describe("image-generation runtime", () => {
 
     expect(result.provider).toBe("image-plugin");
     expect(result.model).toBe("img-v1");
-    expect(result.attempts).toEqual([]);
+    expect(result.attempts).toStrictEqual([]);
     expect(seenAuthStore).toEqual(authStore);
     expect(seenTimeoutMs).toBe(12_345);
     expect(result.images).toEqual([
@@ -92,7 +92,7 @@ describe("image-generation runtime", () => {
         fileName: "sample.png",
       },
     ]);
-    expect(result.ignoredOverrides).toEqual([]);
+    expect(result.ignoredOverrides).toStrictEqual([]);
   });
 
   it("does not list providers when explicit config disables auto provider fallback", async () => {
@@ -132,7 +132,7 @@ describe("image-generation runtime", () => {
     const result = await runGenerateImage(params);
 
     expect(result.provider).toBe("image-plugin");
-    expect(listedConfigs).toEqual([]);
+    expect(listedConfigs).toStrictEqual([]);
   });
 
   it("uses configured image-generation timeout when the call omits timeoutMs", async () => {
@@ -366,7 +366,7 @@ describe("image-generation runtime", () => {
         },
       },
     });
-    expect(result.ignoredOverrides).toEqual([]);
+    expect(result.ignoredOverrides).toStrictEqual([]);
   });
 
   it("drops unsupported image output hints and reports them", async () => {
@@ -483,7 +483,7 @@ describe("image-generation runtime", () => {
       aspectRatio: "16:9",
       resolution: undefined,
     });
-    expect(result.ignoredOverrides).toEqual([]);
+    expect(result.ignoredOverrides).toStrictEqual([]);
     expect(result.normalization).toMatchObject({
       aspectRatio: {
         applied: "16:9",

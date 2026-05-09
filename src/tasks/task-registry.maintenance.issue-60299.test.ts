@@ -561,6 +561,7 @@ describe("task-registry maintenance issue #60299", () => {
       tryRecoverTaskBeforeMarkLost: recoveryHook,
     });
 
+    const beforeMaintenance = Date.now();
     expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 1, recovered: 0 });
     const result = await runTaskRegistryMaintenance();
     expect(result).toMatchObject({ reconciled: 0, recovered: 1 });
@@ -570,8 +571,14 @@ describe("task-registry maintenance issue #60299", () => {
         taskId: task.taskId,
         runtime: "cron",
         task: expect.objectContaining({ taskId: task.taskId }),
-        now: expect.any(Number),
       }),
     );
+    const hookCalls = recoveryHook.mock.calls as unknown as Array<[params: { now?: unknown }]>;
+    const hookNow = hookCalls[0]?.[0]?.now;
+    expect(typeof hookNow).toBe("number");
+    if (typeof hookNow !== "number") {
+      throw new Error("Expected task recovery hook now timestamp");
+    }
+    expect(hookNow).toBeGreaterThanOrEqual(beforeMaintenance);
   });
 });

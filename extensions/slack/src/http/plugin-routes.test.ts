@@ -42,7 +42,7 @@ describe("registerSlackPluginHttpRoutes", () => {
     };
     const api = createApi(cfg, registerHttpRoute);
 
-    expect(() => registerSlackPluginHttpRoutes(api)).not.toThrow();
+    registerSlackPluginHttpRoutes(api);
 
     const paths = registerHttpRoute.mock.calls
       .map((call) => (call[0] as { path: string }).path)

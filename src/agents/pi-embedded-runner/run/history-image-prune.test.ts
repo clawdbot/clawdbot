@@ -23,13 +23,21 @@ function expectPrunedImageMessage(
   messages: AgentMessage[],
   errorMessage: string,
 ): Array<{ type: string; text?: string; data?: string }> {
-  const pruned = pruneProcessedHistoryImages(messages);
-  expect(pruned).not.toBeNull();
-  expect(pruned).not.toBe(messages);
-  const content = expectArrayMessageContent(pruned?.[0], errorMessage);
+  const pruned = expectPrunedMessages(messages);
+  const content = expectArrayMessageContent(pruned[0], errorMessage);
   expect(content).toHaveLength(2);
   expect(content[1]).toMatchObject({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
   return content;
+}
+
+function expectPrunedMessages(messages: AgentMessage[]): AgentMessage[] {
+  const pruned = pruneProcessedHistoryImages(messages);
+  expect(Array.isArray(pruned)).toBe(true);
+  if (!pruned) {
+    throw new Error("expected pruned history messages");
+  }
+  expect(pruned).not.toBe(messages);
+  return pruned;
 }
 
 function expectImageMessagePreserved(messages: AgentMessage[], errorMessage: string) {
@@ -98,10 +106,9 @@ describe("pruneProcessedHistoryImages", () => {
       ...oldEnoughTail(),
     ];
 
-    const pruned = pruneProcessedHistoryImages(messages);
+    const pruned = expectPrunedMessages(messages);
 
-    expect(pruned).not.toBeNull();
-    const content = expectArrayMessageContent(pruned?.[0], "expected user array content");
+    const content = expectArrayMessageContent(pruned[0], "expected user array content");
     expect(content[0]?.text).toBe(
       [
         "old image",
@@ -128,10 +135,9 @@ describe("pruneProcessedHistoryImages", () => {
       ...oldEnoughTail(),
     ];
 
-    const pruned = pruneProcessedHistoryImages(messages);
+    const pruned = expectPrunedMessages(messages);
 
-    expect(pruned).not.toBeNull();
-    const firstUser = pruned?.[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
     expect(firstUser?.content).toBe(`please remember ${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER}`);
     const originalUser = messages[0] as Extract<AgentMessage, { role: "user" }> | undefined;
     expect(originalUser?.content).toBe(
@@ -149,10 +155,9 @@ describe("pruneProcessedHistoryImages", () => {
       ...oldEnoughTail(),
     ];
 
-    const pruned = pruneProcessedHistoryImages(messages);
+    const pruned = expectPrunedMessages(messages);
 
-    expect(pruned).not.toBeNull();
-    const toolResult = pruned?.[0] as Extract<AgentMessage, { role: "toolResult" }> | undefined;
+    const toolResult = pruned[0] as Extract<AgentMessage, { role: "toolResult" }> | undefined;
     expect(toolResult?.content).toBe(`previous ${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER} result`);
     const originalToolResult = messages[0] as
       | Extract<AgentMessage, { role: "toolResult" }>
@@ -284,13 +289,12 @@ describe("pruneProcessedHistoryImages", () => {
       assistantTurn(),
     ];
 
-    const pruned = pruneProcessedHistoryImages(messages);
-    expect(pruned).not.toBeNull();
+    const pruned = expectPrunedMessages(messages);
 
-    const oldContent = expectArrayMessageContent(pruned?.[0], "expected old user content");
+    const oldContent = expectArrayMessageContent(pruned[0], "expected old user content");
     expect(oldContent[1]).toMatchObject({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
 
-    const recentContent = expectArrayMessageContent(pruned?.[6], "expected recent user content");
+    const recentContent = expectArrayMessageContent(pruned[6], "expected recent user content");
     expect(recentContent[1]).toMatchObject({ type: "image", data: "abc" });
 
     const originalOldContent = expectArrayMessageContent(

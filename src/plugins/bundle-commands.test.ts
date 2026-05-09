@@ -157,7 +157,8 @@ describe("loadEnabledClaudeBundleCommands", () => {
           promptTemplate: "Review the code. $ARGUMENTS",
         },
       ]);
-      expect(commands.some((entry) => entry.rawName === "disabled")).toBe(false);
+      const rawNames = commands.map((entry) => entry.rawName);
+      expect(rawNames).not.toContain("disabled");
     } finally {
       env.restore();
     }

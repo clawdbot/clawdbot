@@ -131,6 +131,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     );
   }
 
+  function requireFirstRunCommandArgs(runCommand: MockedRunCommand): string[] {
+    const args = vi.mocked(runCommand).mock.calls[0]?.[0] as string[] | undefined;
+    if (!args) {
+      throw new Error("expected runCommand args");
+    }
+    return args;
+  }
+
   function expectApprovalRequiredDenied(params: {
     sendNodeEvent: MockedSendNodeEvent;
     sendInvokeResult: MockedSendInvokeResult;
@@ -598,8 +606,12 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           continue;
         }
 
-        const runArgs = vi.mocked(invoke.runCommand).mock.calls[0]?.[0] as string[] | undefined;
-        expect(runArgs).toEqual(["env", "sh", "-c", "echo SAFE"]);
+        expect(requireFirstRunCommandArgs(invoke.runCommand)).toEqual([
+          "env",
+          "sh",
+          "-c",
+          "echo SAFE",
+        ]);
         expect(fs.existsSync(marker)).toBe(false);
         expectInvokeOk(invoke.sendInvokeResult);
       }
@@ -621,10 +633,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expect(transparent.runCommand).not.toHaveBeenCalled();
         expectInvokeErrorMessage(transparent.sendInvokeResult, { message: "allowlist miss" });
       } else {
-        const runArgs = vi.mocked(transparent.runCommand).mock.calls[0]?.[0] as
-          | string[]
-          | undefined;
-        expect(runArgs).toEqual([expect.stringMatching(/(^|[/\\])tr$/), "a", "b"]);
+        expect(requireFirstRunCommandArgs(transparent.runCommand)).toEqual([
+          expect.stringMatching(/(^|[/\\])tr$/),
+          "a",
+          "b",
+        ]);
         expectInvokeOk(transparent.sendInvokeResult);
       }
 

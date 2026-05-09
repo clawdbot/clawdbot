@@ -116,7 +116,7 @@ describe("discord audit", () => {
     } as unknown as OpenClawConfig;
 
     const collected = collectDiscordAuditChannelIdsForGuilds(readDiscordGuilds(cfg));
-    expect(collected.channelIds).toEqual([]);
+    expect(collected.channelIds).toStrictEqual([]);
     expect(collected.unresolvedChannels).toBe(0);
   });
 

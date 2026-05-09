@@ -10,6 +10,18 @@ function createParams(): EmbeddedRunAttemptParams {
   } as unknown as EmbeddedRunAttemptParams;
 }
 
+function expectFirstBlockReplyText(params: EmbeddedRunAttemptParams): string {
+  const onBlockReply = params.onBlockReply;
+  if (onBlockReply === undefined) {
+    throw new Error("Expected onBlockReply callback");
+  }
+  const payload = vi.mocked(onBlockReply).mock.calls[0]?.[0];
+  if (typeof payload?.text !== "string") {
+    throw new Error("Expected first block reply text");
+  }
+  return payload.text;
+}
+
 describe("Codex app-server user input bridge", () => {
   it("prompts the originating chat and resolves request_user_input from the next queued message", async () => {
     const params = createParams();
@@ -161,9 +173,7 @@ describe("Codex app-server user input bridge", () => {
     });
 
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
-    const payload = vi.mocked(params.onBlockReply!).mock.calls[0]?.[0];
-    expect(payload).toEqual(expect.objectContaining({ text: expect.any(String) }));
-    const text = payload?.text ?? "";
+    const text = expectFirstBlockReplyText(params);
     expect(text).toContain("Mode &lt;\uff20U123&gt;");
     expect(text).toContain("Pick \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here");
     expect(text).toContain(

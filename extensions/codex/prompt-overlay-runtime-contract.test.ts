@@ -33,7 +33,7 @@ describe("Codex prompt overlay runtime contract", () => {
     );
 
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
-    expect(contribution?.sectionOverrides).toEqual({});
+    expect(contribution?.sectionOverrides).toStrictEqual({});
   });
 
   it("does not add the shared GPT-5 overlay to non-GPT-5 Codex provider runs", () => {

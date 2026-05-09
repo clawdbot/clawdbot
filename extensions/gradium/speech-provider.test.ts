@@ -94,8 +94,12 @@ describe("gradium speech provider", () => {
     const audioData = Buffer.from("ulaw-audio-data");
     const fetchMock = vi.fn().mockResolvedValue(new Response(audioData, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
+    const synthesizeTelephony = provider.synthesizeTelephony;
+    if (!synthesizeTelephony) {
+      throw new Error("Expected Gradium provider synthesizeTelephony");
+    }
 
-    const result = await provider.synthesizeTelephony!({
+    const result = await synthesizeTelephony({
       text: "Telephony test",
       cfg: {} as never,
       providerConfig: { apiKey: "gsk_test123", voiceId: "default-voice" },

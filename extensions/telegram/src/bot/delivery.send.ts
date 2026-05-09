@@ -17,40 +17,15 @@ export { buildTelegramSendParams } from "../reply-parameters.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const EMPTY_TEXT_ERR_RE = /message text is empty/i;
-const THREAD_NOT_FOUND_RE = /message thread not found/i;
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
-
-function isTelegramThreadNotFoundError(err: unknown): boolean {
-  if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
-    return THREAD_NOT_FOUND_RE.test(err.description);
-  }
-  return THREAD_NOT_FOUND_RE.test(formatErrorMessage(err));
-}
 
 function isTelegramQuoteParamError(err: unknown): boolean {
   if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
     return QUOTE_PARAM_RE.test(err.description);
   }
   return QUOTE_PARAM_RE.test(formatErrorMessage(err));
-}
-
-function hasMessageThreadIdParam(params: Record<string, unknown> | undefined): boolean {
-  if (!params) {
-    return false;
-  }
-  return typeof params.message_thread_id === "number";
-}
-
-function removeMessageThreadIdParam(
-  params: Record<string, unknown> | undefined,
-): Record<string, unknown> {
-  if (!params) {
-    return {};
-  }
-  const { message_thread_id: _ignored, ...rest } = params;
-  return rest;
 }
 
 function createTelegramDeliverySendRetry() {
@@ -68,12 +43,9 @@ export async function sendTelegramWithThreadFallback<T>(params: {
   send: (effectiveParams: Record<string, unknown>) => Promise<T>;
   shouldLog?: (err: unknown) => boolean;
 }): Promise<T> {
-  const allowThreadlessRetry = params.thread?.scope === "dm";
-  const hasThreadId = hasMessageThreadIdParam(params.requestParams);
   const hasNativeQuote = getTelegramNativeQuoteReplyMessageId(params.requestParams) != null;
   const shouldSuppressFirstErrorLog = (err: unknown) =>
-    (allowThreadlessRetry && hasThreadId && isTelegramThreadNotFoundError(err)) ||
-    (hasNativeQuote && isTelegramQuoteParamError(err));
+    hasNativeQuote && isTelegramQuoteParamError(err);
   const mergedShouldLog = params.shouldLog
     ? (err: unknown) => params.shouldLog!(err) && !shouldSuppressFirstErrorLog(err)
     : (err: unknown) => !shouldSuppressFirstErrorLog(err);
@@ -103,14 +75,7 @@ export async function sendTelegramWithThreadFallback<T>(params: {
         requestParams: removeTelegramNativeQuoteParam(params.requestParams),
       });
     }
-    if (!allowThreadlessRetry || !hasThreadId || !isTelegramThreadNotFoundError(err)) {
-      throw err;
-    }
-    const retryParams = removeMessageThreadIdParam(params.requestParams);
-    params.runtime.log?.(
-      `telegram ${params.operation}: message thread not found; retrying without message_thread_id`,
-    );
-    return await runLoggedSend(`${params.operation} (threadless retry)`, retryParams);
+    throw err;
   }
 }
 

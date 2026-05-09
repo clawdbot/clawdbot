@@ -124,7 +124,10 @@ describe("auditGatewayServiceConfig", () => {
   it("accepts canonical macOS gateway service PATH without user-bin defaults", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-home-"));
     try {
-      const servicePath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+      const servicePath = buildMinimalServicePath({ platform: "darwin", env: { HOME: home } });
+      expect(servicePath).toBe(
+        "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      );
 
       const audit = await auditGatewayServiceConfig({
         env: { HOME: home },
@@ -136,6 +139,28 @@ describe("auditGatewayServiceConfig", () => {
       });
 
       expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissingDirs)).toBe(false);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("requires Homebrew directories in canonical macOS gateway service PATH", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-home-"));
+    try {
+      const audit = await auditGatewayServiceConfig({
+        env: { HOME: home },
+        platform: "darwin",
+        command: {
+          programArguments: ["/usr/bin/node", "gateway"],
+          environment: { PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" },
+        },
+      });
+
+      const issue = audit.issues.find(
+        (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs,
+      );
+      expect(issue?.message).toContain("/opt/homebrew/bin");
+      expect(issue?.message).toContain("/opt/homebrew/sbin");
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }
@@ -472,9 +497,10 @@ describe("checkTokenDrift", () => {
 
   it("detects drift when config has token but service has different token", () => {
     const result = checkTokenDrift({ serviceToken: "old-token", configToken: "new-token" });
-    expect(result).not.toBeNull();
-    expect(result?.code).toBe(SERVICE_AUDIT_CODES.gatewayTokenDrift);
-    expect(result?.message).toContain("differs from service token");
+    expect(result).toMatchObject({
+      code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
+      message: expect.stringContaining("differs from service token"),
+    });
   });
 
   it("returns null when config has token but service has no token", () => {

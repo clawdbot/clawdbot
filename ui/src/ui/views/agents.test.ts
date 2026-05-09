@@ -383,7 +383,9 @@ describe("renderAgentFiles", () => {
       container,
     );
 
-    expect(container.querySelector(".md-preview-dialog__reader.sidebar-markdown")).not.toBeNull();
+    expect(container.querySelectorAll(".md-preview-dialog__reader.sidebar-markdown")).toHaveLength(
+      1,
+    );
     expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
       "USER.md",
     );
@@ -486,14 +488,17 @@ describe("renderAgentFiles", () => {
     const panel = container.querySelector<HTMLElement>(".md-preview-dialog__panel");
     const expandButton = container.querySelector<HTMLButtonElement>(".md-preview-expand-btn");
 
-    expandButton?.click();
+    expect(dialog).toBeInstanceOf(HTMLDialogElement);
+    expect(panel).toBeInstanceOf(HTMLElement);
+    expect(expandButton).toBeInstanceOf(HTMLButtonElement);
+    expandButton!.click();
 
     expect(panel?.classList.contains("fullscreen")).toBe(true);
     expect(expandButton?.classList.contains("is-fullscreen")).toBe(true);
     expect(expandButton?.getAttribute("aria-pressed")).toBe("true");
     expect(expandButton?.getAttribute("aria-label")).toBe("Collapse preview");
 
-    dialog?.dispatchEvent(new Event("close"));
+    dialog!.dispatchEvent(new Event("close"));
 
     expect(panel?.classList.contains("fullscreen")).toBe(false);
     expect(expandButton?.classList.contains("is-fullscreen")).toBe(false);

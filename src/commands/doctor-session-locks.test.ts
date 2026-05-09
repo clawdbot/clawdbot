@@ -14,6 +14,10 @@ vi.mock("../terminal/note.js", () => ({
 
 import { noteSessionLockHealth } from "./doctor-session-locks.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("noteSessionLockHealth", () => {
   let state: OpenClawTestState;
 
@@ -75,7 +79,7 @@ describe("noteSessionLockHealth", () => {
     expect(message).toContain("[removed]");
     expect(message).toContain("Removed 1 stale session lock file");
 
-    await expect(fs.access(staleLock)).rejects.toThrow();
+    await expectPathMissing(staleLock);
     await expect(fs.access(freshLock)).resolves.toBeUndefined();
   });
 });

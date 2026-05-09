@@ -122,6 +122,7 @@ describe("runDaemonRestart health checks", () => {
     json?: boolean;
     safe?: boolean;
     force?: boolean;
+    skipDeferral?: boolean;
   }) => Promise<boolean>;
   let runDaemonStop: (opts?: { json?: boolean; disable?: boolean }) => Promise<void>;
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -281,6 +282,25 @@ describe("runDaemonRestart health checks", () => {
 
     expect(callGatewayCli).not.toHaveBeenCalled();
     expect(runServiceRestart).toHaveBeenCalled();
+  });
+
+  it("forwards --safe --skip-deferral as skipDeferral: true on the RPC", async () => {
+    await runDaemonRestart({ json: true, safe: true, skipDeferral: true });
+
+    expect(callGatewayCli).toHaveBeenCalledWith({
+      method: "gateway.restart.request",
+      params: { reason: "gateway.restart.safe", skipDeferral: true },
+      timeoutMs: 10_000,
+    });
+    expect(runServiceRestart).not.toHaveBeenCalled();
+  });
+
+  it("rejects --skip-deferral without --safe", async () => {
+    await expect(runDaemonRestart({ json: true, skipDeferral: true })).rejects.toThrow(
+      "--skip-deferral requires --safe",
+    );
+    expect(callGatewayCli).not.toHaveBeenCalled();
+    expect(runServiceRestart).not.toHaveBeenCalled();
   });
 
   it("repairs stale loaded service definitions from gateway start", async () => {

@@ -36,6 +36,7 @@ import {
   shouldUseReplyFastTestRuntime,
 } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
+import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { hasInboundMedia } from "./inbound-media.js";
@@ -248,16 +249,7 @@ export async function getReplyFromConfig(
   }
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
-  const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
-    useFastTestBootstrap
-      ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
-      : await ensureAgentWorkspace({
-          dir: workspaceDirRaw,
-          ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-          skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-        }),
-  );
-  const workspaceDir = workspace.dir;
+  const workspaceDirForNativeCommand = workspaceDirRaw;
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =
@@ -274,6 +266,41 @@ export async function getReplyFromConfig(
   opts?.onTypingController?.(typing);
 
   const finalized = finalizeInboundContext(ctx);
+  const nativeSlashCommandFastReply = await traceGetReplyPhase(
+    "reply.native_slash_command_fast_path",
+    () =>
+      maybeResolveNativeSlashCommandFastReply({
+        ctx: finalized,
+        cfg,
+        agentId,
+        agentDir,
+        agentCfg,
+        commandAuthorized: finalized.CommandAuthorized,
+        defaultProvider,
+        defaultModel,
+        aliasIndex,
+        provider,
+        model,
+        workspaceDir: workspaceDirForNativeCommand,
+        typing,
+        opts: resolvedOpts,
+        skillFilter: mergedSkillFilter,
+      }),
+  );
+  if (nativeSlashCommandFastReply.handled) {
+    return nativeSlashCommandFastReply.reply;
+  }
+
+  const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
+    useFastTestBootstrap
+      ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
+      : await ensureAgentWorkspace({
+          dir: workspaceDirRaw,
+          ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+          skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+        }),
+  );
+  const workspaceDir = workspace.dir;
 
   if (!isFastTestEnv && hasInboundMedia(finalized)) {
     await traceGetReplyPhase("reply.apply_media_understanding", () =>

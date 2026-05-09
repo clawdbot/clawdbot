@@ -3,12 +3,15 @@ import type { ChannelsStatusSnapshot } from "../types.ts";
 import { loadChannels, waitWhatsAppLogin, type ChannelsState } from "./channels.ts";
 
 function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }
 
@@ -29,6 +32,14 @@ function createState(): ChannelsState {
   };
 }
 
+function requireClientRequest(state: ChannelsState) {
+  const request = state.client?.request;
+  if (!request) {
+    throw new Error("Expected channels controller client request");
+  }
+  return vi.mocked(request);
+}
+
 describe("channels controller WhatsApp wait", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -36,7 +47,7 @@ describe("channels controller WhatsApp wait", () => {
 
   it("passes the currently displayed QR and replaces it when the login QR rotates", async () => {
     const state = createState();
-    const request = vi.mocked(state.client!.request);
+    const request = requireClientRequest(state);
     request.mockResolvedValueOnce({
       connected: false,
       message: "QR refreshed. Scan the latest code in WhatsApp → Linked Devices.",
@@ -76,7 +87,7 @@ describe("loadChannels", () => {
         ts: 2,
       };
       const deferred = createDeferred<ChannelsStatusSnapshot | null>();
-      const request = vi.mocked(state.client!.request);
+      const request = requireClientRequest(state);
       request.mockReturnValueOnce(deferred.promise);
       state.channelsSnapshot = previous;
       state.channelsLastSuccess = 10;
@@ -95,7 +106,7 @@ describe("loadChannels", () => {
 
       expect(state.channelsLoading).toBe(false);
       expect(state.channelsSnapshot).toBe(next);
-      expect(state.channelsLastSuccess).toEqual(expect.any(Number));
+      expect(state.channelsLastSuccess).toBeGreaterThan(10);
     } finally {
       vi.useRealTimers();
     }

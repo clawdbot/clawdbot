@@ -2766,7 +2766,7 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("uses resolved Matrix account progress config for draft text", async () => {
+  it("uses resolved Matrix account progress maxLines for draft text", async () => {
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -2789,7 +2789,7 @@ describe("matrix monitor handler draft streaming", () => {
     await vi.waitFor(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
-    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe("Pearling\n- `second`");
+    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe("- `second`");
     await finish();
   });
 

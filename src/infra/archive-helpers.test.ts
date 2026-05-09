@@ -8,7 +8,7 @@ import {
   resolvePackedRootDir,
 } from "./archive.js";
 import { pathExists, withTimeout } from "./fs-safe.js";
-import { readJsonFileStrict } from "./json-files.js";
+import { JsonFileReadError, readJsonFileStrict } from "./json-files.js";
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("openclaw-archive-helper-test-");
@@ -142,7 +142,7 @@ describe("archive helpers", () => {
       },
     });
 
-    expect(() => checker({ path: "package", type: "Directory", size: 0 })).not.toThrow();
+    checker({ path: "package", type: "Directory", size: 0 });
     checker({ path: "package/a.txt", type: "File", size: 6 });
     expectTarPreflightError(
       checker,
@@ -159,7 +159,7 @@ describe("archive helpers", () => {
     await fs.writeFile(badPath, "{not json", "utf8");
 
     await expect(readJsonFileStrict<{ ok: boolean }>(jsonPath)).resolves.toEqual({ ok: true });
-    await expect(readJsonFileStrict(badPath)).rejects.toThrow();
+    await expect(readJsonFileStrict(badPath)).rejects.toBeInstanceOf(JsonFileReadError);
     await expect(pathExists(jsonPath)).resolves.toBe(true);
     await expect(pathExists(path.join(dir, "missing.json"))).resolves.toBe(false);
   });

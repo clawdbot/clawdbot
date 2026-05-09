@@ -126,12 +126,18 @@ function splitTopLevelArgs(args: string): string[] {
       continue;
     }
     if (char === "," && depth === 0) {
-      parts.push(args.slice(start, index).trim());
+      const part = args.slice(start, index).trim();
+      if (part.length > 0) {
+        parts.push(part);
+      }
       start = index + 1;
     }
   }
-  parts.push(args.slice(start).trim());
-  return parts.filter(Boolean);
+  const part = args.slice(start).trim();
+  if (part.length > 0) {
+    parts.push(part);
+  }
+  return parts;
 }
 
 function extractStringLiterals(source: string): string[] {

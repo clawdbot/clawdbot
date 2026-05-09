@@ -128,7 +128,9 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(first.pagePaths).toHaveLength(3);
 
     const sourcePages = await fs.readdir(path.join(vaultDir, "sources"));
-    expect(sourcePages.filter((name) => name.startsWith("bridge-"))).toHaveLength(3);
+    expect(
+      sourcePages.reduce((count, name) => count + (name.startsWith("bridge-") ? 1 : 0), 0),
+    ).toBe(3);
 
     const memoryPage = await fs.readFile(path.join(vaultDir, first.pagePaths[0] ?? ""), "utf8");
     expect(memoryPage).toContain("sourceType: memory-bridge");

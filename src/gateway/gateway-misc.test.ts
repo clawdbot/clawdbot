@@ -631,7 +631,9 @@ describe("gateway broadcaster", () => {
           reason: "ws_send_buffer_drop",
         }),
       );
-      expect(events.filter((event) => event.type === "payload.large")).toHaveLength(1);
+      expect(
+        events.reduce((count, event) => count + (event.type === "payload.large" ? 1 : 0), 0),
+      ).toBe(1);
     } finally {
       stop();
       resetDiagnosticEventsForTest();

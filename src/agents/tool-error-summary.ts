@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import type { FileTarget } from "./tool-mutation.js";
 
 export type ToolErrorSummary = {
   toolName: string;
@@ -7,6 +8,7 @@ export type ToolErrorSummary = {
   timedOut?: boolean;
   mutatingAction?: boolean;
   actionFingerprint?: string;
+  fileTarget?: FileTarget;
 };
 
 const EXEC_LIKE_TOOL_NAMES = new Set(["exec", "bash"]);

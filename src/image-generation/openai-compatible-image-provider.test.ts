@@ -60,6 +60,19 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
 }));
 
+function requireFirstRequestHeaders(mock: ReturnType<typeof vi.fn>): Headers {
+  const [request] = (mock.mock.calls[0] ?? []) as [{ headers?: Headers }?];
+  if (!request) {
+    throw new Error("expected request call");
+  }
+  const headers = request.headers;
+  expect(headers).toBeInstanceOf(Headers);
+  if (!headers) {
+    throw new Error("expected request headers");
+  }
+  return headers;
+}
+
 function createProvider(overrides: Partial<OpenAiCompatibleImageProviderOptions> = {}) {
   return createOpenAiCompatibleImageGenerationProvider({
     id: "sample",
@@ -185,7 +198,7 @@ describe("OpenAI-compatible image provider helper", () => {
         },
       }),
     );
-    const headers = postJsonRequestMock.mock.calls[0]?.[0].headers as Headers;
+    const headers = requireFirstRequestHeaders(postJsonRequestMock);
     expect(headers.get("Content-Type")).toBe("application/json");
     expect(result).toMatchObject({
       model: "custom-image",
@@ -212,7 +225,7 @@ describe("OpenAI-compatible image provider helper", () => {
         body: expect.any(FormData),
       }),
     );
-    const headers = postMultipartRequestMock.mock.calls[0]?.[0].headers as Headers;
+    const headers = requireFirstRequestHeaders(postMultipartRequestMock);
     expect(headers.has("Content-Type")).toBe(false);
   });
 

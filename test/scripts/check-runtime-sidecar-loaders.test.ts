@@ -42,7 +42,7 @@ describe("check-runtime-sidecar-loaders", () => {
         "src/tasks/task-registry.ts",
         new Set(["src/tasks/task-registry-control.runtime.ts"]),
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("resolves candidate arrays used by source/build fallback loops", () => {
@@ -81,7 +81,7 @@ describe("check-runtime-sidecar-loaders", () => {
 
     expect(
       findRuntimeSidecarLoaderViolations(source, "src/tasks/task-registry.ts", new Set()),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("collects explicit tsdown entry sources", () => {

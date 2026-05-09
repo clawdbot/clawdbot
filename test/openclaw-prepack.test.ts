@@ -8,7 +8,7 @@ describe("collectPreparedPrepackErrors", () => {
         ["dist/index.mjs", "dist/control-ui/index.html"],
         ["dist/control-ui/assets/index-Bu8rSoJV.js"],
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("reports missing build and control ui artifacts", () => {

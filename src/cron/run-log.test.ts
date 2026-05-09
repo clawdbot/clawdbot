@@ -87,10 +87,13 @@ describe("cron run log", () => {
       }
 
       const raw = await fs.readFile(logPath, "utf-8");
-      const lines = raw
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean);
+      const lines: string[] = [];
+      for (const rawLine of raw.split("\n")) {
+        const line = rawLine.trim();
+        if (line) {
+          lines.push(line);
+        }
+      }
       expect(lines.length).toBe(3);
       const last = JSON.parse(lines[2] ?? "{}") as { ts?: number };
       expect(last.ts).toBe(1009);

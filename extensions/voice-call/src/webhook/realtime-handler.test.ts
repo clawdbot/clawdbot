@@ -4,7 +4,7 @@ import type {
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceToolCallEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
@@ -12,6 +12,10 @@ import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function makeRequest(url: string, host = "gateway.ts.net"): http.IncomingMessage {
   const req = new http.IncomingMessage(null as never);
@@ -676,6 +680,7 @@ describe("RealtimeCallHandler path routing", () => {
           expect(createBridge).toHaveBeenCalled();
         });
 
+        vi.useFakeTimers();
         callbacks?.onTranscript?.("user", "Are the basement", false);
         callbacks?.onToolCall?.({
           itemId: "item-1",
@@ -683,6 +688,7 @@ describe("RealtimeCallHandler path routing", () => {
           name: "openclaw_agent_consult",
           args: { question: "Are the basement lights on?" },
         });
+        await vi.advanceTimersByTimeAsync(350);
         await vi.waitFor(() => {
           expect(receivedPartialTranscript).toBe("Are the basement");
         });
@@ -726,6 +732,7 @@ describe("RealtimeCallHandler path routing", () => {
           willContinue: true,
         });
       } finally {
+        vi.useRealTimers();
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
         }
@@ -789,7 +796,9 @@ describe("RealtimeCallHandler path routing", () => {
           expect(createBridge).toHaveBeenCalled();
         });
 
+        vi.useFakeTimers();
         callbacks?.onTranscript?.("user", "Create a smoke test file for me.", true);
+        await vi.advanceTimersByTimeAsync(200);
 
         await vi.waitFor(() => {
           expect(consult).toHaveBeenCalledWith(
@@ -806,6 +815,7 @@ describe("RealtimeCallHandler path routing", () => {
           );
         });
       } finally {
+        vi.useRealTimers();
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
         }
@@ -950,6 +960,7 @@ describe("RealtimeCallHandler path routing", () => {
           expect(createBridge).toHaveBeenCalled();
         });
 
+        vi.useFakeTimers();
         callbacks?.onTranscript?.("user", "Send a Discord", false);
         callbacks?.onToolCall?.({
           itemId: "item-1",
@@ -957,8 +968,9 @@ describe("RealtimeCallHandler path routing", () => {
           name: "openclaw_agent_consult",
           args: { question: "message" },
         });
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await vi.advanceTimersByTimeAsync(50);
         callbacks?.onTranscript?.("user", "message.", false);
+        await vi.advanceTimersByTimeAsync(350);
 
         await vi.waitFor(
           () => {
@@ -981,6 +993,7 @@ describe("RealtimeCallHandler path routing", () => {
           );
         });
       } finally {
+        vi.useRealTimers();
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
         }
@@ -1048,6 +1061,7 @@ describe("RealtimeCallHandler path routing", () => {
           expect(createBridge).toHaveBeenCalled();
         });
 
+        vi.useFakeTimers();
         callbacks?.onTranscript?.("user", "Send me a Discord message.", true);
         callbacks?.onToolCall?.({
           itemId: "item-1",
@@ -1063,9 +1077,10 @@ describe("RealtimeCallHandler path routing", () => {
             undefined,
           );
         });
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        await vi.advanceTimersByTimeAsync(250);
         expect(consult).toHaveBeenCalledTimes(1);
       } finally {
+        vi.useRealTimers();
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
         }

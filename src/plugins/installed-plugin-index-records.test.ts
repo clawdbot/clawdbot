@@ -353,7 +353,7 @@ describe("plugin index install records store", () => {
       loadInstalledPluginIndexInstallRecordsSync({
         stateDir,
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 
   it("updates and removes records without mutating caller state", () => {
@@ -418,6 +418,6 @@ describe("plugin index install records store", () => {
       loadInstalledPluginIndexInstallRecords({
         stateDir,
       }),
-    ).resolves.toEqual({});
+    ).resolves.toStrictEqual({});
   });
 });

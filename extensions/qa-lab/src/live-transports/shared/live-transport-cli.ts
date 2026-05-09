@@ -12,6 +12,7 @@ export type LiveTransportQaCommandOptions = {
   fastMode?: boolean;
   allowFailures?: boolean;
   scenarioIds?: string[];
+  listScenarios?: boolean;
   sutAccountId?: string;
   credentialSource?: string;
   credentialRole?: string;
@@ -24,6 +25,7 @@ type LiveTransportQaCommanderOptions = {
   model?: string;
   altModel?: string;
   scenario?: string[];
+  listScenarios?: boolean;
   fast?: boolean;
   allowFailures?: boolean;
   sutAccount?: string;
@@ -61,6 +63,7 @@ function mapLiveTransportQaCommanderOptions(
     fastMode: opts.fast,
     allowFailures: opts.allowFailures,
     scenarioIds: opts.scenario,
+    listScenarios: opts.listScenarios,
     sutAccountId: opts.sutAccount,
     credentialSource: opts.credentialSource,
     credentialRole: opts.credentialRole,
@@ -72,6 +75,7 @@ function registerLiveTransportQaCli(params: {
   commandName: string;
   credentialOptions?: LiveTransportQaCredentialCliOptions;
   description: string;
+  listScenariosHelp?: string;
   outputDirHelp: string;
   scenarioHelp: string;
   sutAccountHelp: string;
@@ -94,6 +98,10 @@ function registerLiveTransportQaCli(params: {
     )
     .option("--sut-account <id>", params.sutAccountHelp, "sut");
 
+  if (params.listScenariosHelp) {
+    command.option("--list-scenarios", params.listScenariosHelp, false);
+  }
+
   if (params.credentialOptions) {
     command.option(
       "--credential-source <source>",
@@ -114,6 +122,7 @@ export function createLiveTransportQaCliRegistration(params: {
   commandName: string;
   credentialOptions?: LiveTransportQaCredentialCliOptions;
   description: string;
+  listScenariosHelp?: string;
   outputDirHelp: string;
   scenarioHelp: string;
   sutAccountHelp: string;
@@ -127,6 +136,7 @@ export function createLiveTransportQaCliRegistration(params: {
         commandName: params.commandName,
         credentialOptions: params.credentialOptions,
         description: params.description,
+        listScenariosHelp: params.listScenariosHelp,
         outputDirHelp: params.outputDirHelp,
         scenarioHelp: params.scenarioHelp,
         sutAccountHelp: params.sutAccountHelp,

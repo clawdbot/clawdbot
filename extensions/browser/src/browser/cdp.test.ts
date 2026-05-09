@@ -201,7 +201,7 @@ describe("cdp", () => {
         url: "https://example.com",
         timeouts: { httpTimeoutMs: 20 },
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/abort|timeout|timed out/i);
   });
 
   it("honors configured WebSocket handshake timeouts when creating a target", async () => {
@@ -222,7 +222,7 @@ describe("cdp", () => {
           url: "https://example.com",
           timeouts: { handshakeTimeoutMs: 20 },
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/handshake|timeout|timed out/i);
     } finally {
       for (const socket of heldSockets) {
         socket.destroy();

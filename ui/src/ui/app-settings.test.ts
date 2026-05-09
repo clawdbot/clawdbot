@@ -256,8 +256,8 @@ describe("setTabFromRoute", () => {
     const host = createHost("chat");
 
     setTabFromRoute(host, "logs");
-    expect(host.logsPollInterval).not.toBeNull();
     expect(host.debugPollInterval).toBeNull();
+    expect(host.logsPollInterval).not.toBe(host.debugPollInterval);
 
     setTabFromRoute(host, "chat");
     expect(host.logsPollInterval).toBeNull();
@@ -267,8 +267,8 @@ describe("setTabFromRoute", () => {
     const host = createHost("chat");
 
     setTabFromRoute(host, "debug");
-    expect(host.debugPollInterval).not.toBeNull();
     expect(host.logsPollInterval).toBeNull();
+    expect(host.debugPollInterval).not.toBe(host.logsPollInterval);
 
     setTabFromRoute(host, "chat");
     expect(host.debugPollInterval).toBeNull();

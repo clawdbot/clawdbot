@@ -614,13 +614,15 @@ describe("callGateway url resolution", () => {
   it("waits for event-loop readiness before starting CLI pairing requests", async () => {
     setLocalLoopbackGatewayConfig();
 
-    let resolveReady!: (result: {
-      ready: boolean;
-      elapsedMs: number;
-      maxDriftMs: number;
-      checks: number;
-      aborted: boolean;
-    }) => void;
+    let resolveReady:
+      | ((result: {
+          ready: boolean;
+          elapsedMs: number;
+          maxDriftMs: number;
+          checks: number;
+          aborted: boolean;
+        }) => void)
+      | undefined;
     eventLoopReadyState.promise = new Promise((resolve) => {
       resolveReady = resolve;
     });
@@ -638,6 +640,9 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.CLI);
     expect(startCalls).toBe(0);
 
+    if (!resolveReady) {
+      throw new Error("Expected gateway event-loop readiness resolver to be initialized");
+    }
     resolveReady({ ready: true, elapsedMs: 0, maxDriftMs: 0, checks: 2, aborted: false });
     await promise;
 
@@ -963,7 +968,7 @@ describe("callGateway error details", () => {
     });
     expect(eventLoopReadyState.calls).toHaveLength(1);
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(5);
-    expect(lastClientOptions).not.toBeNull();
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
     expect(startCalls).toBe(0);
   });
 
@@ -1064,7 +1069,7 @@ describe("callGateway error details", () => {
   it("waits for gateway client teardown before resolving", async () => {
     setLocalLoopbackGatewayConfig();
 
-    let releaseStop!: () => void;
+    let releaseStop: (() => void) | undefined;
     let stopStarted = false;
     let stopFinished = false;
     let callResolved = false;
@@ -1116,6 +1121,9 @@ describe("callGateway error details", () => {
     });
     expect(callResolved).toBe(false);
 
+    if (!releaseStop) {
+      throw new Error("Expected gateway stop release callback to be initialized");
+    }
     releaseStop();
     await promise;
 
@@ -1127,7 +1135,7 @@ describe("callGateway error details", () => {
     setLocalLoopbackGatewayConfig();
 
     vi.useFakeTimers();
-    let releaseStop!: () => void;
+    let releaseStop: (() => void) | undefined;
     let stopStarted = false;
 
     __testing.setDepsForTests({
@@ -1173,6 +1181,9 @@ describe("callGateway error details", () => {
 
     await vi.advanceTimersByTimeAsync(5);
 
+    if (!releaseStop) {
+      throw new Error("Expected gateway stop release callback to be initialized");
+    }
     releaseStop();
 
     await expect(promise).resolves.toEqual({ ok: true });

@@ -146,7 +146,6 @@ describe("memory watcher config", () => {
 
   async function expectWatcherManager(cfg: OpenClawConfig) {
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
     if (!result.manager) {
       throw new Error("manager missing");
     }
@@ -173,7 +172,7 @@ describe("memory watcher config", () => {
         extraDir,
       ]),
     );
-    expect(watchedPaths.every((watchPath) => !watchPath.includes("*"))).toBe(true);
+    expect(watchedPaths).not.toContainEqual(expect.stringContaining("*"));
     expect(options.ignoreInitial).toBe(true);
     expect(options.awaitWriteFinish).toEqual({ stabilityThreshold: 25, pollInterval: 100 });
 
@@ -200,7 +199,9 @@ describe("memory watcher config", () => {
     const cfg = createWatcherConfig();
 
     const result = await getMemorySearchManager({ cfg, agentId: "main", purpose: "cli" });
-    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
     manager = result.manager as unknown as MemoryIndexManager;
 
     expect(watchMock).not.toHaveBeenCalled();
@@ -225,7 +226,7 @@ describe("memory watcher config", () => {
     expect(watchedPaths).toEqual(
       expect.arrayContaining([path.join(workspaceDir, "MEMORY.md"), path.join(extraDir)]),
     );
-    expect(watchedPaths.every((watchPath) => !watchPath.includes("*"))).toBe(true);
+    expect(watchedPaths).not.toContainEqual(expect.stringContaining("*"));
 
     const ignored = options.ignored as WatchIgnoredFn | undefined;
     expect(ignored).toBeTypeOf("function");
@@ -268,7 +269,7 @@ describe("memory watcher config", () => {
 
     const watcher = createdWatchers[0];
     expect(watcher?.on).toHaveBeenCalledWith("error", expect.any(Function));
-    expect(() => watcher?.emit("error", new Error("watcher error: ENOSPC"))).not.toThrow();
+    expect(watcher?.emit("error", new Error("watcher error: ENOSPC"))).toBeUndefined();
     expect(memoryLoggerWarn).toHaveBeenCalledWith("memory watcher error: watcher error: ENOSPC");
   });
 });

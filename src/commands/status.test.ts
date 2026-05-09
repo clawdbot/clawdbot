@@ -85,6 +85,14 @@ function getRuntimeLogs() {
   return runtimeLogMock.mock.calls.map((call: unknown[]) => String(call[0]));
 }
 
+function getRuntimeLog(index: number): string {
+  const call = runtimeLogMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected runtime log call ${index}`);
+  }
+  return String(call[0]);
+}
+
 function getJoinedRuntimeLogs() {
   return getRuntimeLogs().join("\n");
 }
@@ -967,14 +975,14 @@ describe("statusCommand", () => {
       createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
+    const payload = JSON.parse(getRuntimeLog(0));
     expect(payload.linkChannel).toBeUndefined();
     expect(payload.memory).toBeNull();
     expect(payload.memoryPlugin.enabled).toBe(true);
     expect(payload.memoryPlugin.slot).toBe("memory-core");
     expect(payload.sessions.count).toBe(1);
     expect(payload.sessions.paths).toContain("/tmp/sessions.json");
-    expect(payload.sessions.defaults.model).toEqual(expect.any(String));
+    expect(payload.sessions.defaults.model).toBe("pi:opus");
     expect(payload.sessions.defaults.contextTokens).toBeGreaterThan(0);
     expect(payload.sessions.recent[0].percentUsed).toBe(50);
     expect(payload.sessions.recent[0].cacheRead).toBe(2_000);
@@ -1001,7 +1009,7 @@ describe("statusCommand", () => {
     runtimeLogMock.mockClear();
     await statusCommand({ json: true, all: true }, runtime as never);
 
-    const allPayload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
+    const allPayload = JSON.parse(getRuntimeLog(0));
     expect(allPayload.securityAudit.summary.critical).toBe(1);
     expect(allPayload.securityAudit.summary.warn).toBe(1);
     expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
@@ -1088,21 +1096,21 @@ describe("statusCommand", () => {
       "Troubleshooting:",
       "Next steps:",
     ]) {
-      expect(logs.some((line) => line.includes(token))).toBe(true);
+      expect(logs).toEqual(expect.arrayContaining([expect.stringContaining(token)]));
     }
-    expect(
-      logs.some((line) => line.includes("legacy-plugin still uses legacy before_agent_start")),
-    ).toBe(true);
-    expect(
-      logs.some(
-        (line) =>
-          line.includes("openclaw status --all") ||
-          line.includes("openclaw --profile isolated status --all"),
-      ),
-    ).toBe(true);
-    expect(logs.some((line) => line.includes("Cache"))).toBe(true);
-    expect(logs.some((line) => line.includes("40% hit"))).toBe(true);
-    expect(logs.some((line) => line.includes("read 2.0k"))).toBe(true);
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("legacy-plugin still uses legacy before_agent_start"),
+      ]),
+    );
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/openclaw (?:--profile isolated )?status --all/),
+      ]),
+    );
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("Cache")]));
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("40% hit")]));
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("read 2.0k")]));
   });
 
   it("shows a maintenance hint when task audit errors are present", async () => {
@@ -1157,8 +1165,8 @@ describe("statusCommand", () => {
       },
     });
     const logs = await runStatusAndGetLogs();
-    expect(logs.some((line) => line.includes("100% cached"))).toBe(true);
-    expect(logs.some((line) => line.includes("120% cached"))).toBe(false);
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("100% cached")]));
+    expect(logs).not.toEqual(expect.arrayContaining([expect.stringContaining("120% cached")]));
 
     mocks.loadSessionStore.mockReturnValue({
       "+1000": {
@@ -1170,8 +1178,10 @@ describe("statusCommand", () => {
       },
     });
     const promptSideLogs = await runStatusAndGetLogs();
-    expect(promptSideLogs.some((line) => line.includes("67% cached"))).toBe(true);
-    expect(promptSideLogs.some((line) => line.includes("40% cached"))).toBe(false);
+    expect(promptSideLogs).toEqual(expect.arrayContaining([expect.stringContaining("67% cached")]));
+    expect(promptSideLogs).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("40% cached")]),
+    );
   });
 
   it("shows node-only gateway info when no local gateway service is installed", async () => {
@@ -1216,7 +1226,7 @@ describe("statusCommand", () => {
         presence: [],
       });
       const logs = await runStatusAndGetLogs();
-      expect(logs.some((l: string) => l.includes("auth token"))).toBe(true);
+      expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("auth token")]));
     });
   });
 
@@ -1239,7 +1249,9 @@ describe("statusCommand", () => {
 
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
-    expect(payload.gateway.error ?? payload.gateway.authWarning ?? null).not.toBeNull();
+    const gatewayAuthMessage = payload.gateway.error ?? payload.gateway.authWarning;
+    expect(typeof gatewayAuthMessage).toBe("string");
+    expect(gatewayAuthMessage.trim().length).toBeGreaterThan(0);
     if (Array.isArray(payload.secretDiagnostics) && payload.secretDiagnostics.length > 0) {
       expect(
         payload.secretDiagnostics.some((entry: string) => entry.includes("gateway.auth.token")),

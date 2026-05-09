@@ -205,6 +205,20 @@ function createConfig(port: number): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function updateMSTeamsConfig(
+  cfg: OpenClawConfig,
+  patch: NonNullable<NonNullable<OpenClawConfig["channels"]>["msteams"]>,
+): void {
+  const msteams = cfg.channels?.msteams;
+  if (!cfg.channels || !msteams) {
+    throw new Error("Expected Microsoft Teams config fixture");
+  }
+  cfg.channels.msteams = {
+    ...msteams,
+    ...patch,
+  };
+}
+
 function createRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),
@@ -262,7 +276,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
     abort.abort();
     const result = await task;
-    expect(result.app).not.toBeNull();
+    if (!result.app) {
+      throw new Error("expected Teams monitor app after startup abort");
+    }
     await expect(result.shutdown()).resolves.toBeUndefined();
   });
 
@@ -331,8 +347,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
   it("does not resolve user allowlists by display name unless name matching is enabled", async () => {
     const abort = new AbortController();
     const cfg = createConfig(0);
-    cfg.channels!.msteams = {
-      ...cfg.channels!.msteams!,
+    updateMSTeamsConfig(cfg, {
       allowFrom: ["Alice", "user:40a1a0ed-4ff2-4164-a219-55518990c197"],
       groupAllowFrom: ["Bob", "msteams:user:50a1a0ed-4ff2-4164-a219-55518990c198"],
       teams: {
@@ -342,7 +357,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
           },
         },
       },
-    };
+    });
     resolveAllowlistMocks.resolveMSTeamsChannelAllowlist.mockResolvedValueOnce([
       {
         input: "Product/Roadmap",
@@ -394,12 +409,11 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
     const abort = new AbortController();
     const cfg = createConfig(0);
-    cfg.channels!.msteams = {
-      ...cfg.channels!.msteams!,
+    updateMSTeamsConfig(cfg, {
       dangerouslyAllowNameMatching: true,
       allowFrom: ["Alice"],
       groupAllowFrom: ["Bob"],
-    };
+    });
 
     const task = monitorMSTeamsProvider({
       cfg,

@@ -60,7 +60,7 @@ describe("extension import boundary inventories", () => {
 
     expect(jsonOutput.exitCode).toBe(0);
     expect(jsonOutput.stderr).toBe("");
-    expect(jsonOutput.json).toEqual([]);
+    expect(jsonOutput.json).toStrictEqual([]);
   });
 });
 

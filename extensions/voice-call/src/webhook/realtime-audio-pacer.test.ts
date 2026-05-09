@@ -81,7 +81,7 @@ describe("RealtimeTwilioAudioPacer", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expect(onBackpressure).toHaveBeenCalledOnce();
-    expect(sent).toEqual([]);
+    expect(sent).toStrictEqual([]);
   });
 });
 

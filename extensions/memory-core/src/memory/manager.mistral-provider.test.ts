@@ -57,6 +57,19 @@ function createSettings(params: {
   } as unknown as ResolvedMemorySearchConfig;
 }
 
+type MemoryFallbackProviderRequest = NonNullable<
+  ReturnType<typeof resolveMemoryFallbackProviderRequest>
+>;
+
+function expectMemoryFallbackRequest(
+  request: ReturnType<typeof resolveMemoryFallbackProviderRequest>,
+): MemoryFallbackProviderRequest {
+  if (!request) {
+    throw new Error("Expected memory fallback provider request");
+  }
+  return request;
+}
+
 describe("memory manager mistral provider wiring", () => {
   it("stores mistral client when mistral provider is selected", () => {
     const mistralRuntime: EmbeddingProviderRuntime = {
@@ -72,7 +85,7 @@ describe("memory manager mistral provider wiring", () => {
       providerUnavailableReason: undefined,
     });
 
-    expect(state.provider?.id).toBe("mistral");
+    expect(state.provider).toEqual(expect.objectContaining({ id: "mistral" }));
     expect(state.providerRuntime).toBe(mistralRuntime);
   });
 
@@ -105,7 +118,7 @@ describe("memory manager mistral provider wiring", () => {
 
     expect(fallbackState.fallbackFrom).toBe("openai");
     expect(fallbackState.fallbackReason).toBe("forced test");
-    expect(fallbackState.provider?.id).toBe("mistral");
+    expect(fallbackState.provider).toEqual(expect.objectContaining({ id: "mistral" }));
     expect(fallbackState.providerRuntime).toBe(mistralRuntime);
   });
 
@@ -116,9 +129,10 @@ describe("memory manager mistral provider wiring", () => {
       currentProviderId: "openai",
     });
 
-    expect(request?.provider).toBe("ollama");
-    expect(request?.model).toBe(DEFAULT_OLLAMA_EMBEDDING_MODEL);
-    expect(request?.fallback).toBe("none");
+    const fallbackRequest = expectMemoryFallbackRequest(request);
+    expect(fallbackRequest.provider).toBe("ollama");
+    expect(fallbackRequest.model).toBe(DEFAULT_OLLAMA_EMBEDDING_MODEL);
+    expect(fallbackRequest.fallback).toBe("none");
   });
 
   it("includes outputDimensionality in the primary provider request", () => {
@@ -158,8 +172,9 @@ describe("memory manager mistral provider wiring", () => {
       currentProviderId: "openai",
     });
 
-    expect(request?.provider).toBe("lmstudio");
-    expect(request?.model).toBe(DEFAULT_LMSTUDIO_EMBEDDING_MODEL);
-    expect(request?.fallback).toBe("none");
+    const fallbackRequest = expectMemoryFallbackRequest(request);
+    expect(fallbackRequest.provider).toBe("lmstudio");
+    expect(fallbackRequest.model).toBe(DEFAULT_LMSTUDIO_EMBEDDING_MODEL);
+    expect(fallbackRequest.fallback).toBe("none");
   });
 });

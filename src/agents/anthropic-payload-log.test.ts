@@ -14,7 +14,7 @@ describe("createAnthropicPayloadLogger", () => {
         flush: async () => undefined,
       },
     });
-    expect(logger).not.toBeNull();
+    expect(typeof logger?.wrapStreamFn).toBe("function");
 
     const payload = {
       messages: [
@@ -41,7 +41,11 @@ describe("createAnthropicPayloadLogger", () => {
     }) as StreamFn;
 
     const wrapped = logger?.wrapStreamFn(streamFn);
-    await wrapped?.({ api: "anthropic-messages" } as never, { messages: [] } as never, {});
+    expect(typeof wrapped).toBe("function");
+    if (!wrapped) {
+      throw new Error("expected payload logger to wrap stream function");
+    }
+    await wrapped({ api: "anthropic-messages" } as never, { messages: [] } as never, {});
 
     const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
     const sanitizedPayload = (event.payload ?? {}) as Record<string, unknown>;

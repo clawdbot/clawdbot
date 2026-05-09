@@ -64,6 +64,11 @@ function makeRuntime(): { runtime: RuntimeEnv; logs: string[] } {
   };
 }
 
+function expectLogsToInclude(logs: readonly string[], text: string): void {
+  const matches = logs.filter((line) => line.includes(text));
+  expect(matches.length).toBeGreaterThan(0);
+}
+
 describe("sessionsCleanupCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -437,11 +442,16 @@ describe("sessionsCleanupCommand", () => {
       runtime,
     );
 
-    expect(logs.some((line) => line.includes("Planned session actions:"))).toBe(true);
-    expect(logs.some((line) => line.includes("Would prune unreferenced artifacts: 2"))).toBe(true);
-    expect(logs.some((line) => line.includes("Action") && line.includes("Key"))).toBe(true);
-    expect(logs.some((line) => line.includes("fresh") && line.includes("keep"))).toBe(true);
-    expect(logs.some((line) => line.includes("stale") && line.includes("prune-stale"))).toBe(true);
+    expectLogsToInclude(logs, "Planned session actions:");
+    expectLogsToInclude(logs, "Would prune unreferenced artifacts: 2");
+    const tableHeaderLines = logs.filter((line) => line.includes("Action") && line.includes("Key"));
+    expect(tableHeaderLines.length).toBeGreaterThan(0);
+    const freshKeepLines = logs.filter((line) => line.includes("fresh") && line.includes("keep"));
+    expect(freshKeepLines.length).toBeGreaterThan(0);
+    const stalePruneLines = logs.filter(
+      (line) => line.includes("stale") && line.includes("prune-stale"),
+    );
+    expect(stalePruneLines.length).toBeGreaterThan(0);
   });
 
   it("returns grouped JSON for --all-agents dry-runs", async () => {

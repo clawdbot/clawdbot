@@ -157,7 +157,7 @@ describe("doctor config flow steps", () => {
     });
 
     expect(result.removed).toEqual(["bogus"]);
-    expect(result.state.candidate).toEqual({});
+    expect(result.state.candidate).toStrictEqual({});
     expect(result.state.fixHints).toContain('Run "openclaw doctor --fix" to remove these keys.');
   });
 

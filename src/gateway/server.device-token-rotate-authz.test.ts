@@ -83,12 +83,19 @@ async function connectApprovedNode(params: {
     },
   });
   client.start();
-  await Promise.race([
-    ready,
-    new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error("timeout waiting for node hello")), 5_000);
-    }),
-  ]);
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      ready,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("timeout waiting for node hello")), 5_000);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
   return client;
 }
 

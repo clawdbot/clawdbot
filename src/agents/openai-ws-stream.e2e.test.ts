@@ -263,21 +263,21 @@ function extractReasoningText(item: { summary?: unknown; content?: unknown }): s
     return summary.trim();
   }
   if (Array.isArray(summary)) {
-    const summaryText = summary
-      .map((part) => {
-        if (typeof part === "string") {
-          return part.trim();
-        }
-        if (!part || typeof part !== "object") {
-          return "";
-        }
-        return typeof (part as { text?: unknown }).text === "string"
-          ? ((part as { text: string }).text ?? "").trim()
-          : "";
-      })
-      .filter(Boolean)
-      .join("\n")
-      .trim();
+    const textParts: string[] = [];
+    for (const part of summary) {
+      const text =
+        typeof part === "string"
+          ? part.trim()
+          : part &&
+              typeof part === "object" &&
+              typeof (part as { text?: unknown }).text === "string"
+            ? (part as { text: string }).text.trim()
+            : "";
+      if (text.length > 0) {
+        textParts.push(text);
+      }
+    }
+    const summaryText = textParts.join("\n").trim();
     if (summaryText) {
       return summaryText;
     }

@@ -546,7 +546,7 @@ describe("channel turn kernel", () => {
       },
     });
 
-    expect(historyMap.get("room-1")).toEqual([]);
+    expect(historyMap.get("room-1")).toStrictEqual([]);
   });
 
   it("cleans up pre-created dispatchers when session recording fails", async () => {

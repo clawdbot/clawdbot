@@ -19,7 +19,9 @@ export async function runNonInteractiveRemoteSetup(params: {
 
   const remoteUrl = normalizeOptionalString(opts.remoteUrl);
   if (!remoteUrl) {
-    runtime.error("Missing --remote-url for remote mode.");
+    runtime.error(
+      `Missing --remote-url for remote mode. Example: ${formatCliCommand("openclaw onboard --non-interactive --mode remote --remote-url ws://127.0.0.1:3000")}.`,
+    );
     runtime.exit(1);
     return;
   }

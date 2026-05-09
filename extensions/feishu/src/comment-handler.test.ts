@@ -29,6 +29,22 @@ vi.mock("./drive.js", () => ({
   deliverCommentThreadText: deliverCommentThreadTextMock,
 }));
 
+async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<"pending">((resolve) => {
+        timer = setTimeout(() => resolve("pending"), 0);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 function buildConfig(overrides?: Partial<ClawdbotConfig>): ClawdbotConfig {
   return {
     channels: {
@@ -489,10 +505,7 @@ describe("handleFeishuCommentEvent", () => {
       } as never,
     });
 
-    const status = await Promise.race([
-      eventPromise.then(() => "done"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const status = await raceWithNextMacrotask(eventPromise.then(() => "done"));
 
     expect(status).toBe("done");
     expect(cleanupTypingReaction).toHaveBeenCalledTimes(1);

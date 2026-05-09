@@ -88,7 +88,7 @@ describe("feishu setup wizard", () => {
     probeFeishuMock.mockResolvedValue({ ok: false, error: "mocked" });
   });
 
-  it("does not throw when config appId/appSecret are SecretRef objects", async () => {
+  it("prompts over SecretRef appId/appSecret config objects", async () => {
     const text = vi
       .fn()
       .mockResolvedValueOnce("cli_from_prompt")

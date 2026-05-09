@@ -1352,7 +1352,13 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
     config,
     run: loadAndMaybeMigrateDoctorConfig,
   });
-  return noteSpy.mock.calls.filter((call) => call[1] === "Doctor warnings").map((call) => call[0]);
+  const warnings: string[] = [];
+  for (const [message, title] of noteSpy.mock.calls) {
+    if (title === "Doctor warnings") {
+      warnings.push(message);
+    }
+  }
+  return warnings;
 }
 
 type DiscordGuildRule = {
@@ -1408,7 +1414,9 @@ describe("doctor config flow", () => {
         },
       },
     });
-    expect(doctorWarnings.some((line) => line.includes("mutable allowlist"))).toBe(false);
+    expect(doctorWarnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("mutable allowlist")]),
+    );
   });
 
   it("warns when hooks transformsDir points outside the hook transforms root", async () => {
@@ -1533,14 +1541,16 @@ describe("doctor config flow", () => {
       },
     });
 
-    expect(
-      doctorWarnings.some((line) =>
-        line.includes(
+    expect(doctorWarnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
           'channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false.',
         ),
-      ),
-    ).toBe(true);
-    expect(doctorWarnings.some((line) => line.includes("first-time setup mode"))).toBe(false);
+      ]),
+    );
+    expect(doctorWarnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("first-time setup mode")]),
+    );
   });
 
   it("shows plugin-blocked guidance instead of first-time Telegram guidance when plugins are disabled globally", async () => {
@@ -1556,14 +1566,16 @@ describe("doctor config flow", () => {
       },
     });
 
-    expect(
-      doctorWarnings.some((line) =>
-        line.includes(
+    expect(doctorWarnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
           "channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally.",
         ),
-      ),
-    ).toBe(true);
-    expect(doctorWarnings.some((line) => line.includes("first-time setup mode"))).toBe(false);
+      ]),
+    );
+    expect(doctorWarnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("first-time setup mode")]),
+    );
   });
 
   it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
@@ -1597,7 +1609,9 @@ describe("doctor config flow", () => {
       },
     });
 
-    expect(doctorWarnings.some((line) => line.includes("channels.zalouser.groups"))).toBe(false);
+    expect(doctorWarnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("channels.zalouser.groups")]),
+    );
   });
 
   it("warns when imessage group allowlist is empty even if allowFrom is set", async () => {
@@ -2016,8 +2030,8 @@ describe("doctor config flow", () => {
         .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
         .map((call) => call[0]);
       const joinedOutputs = outputs.join("\n");
-      expect(outputs.filter((line) => line.includes("\u001b"))).toEqual([]);
-      expect(outputs.filter((line) => line.includes("\nforged"))).toEqual([]);
+      expect(outputs.some((line) => line.includes("\u001b"))).toBe(false);
+      expect(outputs.some((line) => line.includes("\nforged"))).toBe(false);
       expect(joinedOutputs).toContain('channels.slack.accounts.opsopen.allowFrom: set to ["*"]');
       expect(joinedOutputs).toContain('required by dmPolicy="open"');
       expect(

@@ -270,6 +270,9 @@ describe("resolveClaudeThinkingProfile", () => {
       levels: expect.arrayContaining([{ id: "adaptive" }]),
       defaultLevel: "adaptive",
     });
-    expect(profile.levels.some((level) => level.id === "xhigh" || level.id === "max")).toBe(false);
+    const fixedBudgetLevels = profile.levels.filter(
+      (level) => level.id === "xhigh" || level.id === "max",
+    );
+    expect(fixedBudgetLevels).toEqual([]);
   });
 });

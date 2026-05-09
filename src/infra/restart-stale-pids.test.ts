@@ -672,8 +672,8 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       mockSpawnSync.mockImplementation(() => ({ error: null, status: 1, stdout: "", stderr: "" }));
 
       vi.spyOn(process, "kill").mockReturnValue(true);
-      // Must not throw — the catch path returns transient inconclusive, loop continues
-      expect(() => cleanStaleGatewayProcessesSync()).not.toThrow();
+      // The catch path returns transient inconclusive, then the loop continues.
+      expect(cleanStaleGatewayProcessesSync()).toContain(stalePid);
     });
   });
 
@@ -759,7 +759,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       cleanStaleGatewayProcessesSync();
 
       expect(events).toContain("port-free");
-      expect(events.filter((e) => e.startsWith("busy-poll")).length).toBeGreaterThan(0);
+      expect(events.some((e) => e.startsWith("busy-poll"))).toBe(true);
     });
 
     it("bails immediately when lsof is permanently unavailable (ENOENT) — Greptile edge case", () => {
@@ -777,7 +777,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       });
 
       vi.spyOn(process, "kill").mockReturnValue(true);
-      expect(() => cleanStaleGatewayProcessesSync()).not.toThrow();
+      expect(cleanStaleGatewayProcessesSync()).toContain(stalePid);
 
       // Must bail after first ENOENT poll — no point retrying a missing binary
       const enoentPolls = events.filter((e) => e.startsWith("enoent-poll"));
@@ -792,7 +792,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         createErrnoResult("EPERM", "lsof eperm"),
       );
       vi.spyOn(process, "kill").mockReturnValue(true);
-      expect(() => cleanStaleGatewayProcessesSync()).not.toThrow();
+      expect(cleanStaleGatewayProcessesSync()).toContain(stalePid);
       // Must bail after exactly 1 EPERM poll — same as ENOENT/EACCES
       expect(getCallCount()).toBe(2); // 1 initial find + 1 EPERM poll
     });
@@ -805,7 +805,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         createErrnoResult("EACCES", "lsof permission denied"),
       );
       vi.spyOn(process, "kill").mockReturnValue(true);
-      expect(() => cleanStaleGatewayProcessesSync()).not.toThrow();
+      expect(cleanStaleGatewayProcessesSync()).toContain(stalePid);
       // Should have bailed after exactly 1 poll call (the EACCES one)
       expect(getCallCount()).toBe(2); // 1 initial find + 1 EACCES poll
     });
@@ -826,8 +826,8 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       });
 
       vi.spyOn(process, "kill").mockReturnValue(true);
-      // Must return without throwing (proceeds with warning after budget expires)
-      expect(() => cleanStaleGatewayProcessesSync()).not.toThrow();
+      // Proceeds with warning after budget expires.
+      expect(cleanStaleGatewayProcessesSync()).toContain(stalePid);
     });
 
     it("still polls for port-free when all stale pids were already dead at SIGTERM time", () => {
@@ -1199,8 +1199,8 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         });
       });
       vi.spyOn(process, "kill").mockReturnValue(true);
-      // Should complete cleanly — no openclaw pids in status-1 output → free
-      expect(() => cleanStaleGatewayProcessesSync()).not.toThrow();
+      // No openclaw pids in status-1 output means the port is free for this cleanup.
+      expect(cleanStaleGatewayProcessesSync()).toContain(stalePid);
       // Completed with one argv verification after the status-1 poll output:
       // initial lsof + poll lsof + ps argv check.
       expect(getCallCount()).toBe(3);

@@ -69,7 +69,7 @@ function extractProviderFromModelRef(value: string): string | null {
 }
 
 function hasConfiguredEmbeddedHarnessRuntime(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return collectConfiguredAgentHarnessRuntimes(cfg, env).length > 0;
+  return collectConfiguredAgentHarnessRuntimes(cfg, env, { includeEnvRuntime: false }).length > 0;
 }
 
 function resolveAgentHarnessOwnerPluginIds(
@@ -641,7 +641,9 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     }
   }
 
-  for (const runtime of collectConfiguredAgentHarnessRuntimes(params.config, params.env)) {
+  for (const runtime of collectConfiguredAgentHarnessRuntimes(params.config, params.env, {
+    includeEnvRuntime: false,
+  })) {
     const pluginIds = resolveAgentHarnessOwnerPluginIds(params.registry, runtime);
     for (const pluginId of pluginIds) {
       changes.push({

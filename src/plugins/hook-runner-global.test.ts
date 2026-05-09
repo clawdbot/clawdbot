@@ -5,6 +5,19 @@ async function importHookRunnerGlobalModule() {
   return import("./hook-runner-global.js");
 }
 
+type HookRunnerGlobalModule = Awaited<ReturnType<typeof importHookRunnerGlobalModule>>;
+type HookRunner = NonNullable<ReturnType<HookRunnerGlobalModule["getGlobalHookRunner"]>>;
+
+function expectGlobalHookRunner(
+  runner: ReturnType<HookRunnerGlobalModule["getGlobalHookRunner"]>,
+): HookRunner {
+  if (runner === null) {
+    throw new Error("Expected global hook runner");
+  }
+  expect(typeof runner.hasHooks).toBe("function");
+  return runner;
+}
+
 async function expectGlobalRunnerState(expected: { hasRunner: boolean; registry?: unknown }) {
   const mod = await importHookRunnerGlobalModule();
   expect(mod.getGlobalHookRunner() === null).toBe(!expected.hasRunner);
@@ -29,13 +42,16 @@ describe("hook-runner-global", () => {
 
   it("preserves the initialized runner across module reloads", async () => {
     const { modA, registry } = await createInitializedModule();
-    expect(modA.getGlobalHookRunner()?.hasHooks("message_received")).toBe(true);
+    expect(expectGlobalHookRunner(modA.getGlobalHookRunner()).hasHooks("message_received")).toBe(
+      true,
+    );
 
     vi.resetModules();
 
     const modB = await expectGlobalRunnerState({ hasRunner: true, registry });
-    expect(modB.getGlobalHookRunner()).not.toBeNull();
-    expect(modB.getGlobalHookRunner()?.hasHooks("message_received")).toBe(true);
+    expect(expectGlobalHookRunner(modB.getGlobalHookRunner()).hasHooks("message_received")).toBe(
+      true,
+    );
   });
 
   it("clears the shared state across module reloads", async () => {

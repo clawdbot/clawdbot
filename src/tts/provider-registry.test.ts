@@ -71,7 +71,7 @@ describe("speech provider registry", () => {
   });
 
   it("returns empty results when the capability runtime has no speech providers", () => {
-    expect(registry.listSpeechProviders()).toEqual([]);
+    expect(registry.listSpeechProviders()).toStrictEqual([]);
     expect(registry.getSpeechProvider("demo-speech")).toBeUndefined();
     expect(registry.canonicalizeSpeechProviderId("demo-speech")).toBe("demo-speech");
   });

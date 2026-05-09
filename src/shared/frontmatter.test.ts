@@ -11,6 +11,15 @@ import {
   resolveOpenClawManifestRequires,
 } from "./frontmatter.js";
 
+function expectInstallBase(
+  parsed: ReturnType<typeof parseOpenClawManifestInstallBase>,
+): NonNullable<ReturnType<typeof parseOpenClawManifestInstallBase>> {
+  if (parsed === undefined) {
+    throw new Error("Expected manifest install base");
+  }
+  return parsed;
+}
+
 describe("shared/frontmatter", () => {
   test("normalizeStringList handles strings, arrays, and non-list values", () => {
     expect(normalizeStringList("a, b,,c")).toEqual(["a", "b", "c"]);
@@ -135,7 +144,7 @@ describe("shared/frontmatter", () => {
         id?: string;
         label?: string;
         bins?: string[];
-      }>({ extra: true }, parsed!),
+      }>({ extra: true }, expectInstallBase(parsed)),
     ).toEqual({
       extra: true,
       id: "brew.git",

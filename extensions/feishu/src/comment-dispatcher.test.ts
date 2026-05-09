@@ -34,6 +34,22 @@ vi.mock("./runtime.js", () => ({
 
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
 
+async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<"pending">((resolve) => {
+        timer = setTimeout(() => resolve("pending"), 0);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 describe("createFeishuCommentReplyDispatcher", () => {
   afterAll(() => {
     vi.doUnmock("./accounts.js");
@@ -136,10 +152,7 @@ describe("createFeishuCommentReplyDispatcher", () => {
     const deliverPromise = Promise.resolve(
       options.deliver({ text: "hello world" }, { kind: "final" }),
     );
-    const status = await Promise.race([
-      deliverPromise.then(() => "done"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const status = await raceWithNextMacrotask(deliverPromise.then(() => "done"));
 
     expect(status).toBe("done");
     expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(

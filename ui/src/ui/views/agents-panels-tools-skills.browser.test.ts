@@ -164,11 +164,11 @@ describe("agents tools panel (browser)", () => {
     const group = container.querySelector<HTMLDetailsElement>(".agent-tools-group");
     const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
 
-    expect(group).not.toBeNull();
-    expect(tool).not.toBeNull();
+    expect(group?.classList.contains("agent-tools-group")).toBe(true);
+    expect(tool?.classList.contains("agent-tool-card")).toBe(true);
 
     if (!group || !tool) {
-      return;
+      throw new Error("expected agent tool group and card");
     }
 
     group.open = true;
@@ -319,13 +319,13 @@ describe("agents tools panel (browser)", () => {
       '.agent-tools-runtime-chip[href="#agent-tool-read"]',
     );
 
-    expect(group).not.toBeNull();
-    expect(tool).not.toBeNull();
-    expect(chip).not.toBeNull();
+    expect(group?.classList.contains("agent-tools-group")).toBe(true);
+    expect(tool?.classList.contains("agent-tool-card")).toBe(true);
+    expect(chip?.getAttribute("href")).toBe("#agent-tool-read");
 
     if (!group || !tool || !chip) {
       container.remove();
-      return;
+      throw new Error("expected agent tool runtime chip");
     }
 
     expect(group.open).toBe(false);

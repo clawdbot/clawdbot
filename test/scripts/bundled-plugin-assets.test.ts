@@ -60,7 +60,7 @@ describe("bundled plugin assets", () => {
     await withPluginAssetFixture(async (rootDir) => {
       await expect(
         readBundledPluginAssetHooks({ phase: "copy", plugins: ["missing"], rootDir }),
-      ).resolves.toEqual([]);
+      ).resolves.toStrictEqual([]);
     });
   });
 

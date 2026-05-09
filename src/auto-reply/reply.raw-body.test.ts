@@ -23,9 +23,10 @@ describe("RawBody directive parsing", () => {
     const directives = parseInlineDirectives(sessionCtx.BodyForCommands ?? "", {
       allowStatusDirective: true,
     });
-    const prefixedBody = [buildInboundUserContextPrefix(sessionCtx), directives.cleaned]
-      .filter(Boolean)
-      .join("\n\n");
+    const contextPrefix = buildInboundUserContextPrefix(sessionCtx);
+    const prefixedBody = contextPrefix
+      ? `${contextPrefix}\n\n${directives.cleaned}`
+      : directives.cleaned;
     const prompt = buildReplyPromptBodies({
       ctx: sessionCtx,
       sessionCtx: { ...sessionCtx, BodyStripped: directives.cleaned },

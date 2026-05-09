@@ -28,20 +28,22 @@ type TargetModelRef = {
 };
 
 function parseTargetModelRefs(raw: string | undefined): TargetModelRef[] {
-  return (raw ?? "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((ref) => {
-      const [provider, ...rest] = ref.split("/");
-      const modelId = rest.join("/").trim();
-      if (!provider?.trim() || !modelId) {
-        throw new Error(
-          `Invalid OPENCLAW_LIVE_TOOL_REPLAY_REPAIR_MODELS entry: ${JSON.stringify(ref)}`,
-        );
-      }
-      return { ref, provider: provider.trim(), modelId };
-    });
+  const refs: TargetModelRef[] = [];
+  for (const item of (raw ?? "").split(",")) {
+    const ref = item.trim();
+    if (!ref) {
+      continue;
+    }
+    const [provider, ...rest] = ref.split("/");
+    const modelId = rest.join("/").trim();
+    if (!provider?.trim() || !modelId) {
+      throw new Error(
+        `Invalid OPENCLAW_LIVE_TOOL_REPLAY_REPAIR_MODELS entry: ${JSON.stringify(ref)}`,
+      );
+    }
+    refs.push({ ref, provider: provider.trim(), modelId });
+  }
+  return refs;
 }
 
 function logProgress(message: string): void {
@@ -171,7 +173,23 @@ function assistantToolCallIds(message: AgentMessage): string[] {
   if (message.role !== "assistant") {
     return [];
   }
-  return message.content.filter((block) => block.type === "toolCall").map((block) => block.id);
+  const ids: string[] = [];
+  for (const block of message.content) {
+    if (block.type === "toolCall") {
+      ids.push(block.id);
+    }
+  }
+  return ids;
+}
+
+function responseText(content: Awaited<ReturnType<typeof completeSimple<Api>>>["content"]): string {
+  const parts: string[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      parts.push(block.text.trim());
+    }
+  }
+  return parts.join(" ").trim();
 }
 
 function isKnownLiveBlocker(errorMessage: string): boolean {
@@ -276,11 +294,7 @@ describeLive("tool replay repair live", () => {
           120_000,
         );
 
-        const text = response.content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text.trim())
-          .join(" ")
-          .trim();
+        const text = responseText(response.content);
         const errorMessage =
           typeof (response as { errorMessage?: unknown }).errorMessage === "string"
             ? ((response as { errorMessage?: string }).errorMessage ?? "")
@@ -361,11 +375,7 @@ describeLive("tool replay repair live", () => {
           120_000,
         );
 
-        const text = response.content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text.trim())
-          .join(" ")
-          .trim();
+        const text = responseText(response.content);
         const errorMessage =
           typeof (response as { errorMessage?: unknown }).errorMessage === "string"
             ? ((response as { errorMessage?: string }).errorMessage ?? "")

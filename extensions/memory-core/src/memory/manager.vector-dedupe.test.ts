@@ -29,13 +29,13 @@ describe("memory vector dedupe", () => {
       END;
     `);
 
-    expect(() =>
+    expect(
       replaceMemoryVectorRow({
-        db: db!,
+        db,
         id: "chunk-1",
         embedding: [2, 0, 0],
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     const row = db
       .prepare("SELECT COUNT(*) as c, length(embedding) as bytes FROM chunks_vec WHERE id = ?")

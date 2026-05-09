@@ -340,7 +340,7 @@ describe("runConfigureWizard", () => {
     expect(mocks.setupSearch).toHaveBeenCalledOnce();
   });
 
-  it("does not crash when web search providers are unavailable under plugin policy", async () => {
+  it("notes unavailable web search providers under plugin policy", async () => {
     setupBaseWizardState();
     mocks.resolveSearchProviderOptions.mockReturnValue([]);
     queueWizardPrompts({

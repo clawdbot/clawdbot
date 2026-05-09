@@ -1727,21 +1727,27 @@ describe("short-term promotion", () => {
       );
       await fs.writeFile(lockPath, `${process.pid}:${Date.now()}\n`, "utf-8");
 
-      let settled = false;
-      const repairPromise = repairShortTermPromotionArtifacts({ workspaceDir }).then((result) => {
-        settled = true;
-        return result;
-      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        let settled = false;
+        const repairPromise = repairShortTermPromotionArtifacts({ workspaceDir }).then((result) => {
+          settled = true;
+          return result;
+        });
 
-      await new Promise((resolve) => setTimeout(resolve, 41));
-      expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(41);
+        expect(settled).toBe(false);
 
-      await fs.unlink(lockPath);
-      const repair = await repairPromise;
+        await fs.unlink(lockPath);
+        await vi.advanceTimersByTimeAsync(40);
+        const repair = await repairPromise;
 
-      expect(repair.changed).toBe(true);
-      expect(repair.rewroteStore).toBe(true);
-      expect(repair.removedInvalidEntries).toBe(1);
+        expect(repair.changed).toBe(true);
+        expect(repair.rewroteStore).toBe(true);
+        expect(repair.removedInvalidEntries).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

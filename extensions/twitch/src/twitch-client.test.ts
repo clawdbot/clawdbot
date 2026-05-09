@@ -295,7 +295,7 @@ describe("TwitchClientManager", () => {
     });
 
     it("should handle disconnecting non-existent client gracefully", async () => {
-      // disconnect doesn't throw, just does nothing
+      // Missing clients are ignored.
       await manager.disconnect(testAccount);
       expect(mockQuit).not.toHaveBeenCalled();
     });
@@ -326,7 +326,7 @@ describe("TwitchClientManager", () => {
     });
 
     it("should handle empty client list gracefully", async () => {
-      // disconnectAll doesn't throw, just does nothing
+      // Empty client sets are ignored.
       await manager.disconnectAll();
       expect(mockQuit).not.toHaveBeenCalled();
     });
@@ -436,7 +436,6 @@ describe("TwitchClientManager", () => {
         id: "msg123",
       });
 
-      expect(capturedMessage).not.toBeNull();
       expect(capturedMessage?.username).toBe("testuser");
       expect(capturedMessage?.displayName).toBe("TestUser");
       expect(capturedMessage?.userId).toBe("12345");

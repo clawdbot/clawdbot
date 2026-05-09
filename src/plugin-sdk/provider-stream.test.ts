@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
+import { VERSION } from "../version.js";
 import {
   composeProviderStreamWrappers as composeProviderStreamWrappersShared,
   createMoonshotThinkingWrapper as createMoonshotThinkingWrapperShared,
@@ -239,7 +240,11 @@ describe("buildProviderStreamFamilyHooks", () => {
       config: { thinkingConfig: { thinkingBudget: -1 } },
       service_tier: "flex",
     });
-    expect(capturedHeaders).toEqual(expect.any(Object));
+    expect(capturedHeaders).toEqual({
+      "User-Agent": `openclaw/${VERSION}`,
+      originator: "openclaw",
+      version: VERSION,
+    });
 
     const openRouterHooks = OPENROUTER_THINKING_STREAM_HOOKS;
     void requireStreamFn(

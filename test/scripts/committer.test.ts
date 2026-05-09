@@ -57,7 +57,13 @@ function commitWithHelperArgs(repo: string, ...args: string[]) {
 
 function committedPaths(repo: string) {
   const output = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD");
-  return output.split("\n").filter(Boolean).toSorted();
+  const paths: string[] = [];
+  for (const line of output.split("\n")) {
+    if (line) {
+      paths.push(line);
+    }
+  }
+  return paths.toSorted();
 }
 
 function committedFileContents(repo: string, relativePath: string) {

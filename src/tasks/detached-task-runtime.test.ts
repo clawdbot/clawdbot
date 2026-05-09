@@ -258,9 +258,17 @@ describe("detached-task-runtime", () => {
         expect.objectContaining({
           taskId: "task-throw",
           runtime: "acp",
-          elapsedMs: expect.any(Number),
         }),
       );
+      const warningPayload = mockLogWarn.mock.calls.find(
+        ([message]) =>
+          message === "Detached task recovery hook threw, proceeding with markTaskLost",
+      )?.[1] as { elapsedMs?: unknown } | undefined;
+      expect(typeof warningPayload?.elapsedMs).toBe("number");
+      if (typeof warningPayload?.elapsedMs !== "number") {
+        throw new Error("Expected detached task recovery warning elapsedMs");
+      }
+      expect(warningPayload.elapsedMs).toBeGreaterThanOrEqual(0);
     });
 
     it("returns not recovered and logs warning when hook returns invalid result", async () => {

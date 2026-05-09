@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 
+function requireProbeFailure(findings: ReturnType<typeof collectDeepProbeFindings>) {
+  const finding = findings.find((entry) => entry.checkId === "gateway.probe_failed");
+  if (!finding) {
+    throw new Error("Expected gateway probe failure finding");
+  }
+  return finding;
+}
+
 describe("security audit deep probe failure", () => {
   it("adds probe_failed warnings for deep probe failure modes", () => {
     const cases: Array<{
@@ -14,7 +22,7 @@ describe("security audit deep probe failure", () => {
           close?: { code: number; reason: string } | null;
         };
       };
-      expectedError?: string;
+      expectedError: string;
     }> = [
       {
         name: "probe returns failed result",
@@ -46,11 +54,8 @@ describe("security audit deep probe failure", () => {
 
     for (const testCase of cases) {
       const findings = collectDeepProbeFindings({ deep: testCase.deep });
-      expect(
-        findings.some((finding) => finding.checkId === "gateway.probe_failed"),
-        testCase.name,
-      ).toBe(true);
-      expect(findings[0]?.detail).toContain(testCase.expectedError!);
+      const probeFailure = requireProbeFailure(findings);
+      expect(probeFailure.detail, testCase.name).toContain(testCase.expectedError);
     }
   });
 });

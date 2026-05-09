@@ -58,7 +58,9 @@ describe("acp setSessionMode", () => {
     const { calls, request } = createRequestRecorder(async () => ({ ok: true }));
     const agent = createAgentWithSession(request);
 
-    await expect(agent.setSessionMode(createSetSessionModeRequest("low"))).resolves.toEqual({});
+    await expect(agent.setSessionMode(createSetSessionModeRequest("low"))).resolves.toStrictEqual(
+      {},
+    );
     expect(calls).toContainEqual([
       "sessions.patch",
       {
@@ -72,7 +74,7 @@ describe("acp setSessionMode", () => {
     const { calls, request } = createRequestRecorder(async () => ({ ok: true }));
     const agent = createAgentWithSession(request);
 
-    await expect(agent.setSessionMode(createSetSessionModeRequest(""))).resolves.toEqual({});
+    await expect(agent.setSessionMode(createSetSessionModeRequest(""))).resolves.toStrictEqual({});
     expect(calls).toEqual([]);
   });
 });

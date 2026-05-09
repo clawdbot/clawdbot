@@ -120,7 +120,7 @@ describe("ensureAuthStoreFile (direct-import coverage attribution)", () => {
     const raw = await fs.readFile(target, "utf8");
     const parsed = JSON.parse(raw) as { version: number; profiles: Record<string, unknown> };
     expect(parsed.version).toBeGreaterThanOrEqual(1);
-    expect(parsed.profiles).toEqual({});
+    expect(parsed.profiles).toStrictEqual({});
   });
 
   it("leaves an existing auth-profiles.json unchanged", async () => {

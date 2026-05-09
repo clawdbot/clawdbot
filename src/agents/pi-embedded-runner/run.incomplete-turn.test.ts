@@ -1072,8 +1072,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       }),
     });
 
-    expect(incompleteTurnText).not.toBeNull();
-    expect(incompleteTurnText).toContain("couldn't generate a response");
+    expect(incompleteTurnText).toEqual(expect.stringContaining("couldn't generate a response"));
   });
 
   it("surfaces tool-use terminal with pre-tool text and side effects as replay-unsafe (#76477)", () => {

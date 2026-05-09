@@ -5,6 +5,16 @@ import {
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
+function collectLegacyExtendedLevelIds(levels: readonly { id: string }[] | undefined): string[] {
+  const ids: string[] = [];
+  for (const level of levels ?? []) {
+    if (level.id === "xhigh" || level.id === "max") {
+      ids.push(level.id);
+    }
+  }
+  return ids;
+}
+
 describe("vercel ai gateway thinking profile", () => {
   async function getProvider() {
     const { providers } = await registerProviderPlugin({
@@ -49,9 +59,7 @@ describe("vercel ai gateway thinking profile", () => {
       levels: expect.arrayContaining([{ id: "adaptive" }]),
       defaultLevel: "adaptive",
     });
-    expect(
-      profile?.levels.map((level) => level.id).filter((id) => id === "xhigh" || id === "max"),
-    ).toEqual([]);
+    expect(collectLegacyExtendedLevelIds(profile?.levels)).toEqual([]);
   });
 
   it("falls through for unsupported OpenAI or untrusted namespaced refs", async () => {

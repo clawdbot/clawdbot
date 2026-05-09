@@ -17,14 +17,28 @@ describe("channel registry helpers", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  function channelIds(): string[] {
+    const ids: string[] = [];
+    for (const channel of listChatChannels()) {
+      ids.push(channel.id);
+    }
+    return ids;
+  }
+
+  function formatTestLink(path?: string, label?: string): string {
+    if (label && path) {
+      return `${label}:${path}`;
+    }
+    return label ?? path ?? "";
+  }
+
   it("keeps Feishu first in the current default order", () => {
     const channels = listChatChannels();
     expect(channels[0]?.id).toBe("feishu");
   });
 
   it("includes MS Teams in the bundled channel list", () => {
-    const channels = listChatChannels();
-    expect(channels.map((channel) => channel.id)).toContain("msteams");
+    expect(channelIds()).toContain("msteams");
   });
 
   it("formats Telegram selection lines without a docs prefix and with website extras", () => {
@@ -32,9 +46,7 @@ describe("channel registry helpers", () => {
     if (!telegram) {
       throw new Error("Missing Telegram channel metadata.");
     }
-    const line = formatChannelSelectionLine(telegram, (path, label) =>
-      [label, path].filter(Boolean).join(":"),
-    );
+    const line = formatChannelSelectionLine(telegram, formatTestLink);
     expect(line).not.toContain("Docs:");
     expect(line).toContain("/channels/telegram");
     expect(line).toContain("https://openclaw.ai");

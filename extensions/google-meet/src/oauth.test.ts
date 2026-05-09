@@ -27,14 +27,15 @@ describe("Google Meet OAuth", () => {
     expect(url.searchParams.get("scope")).toContain("calendar.events.readonly");
     expect(url.searchParams.get("scope")).toContain("drive.meet.readonly");
 
+    const cachedExpiresAt = Date.now() + 120_000;
     await expect(
       resolveGoogleMeetAccessToken({
         accessToken: "cached-token",
-        expiresAt: Date.now() + 120_000,
+        expiresAt: cachedExpiresAt,
       }),
     ).resolves.toEqual({
       accessToken: "cached-token",
-      expiresAt: expect.any(Number),
+      expiresAt: cachedExpiresAt,
       refreshed: false,
     });
   });

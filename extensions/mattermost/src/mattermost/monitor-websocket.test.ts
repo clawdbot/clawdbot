@@ -6,6 +6,16 @@ import {
   WebSocketClosedBeforeOpenError,
 } from "./monitor-websocket.js";
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 class FakeWebSocket implements MattermostWebSocketLike {
   public readonly sent: string[] = [];
   public pingCalls = 0;
@@ -172,8 +182,8 @@ describe("mattermost websocket monitor", () => {
       data: { token: "token" },
       seq: 1,
     });
-    expect(patches.filter((patch) => patch.connected === true)).toHaveLength(1);
-    expect(patches.filter((patch) => patch.connected === false)).toHaveLength(2);
+    expect(countMatching(patches, (patch) => patch.connected === true)).toBe(1);
+    expect(countMatching(patches, (patch) => patch.connected === false)).toBe(2);
   });
 
   it("dispatches reaction events to the reaction handler", async () => {

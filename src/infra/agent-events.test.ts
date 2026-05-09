@@ -189,13 +189,13 @@ describe("agent-events sequencing", () => {
       seen.push(evt.runId);
     });
 
-    expect(() =>
+    expect(
       emitAgentEvent({
         runId: "run-safe",
         stream: "assistant",
         data: { text: "hi" },
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     stopGood();
     stopBad();

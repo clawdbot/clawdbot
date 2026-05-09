@@ -44,20 +44,22 @@ vi.mock("./run-wait.js", () => {
         continue;
       }
       const content = (message as { content?: unknown }).content;
-      const text = Array.isArray(content)
-        ? content
-            .map((block) =>
-              block &&
-              typeof block === "object" &&
-              typeof (block as { text?: unknown }).text === "string"
-                ? (block as { text: string }).text
-                : "",
-            )
-            .filter(Boolean)
-            .join("\n")
-        : typeof content === "string"
-          ? content
-          : "";
+      let text = "";
+      if (Array.isArray(content)) {
+        const textBlocks: string[] = [];
+        for (const block of content) {
+          if (
+            block &&
+            typeof block === "object" &&
+            typeof (block as { text?: unknown }).text === "string"
+          ) {
+            textBlocks.push((block as { text: string }).text);
+          }
+        }
+        text = textBlocks.join("\n");
+      } else if (typeof content === "string") {
+        text = content;
+      }
       if (text.trim()) {
         return { text, fingerprint: JSON.stringify(message) };
       }

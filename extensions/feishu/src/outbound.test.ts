@@ -75,7 +75,64 @@ vi.mock("./comment-reaction.js", () => ({
 import { feishuPlugin } from "./channel.js";
 import { feishuOutbound } from "./outbound.js";
 import { createFeishuSendReceipt } from "./send-result.js";
-const sendText = feishuOutbound.sendText!;
+
+async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<"pending">((resolve) => {
+        timer = setTimeout(() => resolve("pending"), 0);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+type FeishuSendText = NonNullable<typeof feishuOutbound.sendText>;
+type FeishuMessageAdapter = NonNullable<typeof feishuPlugin.message>;
+type FeishuMessageSender = NonNullable<FeishuMessageAdapter["send"]>;
+
+function requireFeishuSendText(): FeishuSendText {
+  const sendText = feishuOutbound.sendText;
+  if (!sendText) {
+    throw new Error("Expected Feishu outbound sendText");
+  }
+  return sendText;
+}
+
+function requireFeishuMessageAdapter(): FeishuMessageAdapter {
+  const adapter = feishuPlugin.message;
+  if (!adapter) {
+    throw new Error("Expected Feishu message adapter");
+  }
+  return adapter;
+}
+
+function requireFeishuTextSender(
+  adapter: FeishuMessageAdapter,
+): NonNullable<FeishuMessageSender["text"]> {
+  const text = adapter.send?.text;
+  if (!text) {
+    throw new Error("Expected Feishu message adapter text sender");
+  }
+  return text;
+}
+
+function requireFeishuMediaSender(
+  adapter: FeishuMessageAdapter,
+): NonNullable<FeishuMessageSender["media"]> {
+  const media = adapter.send?.media;
+  if (!media) {
+    throw new Error("Expected Feishu message adapter media sender");
+  }
+  return media;
+}
+
+const sendText = requireFeishuSendText();
 const emptyConfig: ClawdbotConfig = {};
 const cardRenderConfig: ClawdbotConfig = {
   channels: {
@@ -133,14 +190,17 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
         kind: "media",
       }),
     });
+    const adapter = requireFeishuMessageAdapter();
+    const adapterSendText = requireFeishuTextSender(adapter);
+    const adapterSendMedia = requireFeishuMediaSender(adapter);
 
     await expect(
       verifyChannelMessageAdapterCapabilityProofs({
         adapterName: "feishu",
-        adapter: feishuPlugin.message!,
+        adapter,
         proofs: {
           text: async () => {
-            const result = await feishuPlugin.message?.send?.text?.({
+            const result = await adapterSendText({
               cfg: emptyConfig,
               to: "chat:chat-1",
               text: "hello",
@@ -153,10 +213,10 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
                 accountId: "default",
               }),
             );
-            expect(result?.receipt.platformMessageIds).toEqual(["feishu-text-1"]);
+            expect(result.receipt.platformMessageIds).toEqual(["feishu-text-1"]);
           },
           media: async () => {
-            const result = await feishuPlugin.message?.send?.media?.({
+            const result = await adapterSendMedia({
               cfg: emptyConfig,
               to: "chat:chat-1",
               text: "",
@@ -170,7 +230,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
                 accountId: "default",
               }),
             );
-            expect(result?.receipt.platformMessageIds).toEqual(["feishu-media-1"]);
+            expect(result.receipt.platformMessageIds).toEqual(["feishu-media-1"]);
           },
         },
       }),
@@ -823,10 +883,7 @@ describe("feishuOutbound comment-thread routing", () => {
       accountId: "main",
     });
 
-    const status = await Promise.race([
-      sendPromise.then(() => "done"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const status = await raceWithNextMacrotask(sendPromise.then(() => "done"));
 
     expect(status).toBe("done");
     expect(deliverCommentThreadTextMock).toHaveBeenCalled();

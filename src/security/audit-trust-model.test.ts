@@ -9,6 +9,16 @@ function audit(cfg: OpenClawConfig) {
   return [...collectExposureMatrixFindings(cfg), ...collectLikelyMultiUserSetupFindings(cfg)];
 }
 
+function requireMultiUserHeuristicFinding(findings: ReturnType<typeof audit>) {
+  const finding = findings.find(
+    (entry) => entry.checkId === "security.trust_model.multi_user_heuristic",
+  );
+  if (!finding) {
+    throw new Error("Expected multi-user heuristic finding");
+  }
+  return finding;
+}
+
 describe("security audit trust model findings", () => {
   it("evaluates trust-model exposure findings", () => {
     const cases = [
@@ -108,15 +118,13 @@ describe("security audit trust model findings", () => {
         } satisfies OpenClawConfig,
         assert: () => {
           const findings = audit(cases[4].cfg);
-          const finding = findings.find(
-            (entry) => entry.checkId === "security.trust_model.multi_user_heuristic",
-          );
-          expect(finding?.severity).toBe("warn");
-          expect(finding?.detail).toContain(
+          const finding = requireMultiUserHeuristicFinding(findings);
+          expect(finding.severity).toBe("warn");
+          expect(finding.detail).toContain(
             'channels.discord.groupPolicy="allowlist" with configured group targets',
           );
-          expect(finding?.detail).toContain("personal-assistant");
-          expect(finding?.remediation).toContain('agents.defaults.sandbox.mode="all"');
+          expect(finding.detail).toContain("personal-assistant");
+          expect(finding.remediation).toContain('agents.defaults.sandbox.mode="all"');
         },
       },
       {

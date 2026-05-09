@@ -257,7 +257,7 @@ describe("RequestClient", () => {
     const metrics = client.getSchedulerMetrics();
     expect(metrics.activeBuckets).toBe(0);
     expect(metrics.routeBucketMappings).toBe(0);
-    expect(metrics.buckets).toEqual([]);
+    expect(metrics.buckets).toStrictEqual([]);
   });
 
   it("waits for a learned bucket reset before dispatching the next request", async () => {
@@ -365,7 +365,7 @@ describe("RequestClient", () => {
     await expect(request).resolves.toEqual({ id: "retried" });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(client.queueSize).toBe(0);
-    expect(client.getSchedulerMetrics().buckets).toEqual([]);
+    expect(client.getSchedulerMetrics().buckets).toStrictEqual([]);
   });
 
   it("honors maxRateLimitRetries for queued requests", async () => {

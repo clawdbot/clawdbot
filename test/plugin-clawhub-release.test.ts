@@ -50,7 +50,7 @@ describe("resolveChangedClawHubPublishablePluginPackages", () => {
         plugins: publishablePlugins,
         changedPaths: ["pnpm-lock.yaml"],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 
@@ -245,7 +245,7 @@ describe("collectClawHubVersionGateErrors", () => {
       gitRange: { baseRef, headRef },
     });
 
-    expect(errors).toEqual([]);
+    expect(errors).toStrictEqual([]);
   });
 
   it("does not require a version bump for shared release-tooling changes", () => {
@@ -258,7 +258,7 @@ describe("collectClawHubVersionGateErrors", () => {
       gitRange: { baseRef, headRef },
     });
 
-    expect(errors).toEqual([]);
+    expect(errors).toStrictEqual([]);
   });
 });
 
@@ -322,7 +322,7 @@ describe("collectPluginClawHubReleasePlan", () => {
       registryBaseUrl: "https://clawhub.ai",
     });
 
-    expect(plan.candidates).toEqual([]);
+    expect(plan.candidates).toStrictEqual([]);
     expect(plan.skippedPublished).toHaveLength(1);
     expect(plan.skippedPublished[0]).toMatchObject({
       packageName: "@openclaw/demo-plugin",
@@ -403,7 +403,7 @@ describe("collectClawHubOpenClawOwnerErrors", () => {
         }),
     });
 
-    expect(errors).toEqual([]);
+    expect(errors).toStrictEqual([]);
   });
 });
 

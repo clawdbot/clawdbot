@@ -26,7 +26,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
   function expectReasoningAndAnswerCalls(onBlockReply: ReturnType<typeof vi.fn>) {
     expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply.mock.calls[0][0].text).toBe("Reasoning:\n_Because it helps_");
+    expect(onBlockReply.mock.calls[0][0].text).toBe("Because it helps");
     expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
   }
 

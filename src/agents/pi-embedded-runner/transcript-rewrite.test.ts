@@ -215,7 +215,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       "rewritten summary entry",
     );
     expect(sessionManager.getLabel(rewrittenSummaryEntry.id)).toBe("bookmark");
-    expect(sessionManager.getBranch().some((entry) => entry.type === "label")).toBe(true);
+    expect(sessionManager.getBranch().map((entry) => entry.type)).toContain("label");
   });
 
   it("remaps compaction keep markers when rewritten entries change ids", () => {

@@ -772,7 +772,8 @@ describe("gateway-status command", () => {
 
     const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
     const targets = parsed.targets as Array<Record<string, unknown>>;
-    expect(targets.some((t) => t.kind === "sshTunnel")).toBe(true);
+    const targetKinds = targets.map((target) => target.kind);
+    expect(targetKinds).toContain("sshTunnel");
   });
 
   it("uses local TLS target strategy and fingerprint for local loopback probes", async () => {

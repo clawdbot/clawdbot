@@ -42,6 +42,7 @@ import {
   logVerbose,
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import {
@@ -214,8 +215,9 @@ function resolveTelegramReasoningLevel(params: {
   telegramDeps: TelegramBotDeps;
 }): TelegramReasoningLevel {
   const { cfg, sessionKey, agentId, telegramDeps } = params;
+  const configDefault = resolveTelegramConfigReasoningDefault(cfg, agentId);
   if (!sessionKey) {
-    return "off";
+    return configDefault;
   }
   try {
     const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
@@ -224,13 +226,13 @@ function resolveTelegramReasoningLevel(params: {
     });
     const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
     const level = entry?.reasoningLevel;
-    if (level === "on" || level === "stream") {
+    if (level === "on" || level === "stream" || level === "off") {
       return level;
     }
   } catch {
-    // Fall through to default.
+    return "off";
   }
-  return "off";
+  return configDefault;
 }
 
 const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
@@ -440,6 +442,9 @@ export const dispatchTelegramMessage = async ({
           minInitialChars: draftMinInitialChars,
           renderText: renderStreamText,
           onSupersededPreview: (superseded) => {
+            if (superseded.retain) {
+              return;
+            }
             void bot.api.deleteMessage(chatId, superseded.messageId).catch((err: unknown) => {
               logVerbose(
                 `telegram: superseded ${laneName} stream cleanup failed (${superseded.messageId}): ${String(err)}`,
@@ -572,8 +577,11 @@ export const dispatchTelegramMessage = async ({
     segments: SplitLaneSegment[];
     suppressedReasoningOnly: boolean;
   };
-  const splitTextIntoLaneSegments = (text?: string): SplitLaneSegmentsResult => {
-    const split = splitTelegramReasoningText(text);
+  const splitTextIntoLaneSegments = (
+    text?: string,
+    isReasoning?: boolean,
+  ): SplitLaneSegmentsResult => {
+    const split = splitTelegramReasoningText(text, isReasoning);
     const segments: SplitLaneSegment[] = [];
     const suppressReasoning = resolvedReasoningLevel === "off";
     if (split.reasoningText && !suppressReasoning) {
@@ -635,8 +643,8 @@ export const dispatchTelegramMessage = async ({
     lane.lastPartialText = text;
     laneStream.update(text);
   };
-  const ingestDraftLaneSegments = async (text: string | undefined) => {
-    const split = splitTextIntoLaneSegments(text);
+  const ingestDraftLaneSegments = async (text: string | undefined, isReasoning?: boolean) => {
+    const split = splitTextIntoLaneSegments(text, isReasoning);
     for (const segment of split.segments) {
       if (segment.lane === "answer") {
         await prepareAnswerLaneForText();
@@ -1035,7 +1043,7 @@ export const dispatchTelegramMessage = async ({
                         | { buttons?: TelegramInlineButtons }
                         | undefined
                     )?.buttons;
-                    const split = splitTextIntoLaneSegments(payload.text);
+                    const split = splitTextIntoLaneSegments(payload.text, payload.isReasoning);
                     const segments = split.segments;
                     const reply = resolveSendableOutboundReplyParts(payload);
                     const _hasMedia = reply.hasMedia;
@@ -1190,7 +1198,7 @@ export const dispatchTelegramMessage = async ({
                             resetDraftLaneState(reasoningLane);
                             splitReasoningOnNextStream = false;
                           }
-                          await ingestDraftLaneSegments(payload.text);
+                          await ingestDraftLaneSegments(payload.text, true);
                         })
                     : undefined,
                   onAssistantMessageStart: answerLane.stream

@@ -27,10 +27,9 @@ describe("withPluginHostCleanupTimeout", () => {
 
     await expect(withPluginHostCleanupTimeout("fast-cleanup", () => "ok")).resolves.toBe("ok");
 
-    expect(globalThis.setTimeout).toHaveBeenCalledWith(
-      expect.any(Function),
-      PLUGIN_HOST_CLEANUP_TIMEOUT_MS,
-    );
+    const timeoutCall = vi.mocked(globalThis.setTimeout).mock.calls[0];
+    expect(typeof timeoutCall?.[0]).toBe("function");
+    expect(timeoutCall?.[1]).toBe(PLUGIN_HOST_CLEANUP_TIMEOUT_MS);
     expect(unref).toHaveBeenCalledTimes(1);
   });
 });

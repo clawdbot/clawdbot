@@ -288,7 +288,10 @@ describe("thread binding lifecycle", () => {
         webhookToken: "tok-1",
         introText: "intro",
       });
-      expect(binding).not.toBeNull();
+      expect(binding).toMatchObject({
+        threadId: "thread-1",
+        targetSessionKey: "agent:main:subagent:child",
+      });
       hoisted.sendMessageDiscord.mockClear();
       hoisted.sendWebhookMessageDiscord.mockClear();
 
@@ -327,7 +330,10 @@ describe("thread binding lifecycle", () => {
         webhookId: "wh-1",
         webhookToken: "tok-1",
       });
-      expect(binding).not.toBeNull();
+      expect(binding).toMatchObject({
+        threadId: "thread-1",
+        targetSessionKey: "agent:main:subagent:child",
+      });
       hoisted.sendMessageDiscord.mockClear();
 
       await vi.advanceTimersByTimeAsync(120_000);
@@ -656,7 +662,10 @@ describe("thread binding lifecycle", () => {
 
       vi.setSystemTime(new Date("2026-02-20T00:00:30.000Z"));
       const touched = manager.touchThread({ threadId: "thread-1", persist: false });
-      expect(touched).not.toBeNull();
+      expect(touched).toMatchObject({
+        threadId: "thread-1",
+        lastActivityAt: new Date("2026-02-20T00:00:30.000Z").getTime(),
+      });
 
       const record = requireBinding(manager, "thread-1");
       expect(record.lastActivityAt).toBe(new Date("2026-02-20T00:00:30.000Z").getTime());
@@ -746,7 +755,10 @@ describe("thread binding lifecycle", () => {
       targetSessionKey: "agent:main:subagent:child-1",
       agentId: "main",
     });
-    expect(first).not.toBeNull();
+    expect(first).toMatchObject({
+      threadId: "thread-1",
+      targetSessionKey: "agent:main:subagent:child-1",
+    });
     expect(hoisted.restPost).toHaveBeenCalledTimes(1);
 
     manager.unbindThread({
@@ -761,9 +773,10 @@ describe("thread binding lifecycle", () => {
       targetSessionKey: "agent:main:subagent:child-2",
       agentId: "main",
     });
-    expect(second).not.toBeNull();
-    expect(second?.webhookId).toBe("wh-created");
-    expect(second?.webhookToken).toBe("tok-created");
+    expect(second).toMatchObject({
+      webhookId: "wh-created",
+      webhookToken: "tok-created",
+    });
     expect(hoisted.restPost).toHaveBeenCalledTimes(1);
   });
 
@@ -796,7 +809,10 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
 
-    expect(childBinding).not.toBeNull();
+    expect(childBinding).toMatchObject({
+      threadId: "thread-created-2",
+      targetSessionKey: "agent:main:subagent:child-2",
+    });
     expect(hoisted.createThreadDiscord).toHaveBeenCalledTimes(1);
     expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
       "parent-1",
@@ -836,8 +852,7 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
 
-    expect(childBinding).not.toBeNull();
-    expect(childBinding?.channelId).toBe("parent-1");
+    expect(childBinding).toMatchObject({ channelId: "parent-1" });
     expect(hoisted.restGet).toHaveBeenCalledTimes(1);
     expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
       "parent-1",
@@ -879,7 +894,10 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
 
-    expect(childBinding).not.toBeNull();
+    expect(childBinding).toMatchObject({
+      threadId: "thread-created-runtime",
+      targetSessionKey: "agent:main:subagent:child-runtime",
+    });
     const firstClientArgs = hoisted.createDiscordRestClient.mock.calls[0]?.[0] as
       | { accountId?: string; token?: string }
       | undefined;
@@ -929,7 +947,10 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
 
-    expect(bound).not.toBeNull();
+    expect(bound).toMatchObject({
+      threadId: "thread-created-runtime-cfg",
+      targetSessionKey: "agent:main:subagent:runtime-cfg",
+    });
     const usedRefreshedCfg = hoisted.createDiscordRestClient.mock.calls.some((call) => {
       if (call?.[1] === refreshedCfg) {
         return true;
@@ -986,7 +1007,10 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
 
-    expect(bound).not.toBeNull();
+    expect(bound).toMatchObject({
+      threadId: "thread-created-token-refresh",
+      targetSessionKey: "agent:main:subagent:token-refresh",
+    });
     expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
       "parent-runtime",
       expect.objectContaining({ autoArchiveMinutes: 60 }),
@@ -1373,7 +1397,7 @@ describe("thread binding lifecycle", () => {
 
     expect(result.checked).toBe(1);
     expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toEqual([]);
+    expect(result.staleSessionKeys).toStrictEqual([]);
     expect(requireBinding(manager, "thread-acp-uncertain")).toMatchObject({
       threadId: "thread-acp-uncertain",
       targetKind: "acp",
@@ -1412,7 +1436,7 @@ describe("thread binding lifecycle", () => {
 
     expect(result.checked).toBe(0);
     expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toEqual([]);
+    expect(result.staleSessionKeys).toStrictEqual([]);
     expect(manager.getByThreadId("user:1177378744822943744")).toMatchObject({
       threadId: "user:1177378744822943744",
       metadata: {
@@ -1506,7 +1530,7 @@ describe("thread binding lifecycle", () => {
 
     expect(result.checked).toBe(1);
     expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toEqual([]);
+    expect(result.staleSessionKeys).toStrictEqual([]);
     expect(requireBinding(manager, "thread-acp-running-uncertain")).toMatchObject({
       threadId: "thread-acp-running-uncertain",
       targetKind: "acp",
@@ -1553,7 +1577,7 @@ describe("thread binding lifecycle", () => {
 
     expect(result.checked).toBe(1);
     expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toEqual([]);
+    expect(result.staleSessionKeys).toStrictEqual([]);
     expect(requireBinding(manager, "thread-acp-error")).toMatchObject({
       threadId: "thread-acp-error",
       targetKind: "acp",
@@ -1857,7 +1881,7 @@ describe("thread binding lifecycle", () => {
       const payload = JSON.parse(fs.readFileSync(bindingsPath, "utf-8")) as {
         bindings?: Record<string, unknown>;
       };
-      expect(Object.keys(payload.bindings ?? {})).toEqual([]);
+      expect(Object.keys(payload.bindings ?? {})).toStrictEqual([]);
     } finally {
       __testing.resetThreadBindingsForTests();
       if (previousStateDir === undefined) {

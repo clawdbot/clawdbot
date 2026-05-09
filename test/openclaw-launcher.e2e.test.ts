@@ -336,6 +336,7 @@ describe("openclaw launcher", () => {
   it("falls back to the default packaged launcher compile cache when NODE_COMPILE_CACHE is empty", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     const runCwd = makeTempDir(fixtureRoots, "openclaw-launcher-cwd-");
+    const tmpRoot = makeTempDir(fixtureRoots, "openclaw-launcher-tmp-");
     await fs.writeFile(path.join(fixtureRoot, "package.json"), '{"version":"2026.4.29"}\n');
     await fs.writeFile(
       path.join(fixtureRoot, "dist", "entry.js"),
@@ -350,6 +351,9 @@ describe("openclaw launcher", () => {
       cwd: runCwd,
       env: launcherEnv({
         NODE_COMPILE_CACHE: "",
+        TMP: tmpRoot,
+        TEMP: tmpRoot,
+        TMPDIR: tmpRoot,
       }),
       encoding: "utf8",
     });
@@ -361,11 +365,16 @@ describe("openclaw launcher", () => {
 
   it("enables compile cache for packaged launchers", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const tmpRoot = makeTempDir(fixtureRoots, "openclaw-launcher-tmp-");
     await addCompileCacheProbe(fixtureRoot);
 
     const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
       cwd: fixtureRoot,
-      env: launcherEnv(),
+      env: launcherEnv({
+        TMP: tmpRoot,
+        TEMP: tmpRoot,
+        TMPDIR: tmpRoot,
+      }),
       encoding: "utf8",
     });
 

@@ -113,7 +113,17 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
       existsSync: allExist,
     });
 
-    expect(result).toEqual(["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]);
+    expect(result).toEqual([
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ]);
+    const userPathEntries = result.filter((entry) => entry.startsWith("/Users/testuser/"));
+    expect(userPathEntries).toEqual([]);
   });
 
   it("can include env-configured version manager dirs on macOS when requested", () => {
@@ -145,7 +155,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     });
 
     const fnmIndex = result.indexOf("/Users/testuser/.fnm/aliases/default/bin");
-    const systemIndex = result.indexOf("/usr/local/bin");
+    const systemIndex = result.indexOf("/opt/homebrew/bin");
 
     expect(fnmIndex).toBe(-1);
     expect(systemIndex).toBe(0);
@@ -191,7 +201,15 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
       existsSync: noneExist,
     });
 
-    expect(result).toEqual(["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]);
+    expect(result).toEqual([
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ]);
     expect(result).not.toContain("/Users/testuser/.local/bin");
     expect(result).not.toContain("/Users/testuser/.npm-global/bin");
     expect(result).not.toContain("/Users/testuser/bin");
@@ -355,7 +373,15 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
     });
 
     expect(result).not.toContain("/Users/testuser/.nix-profile/bin");
-    expect(result).toEqual(["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]);
+    expect(result).toEqual([
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ]);
   });
 
   it("places rightmost NIX_PROFILES entry before leftmost on Linux", () => {
@@ -389,7 +415,15 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
     const defaultIdx = result.indexOf("/nix/var/nix/profiles/default/bin");
     expect(userIdx).toBe(-1);
     expect(defaultIdx).toBe(-1);
-    expect(result).toEqual(["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]);
+    expect(result).toEqual([
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ]);
   });
 
   it("includes single Nix profile from NIX_PROFILES on Linux", () => {
@@ -450,7 +484,15 @@ describe("buildMinimalServicePath", () => {
       platform: "darwin",
     });
     const parts = splitPath(result, "darwin");
-    expect(parts).toEqual(["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]);
+    expect(parts).toEqual([
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ]);
   });
 
   it("returns PATH as-is on Windows", () => {
@@ -607,7 +649,9 @@ describe("buildServiceEnvironment", () => {
       platform: "darwin",
     });
 
-    expect(env.PATH).toBe("/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
+    expect(env.PATH).toBe(
+      "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    );
   });
 
   it("falls back to os.tmpdir when TMPDIR is not set on Linux", () => {
@@ -699,7 +743,7 @@ describe("buildServiceEnvironment", () => {
     });
 
     expect(env.PATH).toBe(
-      "/opt/homebrew/Cellar/node/22.16.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      "/opt/homebrew/Cellar/node/22.16.0/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
     );
   });
 });
@@ -920,7 +964,7 @@ describe("shared Node TLS env defaults focused", () => {
   });
 
   it("defaults NODE_EXTRA_CA_CERTS on Linux when NVM_DIR is set", () => {
-    const expected = resolveLinuxSystemCaBundle();
+    const expected = resolveLinuxSystemCaBundle({ platform: "linux" });
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", NVM_DIR: "/home/user/.nvm" },
       port: 18789,
@@ -931,7 +975,7 @@ describe("shared Node TLS env defaults focused", () => {
   });
 
   it("defaults NODE_EXTRA_CA_CERTS on Linux when execPath is under nvm", () => {
-    const expected = resolveLinuxSystemCaBundle();
+    const expected = resolveLinuxSystemCaBundle({ platform: "linux" });
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user" },
       platform: "linux",

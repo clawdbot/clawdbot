@@ -40,8 +40,8 @@ describe("readConnectErrorRecoveryAdvice", () => {
   });
 
   it("returns empty advice for invalid payloads", () => {
-    expect(readConnectErrorRecoveryAdvice(null)).toEqual({});
-    expect(readConnectErrorRecoveryAdvice("x")).toEqual({});
+    expect(readConnectErrorRecoveryAdvice(null)).toStrictEqual({});
+    expect(readConnectErrorRecoveryAdvice("x")).toStrictEqual({});
     expect(readConnectErrorRecoveryAdvice({ canRetryWithDeviceToken: "yes" })).toEqual({});
     expect(
       readConnectErrorRecoveryAdvice({

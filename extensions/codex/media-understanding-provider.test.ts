@@ -26,6 +26,7 @@ function threadStartResult() {
   return {
     thread: {
       id: "thread-1",
+      sessionId: "session-1",
       forkedFromId: null,
       preview: "",
       ephemeral: true,

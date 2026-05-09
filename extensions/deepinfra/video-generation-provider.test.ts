@@ -104,10 +104,15 @@ describe("deepinfra video generation provider", () => {
       cfg: {},
     });
 
-    expect(result.videos[0]).toMatchObject({
+    expect(result.videos).toHaveLength(1);
+    const [video] = result.videos;
+    if (!video) {
+      throw new Error("Expected generated DeepInfra video");
+    }
+    expect(video).toMatchObject({
       mimeType: "video/webm",
       fileName: "video-1.webm",
     });
-    expect(result.videos[0]?.buffer).toEqual(Buffer.from("webm-data"));
+    expect(video.buffer).toEqual(Buffer.from("webm-data"));
   });
 });

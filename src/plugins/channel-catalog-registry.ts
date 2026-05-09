@@ -1,5 +1,6 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import {
   loadPluginManifest,
@@ -45,7 +46,14 @@ export function listChannelCatalogEntries(
     if (!channel?.id) {
       return [];
     }
-    const manifest = loadPluginManifest(candidate.rootDir, candidate.origin !== "bundled");
+    const manifest = loadPluginManifest(
+      candidate.rootDir,
+      shouldRejectHardlinkedPluginFiles({
+        origin: candidate.origin,
+        rootDir: candidate.rootDir,
+        env: params.env,
+      }),
+    );
     if (!manifest.ok) {
       return [];
     }

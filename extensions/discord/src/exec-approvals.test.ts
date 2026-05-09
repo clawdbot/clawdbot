@@ -72,7 +72,7 @@ describe("discord exec approvals", () => {
       },
     );
 
-    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(getDiscordExecApprovalApprovers({ cfg })).toStrictEqual([]);
     expect(isDiscordExecApprovalApprover({ cfg, senderId: "789" })).toBe(false);
   });
 

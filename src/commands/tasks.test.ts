@@ -20,6 +20,15 @@ function createRuntime(): RuntimeEnv {
   } as unknown as RuntimeEnv;
 }
 
+const zeroTaskAuditCounts = {
+  delivery_failed: 0,
+  inconsistent_timestamps: 0,
+  lost: 0,
+  missing_cleanup: 0,
+  stale_queued: 0,
+  stale_running: 0,
+};
+
 async function withTaskCommandStateDir(run: () => Promise<void>): Promise<void> {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-tasks-command-" },
@@ -150,11 +159,9 @@ describe("tasks commands", () => {
 
       expect(payload.mode).toBe("preview");
       expect(payload.maintenance.taskFlows.pruned).toBe(1);
-      expect(payload.auditBefore.byCode).toEqual(expect.any(Object));
-      expect(Array.isArray(payload.auditBefore.byCode)).toBe(false);
+      expect(payload.auditBefore.byCode).toStrictEqual(zeroTaskAuditCounts);
       expect(payload.auditBefore.taskFlows.byCode.stale_running).toBe(0);
-      expect(payload.auditAfter.byCode).toEqual(expect.any(Object));
-      expect(Array.isArray(payload.auditAfter.byCode)).toBe(false);
+      expect(payload.auditAfter.byCode).toStrictEqual(zeroTaskAuditCounts);
       expect(payload.auditAfter.taskFlows.byCode.stale_running).toBe(0);
     });
   });

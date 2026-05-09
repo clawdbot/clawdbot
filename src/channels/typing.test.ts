@@ -73,7 +73,7 @@ describe("createTypingCallbacks", () => {
   });
 
   it("does not block reply start on a pending typing request", async () => {
-    let resolveStart!: () => void;
+    let resolveStart: (() => void) | undefined;
     const { start, callbacks } = createTypingHarness({
       start: vi.fn(
         () =>
@@ -86,6 +86,9 @@ describe("createTypingCallbacks", () => {
     await callbacks.onReplyStart();
 
     expect(start).toHaveBeenCalledTimes(1);
+    if (!resolveStart) {
+      throw new Error("Expected typing start resolver to be initialized");
+    }
     resolveStart();
   });
 

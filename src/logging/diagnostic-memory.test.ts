@@ -149,6 +149,11 @@ describe("diagnostic memory", () => {
     }
     stop();
 
-    expect(events.filter((event) => event.type === "diagnostic.memory.pressure")).toHaveLength(1);
+    expect(
+      events.reduce(
+        (count, event) => count + (event.type === "diagnostic.memory.pressure" ? 1 : 0),
+        0,
+      ),
+    ).toBe(1);
   });
 });

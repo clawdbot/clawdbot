@@ -59,7 +59,7 @@ describe("applyJobPatch", () => {
       to: "123",
     });
 
-    expect(() => applyJobPatch(job, switchToMainPatch())).not.toThrow();
+    applyJobPatch(job, switchToMainPatch());
     expect(job.sessionTarget).toBe("main");
     expect(job.payload.kind).toBe("systemEvent");
     expect(job.delivery).toBeUndefined();
@@ -71,7 +71,7 @@ describe("applyJobPatch", () => {
       to: "https://example.invalid/cron",
     });
 
-    expect(() => applyJobPatch(job, switchToMainPatch())).not.toThrow();
+    applyJobPatch(job, switchToMainPatch());
     expect(job.sessionTarget).toBe("main");
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/cron" });
   });
@@ -92,7 +92,7 @@ describe("applyJobPatch", () => {
       },
     };
 
-    expect(() => applyJobPatch(job, patch)).not.toThrow();
+    applyJobPatch(job, patch);
     expect(job.payload.kind).toBe("agentTurn");
     if (job.payload.kind === "agentTurn") {
       expect(job.payload.message).toBe("do it");
@@ -344,9 +344,7 @@ describe("applyJobPatch", () => {
       to: "https://example.invalid/original",
     });
 
-    expect(() =>
-      applyJobPatch(job, { delivery: { mode: "webhook", to: "  https://example.invalid/trim  " } }),
-    ).not.toThrow();
+    applyJobPatch(job, { delivery: { mode: "webhook", to: "  https://example.invalid/trim  " } });
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/trim" });
   });
 
@@ -391,7 +389,7 @@ describe("applyJobPatch", () => {
         to: "  https://example.invalid/failure  ",
       },
     };
-    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+    applyJobPatch(job, { enabled: true });
     expect(job.delivery?.failureDestination?.to).toBe("https://example.invalid/failure");
   });
 
@@ -402,7 +400,7 @@ describe("applyJobPatch", () => {
       to: "-10012345/6789",
     });
 
-    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+    applyJobPatch(job, { enabled: true });
     expect(job.delivery?.to).toBe("-10012345/6789");
   });
 
@@ -421,7 +419,8 @@ describe("applyJobPatch", () => {
       ...(to ? { to } : {}),
     });
 
-    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+    applyJobPatch(job, { enabled: true });
+    expect(job.enabled).toBe(true);
   });
 });
 
@@ -453,7 +452,8 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
     { name: "case-insensitive defaultAgentId match", defaultAgentId: "Main", agentId: "MAIN" },
   ] as const)("allows creating a main-session job for $name", ({ defaultAgentId, agentId }) => {
     const state = createMockState(now, { defaultAgentId });
-    expect(() => createJob(state, mainJobInput(agentId))).not.toThrow();
+    const job = createJob(state, mainJobInput(agentId));
+    expect(job.sessionTarget).toBe("main");
   });
 
   it.each([
@@ -468,7 +468,7 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
 
   it("allows isolated session job for non-default agents", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
-    expect(() =>
+    expect(
       createJob(state, {
         name: "isolated-job",
         enabled: true,
@@ -478,7 +478,10 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
         payload: { kind: "agentTurn", message: "do it" },
         agentId: "custom-agent",
       }),
-    ).not.toThrow();
+    ).toMatchObject({
+      agentId: "custom-agent",
+      sessionTarget: "isolated",
+    });
   });
 
   it("rejects custom session targets with path separators", () => {
@@ -544,7 +547,8 @@ describe("applyJobPatch rejects sessionTarget main for non-default agents", () =
       );
       return;
     }
-    expect(() => applyJobPatch(job, patch, { defaultAgentId: "main" })).not.toThrow();
+    applyJobPatch(job, patch, { defaultAgentId: "main" });
+    expect(job.agentId).toBe("main");
   });
 
   it("rejects patching to a custom session target with path separators", () => {
@@ -921,7 +925,7 @@ describe("recomputeNextRuns", () => {
     expect(job.state.nextRunAtMs).toBe(expected);
   });
 
-  it("does not throw while probing malformed cron schedules with future nextRunAtMs", () => {
+  it("keeps future nextRunAtMs while probing malformed cron schedules", () => {
     const now = Date.parse("2026-05-05T12:00:00.000Z");
     const future = Date.parse("2026-05-12T16:00:00.000Z");
     const job: CronJob = {
@@ -941,7 +945,7 @@ describe("recomputeNextRuns", () => {
       store: { version: 1 as const, jobs: [job] },
     } as CronServiceState;
 
-    expect(() => recomputeNextRunsForMaintenance(state)).not.toThrow();
+    recomputeNextRunsForMaintenance(state);
     expect(job.state.nextRunAtMs).toBe(future);
     expect(job.state.scheduleErrorCount).toBeUndefined();
   });

@@ -178,7 +178,11 @@ describe("nextcloud-talk inbound behavior", () => {
       }),
     );
     expect(statusSink).toHaveBeenCalledWith({ lastInboundAt: 1_736_380_800_000 });
-    expect(statusSink).toHaveBeenCalledWith({ lastOutboundAt: expect.any(Number) });
+    const outboundStatus = statusSink.mock.calls
+      .map(([status]) => status as { lastOutboundAt?: unknown })
+      .find((status) => status.lastOutboundAt !== undefined);
+    expect(typeof outboundStatus?.lastOutboundAt).toBe("number");
+    expect(outboundStatus?.lastOutboundAt).toBeGreaterThanOrEqual(1_736_380_800_000);
     expect(dispatchChannelMessageReplyWithBaseMock).not.toHaveBeenCalled();
   });
 

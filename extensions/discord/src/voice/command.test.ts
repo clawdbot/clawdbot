@@ -61,7 +61,7 @@ describe("createDiscordVoiceCommand", () => {
     expect(firstOption).toMatchObject({
       name: "join",
       type: 1,
-      description: expect.any(String),
+      description: "Join a voice channel",
     });
     expect(firstOption).not.toHaveProperty("contexts");
     expect(firstOption).not.toHaveProperty("integration_types");

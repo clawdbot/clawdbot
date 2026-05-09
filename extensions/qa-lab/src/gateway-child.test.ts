@@ -590,7 +590,7 @@ describe("buildQaRuntimeEnv", () => {
       expect(processKill).toHaveBeenCalledWith(-12345, "SIGTERM");
       expect(processKill).toHaveBeenCalledWith(-12345, "SIGKILL");
     }
-    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
   });
 
   it("treats bind collisions as retryable gateway startup errors", () => {
@@ -972,10 +972,6 @@ describe("qa bundled plugin dir", () => {
     expect(stagedRoot).toBe(
       path.join(repoRoot, ".artifacts", "qa-runtime", path.basename(tempRoot)),
     );
-    expect(stagedRoot).not.toBeNull();
-    if (!stagedRoot) {
-      throw new Error("expected staged runtime root");
-    }
     await expect(readFile(path.join(stagedRoot, "package.json"), "utf8")).resolves.toContain(
       '"name": "openclaw"',
     );
@@ -999,7 +995,11 @@ describe("qa bundled plugin dir", () => {
         "shared-chunk-abc123.js",
       ),
     );
-    expect(sharedChunkStat.isFile() || sharedChunkStat.isSymbolicLink()).toBe(true);
+    if (sharedChunkStat.isFile()) {
+      expect(sharedChunkStat.isFile()).toBe(true);
+    } else {
+      expect(sharedChunkStat.isSymbolicLink()).toBe(true);
+    }
   });
 
   it("preserves dist-runtime-only root chunks when dist also exists", async () => {
@@ -1074,7 +1074,11 @@ describe("qa bundled plugin dir", () => {
         "runtime-chunk.js",
       ),
     );
-    expect(runtimeChunkStat.isFile() || runtimeChunkStat.isSymbolicLink()).toBe(true);
+    if (runtimeChunkStat.isFile()) {
+      expect(runtimeChunkStat.isFile()).toBe(true);
+    } else {
+      expect(runtimeChunkStat.isSymbolicLink()).toBe(true);
+    }
   });
 
   it("rejects invalid bundled plugin ids before staging paths are built", async () => {

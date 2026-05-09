@@ -118,9 +118,9 @@ describe("probeGateway auth integration", () => {
 
       expect(result.ok).toBe(true);
       expect(result.error).toBeNull();
-      expect(result.health).not.toBeNull();
-      expect(result.status).not.toBeNull();
-      expect(result.configSnapshot).not.toBeNull();
+      expectRecord(result.health, "probe health");
+      expectRecord(result.status, "probe status");
+      expectRecord(result.configSnapshot, "probe config snapshot");
     });
   });
 });

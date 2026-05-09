@@ -215,8 +215,8 @@ describe("config cli integration", () => {
       const afterDryRun = fs.readFileSync(configPath, "utf8");
       expect(afterDryRun).toBe(before);
       expect(runtime.errors).toEqual([]);
-      expect(runtime.logs.some((line) => line.includes("Dry run successful: 2 update(s)"))).toBe(
-        true,
+      expect(runtime.logs).toEqual(
+        expect.arrayContaining([expect.stringContaining("Dry run successful: 2 update(s)")]),
       );
 
       await runConfigSet({
@@ -303,9 +303,11 @@ describe("config cli integration", () => {
       };
       expect(payload.ok).toBe(false);
       expect(payload.checks?.resolvability).toBe(true);
-      expect(payload.errors?.some((entry) => entry.kind === "resolvability")).toBe(true);
-      expect(payload.errors?.some((entry) => entry.ref?.includes("MISSING_TEST_SECRET"))).toBe(
-        true,
+      expect(payload.errors).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: "resolvability" })]),
+      );
+      expect(payload.errors?.map((entry) => entry.ref ?? "")).toEqual(
+        expect.arrayContaining([expect.stringContaining("MISSING_TEST_SECRET")]),
       );
     } finally {
       envSnapshot.restore();

@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { getTerminalTableWidth } from "../../terminal/table.js";
+import { formatCliCommand } from "../command-format.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
@@ -80,7 +81,9 @@ export function registerNodesPairingCommands(nodes: Command) {
         await runNodesCommand("remove", async () => {
           const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           if (!nodeId) {
-            defaultRuntime.error("--node required");
+            defaultRuntime.error(
+              `--node is required. Run ${formatCliCommand("openclaw nodes pairing pending")} to choose a node request.`,
+            );
             defaultRuntime.exit(1);
             return;
           }
@@ -106,7 +109,9 @@ export function registerNodesPairingCommands(nodes: Command) {
           const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           const name = normalizeOptionalString(opts.name) ?? "";
           if (!nodeId || !name) {
-            defaultRuntime.error("--node and --name required");
+            defaultRuntime.error(
+              `--node and --name are required. Run ${formatCliCommand("openclaw nodes pairing pending")} to choose a node, then rerun with --name <displayName>.`,
+            );
             defaultRuntime.exit(1);
             return;
           }

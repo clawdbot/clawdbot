@@ -183,9 +183,6 @@ describe("git commit resolution", () => {
       .trim()
       .slice(0, 7);
 
-    expect(() =>
-      resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: repoRoot, env: {} }),
-    ).not.toThrow();
     expect(resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: repoRoot, env: {} })).toBe(
       repoHead,
     );

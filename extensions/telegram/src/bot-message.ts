@@ -1,6 +1,11 @@
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-types";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-types";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import {
+  createSubsystemLogger,
+  danger,
+  logVerbose,
+  shouldLogVerbose,
+} from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
@@ -15,7 +20,19 @@ import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
-/** Dependencies injected once when creating the message processor. */
+const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
+
+export function formatTelegramInboundLogLine(params: {
+  from: string;
+  to: string;
+  chatType: string;
+  body: string;
+  mediaType?: string;
+}): string {
+  const kindLabel = params.mediaType ? `, ${params.mediaType}` : "";
+  return `Inbound message ${params.from} -> ${params.to} (${params.chatType}${kindLabel}, ${params.body.length} chars)`;
+}
+
 type TelegramMessageProcessorDeps = Omit<
   BuildTelegramMessageContextParams,
   "primaryCtx" | "allMedia" | "storeAllowFrom" | "options"
@@ -113,6 +130,17 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     void context.sendTyping().catch((err) => {
       logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
     });
+    telegramInboundLog.info(
+      formatTelegramInboundLogLine({
+        from: context.ctxPayload.From,
+        to: context.primaryCtx.me?.username
+          ? `@${context.primaryCtx.me.username}`
+          : context.ctxPayload.To,
+        chatType: context.ctxPayload.ChatType,
+        body: context.ctxPayload.RawBody,
+        mediaType: allMedia[0]?.contentType,
+      }),
+    );
     try {
       await dispatchTelegramMessage({
         context,
@@ -140,9 +168,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           "Something went wrong while processing your request. Please try again.",
           buildTelegramThreadParams(context.threadSpec),
         );
-      } catch {
-        // Best-effort fallback; delivery may fail if the bot was blocked or the chat is invalid.
-      }
+      } catch {}
     }
   };
 };

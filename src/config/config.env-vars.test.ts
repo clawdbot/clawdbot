@@ -47,7 +47,7 @@ describe("config env vars", () => {
         }
       }`);
 
-      expect(() => applyConfigEnvVars(cfg)).not.toThrow();
+      expect(applyConfigEnvVars(cfg)).toBeUndefined();
       expect(process.env.API_TOKEN).toBe("sk-test-123");
       expect(process.env.PORT).toBeUndefined();
       expect(process.env.DEBUG).toBeUndefined();
@@ -165,7 +165,7 @@ describe("config env vars", () => {
 
   it("returns empty record when the state-dir .env file is missing", async () => {
     await withTempHome(async (_home) => {
-      expect(readStateDirDotEnvVars(process.env)).toEqual({});
+      expect(readStateDirDotEnvVars(process.env)).toStrictEqual({});
     });
   });
 

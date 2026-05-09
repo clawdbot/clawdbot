@@ -1,5 +1,8 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
+import {
+  normalizeAgentModelMapForConfig,
+  normalizeAgentModelRefForConfig,
+} from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -89,12 +92,64 @@ function mergeConfigPatch<T>(base: T, patch: unknown): T {
   return next as T;
 }
 
+function normalizeAgentModelConfigForWrite(value: unknown): unknown {
+  if (typeof value === "string") {
+    return normalizeAgentModelRefForConfig(value);
+  }
+  if (!isPlainRecord(value)) {
+    return value;
+  }
+
+  const next: Record<string, unknown> = { ...value };
+  if (typeof next.primary === "string") {
+    next.primary = normalizeAgentModelRefForConfig(next.primary);
+  }
+  if (Array.isArray(next.fallbacks)) {
+    next.fallbacks = next.fallbacks.map((fallback) =>
+      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
+    );
+  }
+  return next;
+}
+
+function normalizeAgentModelMapForWrite(value: unknown): unknown {
+  if (!isPlainRecord(value)) {
+    return value;
+  }
+  return normalizeAgentModelMapForConfig(value);
+}
+
+function normalizeConfigModelRefsForWrite(cfg: OpenClawConfig): OpenClawConfig {
+  const defaults = cfg.agents?.defaults;
+  if (!defaults) {
+    return cfg;
+  }
+
+  const nextDefaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {
+    ...defaults,
+  };
+  if (defaults.model !== undefined) {
+    nextDefaults.model = normalizeAgentModelConfigForWrite(defaults.model) as typeof defaults.model;
+  }
+  if (defaults.models !== undefined) {
+    nextDefaults.models = normalizeAgentModelMapForWrite(defaults.models) as typeof defaults.models;
+  }
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: nextDefaults,
+    },
+  };
+}
+
 export function applyProviderAuthConfigPatch(
   cfg: OpenClawConfig,
   patch: unknown,
   options?: { replaceDefaultModels?: boolean },
 ): OpenClawConfig {
-  const merged = mergeConfigPatch(cfg, patch);
+  const merged = normalizeConfigModelRefsForWrite(mergeConfigPatch(cfg, patch));
   if (!options?.replaceDefaultModels || !isPlainRecord(patch)) {
     return merged;
   }
@@ -105,7 +160,7 @@ export function applyProviderAuthConfigPatch(
     return merged;
   }
 
-  return {
+  return normalizeConfigModelRefsForWrite({
     ...merged,
     agents: {
       ...merged.agents,
@@ -117,7 +172,7 @@ export function applyProviderAuthConfigPatch(
         >["models"],
       },
     },
-  };
+  });
 }
 
 export function applyDefaultModel(
@@ -126,7 +181,9 @@ export function applyDefaultModel(
   opts?: { preserveExistingPrimary?: boolean },
 ): OpenClawConfig {
   const normalizedModel = normalizeAgentModelRefForConfig(model);
-  const models = { ...cfg.agents?.defaults?.models };
+  const models = {
+    ...normalizeAgentModelMapForConfig(cfg.agents?.defaults?.models ?? {}),
+  };
   models[normalizedModel] = models[normalizedModel] ?? {};
 
   const existingModel = cfg.agents?.defaults?.model;

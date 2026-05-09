@@ -324,7 +324,7 @@ describe("runSetupWizard", () => {
     return dir;
   }
 
-  it("does not crash when preferred-provider lookup sees a provider without an id", async () => {
+  it("skips provider entries without an id during preferred-provider lookup", async () => {
     setupChannels.mockClear();
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
@@ -619,7 +619,8 @@ describe("runSetupWizard", () => {
 
       const calls = getWizardNoteCalls(note);
       expect(calls.length).toBeGreaterThan(0);
-      expect(calls.some((call) => call?.[1] === "Web search")).toBe(true);
+      const noteTitles = calls.map((call) => call?.[1]);
+      expect(noteTitles).toContain("Web search");
     } finally {
       if (prevBraveKey === undefined) {
         delete process.env.BRAVE_API_KEY;
@@ -843,13 +844,13 @@ describe("runSetupWizard", () => {
     );
 
     const calls = getWizardNoteCalls(note);
-    expect(calls.some((call) => call?.[1] === "Plugin compatibility")).toBe(true);
-    expect(
-      calls.some((call) => {
-        const body = call?.[0];
-        return typeof body === "string" && body.includes("legacy-plugin");
-      }),
-    ).toBe(true);
+    const noteTitles = calls.map((call) => call?.[1]);
+    expect(noteTitles).toContain("Plugin compatibility");
+    const noteBodies = calls
+      .map((call) => call?.[0])
+      .filter((body): body is string => typeof body === "string");
+    const legacyPluginNotes = noteBodies.filter((body) => body.includes("legacy-plugin"));
+    expect(legacyPluginNotes.length).toBeGreaterThan(0);
   });
 
   it("resolves gateway.auth.password SecretRef for local setup probe", async () => {
@@ -983,14 +984,13 @@ describe("runSetupWizard", () => {
     }
 
     const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
-    expect(
-      calls.some(
-        (call) =>
-          call?.[1] === "QuickStart" &&
-          typeof call?.[0] === "string" &&
-          call[0].includes("Gateway port: 18791"),
-      ),
-    ).toBe(true);
+    const matchingQuickStartNotes = calls.filter(
+      (call) =>
+        call?.[1] === "QuickStart" &&
+        typeof call?.[0] === "string" &&
+        call[0].includes("Gateway port: 18791"),
+    );
+    expect(matchingQuickStartNotes.length).toBeGreaterThan(0);
   });
 
   it("uses manifest setup metadata for post-auth model policy without loading provider runtime", async () => {

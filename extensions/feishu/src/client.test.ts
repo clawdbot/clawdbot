@@ -247,10 +247,9 @@ describe("createFeishuClient HTTP timeout", () => {
   it("passes a custom httpInstance with default timeout to Lark.Client", () => {
     createFeishuClient({ appId: "app_1", appSecret: "secret_1", accountId: "timeout-test" }); // pragma: allowlist secret
 
-    expect(readLastClientHttpInstance()).toMatchObject({
-      get: expect.any(Function),
-      post: expect.any(Function),
-    });
+    const httpInstance = readLastClientHttpInstance();
+    expect(typeof httpInstance.get).toBe("function");
+    expect(typeof httpInstance.post).toBe("function");
   });
 
   it("injects default timeout into HTTP request options", async () => {

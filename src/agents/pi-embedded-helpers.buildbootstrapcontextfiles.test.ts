@@ -71,10 +71,11 @@ describe("buildBootstrapContextFiles", () => {
       warn: (message) => warnings.push(message),
     });
     const kept = result?.content.match(/kept (\d+)\+(\d+) chars/);
-    expect(kept).not.toBeNull();
     if (!kept) {
       throw new Error("missing truncation kept-count marker");
     }
+    expect(kept[1].length).toBeGreaterThan(0);
+    expect(kept[2].length).toBeGreaterThan(0);
     const headChars = Number(kept[1]);
     const tailChars = Number(kept[2]);
     expect(result?.content).toContain("[...truncated, read TOOLS.md for full content...]");
@@ -219,9 +220,9 @@ describe("buildBootstrapContextFiles", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.path).toBe("/tmp/AGENTS.md");
     expect(warnings).toHaveLength(3);
-    expect(warnings.every((warning) => warning.includes('missing or invalid "path" field'))).toBe(
-      true,
-    );
+    expect(
+      warnings.filter((warning) => !warning.includes('missing or invalid "path" field')),
+    ).toEqual([]);
   });
 });
 

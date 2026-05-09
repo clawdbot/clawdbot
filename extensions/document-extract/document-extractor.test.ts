@@ -70,7 +70,10 @@ describe("PDF document extractor", () => {
       minTextChars: 10,
     });
 
-    expect(result?.images).toHaveLength(1);
+    if (!result) {
+      throw new Error("Expected PDF extraction result");
+    }
+    expect(result.images).toHaveLength(1);
     expect(canvasSizes).toEqual([{ width: 10, height: 10 }]);
   });
 

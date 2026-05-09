@@ -46,7 +46,7 @@ describe("deliverMattermostReplyPayload", () => {
     await deliverMattermostReplyPayload({
       core,
       cfg,
-      payload: { text: "Reasoning:\n_hidden_", isReasoning: true },
+      payload: { text: "hidden", isReasoning: true },
       to: "channel:town-square",
       accountId: "default",
       agentId: "agent-1",

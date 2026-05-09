@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { runAcpClientInteractive } from "../acp/client.js";
 import { serveAcpGateway } from "../acp/server.js";
 import { normalizeAcpProvenanceMode } from "../acp/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -33,7 +34,7 @@ export function registerAcpCli(program: Command) {
         const { gatewayToken, gatewayPassword } = resolveGatewayAuthOptions(opts);
         const provenanceMode = normalizeAcpProvenanceMode(opts.provenance as string | undefined);
         if (opts.provenance && !provenanceMode) {
-          throw new Error("Invalid --provenance value. Use off, meta, or meta+receipt.");
+          throw new Error('Invalid --provenance. Use "off", "meta", or "meta+receipt".');
         }
         await serveAcpGateway({
           gatewayUrl: opts.url as string | undefined,
@@ -48,7 +49,7 @@ export function registerAcpCli(program: Command) {
           verbose: Boolean(opts.verbose),
         });
       } catch (err) {
-        defaultRuntime.error(String(err));
+        defaultRuntime.error(`ACP bridge failed: ${formatErrorMessage(err)}`);
         defaultRuntime.exit(1);
       }
     });

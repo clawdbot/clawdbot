@@ -106,11 +106,16 @@ vi.mock("../process/supervisor/index.js", () => {
   const immediate = () => new Promise<void>((resolve) => setImmediate(resolve));
   const readEnvPath = (env?: NodeJS.ProcessEnv) => env?.PATH ?? env?.Path ?? "";
   const extractCommand = (input: SpawnInput) => input.ptyCommand ?? input.argv?.at(-1) ?? "";
-  const splitCommands = (command: string) =>
-    command
-      .split(";")
-      .map((part) => part.trim())
-      .filter(Boolean);
+  const splitCommands = (command: string) => {
+    const commands: string[] = [];
+    for (const part of command.split(";")) {
+      const trimmed = part.trim();
+      if (trimmed.length > 0) {
+        commands.push(trimmed);
+      }
+    }
+    return commands;
+  };
   const stdoutForSegment = (segment: string, env?: NodeJS.ProcessEnv) => {
     if (segment === "echo $PATH" || segment === "Write-Output $env:PATH") {
       return `${readEnvPath(env)}\n`;

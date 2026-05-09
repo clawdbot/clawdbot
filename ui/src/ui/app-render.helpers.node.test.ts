@@ -654,13 +654,14 @@ describe("handleChatManualRefresh", () => {
     const previousRequestAnimationFrame = globalThis.requestAnimationFrame;
     Object.defineProperty(globalThis, "requestAnimationFrame", {
       configurable: true,
+      writable: true,
       value: vi.fn((callback: FrameRequestCallback) => {
         animationFrame.callback = callback;
         return 1;
       }),
     });
     try {
-      let resolveRefresh!: () => void;
+      let resolveRefresh: (() => void) | undefined;
       refreshChatMock.mockReturnValueOnce(
         new Promise<void>((resolve) => {
           resolveRefresh = resolve;
@@ -678,6 +679,9 @@ describe("handleChatManualRefresh", () => {
       await Promise.resolve();
 
       expect(state.scrollToBottom).not.toHaveBeenCalled();
+      if (!resolveRefresh) {
+        throw new Error("Expected chat refresh resolver to be initialized");
+      }
       resolveRefresh();
       await run;
 
@@ -698,10 +702,15 @@ describe("handleChatManualRefresh", () => {
       expect(state.chatManualRefreshInFlight).toBe(false);
       expect(state.chatNewMessagesBelow).toBe(false);
     } finally {
-      Object.defineProperty(globalThis, "requestAnimationFrame", {
-        configurable: true,
-        value: previousRequestAnimationFrame,
-      });
+      if (previousRequestAnimationFrame === undefined) {
+        Reflect.deleteProperty(globalThis, "requestAnimationFrame");
+      } else {
+        Object.defineProperty(globalThis, "requestAnimationFrame", {
+          configurable: true,
+          writable: true,
+          value: previousRequestAnimationFrame,
+        });
+      }
     }
   });
 });

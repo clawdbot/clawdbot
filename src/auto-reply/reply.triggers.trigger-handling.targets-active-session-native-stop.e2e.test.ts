@@ -92,10 +92,19 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
   },
 }));
 
-let getReplyFromConfig!: GetReplyFromConfig;
+let capturedGetReplyFromConfig: GetReplyFromConfig | undefined;
 installTriggerHandlingReplyHarness((impl) => {
-  getReplyFromConfig = impl;
+  capturedGetReplyFromConfig = impl;
 });
+
+function getReplyFromConfig(
+  ...args: Parameters<GetReplyFromConfig>
+): ReturnType<GetReplyFromConfig> {
+  if (!capturedGetReplyFromConfig) {
+    throw new Error("Expected trigger handling reply harness to install getReplyFromConfig");
+  }
+  return capturedGetReplyFromConfig(...args);
+}
 
 const BASE_MESSAGE = {
   Body: "hello",

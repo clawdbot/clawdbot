@@ -66,8 +66,13 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
       // library replaces any access error with a misleading "File not found".
       // By resolving silently the subsequent readFile call surfaces the real
       // "Path escapes workspace root" / "outside-workspace" error instead.
+      const operations = mocks.operations;
+      expect(operations).toBeDefined();
+      if (!operations) {
+        throw new Error("Expected workspace edit operations to be registered.");
+      }
       await expect(
-        mocks.operations.access(path.join(workspaceDir, "escape", "secret.txt")),
+        operations.access(path.join(workspaceDir, "escape", "secret.txt")),
       ).resolves.toBeUndefined();
     },
   );

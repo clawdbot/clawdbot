@@ -121,12 +121,17 @@ async function readCacheTraceEvents(sessionId: string): Promise<CacheTraceEvent[
     throw new Error("live cache trace file not initialized");
   }
   const raw = await fs.readFile(liveCacheTraceFile, "utf8").catch(() => "");
-  return raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as CacheTraceEvent)
-    .filter((event) => event.sessionId === sessionId);
+  const events: CacheTraceEvent[] = [];
+  for (const rawLine of raw.split("\n")) {
+    const line = rawLine.trim();
+    if (line.length > 0) {
+      const event = JSON.parse(line) as CacheTraceEvent;
+      if (event.sessionId === sessionId) {
+        events.push(event);
+      }
+    }
+  }
+  return events;
 }
 
 async function expectCacheTraceStages(

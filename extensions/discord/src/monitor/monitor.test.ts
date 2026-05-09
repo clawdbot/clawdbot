@@ -392,7 +392,11 @@ describe("discord component interactions", () => {
     await button.run(secondInteraction, { cid: "btn_1" } as ComponentData);
 
     expect(dispatchReplyMock).toHaveBeenCalledTimes(2);
-    expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
+    const entry = resolveDiscordComponentEntry({ id: "btn_1", consume: false });
+    if (!entry) {
+      throw new Error("expected reusable Discord component entry");
+    }
+    expect(entry.id).toBe("btn_1");
   });
 
   it("blocks buttons when allowedUsers does not match", async () => {
@@ -411,7 +415,11 @@ describe("discord component interactions", () => {
       ephemeral: true,
     });
     expect(dispatchReplyMock).not.toHaveBeenCalled();
-    expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
+    const entry = resolveDiscordComponentEntry({ id: "btn_1", consume: false });
+    if (!entry) {
+      throw new Error("expected unauthorized Discord component entry to remain active");
+    }
+    expect(entry.id).toBe("btn_1");
   });
 
   it("blocks buttons from guilds removed from the allowlist", async () => {
@@ -590,7 +598,11 @@ describe("discord component interactions", () => {
     const { acknowledge } = await runModalSubmission({ reusable: true });
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    expect(resolveDiscordModalEntry({ id: "mdl_1", consume: false })).not.toBeNull();
+    const entry = resolveDiscordModalEntry({ id: "mdl_1", consume: false });
+    if (!entry) {
+      throw new Error("expected reusable Discord modal entry");
+    }
+    expect(entry.id).toBe("mdl_1");
   });
 
   it("passes false auth to plugin Discord interactions for non-allowlisted guild users", async () => {

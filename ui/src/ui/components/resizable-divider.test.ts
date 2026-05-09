@@ -44,10 +44,13 @@ async function renderDivider() {
 
   const root = container.querySelector<HTMLDivElement>("#split-root");
   const divider = container.querySelector<ResizableDivider>("resizable-divider");
-  expect(root).not.toBeNull();
-  expect(divider).not.toBeNull();
+  expect(root?.id).toBe("split-root");
+  expect(divider?.tagName.toLowerCase()).toBe("resizable-divider");
+  if (!root || !divider) {
+    throw new Error("expected resizable divider fixture");
+  }
 
-  root!.getBoundingClientRect = vi.fn(() => ({
+  root.getBoundingClientRect = vi.fn(() => ({
     bottom: 0,
     height: 0,
     left: 0,
@@ -59,9 +62,9 @@ async function renderDivider() {
     toJSON: () => ({}),
   }));
 
-  await divider!.updateComplete;
+  await divider.updateComplete;
   await nextFrame();
-  return divider!;
+  return divider;
 }
 
 function dispatchPointer(target: EventTarget, type: string, clientX: number) {

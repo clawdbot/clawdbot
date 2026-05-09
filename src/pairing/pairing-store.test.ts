@@ -78,6 +78,17 @@ function setDefaultRandomIntMock() {
   });
 }
 
+function requireFirstPairingRequest(
+  requests: Awaited<ReturnType<typeof listChannelPairingRequests>>,
+) {
+  expect(requests).toHaveLength(1);
+  const [request] = requests;
+  if (!request) {
+    throw new Error("expected pairing request");
+  }
+  return request;
+}
+
 async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
   const dir = path.join(fixtureRoot, `case-${caseId++}`);
   fsSync.mkdirSync(dir, { recursive: true });
@@ -199,7 +210,13 @@ async function expectAllowFromCacheInvalidationWithReadSpy(params: {
 }
 
 function countFileReads(spy: { mock: { calls: unknown[][] } }, filePath: string): number {
-  return spy.mock.calls.filter(([candidate]) => candidate === filePath).length;
+  let count = 0;
+  for (const [candidate] of spy.mock.calls) {
+    if (candidate === filePath) {
+      count++;
+    }
+  }
+  return count;
 }
 
 async function seedDefaultAccountAllowFromFixture(stateDir: string) {
@@ -277,10 +294,8 @@ async function expectPendingPairingRequestsIsolatedByAccount(params: {
     process.env,
     params.secondAccountId,
   );
-  expect(firstList).toHaveLength(1);
-  expect(secondList).toHaveLength(1);
-  expect(firstList[0]?.code).toBe(first.code);
-  expect(secondList[0]?.code).toBe(second.code);
+  expect(requireFirstPairingRequest(firstList).code).toBe(first.code);
+  expect(requireFirstPairingRequest(secondList).code).toBe(second.code);
 }
 
 describe("pairing store", () => {
@@ -300,8 +315,7 @@ describe("pairing store", () => {
       expect(second.created).toBe(false);
       expect(second.code).toBe(first.code);
       const reusedList = await listChannelPairingRequests("demo-pairing-a");
-      expect(reusedList).toHaveLength(1);
-      expect(reusedList[0]?.code).toBe(first.code);
+      expect(requireFirstPairingRequest(reusedList).code).toBe(first.code);
 
       const created = await upsertChannelPairingRequest({
         channel: "demo-pairing-b",
@@ -435,7 +449,7 @@ describe("pairing store", () => {
         channel: "telegram",
         code: created.code,
       });
-      expect(approved?.id).toBe("67890");
+      expect(approved).toMatchObject({ id: "67890" });
       await expectAccountScopedEntryIsolated("67890");
 
       const filtered = await createTelegramPairingRequest("yy", "filtered");

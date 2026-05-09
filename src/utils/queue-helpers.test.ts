@@ -109,7 +109,7 @@ describe("queue summary helpers", () => {
     };
     clearQueueSummaryState(state);
     expect(state.droppedCount).toBe(0);
-    expect(state.summaryLines).toEqual([]);
+    expect(state.summaryLines).toStrictEqual([]);
   });
 });
 
@@ -128,7 +128,7 @@ describe("drainCollectItemIfNeeded", () => {
     });
 
     expect(result).toBe("skipped");
-    expect(seen).toEqual([]);
+    expect(seen).toStrictEqual([]);
     expect(items).toEqual([1]);
   });
 

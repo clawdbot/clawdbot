@@ -75,7 +75,7 @@ describe("listChannelsMSTeams", () => {
       teamId: "team-empty",
     });
 
-    expect(result.channels).toEqual([]);
+    expect(result.channels).toStrictEqual([]);
   });
 
   it("returns empty array when value is undefined", async () => {
@@ -86,7 +86,7 @@ describe("listChannelsMSTeams", () => {
       teamId: "team-no-value",
     });
 
-    expect(result.channels).toEqual([]);
+    expect(result.channels).toStrictEqual([]);
   });
 
   it("follows @odata.nextLink across multiple pages", async () => {

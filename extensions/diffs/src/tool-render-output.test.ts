@@ -68,7 +68,7 @@ describe("diffs tool rendered output guards", () => {
     });
 
     expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
-    expect((result?.details as Record<string, unknown>).filePath).toEqual(expect.any(String));
+    expect((result?.details as Record<string, unknown>).filePath).toMatch(/preview\.png$/);
   });
 });
 

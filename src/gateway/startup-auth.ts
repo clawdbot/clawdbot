@@ -61,6 +61,9 @@ export function mergeGatewayTailscaleConfig(
   if (override.resetOnExit !== undefined) {
     merged.resetOnExit = override.resetOnExit;
   }
+  if (override.preserveFunnel !== undefined) {
+    merged.preserveFunnel = override.preserveFunnel;
+  }
   return merged;
 }
 

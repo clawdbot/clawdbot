@@ -748,7 +748,8 @@ describe("setupChannels", () => {
         expect(entries.find((entry) => entry.value === "external-chat")?.label).toBe(
           "Healthy Chat",
         );
-        expect(entries.some((entry) => entry.value === "broken-channel")).toBe(false);
+        const entryValues = entries.map((entry) => entry.value);
+        expect(entryValues).not.toContain("broken-channel");
         return "__done__";
       }
       return "__done__";

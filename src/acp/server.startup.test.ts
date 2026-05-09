@@ -17,6 +17,7 @@ type ResolveGatewayClientBootstrap = (params: unknown) => Promise<{
 }>;
 type GatewayClientOptions = GatewayClientCallbacks &
   GatewayClientAuth & {
+    caps?: string[];
     url?: string;
   };
 
@@ -230,6 +231,21 @@ describe("serveAcpGateway startup", () => {
 
       expect(mockState.agentSideConnectionCtor).not.toHaveBeenCalled();
       await emitHelloAndWaitForAgentSideConnection();
+      await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("subscribes the Gateway client to run-scoped tool events", async () => {
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await emitHelloAndWaitForAgentSideConnection();
+
+      expect(mockState.gatewayOptions[0]?.caps).toEqual(["tool-events"]);
+
       await stopServeWithSigint(signalHandlers, servePromise);
     } finally {
       onceSpy.mockRestore();

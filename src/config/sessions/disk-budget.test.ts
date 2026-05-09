@@ -14,6 +14,10 @@ async function expectPathExists(targetPath: string): Promise<void> {
   await expect(fs.access(targetPath)).resolves.toBeUndefined();
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("enforceSessionDiskBudget", () => {
   it("does not treat referenced transcripts with marker-like session IDs as archived artifacts", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
@@ -80,7 +84,7 @@ describe("enforceSessionDiskBudget", () => {
       });
 
       await expectPathExists(transcriptPath);
-      await expect(fs.stat(archivePath)).rejects.toThrow();
+      await expectPathMissing(archivePath);
       expect(result).toEqual(
         expect.objectContaining({
           removedFiles: 1,
@@ -140,7 +144,7 @@ describe("enforceSessionDiskBudget", () => {
       });
 
       await expectPathExists(transcriptPath);
-      await expect(fs.stat(checkpointPath)).rejects.toThrow();
+      await expectPathMissing(checkpointPath);
       await expectPathExists(referencedCheckpointPath);
       expect(result).toEqual(
         expect.objectContaining({
@@ -190,8 +194,8 @@ describe("enforceSessionDiskBudget", () => {
       await expectPathExists(transcriptPath);
       await expectPathExists(referencedRuntime);
       await expectPathExists(referencedPointer);
-      await expect(fs.stat(orphanRuntime)).rejects.toThrow();
-      await expect(fs.stat(orphanPointer)).rejects.toThrow();
+      await expectPathMissing(orphanRuntime);
+      await expectPathMissing(orphanPointer);
       expect(result).toEqual(
         expect.objectContaining({
           removedFiles: 2,

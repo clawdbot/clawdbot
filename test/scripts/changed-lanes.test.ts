@@ -17,6 +17,7 @@ import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
+type ExecFileSyncFailure = Error & { status?: number | null; stderr?: Buffer };
 const nestedGitEnvKeys = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_DIR",
@@ -781,7 +782,7 @@ describe("scripts/changed-lanes", () => {
       "utf8",
     );
     git(dir, ["add", "package.json"]);
-    expect(() =>
+    expect(
       execFileSync(
         process.execPath,
         [path.join(repoRoot, "scripts", "check-release-metadata-only.mjs"), "--staged"],
@@ -791,7 +792,7 @@ describe("scripts/changed-lanes", () => {
           stdio: "pipe",
         },
       ),
-    ).not.toThrow();
+    ).toBeInstanceOf(Buffer);
 
     writeFileSync(
       path.join(dir, "package.json"),
@@ -799,7 +800,8 @@ describe("scripts/changed-lanes", () => {
       "utf8",
     );
     git(dir, ["add", "package.json"]);
-    expect(() =>
+    let failure: ExecFileSyncFailure | undefined;
+    try {
       execFileSync(
         process.execPath,
         [path.join(repoRoot, "scripts", "check-release-metadata-only.mjs"), "--staged"],
@@ -808,8 +810,15 @@ describe("scripts/changed-lanes", () => {
           env: createNestedGitEnv(),
           stdio: "pipe",
         },
-      ),
-    ).toThrow();
+      );
+    } catch (error) {
+      failure = error as ExecFileSyncFailure;
+    }
+
+    expect(failure?.status).toBe(1);
+    expect(failure?.stderr?.toString("utf8")).toContain(
+      "[release-metadata] package.json changed outside the top-level version field",
+    );
   });
 
   it("routes root test/support changes to the tooling test lane instead of all lanes", () => {

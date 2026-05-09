@@ -83,6 +83,8 @@ export type AgentCommandOpts = {
   senderIsOwner?: boolean;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
   allowModelOverride?: boolean;
+  /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
+  toolsAllow?: string[];
   /** Group/spawn metadata for subagent policy inheritance and routing context. */
   groupId?: SpawnedRunMetadata["groupId"];
   groupChannel?: SpawnedRunMetadata["groupChannel"];
@@ -116,6 +118,8 @@ export type AgentCommandOpts = {
   promptMode?: PromptMode;
   /** Internal ACP-ready session turn source. Manual spawn turns bypass only the dispatch gate. */
   acpTurnSource?: AcpTurnSource;
+  /** Internal handoffs can feed the model without writing the synthetic prompt to transcript. */
+  suppressPromptPersistence?: boolean;
 };
 
 export type AgentCommandIngressOpts = Omit<

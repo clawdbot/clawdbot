@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-
+import { formatCliFailureLines } from "./cli/failure-output.js";
 import { assertNotRoot } from "./cli/root-guard.js";
 import { formatUncaughtError } from "./infra/errors.js";
 import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
@@ -110,7 +110,13 @@ if (isMain) {
       );
       return;
     }
-    console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+    for (const line of formatCliFailureLines({
+      title: "OpenClaw hit an unexpected runtime error.",
+      error,
+      argv: process.argv,
+    })) {
+      console.error(line);
+    }
     for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
       console.error("[openclaw]", message);
     }
@@ -119,7 +125,13 @@ if (isMain) {
   });
 
   void runLegacyCliEntry(process.argv).catch((err) => {
-    console.error("[openclaw] CLI failed:", formatUncaughtError(err));
+    for (const line of formatCliFailureLines({
+      title: "The CLI command failed.",
+      error: err,
+      argv: process.argv,
+    })) {
+      console.error(line);
+    }
     for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
       console.error("[openclaw]", message);
     }

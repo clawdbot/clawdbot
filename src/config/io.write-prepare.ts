@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "../utils.js";
 import { applyMergePatch } from "./merge-patch.js";
+import { normalizeAgentModelRefForConfig } from "./model-input.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -153,6 +154,23 @@ function setPathValueCreatingParents(value: unknown, path: string[], nextValue: 
   };
 }
 
+function deletePathValue(value: unknown, path: string[]): unknown {
+  if (path.length === 0 || !isRecord(value)) {
+    return value;
+  }
+  const [head, ...tail] = path;
+  if (!Object.prototype.hasOwnProperty.call(value, head)) {
+    return value;
+  }
+  const next: Record<string, unknown> = { ...value };
+  if (tail.length === 0) {
+    delete next[head];
+    return next;
+  }
+  next[head] = deletePathValue(value[head], tail);
+  return next;
+}
+
 function preserveSourceValueAtPath(params: {
   persistedCandidate: unknown;
   sourceConfig: unknown;
@@ -211,8 +229,16 @@ function preserveAuthoredAgentParams(params: {
     if (!isRecord(modelEntry) || !Object.prototype.hasOwnProperty.call(modelEntry, "params")) {
       continue;
     }
-    const modelPath = ["agents", "defaults", "models", modelId];
+    const modelPath = [
+      "agents",
+      "defaults",
+      "models",
+      normalizeAgentModelRefForConfig(modelId) || modelId,
+    ];
     const paramsPath = [...modelPath, "params"];
+    if (modelPath.at(-1) !== modelId) {
+      next = deletePathValue(next, ["agents", "defaults", "models", modelId]);
+    }
     if (getPathValue(next, modelPath) === undefined) {
       next = preserveSourceValueAtPath({
         ...params,

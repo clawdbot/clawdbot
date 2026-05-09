@@ -79,7 +79,7 @@ describe("realtime voice agent consult tool", () => {
     expect(resolveRealtimeVoiceAgentConsultTools("safe-read-only")).toEqual([
       expect.objectContaining({ name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME }),
     ]);
-    expect(resolveRealtimeVoiceAgentConsultTools("none")).toEqual([]);
+    expect(resolveRealtimeVoiceAgentConsultTools("none")).toStrictEqual([]);
     expect(resolveRealtimeVoiceAgentConsultToolsAllow("safe-read-only")).toEqual([
       "read",
       "web_search",
@@ -89,7 +89,7 @@ describe("realtime voice agent consult tool", () => {
       "memory_get",
     ]);
     expect(resolveRealtimeVoiceAgentConsultToolsAllow("owner")).toBeUndefined();
-    expect(resolveRealtimeVoiceAgentConsultToolsAllow("none")).toEqual([]);
+    expect(resolveRealtimeVoiceAgentConsultToolsAllow("none")).toStrictEqual([]);
   });
 
   it("keeps the shared consult tool ahead of custom realtime tools and dedupes by name", () => {

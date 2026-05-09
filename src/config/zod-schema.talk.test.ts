@@ -3,13 +3,13 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 describe("OpenClawSchema talk validation", () => {
   it("accepts a positive integer talk.silenceTimeoutMs", () => {
-    expect(() =>
-      OpenClawSchema.parse({
+    expect(
+      OpenClawSchema.safeParse({
         talk: {
           silenceTimeoutMs: 1500,
         },
       }),
-    ).not.toThrow();
+    ).toMatchObject({ success: true });
   });
 
   it.each([

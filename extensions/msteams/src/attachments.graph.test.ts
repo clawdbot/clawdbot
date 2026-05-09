@@ -340,7 +340,7 @@ describe("msteams graph attachments", () => {
         { maxBytes: 4 },
       );
 
-      expect(media.media).toEqual([]);
+      expect(media.media).toStrictEqual([]);
       expect(bufferFromSpy).not.toHaveBeenCalledWith(oversizedBase64, "base64");
     } finally {
       bufferFromSpy.mockRestore();

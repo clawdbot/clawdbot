@@ -324,7 +324,7 @@ describe("stuck session recovery", () => {
   });
 
   it("coalesces duplicate recovery attempts for the same session", async () => {
-    let resolveWait!: (value: boolean) => void;
+    let resolveWait: ((value: boolean) => void) | undefined;
     const waitPromise = new Promise<boolean>((resolve) => {
       resolveWait = resolve;
     });
@@ -346,6 +346,9 @@ describe("stuck session recovery", () => {
     });
 
     expect(mocks.abortEmbeddedPiRun).toHaveBeenCalledTimes(1);
+    if (!resolveWait) {
+      throw new Error("Expected diagnostic recovery wait resolver to be initialized");
+    }
     resolveWait(true);
     await first;
   });

@@ -8,6 +8,14 @@ import {
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
+function requireMatrixConfig(snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>) {
+  const config = snapshot.config.channels?.matrix;
+  if (!config) {
+    throw new Error("expected Matrix runtime config");
+  }
+  return config;
+}
+
 describe("secrets runtime snapshot matrix shadowing", () => {
   it("ignores Matrix password refs that are shadowed by scoped env access tokens", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
@@ -121,7 +129,7 @@ describe("secrets runtime snapshot matrix shadowing", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.matrix?.password).toEqual({
+    expect(requireMatrixConfig(snapshot).password).toEqual({
       source: "env",
       provider: "default",
       id: "MATRIX_PASSWORD",

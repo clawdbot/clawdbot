@@ -101,7 +101,6 @@ describe("buildTelegramMessageContext reactions", () => {
       }),
     });
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.ackReactionPromise).toBeNull();
     expect(ctx?.statusReactionController).toBeNull();
     expect(createStatusReactionController).not.toHaveBeenCalled();

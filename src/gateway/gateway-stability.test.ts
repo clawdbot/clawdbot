@@ -138,10 +138,14 @@ describe("gateway stability lane", () => {
       expect(event).not.toHaveProperty("sessionId");
       expect(event).not.toHaveProperty("sessionKey");
     }
-    expect(sessionEvents.some((event) => event.outcome === "idle" && event.queueDepth === 0)).toBe(
-      true,
+    const idleDrainedEvents = sessionEvents.filter(
+      (event) => event.outcome === "idle" && event.queueDepth === 0,
     );
-    expect(sessionEvents.every((event) => event.reason === STABILITY_REASON)).toBe(true);
+    expect(idleDrainedEvents.length).toBeGreaterThan(0);
+    const unexpectedReasons = sessionEvents
+      .map((event) => event.reason)
+      .filter((reason) => reason !== STABILITY_REASON);
+    expect(unexpectedReasons).toEqual([]);
 
     stopDiagnosticStabilityRecorder();
     emitDiagnosticEvent({

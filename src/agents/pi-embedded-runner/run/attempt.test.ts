@@ -2973,8 +2973,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       // drain
     }
 
-    expect(partialToolCall.arguments).toEqual({});
-    expect(streamedToolCall.arguments).toEqual({});
+    expect(partialToolCall.arguments).toStrictEqual({});
+    expect(streamedToolCall.arguments).toStrictEqual({});
   });
 
   it("keeps incomplete partial JSON unchanged until a complete object exists", async () => {
@@ -2999,7 +2999,7 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       // drain
     }
 
-    expect(partialToolCall.arguments).toEqual({});
+    expect(partialToolCall.arguments).toStrictEqual({});
   });
 
   it("does not repair tool arguments when trailing junk exceeds the Kimi-specific allowance", async () => {
@@ -3031,8 +3031,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       // drain
     }
 
-    expect(partialToolCall.arguments).toEqual({});
-    expect(streamedToolCall.arguments).toEqual({});
+    expect(partialToolCall.arguments).toStrictEqual({});
+    expect(streamedToolCall.arguments).toStrictEqual({});
   });
 
   it("clears a cached repair when later deltas make the trailing suffix invalid", async () => {
@@ -3076,8 +3076,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       // drain
     }
 
-    expect(partialToolCall.arguments).toEqual({});
-    expect(streamedToolCall.arguments).toEqual({});
+    expect(partialToolCall.arguments).toStrictEqual({});
+    expect(streamedToolCall.arguments).toStrictEqual({});
   });
 
   it("clears a cached repair when a later delta adds a single oversized trailing suffix", async () => {
@@ -3115,8 +3115,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       // drain
     }
 
-    expect(partialToolCall.arguments).toEqual({});
-    expect(streamedToolCall.arguments).toEqual({});
+    expect(partialToolCall.arguments).toStrictEqual({});
+    expect(streamedToolCall.arguments).toStrictEqual({});
   });
 
   it("preserves preexisting tool arguments when later reevaluation fails", async () => {
@@ -3153,7 +3153,7 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     }
 
     expect(partialToolCall.arguments).toEqual({ path: "/etc/hosts" });
-    expect(streamedToolCall.arguments).toEqual({});
+    expect(streamedToolCall.arguments).toStrictEqual({});
   });
 });
 

@@ -36,9 +36,14 @@ describe("collectTelegramStatusIssues", () => {
         }),
       ]),
     );
-    expect(issues.some((issue) => issue.message.includes("privacy mode"))).toBe(true);
-    expect(issues.some((issue) => issue.message.includes('uses "*"'))).toBe(true);
-    expect(issues.some((issue) => issue.message.includes("unresolvedGroups=2"))).toBe(true);
+    const issueMessages = issues.map((issue) => issue.message);
+    expect(issueMessages).toEqual(
+      expect.arrayContaining([expect.stringContaining("privacy mode")]),
+    );
+    expect(issueMessages).toEqual(expect.arrayContaining([expect.stringContaining('uses "*"')]));
+    expect(issueMessages).toEqual(
+      expect.arrayContaining([expect.stringContaining("unresolvedGroups=2")]),
+    );
   });
 
   it("reports unreachable groups with match metadata", () => {

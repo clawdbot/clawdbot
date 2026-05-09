@@ -68,8 +68,12 @@ describe("canvas CLI", () => {
       }),
     );
     expect(writtenFiles).toHaveLength(1);
-    expect(writtenFiles[0]?.filePath).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
-    expect(writtenFiles[0]?.base64).toBe("aGk=");
+    const [writtenFile] = writtenFiles;
+    if (!writtenFile) {
+      throw new Error("Expected canvas snapshot file");
+    }
+    expect(writtenFile.filePath).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
+    expect(writtenFile.base64).toBe("aGk=");
     expect(runtime.log).toHaveBeenCalledWith(expect.stringMatching(/^MEDIA:.*\.png$/));
   });
 });

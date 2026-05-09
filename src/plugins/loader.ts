@@ -49,6 +49,7 @@ import {
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { toSafeImportPath } from "./import-specifier.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
@@ -2002,11 +2003,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           : runtimeCandidateEntry;
       const moduleLoadSource = resolveCanonicalDistRuntimeSource(loadEntry.source);
       const moduleRoot = resolveCanonicalDistRuntimeSource(loadEntry.rootDir);
+      const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+        origin: candidate.origin,
+        rootDir: candidate.rootDir,
+        env,
+      });
       const opened = openRootFileSync({
         absolutePath: moduleLoadSource,
         rootPath: moduleRoot,
         boundaryLabel: "plugin root",
-        rejectHardlinks: candidate.origin !== "bundled",
+        rejectHardlinks,
         skipLexicalRootCheck: true,
       });
       if (!opened.ok) {
@@ -2097,7 +2103,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               absolutePath: runtimeModuleSource,
               rootPath: runtimeModuleRoot,
               boundaryLabel: "plugin root",
-              rejectHardlinks: candidate.origin !== "bundled",
+              rejectHardlinks,
               skipLexicalRootCheck: true,
             });
             if (!runtimeOpened.ok) {
@@ -2678,7 +2684,11 @@ export async function loadOpenClawPluginCliRegistry(
       absolutePath: sourceForCliMetadata,
       rootPath: pluginRoot,
       boundaryLabel: "plugin root",
-      rejectHardlinks: candidate.origin !== "bundled",
+      rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+        origin: candidate.origin,
+        rootDir: candidate.rootDir,
+        env,
+      }),
       skipLexicalRootCheck: true,
     });
     if (!opened.ok) {

@@ -89,7 +89,7 @@ describe("schema validator", () => {
       expect(result.value).toEqual({ mode: "auto" });
       expect(result.value).not.toBe(value);
     }
-    expect(value).toEqual({});
+    expect(value).toStrictEqual({});
 
     expectSuccessfulValidationValue({
       input: {

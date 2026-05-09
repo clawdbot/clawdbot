@@ -580,6 +580,7 @@ export async function runCli(argv: string[] = process.argv) {
       const [
         { buildProgram },
         { formatUncaughtError },
+        { formatCliFailureLines },
         { runFatalErrorHooks },
         {
           installUnhandledRejectionHandler,
@@ -591,6 +592,7 @@ export async function runCli(argv: string[] = process.argv) {
         Promise.all([
           import("./program.js"),
           import("../infra/errors.js"),
+          import("./failure-output.js"),
           import("../infra/fatal-error-hooks.js"),
           import("../infra/unhandled-rejections.js"),
           import("../terminal/restore.js"),
@@ -613,7 +615,13 @@ export async function runCli(argv: string[] = process.argv) {
           );
           return;
         }
-        console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+        for (const line of formatCliFailureLines({
+          title: "OpenClaw hit an unexpected runtime error.",
+          error,
+          argv: normalizedArgv,
+        })) {
+          console.error(line);
+        }
         for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
           console.error("[openclaw]", message);
         }

@@ -18,6 +18,34 @@ import {
   verifyInteractionToken,
 } from "./interactions.js";
 
+type ButtonAttachments = ReturnType<typeof buildButtonAttachments>;
+type ButtonAttachment = ButtonAttachments[number];
+type ButtonAction = NonNullable<ButtonAttachment["actions"]>[number];
+
+function requireFirstAttachment(attachments: ButtonAttachments): ButtonAttachment {
+  const [attachment] = attachments;
+  if (!attachment) {
+    throw new Error("Expected button attachment fixture");
+  }
+  return attachment;
+}
+
+function requireActions(attachments: ButtonAttachments): ButtonAction[] {
+  const attachment = requireFirstAttachment(attachments);
+  if (!attachment.actions) {
+    throw new Error("Expected button attachment fixture actions");
+  }
+  return attachment.actions;
+}
+
+function requireAction(attachments: ButtonAttachments, index = 0): ButtonAction {
+  const action = requireActions(attachments).at(index);
+  if (!action) {
+    throw new Error(`Expected button attachment action at index ${index}`);
+  }
+  return action;
+}
+
 // ── HMAC token management ────────────────────────────────────────────
 
 describe("setInteractionSecret / getInteractionSecret", () => {
@@ -308,7 +336,7 @@ describe("buildButtonAttachments", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].actions).toHaveLength(2);
+    expect(requireActions(result)).toHaveLength(2);
   });
 
   it("sets type to 'button' on every action", () => {
@@ -317,7 +345,7 @@ describe("buildButtonAttachments", () => {
       buttons: [{ id: "a", name: "A" }],
     });
 
-    expect(result[0].actions![0].type).toBe("button");
+    expect(requireAction(result).type).toBe("button");
   });
 
   it("includes HMAC _token in integration context", () => {
@@ -326,7 +354,7 @@ describe("buildButtonAttachments", () => {
       buttons: [{ id: "test", name: "Test" }],
     });
 
-    const action = result[0].actions![0];
+    const action = requireAction(result);
     expect(action.integration.context._token).toMatch(/^[0-9a-f]{64}$/);
   });
 
@@ -336,7 +364,7 @@ describe("buildButtonAttachments", () => {
       buttons: [{ id: "my_action", name: "Do It" }],
     });
 
-    const action = result[0].actions![0];
+    const action = requireAction(result);
     // sanitizeActionId strips hyphens and underscores (Mattermost routing bug #25747)
     expect(action.integration.context.action_id).toBe("myaction");
     expect(action.id).toBe("myaction");
@@ -348,7 +376,7 @@ describe("buildButtonAttachments", () => {
       buttons: [{ id: "btn", name: "Go", context: { tweet_id: "123", batch: true } }],
     });
 
-    const ctx = result[0].actions![0].integration.context;
+    const ctx = requireAction(result).integration.context;
     expect(ctx.tweet_id).toBe("123");
     expect(ctx.batch).toBe(true);
     expect(ctx.action_id).toBe("btn");
@@ -365,7 +393,7 @@ describe("buildButtonAttachments", () => {
       ],
     });
 
-    for (const action of result[0].actions!) {
+    for (const action of requireActions(result)) {
       expect(action.integration.url).toBe(url);
     }
   });
@@ -379,8 +407,8 @@ describe("buildButtonAttachments", () => {
       ],
     });
 
-    expect(result[0].actions![0].style).toBe("primary");
-    expect(result[0].actions![1].style).toBe("danger");
+    expect(requireAction(result, 0).style).toBe("primary");
+    expect(requireAction(result, 1).style).toBe("danger");
   });
 
   it("uses provided text for the attachment", () => {
@@ -390,7 +418,7 @@ describe("buildButtonAttachments", () => {
       text: "Choose an action:",
     });
 
-    expect(result[0].text).toBe("Choose an action:");
+    expect(requireFirstAttachment(result).text).toBe("Choose an action:");
   });
 
   it("defaults to empty string text when not provided", () => {
@@ -399,7 +427,7 @@ describe("buildButtonAttachments", () => {
       buttons: [{ id: "x", name: "X" }],
     });
 
-    expect(result[0].text).toBe("");
+    expect(requireFirstAttachment(result).text).toBe("");
   });
 
   it("generates verifiable tokens", () => {
@@ -408,7 +436,7 @@ describe("buildButtonAttachments", () => {
       buttons: [{ id: "verify_me", name: "V", context: { extra: "data" } }],
     });
 
-    const ctx = result[0].actions![0].integration.context;
+    const ctx = requireAction(result).integration.context;
     const token = ctx._token as string;
     const { _token, ...contextWithoutToken } = ctx;
     expect(verifyInteractionToken(contextWithoutToken, token)).toBe(true);
@@ -420,7 +448,7 @@ describe("buildButtonAttachments", () => {
       buttons: [{ id: "do_action", name: "Do", context: { tweet_id: "42", category: "ai" } }],
     });
 
-    const ctx = result[0].actions![0].integration.context;
+    const ctx = requireAction(result).integration.context;
     const token = ctx._token as string;
 
     // Simulate Mattermost returning context with keys in a different order

@@ -14,7 +14,11 @@ describe("exa web search provider", () => {
     expect(provider.id).toBe("exa");
     expect(provider.onboardingScopes).toEqual(["text-inference"]);
     expect(provider.credentialPath).toBe("plugins.entries.exa.config.webSearch.apiKey");
-    expect(applied.plugins?.entries?.exa?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.exa;
+    if (!pluginEntry) {
+      throw new Error("expected Exa plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("keeps the lightweight contract surface aligned with provider metadata", () => {
@@ -39,7 +43,11 @@ describe("exa web search provider", () => {
       credentialPath: provider.credentialPath,
     });
     expect(contractProvider.createTool({ config: {}, searchConfig: {} })).toBeNull();
-    expect(applied.plugins?.entries?.exa?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.exa;
+    if (!pluginEntry) {
+      throw new Error("expected contract Exa plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("prefers scoped configured api keys over environment fallbacks", () => {

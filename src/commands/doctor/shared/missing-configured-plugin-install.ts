@@ -109,7 +109,10 @@ function addConfiguredAgentRuntimePluginIds(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): void {
-  for (const runtime of collectConfiguredAgentHarnessRuntimes(cfg, env ?? process.env)) {
+  for (const runtime of collectConfiguredAgentHarnessRuntimes(cfg, env ?? process.env, {
+    includeEnvRuntime: false,
+    includeLegacyAgentRuntimes: false,
+  })) {
     addConfiguredPluginId(ids, runtime);
   }
 }

@@ -50,22 +50,22 @@ describe("resolveProviderPluginLookupKey", () => {
     ).toBe("google");
   });
 
-  it("does not throw when runtime provider models is an object map", () => {
-    expect(() =>
+  it("falls through when runtime provider models is an object map", () => {
+    expect(
       resolveProviderPluginLookupKey("openrouter", {
         baseUrl: "https://openrouter.ai/api/v1",
         models: { "some/model": { api: "openai-completions" } } as never,
       }),
-    ).not.toThrow();
+    ).toBe("openrouter");
   });
 
-  it("does not throw when runtime provider models is undefined", () => {
-    expect(() =>
+  it("falls through when runtime provider models is undefined", () => {
+    expect(
       resolveProviderPluginLookupKey("openrouter", {
         baseUrl: "https://openrouter.ai/api/v1",
         models: undefined as never,
       }),
-    ).not.toThrow();
+    ).toBe("openrouter");
   });
 
   it("falls through to the provider key when runtime provider models is non-array", () => {

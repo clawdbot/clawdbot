@@ -402,6 +402,97 @@ export async function enableTailscaleServe(port: number, exec: typeof runExec = 
   });
 }
 
+export async function hasTailscaleFunnelRouteForPort(
+  port: number,
+  exec: typeof runExec = runExec,
+): Promise<boolean> {
+  try {
+    const tailscaleBin = await getTailscaleBinary();
+    const { stdout } = await exec(tailscaleBin, ["funnel", "status", "--json"], {
+      maxBuffer: 200_000,
+      timeoutMs: 5_000,
+    });
+    const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+    return tailscaleFunnelStatusCoversPort(parsed, port);
+  } catch {
+    return false;
+  }
+}
+
+const TAILSCALE_LOOPBACK_PROXY_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+
+export function tailscaleFunnelStatusCoversPort(
+  status: Record<string, unknown>,
+  port: number,
+): boolean {
+  for (const proxy of funnelStatusBackendsForPort(status)) {
+    if (tailscaleProxyMatchesLoopbackPort(proxy, port)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function tailscaleProxyMatchesLoopbackPort(proxy: string, port: number): boolean {
+  // Tailscale stores the Proxy field as a full URL string (e.g.
+  // "http://127.0.0.1:18789", "http://127.0.0.1:18789/",
+  // "https+insecure://localhost:18789/api"), or as the bare forms accepted
+  // by `tailscale funnel/serve` ("localhost:18789", "18789"). Strip any
+  // RFC 3986 scheme (ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) "://") and
+  // any trailing path before host/port match — covers documented Tailscale
+  // target schemes such as `http`, `https`, and `https+insecure`.
+  const stripped = proxy.replace(/^[a-z][a-z0-9+\-.]*:\/\//i, "").replace(/\/.*$/, "");
+  if (stripped === String(port)) {
+    return true;
+  }
+  const sep = stripped.lastIndexOf(":");
+  if (sep < 0) {
+    return false;
+  }
+  const host = stripped.slice(0, sep);
+  const portStr = stripped.slice(sep + 1);
+  if (portStr !== String(port)) {
+    return false;
+  }
+  return TAILSCALE_LOOPBACK_PROXY_HOSTS.has(host);
+}
+
+function funnelStatusBackendsForPort(status: Record<string, unknown>): Set<string> {
+  const backends = new Set<string>();
+  const allowFunnel = (status as { AllowFunnel?: Record<string, unknown> }).AllowFunnel ?? {};
+  const enabledHosts = new Set(
+    Object.entries(allowFunnel)
+      .filter(([, value]) => value === true)
+      .map(([host]) => host),
+  );
+  if (enabledHosts.size === 0) {
+    return backends;
+  }
+  const web = (status as { Web?: Record<string, unknown> }).Web;
+  if (!web || typeof web !== "object") {
+    return backends;
+  }
+  for (const [host, handlers] of Object.entries(web)) {
+    if (!enabledHosts.has(host)) {
+      continue;
+    }
+    if (!handlers || typeof handlers !== "object") {
+      continue;
+    }
+    const handlerEntries = (handlers as { Handlers?: Record<string, unknown> }).Handlers;
+    if (!handlerEntries || typeof handlerEntries !== "object") {
+      continue;
+    }
+    for (const handler of Object.values(handlerEntries)) {
+      const proxy = (handler as { Proxy?: unknown })?.Proxy;
+      if (typeof proxy === "string" && proxy.length > 0) {
+        backends.add(proxy);
+      }
+    }
+  }
+  return backends;
+}
+
 export async function disableTailscaleServe(exec: typeof runExec = runExec) {
   const tailscaleBin = await getTailscaleBinary();
   await execWithSudoFallback(exec, tailscaleBin, ["serve", "reset"], {

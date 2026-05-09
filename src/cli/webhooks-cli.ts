@@ -20,6 +20,7 @@ import { defaultRuntime } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "./command-format.js";
 
 export function registerWebhooksCli(program: Command) {
   const webhooks = program
@@ -109,7 +110,9 @@ function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions
   const accountRaw = raw.account;
   const account = normalizeOptionalString(accountRaw) ?? "";
   if (!account) {
-    throw new Error("--account is required");
+    throw new Error(
+      `--account is required. Example: ${formatCliCommand("openclaw webhooks gmail setup --account default")}.`,
+    );
   }
   const common = parseGmailCommonOptions(raw);
   return {

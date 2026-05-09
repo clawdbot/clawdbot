@@ -1775,6 +1775,7 @@
   "overrides": {
     "@aws-sdk/client-bedrock-runtime": "$@aws-sdk/client-bedrock-runtime",
     "axios": "1.16.0",
+    "fast-uri": "3.1.2",
     "follow-redirects": "1.16.0",
     "ip-address": "10.2.0",
     "node-domexception": "npm:@nolyfill/domexception@1.0.28",
@@ -1791,6 +1792,7 @@
       "@hono/node-server": "1.19.14",
       "@aws-sdk/client-bedrock-runtime": "3.1024.0",
       "axios": "1.16.0",
+      "fast-uri": "3.1.2",
       "follow-redirects": "1.16.0",
       "defu": "6.1.5",
       "fast-xml-parser": "5.7.0",

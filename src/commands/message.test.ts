@@ -215,9 +215,9 @@ describe("messageCommand", () => {
       targetIds?: Set<string>;
     };
     expect(call.targetIds).toBeInstanceOf(Set);
-    expect([...(call.targetIds ?? [])].every((id) => id.startsWith("channels.telegram."))).toBe(
-      true,
-    );
+    expect(
+      [...(call.targetIds ?? [])].filter((id) => !id.startsWith("channels.telegram.")),
+    ).toEqual([]);
   });
 
   it("keeps local-fallback resolved cfg and logs diagnostics", async () => {

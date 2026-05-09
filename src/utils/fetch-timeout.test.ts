@@ -150,6 +150,23 @@ describe("buildTimeoutAbortSignal", () => {
     cleanup();
   });
 
+  it("emits a warning without operation or url when callers omit context (#79195)", async () => {
+    const { signal, cleanup } = buildTimeoutAbortSignal({
+      timeoutMs: 25,
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(signal?.aborted).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [, record] = warn.mock.calls[0] as [string, Record<string, unknown>];
+    expect(record).not.toHaveProperty("operation");
+    expect(record).not.toHaveProperty("url");
+    expect(record.consoleMessage).toBe("fetch timeout after 25ms (elapsed 25ms)");
+
+    cleanup();
+  });
+
   it("refreshes its timeout when progress is observed", async () => {
     const { signal, refresh, cleanup } = buildTimeoutAbortSignal({
       timeoutMs: 25,

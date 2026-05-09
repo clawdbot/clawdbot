@@ -1226,7 +1226,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
     vi.advanceTimersByTime(10_000);
 
     const statusCalls = setActivityStatus.mock.calls.map((c) => c[0]);
-    expect(statusCalls.filter((s) => s === "idle").length).toBe(1);
+    expect(statusCalls.reduce((count, s) => count + (s === "idle" ? 1 : 0), 0)).toBe(1);
     expect(chatLog.addSystem).not.toHaveBeenCalledWith(expectedTimeoutMessage);
     expect(state.activeChatRunId).toBeNull();
 

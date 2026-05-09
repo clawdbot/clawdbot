@@ -234,8 +234,7 @@ describe("GatewayClient security checks", () => {
       onConnectError,
     });
 
-    // Should not throw
-    expect(() => client.start()).not.toThrow();
+    expect(client.start()).toBeUndefined();
 
     expectSecurityConnectError(onConnectError);
     expect(wsInstances.length).toBe(0); // No WebSocket created
@@ -535,9 +534,7 @@ describe("GatewayClient close handling", () => {
     const client = createClientWithIdentity("dev-2", onClose);
 
     client.start();
-    expect(() => {
-      getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
-    }).not.toThrow();
+    expect(getLatestWs().emitClose(1008, "unauthorized: device token mismatch")).toBeUndefined();
 
     expect(logDebugMock).toHaveBeenCalledWith(
       expect.stringContaining("failed clearing stale device-auth token"),

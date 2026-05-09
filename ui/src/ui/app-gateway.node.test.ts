@@ -1012,7 +1012,7 @@ describe("connectGateway", () => {
     });
 
     expect(host.chatRunId).toBeNull();
-    expect(host.chatMessages).toEqual([]);
+    expect(host.chatMessages).toStrictEqual([]);
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
   });

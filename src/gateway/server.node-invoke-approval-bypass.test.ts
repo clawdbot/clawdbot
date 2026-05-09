@@ -84,7 +84,13 @@ async function getConnectedNodeIds(ws: WebSocket): Promise<string[]> {
     {},
   );
   expect(nodes.ok).toBe(true);
-  return (nodes.payload?.nodes ?? []).filter((n) => n.connected).map((n) => n.nodeId);
+  const nodeIds: string[] = [];
+  for (const node of nodes.payload?.nodes ?? []) {
+    if (node.connected) {
+      nodeIds.push(node.nodeId);
+    }
+  }
+  return nodeIds;
 }
 
 async function requestAllowOnceApproval(
@@ -269,12 +275,22 @@ describe("node.invoke approval bypass", () => {
       },
     });
     client.start();
-    await Promise.race([
-      ready,
-      sleep(NODE_CONNECT_TIMEOUT_MS).then(() => {
-        throw new Error("timeout waiting for node to connect");
-      }),
-    ]);
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        ready,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("timeout waiting for node to connect")),
+            NODE_CONNECT_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
     return client;
   };
 

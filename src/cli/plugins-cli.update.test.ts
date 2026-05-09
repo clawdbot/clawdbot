@@ -140,9 +140,11 @@ describe("plugins cli update", () => {
     );
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
-    expect(
-      runtimeLogs.some((line) => line.includes("Restart the gateway to load plugins and hooks.")),
-    ).toBe(true);
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Restart the gateway to load plugins and hooks."),
+      ]),
+    );
   });
 
   it("exits when update is called without id and without --all", async () => {
@@ -253,9 +255,11 @@ describe("plugins cli update", () => {
       installRecords: nextConfig.plugins?.installs,
       reason: "source-changed",
     });
-    expect(
-      runtimeLogs.some((line) => line.includes("Restart the gateway to load plugins and hooks.")),
-    ).toBe(true);
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Restart the gateway to load plugins and hooks."),
+      ]),
+    );
   });
 
   it("exits non-zero when a plugin update reports an error after persisting successes", async () => {

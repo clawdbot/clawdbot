@@ -16,6 +16,17 @@ function hasFinding(
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
 }
 
+function requireFinding(
+  checkId: "tools.exec.fs_tools_disabled_but_exec_enabled",
+  findings: ReturnType<typeof collectExecRuntimeFindings>,
+) {
+  const finding = findings.find((entry) => entry.checkId === checkId);
+  if (!finding) {
+    throw new Error(`Expected ${checkId} finding`);
+  }
+  return finding;
+}
+
 afterEach(() => {
   saveExecApprovals({ version: 1, agents: {} });
 });
@@ -132,13 +143,11 @@ describe("security audit exec surface findings", () => {
       },
     } satisfies OpenClawConfig);
 
-    const finding = findings.find(
-      (entry) => entry.checkId === "tools.exec.fs_tools_disabled_but_exec_enabled",
-    );
-    expect(finding?.severity).toBe("warn");
-    expect(finding?.detail).toContain("tools");
-    expect(finding?.detail).toContain("runtime=[exec, process]");
-    expect(finding?.remediation).toContain("deny exec and process");
+    const finding = requireFinding("tools.exec.fs_tools_disabled_but_exec_enabled", findings);
+    expect(finding.severity).toBe("warn");
+    expect(finding.detail).toContain("tools");
+    expect(finding.detail).toContain("runtime=[exec, process]");
+    expect(finding.remediation).toContain("deny exec and process");
   });
 
   it("does not warn when sandbox filesystem policy constrains exec", () => {

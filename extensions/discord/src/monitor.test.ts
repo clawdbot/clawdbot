@@ -38,6 +38,17 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
 
 const fakeGuild = (id: string, name: string) => ({ id, name }) as Guild;
 
+function expectNormalizedAllowList(
+  entries: string[],
+  prefixes: string[],
+): NonNullable<ReturnType<typeof normalizeDiscordAllowList>> {
+  const allow = normalizeDiscordAllowList(entries, prefixes);
+  if (allow === null) {
+    throw new Error("Expected allow list to be normalized");
+  }
+  return allow;
+}
+
 const makeEntries = (
   entries: Record<string, Partial<DiscordGuildEntryResolved>>,
 ): Record<string, DiscordGuildEntryResolved> => {
@@ -226,14 +237,10 @@ describe("discord allowlist helpers", () => {
   });
 
   it("matches ids by default and names only when enabled", () => {
-    const allow = normalizeDiscordAllowList(
+    const allow = expectNormalizedAllowList(
       ["123", "steipete", "Friends of OpenClaw"],
       ["discord:", "user:", "guild:", "channel:"],
     );
-    expect(allow).not.toBeNull();
-    if (!allow) {
-      throw new Error("Expected allow list to be normalized");
-    }
     expect(allowListMatches(allow, { id: "123" })).toBe(true);
     expect(allowListMatches(allow, { name: "steipete" })).toBe(false);
     expect(allowListMatches(allow, { name: "friends-of-openclaw" })).toBe(false);
@@ -245,11 +252,7 @@ describe("discord allowlist helpers", () => {
   });
 
   it("matches pk-prefixed allowlist entries", () => {
-    const allow = normalizeDiscordAllowList(["pk:member-123"], ["discord:", "user:", "pk:"]);
-    expect(allow).not.toBeNull();
-    if (!allow) {
-      throw new Error("Expected allow list to be normalized");
-    }
+    const allow = expectNormalizedAllowList(["pk:member-123"], ["discord:", "user:", "pk:"]);
     expect(allowListMatches(allow, { id: "member-123" })).toBe(true);
     expect(allowListMatches(allow, { id: "member-999" })).toBe(false);
   });
@@ -266,7 +269,11 @@ describe("discord allowlist helpers", () => {
       allowFrom: ["*", "user:123"],
       sender: { id: "123" },
     });
-    expect(explicitOwner.ownerAllowList).not.toBeNull();
+    if (explicitOwner.ownerAllowList === null) {
+      throw new Error("Expected explicit owner allowlist");
+    }
+    expect(explicitOwner.ownerAllowList.allowAll).toBe(false);
+    expect(explicitOwner.ownerAllowList.ids).toEqual(new Set(["123"]));
     expect(explicitOwner.ownerAllowed).toBe(true);
   });
 });

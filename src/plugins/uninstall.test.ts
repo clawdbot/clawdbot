@@ -236,7 +236,7 @@ async function expectPathAccessState(pathToCheck: string, expected: "exists" | "
     await expect(accessExpectation).resolves.toBeUndefined();
     return;
   }
-  await expect(accessExpectation).rejects.toThrow();
+  await expect(accessExpectation).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 describe("resolveUninstallChannelConfigKeys", () => {
@@ -895,7 +895,7 @@ describe("uninstallPlugin", () => {
       expectSuccessfulUninstallActions(result, {
         directory: true,
       });
-      await expect(fs.access(pluginDir)).rejects.toThrow();
+      await expect(fs.access(pluginDir)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await fs.rm(pluginDir, { recursive: true, force: true });
     }
@@ -923,7 +923,7 @@ describe("uninstallPlugin", () => {
 
     const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
     expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
-    await expect(fs.access(pluginDir)).rejects.toThrow();
+    await expect(fs.access(pluginDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("uninstalls npm-managed packages through npm before deleting the package directory", async () => {
@@ -992,8 +992,6 @@ describe("uninstallPlugin", () => {
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
-        "--prefix",
-        ".",
         "@openclaw/kitchen-sink",
       ],
       expect.objectContaining({
@@ -1006,7 +1004,7 @@ describe("uninstallPlugin", () => {
         }),
       }),
     );
-    await expect(fs.access(pluginDir)).rejects.toThrow();
+    await expect(fs.access(pluginDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("repairs remaining npm plugin openclaw peer links after npm uninstall prunes them", async () => {
@@ -1070,8 +1068,10 @@ describe("uninstallPlugin", () => {
     });
 
     expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
-    await expect(fs.access(removedPluginDir)).rejects.toThrow();
-    await expect(fs.access(path.join(npmRoot, "node_modules", "openclaw"))).rejects.toThrow();
+    await expect(fs.access(removedPluginDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(path.join(npmRoot, "node_modules", "openclaw"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     await expect(fs.lstat(peerLink).then((stat) => stat.isSymbolicLink())).resolves.toBe(true);
   });
 
@@ -1128,8 +1128,6 @@ describe("uninstallPlugin", () => {
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
-        "--prefix",
-        ".",
         "missing-plugin",
       ],
       expect.objectContaining({
@@ -1222,7 +1220,7 @@ describe("uninstallPlugin", () => {
     expect(successfulResult.warnings).toEqual([
       "Failed to prune npm dependencies for plugin package demo-plugin: registry unavailable",
     ]);
-    await expect(fs.access(pluginDir)).rejects.toThrow();
+    await expect(fs.access(pluginDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it.each([
@@ -1370,7 +1368,7 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: true,
     });
-    await expect(fs.access(managedDir)).rejects.toThrow();
+    await expect(fs.access(managedDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("deletes tracked installs from a recorded managed extensions root", async () => {
@@ -1390,7 +1388,7 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: true,
     });
-    await expect(fs.access(installPath)).rejects.toThrow();
+    await expect(fs.access(installPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("deletes managed ClawHub install directories", async () => {
@@ -1433,7 +1431,7 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: true,
     });
-    await expect(fs.access(installPath)).rejects.toThrow();
+    await expect(fs.access(installPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("deletes managed git install repos outside the extensions directory", async () => {
@@ -1459,8 +1457,8 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: true,
     });
-    await expect(fs.access(installPath)).rejects.toThrow();
-    await expect(fs.access(installParent)).rejects.toThrow();
+    await expect(fs.access(installPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(installParent)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("keeps non-empty managed git install parents after deleting the repo", async () => {
@@ -1487,7 +1485,7 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: true,
     });
-    await expect(fs.access(installPath)).rejects.toThrow();
+    await expect(fs.access(installPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.access(path.join(installParent, "keep.txt"))).resolves.toBeUndefined();
   });
 

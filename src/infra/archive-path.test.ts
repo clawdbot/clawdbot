@@ -30,7 +30,7 @@ describe("archive path helpers", () => {
   });
 
   it.each(["", ".", "./"])("accepts empty-like entry paths: %j", (entryPath) => {
-    expect(() => validateArchiveEntryPath(entryPath)).not.toThrow();
+    expect(validateArchiveEntryPath(entryPath)).toBeUndefined();
   });
 
   it.each([

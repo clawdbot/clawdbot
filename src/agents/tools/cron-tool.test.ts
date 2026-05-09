@@ -213,7 +213,7 @@ describe("cron tool", () => {
     });
 
     const params = expectSingleGatewayCallMethod("cron.status");
-    expect(params).toEqual({});
+    expect(params).toStrictEqual({});
     expect(result.details).toEqual({ enabled: true });
   });
 

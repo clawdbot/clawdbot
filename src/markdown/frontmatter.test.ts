@@ -99,6 +99,6 @@ metadata:
 
   it("returns empty when frontmatter is missing", () => {
     const content = "# No frontmatter";
-    expect(parseFrontmatterBlock(content)).toEqual({});
+    expect(parseFrontmatterBlock(content)).toStrictEqual({});
   });
 });

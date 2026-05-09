@@ -3,7 +3,10 @@
 
 import { ensureStaticModelAllowlistEntry } from "../agents/model-allowlist-entry.js";
 import { findNormalizedProviderKey } from "../agents/provider-id.js";
-import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
+import {
+  normalizeAgentModelMapForConfig,
+  normalizeAgentModelRefForConfig,
+} from "../config/model-input.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type {
   ModelApi,
@@ -165,12 +168,13 @@ export function withAgentModelAliases(
   existing: Record<string, AgentModelEntryConfig> | undefined,
   aliases: readonly AgentModelAliasEntry[],
 ): Record<string, AgentModelEntryConfig> {
-  const next = { ...existing };
+  const next = normalizeAgentModelMapForConfig({ ...existing });
   for (const entry of aliases) {
     const normalized = normalizeAgentModelAliasEntry(entry);
-    next[normalized.modelRef] = {
-      ...next[normalized.modelRef],
-      ...(normalized.alias ? { alias: next[normalized.modelRef]?.alias ?? normalized.alias } : {}),
+    const modelRef = normalizeAgentModelRefForConfig(normalized.modelRef);
+    next[modelRef] = {
+      ...next[modelRef],
+      ...(normalized.alias ? { alias: next[modelRef]?.alias ?? normalized.alias } : {}),
     };
   }
   return next;
@@ -183,10 +187,10 @@ export function applyOnboardAuthAgentModelsAndProviders(
     providers: Record<string, ModelProviderConfig>;
   },
 ): OpenClawConfig {
-  const mergedAgentModels = {
+  const mergedAgentModels = normalizeAgentModelMapForConfig({
     ...cfg.agents?.defaults?.models,
     ...params.agentModels,
-  };
+  });
   return {
     ...cfg,
     agents: {

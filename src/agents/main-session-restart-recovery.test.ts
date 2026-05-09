@@ -305,6 +305,7 @@ describe("main-session-restart-recovery", () => {
     const callParams = vi.mocked(callGateway).mock.calls[0]?.[0].params as { message?: string };
     expect(callParams.message).toContain(pendingPayload);
 
+    const beforeStoreRead = Date.now();
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     const entry = store["agent:main:main"];
     expect(entry).toMatchObject({
@@ -314,8 +315,8 @@ describe("main-session-restart-recovery", () => {
       pendingFinalDeliveryAttemptCount: 1,
       pendingFinalDeliveryLastError: null,
     });
-    expect(entry?.pendingFinalDeliveryCreatedAt).toEqual(expect.any(Number));
-    expect(entry?.pendingFinalDeliveryLastAttemptAt).toEqual(expect.any(Number));
+    expect(entry?.pendingFinalDeliveryCreatedAt).toBeLessThanOrEqual(beforeStoreRead);
+    expect(entry?.pendingFinalDeliveryLastAttemptAt).toBeLessThanOrEqual(beforeStoreRead);
     expect(entry?.pendingFinalDeliveryLastAttemptAt ?? 0).toBeGreaterThanOrEqual(
       entry?.pendingFinalDeliveryCreatedAt ?? Number.POSITIVE_INFINITY,
     );

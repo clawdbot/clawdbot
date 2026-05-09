@@ -69,7 +69,11 @@ function expectWrapperToContainPathSuffix(wrapper: string, pathSuffix: string[])
   const nativeSuffix = pathSuffix.join(path.sep);
   const escapedNativeSuffix = JSON.stringify(nativeSuffix).slice(1, -1);
   const posixSuffix = pathSuffix.join("/");
-  expect(wrapper.includes(escapedNativeSuffix) || wrapper.includes(posixSuffix)).toBe(true);
+  if (wrapper.includes(escapedNativeSuffix)) {
+    expect(wrapper).toContain(escapedNativeSuffix);
+  } else {
+    expect(wrapper).toContain(posixSuffix);
+  }
 }
 
 afterEach(async () => {

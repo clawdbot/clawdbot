@@ -113,7 +113,7 @@ function stubImageGenerationProviders() {
 }
 
 function requireImageGenerateTool(tool: ReturnType<typeof createImageGenerateTool>) {
-  expect(tool).not.toBeNull();
+  expect(typeof tool?.execute).toBe("function");
   if (!tool) {
     throw new Error("expected image_generate tool");
   }
@@ -286,7 +286,7 @@ describe("createImageGenerateTool", () => {
         throw new Error("runtime provider list should not run during tool registration");
       });
 
-    expect(
+    requireImageGenerateTool(
       createImageGenerateTool({
         config: {
           agents: {
@@ -298,7 +298,7 @@ describe("createImageGenerateTool", () => {
           },
         },
       }),
-    ).not.toBeNull();
+    );
     expect(listProviders).not.toHaveBeenCalled();
   });
 
@@ -325,7 +325,7 @@ describe("createImageGenerateTool", () => {
       },
     ]);
 
-    expect(
+    requireImageGenerateTool(
       createImageGenerateTool({
         config: {
           agents: {
@@ -337,7 +337,7 @@ describe("createImageGenerateTool", () => {
           },
         },
       }),
-    ).not.toBeNull();
+    );
   });
 
   it("infers an OpenAI image-generation model from env-backed auth", () => {
@@ -347,7 +347,7 @@ describe("createImageGenerateTool", () => {
     expect(resolveImageGenerationModelConfigForTool({ cfg: {} })).toEqual({
       primary: "openai/gpt-image-1",
     });
-    expect(createImageGenerateTool({ config: {} })).not.toBeNull();
+    requireImageGenerateTool(createImageGenerateTool({ config: {} }));
   });
 
   it("does not load runtime providers while resolving an explicitly configured model", () => {
@@ -410,7 +410,7 @@ describe("createImageGenerateTool", () => {
     ).toEqual({
       primary: "openai/gpt-image-2",
     });
-    expect(createImageGenerateTool({ config: {}, agentDir: "/tmp/agent" })).not.toBeNull();
+    requireImageGenerateTool(createImageGenerateTool({ config: {}, agentDir: "/tmp/agent" }));
     expect(isConfigured).toHaveBeenCalledWith({
       cfg: {},
       agentDir: "/tmp/agent",
@@ -548,24 +548,21 @@ describe("createImageGenerateTool", () => {
       contentType: "image/png",
     });
 
-    const tool = createImageGenerateTool({
-      config: {
-        agents: {
-          defaults: {
-            mediaMaxMb: 8,
-            imageGenerationModel: {
-              primary: "openai/gpt-image-1",
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              mediaMaxMb: 8,
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+              },
             },
           },
         },
-      },
-      agentDir: "/tmp/agent",
-    });
-
-    expect(tool).not.toBeNull();
-    if (!tool) {
-      throw new Error("expected image_generate tool");
-    }
+        agentDir: "/tmp/agent",
+      }),
+    );
 
     const result = await tool.execute("call-1", {
       prompt: "A cat wearing sunglasses",
@@ -856,19 +853,17 @@ describe("createImageGenerateTool", () => {
       contentType: "image/jpeg",
     });
 
-    const tool = createImageGenerateTool({
-      config: {
-        agents: {
-          defaults: {
-            imageGenerationModel: { primary: "google/gemini-3.1-flash-image-preview" },
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: { primary: "google/gemini-3.1-flash-image-preview" },
+            },
           },
         },
-      },
-    });
-    expect(tool).not.toBeNull();
-    if (!tool) {
-      throw new Error("expected image_generate tool");
-    }
+      }),
+    );
 
     const result = await tool.execute("call-regression", { prompt: "kodo sawaki zazen" });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
@@ -913,21 +908,19 @@ describe("createImageGenerateTool", () => {
         }),
       },
     ]);
-    const tool = createImageGenerateTool({
-      config: {
-        agents: {
-          defaults: {
-            imageGenerationModel: {
-              primary: "google/gemini-3.1-flash-image-preview",
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "google/gemini-3.1-flash-image-preview",
+              },
             },
           },
         },
-      },
-    });
-    expect(tool).not.toBeNull();
-    if (!tool) {
-      throw new Error("expected image_generate tool");
-    }
+      }),
+    );
 
     await expect(tool.execute("call-2", { prompt: "too many cats", count: 5 })).rejects.toThrow(
       "count must be between 1 and 4",
@@ -1363,22 +1356,19 @@ describe("createImageGenerateTool", () => {
   it("rejects unsupported aspect ratios", async () => {
     stubImageGenerationProviders();
 
-    const tool = createImageGenerateTool({
-      config: {
-        agents: {
-          defaults: {
-            imageGenerationModel: {
-              primary: "google/gemini-3-pro-image-preview",
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "google/gemini-3-pro-image-preview",
+              },
             },
           },
         },
-      },
-    });
-
-    expect(tool).not.toBeNull();
-    if (!tool) {
-      throw new Error("expected image_generate tool");
-    }
+      }),
+    );
 
     await expect(
       tool.execute("call-bad-aspect", { prompt: "portrait", aspectRatio: "7:5" }),
@@ -1390,22 +1380,19 @@ describe("createImageGenerateTool", () => {
   it("lists registered provider and model options", async () => {
     stubImageGenerationProviders();
 
-    const tool = createImageGenerateTool({
-      config: {
-        agents: {
-          defaults: {
-            imageGenerationModel: {
-              primary: "google/gemini-3.1-flash-image-preview",
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "google/gemini-3.1-flash-image-preview",
+              },
             },
           },
         },
-      },
-    });
-
-    expect(tool).not.toBeNull();
-    if (!tool) {
-      throw new Error("expected image_generate tool");
-    }
+      }),
+    );
 
     const result = await tool.execute("call-list", { action: "list" });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
@@ -1467,22 +1454,19 @@ describe("createImageGenerateTool", () => {
       },
     ]);
 
-    const tool = createImageGenerateTool({
-      config: {
-        agents: {
-          defaults: {
-            imageGenerationModel: {
-              primary: "__proto__/proto-v1",
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "__proto__/proto-v1",
+              },
             },
           },
         },
-      },
-    });
-
-    expect(tool).not.toBeNull();
-    if (!tool) {
-      throw new Error("expected image_generate tool");
-    }
+      }),
+    );
 
     const result = await tool.execute("call-list-proto", { action: "list" });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";

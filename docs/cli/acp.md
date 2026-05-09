@@ -49,6 +49,7 @@ Quick rule:
 | Session modes                                                         | Partial     | `session/set_mode` is supported and the bridge exposes initial Gateway-backed session controls for thought level, tool verbosity, reasoning, usage detail, and elevated actions. Broader ACP-native mode/config surfaces are still out of scope. |
 | Session info and usage updates                                        | Partial     | The bridge emits `session_info_update` and best-effort `usage_update` notifications from cached Gateway session snapshots. Usage is approximate and only sent when Gateway token totals are marked fresh.                                        |
 | Tool streaming                                                        | Partial     | `tool_call` / `tool_call_update` events include raw I/O, text content, and best-effort file locations when Gateway tool args/results expose them. Embedded terminals and richer diff-native output are still not exposed.                        |
+| Exec approvals                                                        | Partial     | Gateway exec approval prompts during active ACP prompt turns are relayed to the ACP client with `session/request_permission`.                                                                                                                    |
 | Per-session MCP servers (`mcpServers`)                                | Unsupported | Bridge mode rejects per-session MCP server requests. Configure MCP on the OpenClaw gateway or agent instead.                                                                                                                                     |
 | Client filesystem methods (`fs/read_text_file`, `fs/write_text_file`) | Unsupported | The bridge does not call ACP client filesystem methods.                                                                                                                                                                                          |
 | Client terminal methods (`terminal/*`)                                | Unsupported | The bridge does not create ACP client terminals or stream terminal ids through tool calls.                                                                                                                                                       |
@@ -76,6 +77,8 @@ Quick rule:
 - Tool follow-along data is best-effort. The bridge can surface file paths that
   appear in known tool args/results, but it does not yet emit ACP terminals or
   structured file diffs.
+- Exec approval relay is scoped to the active ACP prompt turn; approvals from
+  other Gateway sessions are ignored.
 
 ## Usage
 

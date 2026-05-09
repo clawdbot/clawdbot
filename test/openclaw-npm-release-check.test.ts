@@ -352,7 +352,7 @@ describe("collectControlUiPackErrors", () => {
         "dist/control-ui/assets/index-Bu8rSoJV.js",
         "dist/control-ui/assets/index-BK0yXA_h.css",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 
@@ -486,7 +486,7 @@ describe("collectPackedTestCargoErrors", () => {
         "dist/extensions/whatsapp/node_modules/pino/lib/proto.js",
         "dist/extensions/webhooks/node_modules/zod/v4/core/api.js",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("allows legitimate package roots named test under node_modules", () => {
@@ -495,7 +495,7 @@ describe("collectPackedTestCargoErrors", () => {
         "dist/extensions/fixture-plugin/node_modules/direct/node_modules/test/index.js",
         "dist/extensions/fixture-plugin/node_modules/direct/node_modules/@scope/tests/index.js",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("allows leaf runtime filenames named test or tests", () => {
@@ -504,7 +504,7 @@ describe("collectPackedTestCargoErrors", () => {
         "dist/extensions/fixture-plugin/node_modules/direct/bin/test",
         "dist/extensions/fixture-plugin/node_modules/direct/bin/tests",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("normalizes Windows or mixed separators before classifying test cargo", () => {
@@ -529,7 +529,7 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10",
         now: new Date("2026-03-11T12:00:00Z"),
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("rejects versions outside the two-day CalVer window", () => {
@@ -549,7 +549,7 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10-1",
         now: new Date("2026-03-10T00:00:00Z"),
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("accepts correction package versions paired with matching correction tags", () => {
@@ -559,7 +559,7 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10-1",
         now: new Date("2026-03-10T00:00:00Z"),
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("rejects beta package versions paired with fallback correction tags", () => {
@@ -583,7 +583,7 @@ describe("collectReleasePackageMetadataErrors", () => {
         repository: { url: "git+https://github.com/openclaw/openclaw.git" },
         bin: { openclaw: "openclaw.mjs" },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("rejects node-llama-cpp as a peer dependency", () => {

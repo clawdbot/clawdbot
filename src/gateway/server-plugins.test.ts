@@ -765,7 +765,7 @@ describe("loadGatewayPlugins", () => {
     });
     const result = await runtime.nodes.list({ connected: true });
 
-    expect(getLastDispatchedParams()).toEqual({});
+    expect(getLastDispatchedParams()).toStrictEqual({});
     expect(result.nodes).toEqual([{ nodeId: "connected", connected: true }]);
   });
 

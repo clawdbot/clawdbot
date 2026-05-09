@@ -210,7 +210,7 @@ describe("GatewayClient", () => {
     });
 
     try {
-      expect(() => client.start()).not.toThrow();
+      expect(client.start()).toBeUndefined();
       await connected;
       expect(onConnectError).not.toHaveBeenCalled();
     } finally {

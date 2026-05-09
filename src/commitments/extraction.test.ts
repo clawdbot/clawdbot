@@ -68,6 +68,17 @@ describe("commitment extraction", () => {
     };
   }
 
+  function expectSingleValidCandidate(
+    valid: ReturnType<typeof validateCommitmentCandidates>,
+  ): ReturnType<typeof validateCommitmentCandidates>[number] {
+    expect(valid).toHaveLength(1);
+    const [entry] = valid;
+    if (!entry) {
+      throw new Error("Expected one valid commitment candidate");
+    }
+    return entry;
+  }
+
   it("parses valid candidates from JSON output with surrounding text", () => {
     const parsed = parseCommitmentExtractionOutput(
       `noise {"candidates":[${JSON.stringify(candidate())}]} trailing`,
@@ -149,9 +160,9 @@ describe("commitment extraction", () => {
       nowMs: writeMs,
     });
 
-    expect(valid).toHaveLength(1);
-    expect(valid[0]?.earliestMs).toBe(writeMs + 10 * 60_000);
-    expect(valid[0]?.latestMs).toBe(writeMs + 10 * 60_000 + 12 * 60 * 60_000);
+    const validCandidate = expectSingleValidCandidate(valid);
+    expect(validCandidate.earliestMs).toBe(writeMs + 10 * 60_000);
+    expect(validCandidate.latestMs).toBe(writeMs + 10 * 60_000 + 12 * 60 * 60_000);
   });
 
   it("persists inferred commitments and dedupes by scope and dedupe key", async () => {

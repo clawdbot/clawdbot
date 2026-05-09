@@ -14,8 +14,8 @@ describe("nvidia provider catalog", () => {
       "minimaxai/minimax-m2.5",
       "z-ai/glm5",
     ]);
-    expect(provider.models.every((model) => model.compat?.requiresStringContent === true)).toBe(
-      true,
+    expect(provider.models.filter((model) => model.compat?.requiresStringContent !== true)).toEqual(
+      [],
     );
   });
 });

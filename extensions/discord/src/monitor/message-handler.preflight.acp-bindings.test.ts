@@ -278,10 +278,11 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
       }),
     );
 
-    expect(result).not.toBeNull();
     expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-    expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
+    expect(result).toMatchObject({
+      boundSessionKey: "agent:codex:acp:binding:discord:default:abc123",
+    });
   });
 
   it("accepts plain messages in configured ACP-bound channels without a mention", async () => {
@@ -309,9 +310,10 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
       }),
     );
 
-    expect(result).not.toBeNull();
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-    expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
+    expect(result).toMatchObject({
+      boundSessionKey: "agent:codex:acp:binding:discord:default:abc123",
+    });
   });
 
   it("hydrates empty guild message payloads from REST before ensuring configured ACP bindings", async () => {

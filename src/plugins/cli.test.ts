@@ -188,16 +188,11 @@ describe("registerPluginCliCommands", () => {
   it("injects gateway-backed node runtime into plugin CLI commands", async () => {
     await registerPluginCliCommands(createProgram(), {} as OpenClawConfig);
 
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeOptions: {
-          nodes: {
-            list: expect.any(Function),
-            invoke: expect.any(Function),
-          },
-        },
-      }),
-    );
+    const loadOptions = mocks.loadOpenClawPlugins.mock.calls[0]?.[0] as
+      | { runtimeOptions?: { nodes?: { list?: unknown; invoke?: unknown } } }
+      | undefined;
+    expect(typeof loadOptions?.runtimeOptions?.nodes?.list).toBe("function");
+    expect(typeof loadOptions?.runtimeOptions?.nodes?.invoke).toBe("function");
   });
 
   it("reuses loaded plugin CLI entries on repeat calls for the same program", async () => {
@@ -397,7 +392,9 @@ describe("registerPluginCliCommands", () => {
       primary: "memory",
     });
 
-    expect(program.commands.filter((command) => command.name() === "memory")).toHaveLength(1);
+    expect(
+      program.commands.reduce((count, command) => count + (command.name() === "memory" ? 1 : 0), 0),
+    ).toBe(1);
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["memory-core"],

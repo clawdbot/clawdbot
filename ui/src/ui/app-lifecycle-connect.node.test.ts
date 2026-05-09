@@ -41,6 +41,17 @@ vi.mock("./app-scroll.ts", () => ({
 
 import { handleConnected } from "./app-lifecycle.ts";
 
+function createDeferred() {
+  let resolve: (() => void) | undefined;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  if (!resolve) {
+    throw new Error("Expected bootstrap deferred resolver to be initialized");
+  }
+  return { promise, resolve };
+}
+
 function createHost() {
   return {
     basePath: "",
@@ -77,30 +88,22 @@ describe("handleConnected", () => {
   });
 
   it("waits for bootstrap load before first gateway connect", async () => {
-    let resolveBootstrap!: () => void;
-    loadBootstrapMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveBootstrap = resolve;
-      }),
-    );
+    const bootstrap = createDeferred();
+    loadBootstrapMock.mockReturnValueOnce(bootstrap.promise);
     connectGatewayMock.mockReset();
     const host = createHost();
 
     handleConnected(host as never);
     expect(connectGatewayMock).not.toHaveBeenCalled();
 
-    resolveBootstrap();
+    bootstrap.resolve();
     await Promise.resolve();
     expect(connectGatewayMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips deferred connect when disconnected before bootstrap resolves", async () => {
-    let resolveBootstrap!: () => void;
-    loadBootstrapMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveBootstrap = resolve;
-      }),
-    );
+    const bootstrap = createDeferred();
+    loadBootstrapMock.mockReturnValueOnce(bootstrap.promise);
     connectGatewayMock.mockReset();
     const host = createHost();
 
@@ -108,7 +111,7 @@ describe("handleConnected", () => {
     expect(connectGatewayMock).not.toHaveBeenCalled();
 
     host.connectGeneration += 1;
-    resolveBootstrap();
+    bootstrap.resolve();
     await Promise.resolve();
 
     expect(connectGatewayMock).not.toHaveBeenCalled();

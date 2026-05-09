@@ -13,37 +13,13 @@ import { patchPluginSessionExtension } from "../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginHookRegistration } from "../plugins/types.js";
-
-type ToolDefinitionAdapterModule = typeof import("./pi-tool-definition-adapter.js");
-type PiToolsAbortModule = typeof import("./pi-tools.abort.js");
-type BeforeToolCallModule = typeof import("./pi-tools.before-tool-call.js");
-
-type ToClientToolDefinitions = ToolDefinitionAdapterModule["toClientToolDefinitions"];
-type ToToolDefinitions = ToolDefinitionAdapterModule["toToolDefinitions"];
-type WrapToolWithAbortSignal = PiToolsAbortModule["wrapToolWithAbortSignal"];
-type BeforeToolCallTesting = BeforeToolCallModule["__testing"];
-type ConsumeAdjustedParamsForToolCall = BeforeToolCallModule["consumeAdjustedParamsForToolCall"];
-type WrapToolWithBeforeToolCallHook = BeforeToolCallModule["wrapToolWithBeforeToolCallHook"];
-
-let toClientToolDefinitions!: ToClientToolDefinitions;
-let toToolDefinitions!: ToToolDefinitions;
-let wrapToolWithAbortSignal!: WrapToolWithAbortSignal;
-let beforeToolCallTesting!: BeforeToolCallTesting;
-let consumeAdjustedParamsForToolCall!: ConsumeAdjustedParamsForToolCall;
-let wrapToolWithBeforeToolCallHook!: WrapToolWithBeforeToolCallHook;
-
-beforeEach(async () => {
-  if (!wrapToolWithBeforeToolCallHook) {
-    ({ toClientToolDefinitions, toToolDefinitions } =
-      await import("./pi-tool-definition-adapter.js"));
-    ({ wrapToolWithAbortSignal } = await import("./pi-tools.abort.js"));
-    ({
-      __testing: beforeToolCallTesting,
-      consumeAdjustedParamsForToolCall,
-      wrapToolWithBeforeToolCallHook,
-    } = await import("./pi-tools.before-tool-call.js"));
-  }
-});
+import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
+import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
+import {
+  __testing as beforeToolCallTesting,
+  consumeAdjustedParamsForToolCall,
+  wrapToolWithBeforeToolCallHook,
+} from "./pi-tools.before-tool-call.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
 
@@ -52,6 +28,20 @@ type BeforeToolCallHookInstall = {
   priority?: number;
   handler: BeforeToolCallHandlerMock;
 };
+
+function collectMatching<T, U>(
+  items: readonly T[],
+  predicate: (item: T) => boolean,
+  map: (item: T) => U,
+): U[] {
+  const matches: U[] = [];
+  for (const item of items) {
+    if (predicate(item)) {
+      matches.push(map(item));
+    }
+  }
+  return matches;
+}
 
 function installBeforeToolCallHook(params?: {
   enabled?: boolean;
@@ -359,7 +349,7 @@ describe("before_tool_call hook integration for client tools", () => {
   });
 
   it("preserves client tool source order when hooks resolve out of order", async () => {
-    let releaseFirstHook!: () => void;
+    let releaseFirstHook: (() => void) | undefined;
     const firstHookGate = new Promise<void>((resolve) => {
       releaseFirstHook = resolve;
     });
@@ -445,13 +435,19 @@ describe("before_tool_call hook integration for client tools", () => {
       { name: "second_tool", completed: true },
     ]);
 
+    if (!releaseFirstHook) {
+      throw new Error("Expected first before-tool-call hook release callback to be initialized");
+    }
     releaseFirstHook();
     await firstRun;
 
-    expect(slots.filter((slot) => slot.completed).map((slot) => slot.name)).toEqual([
-      "first_tool",
-      "second_tool",
-    ]);
+    expect(
+      collectMatching(
+        slots,
+        (slot) => slot.completed,
+        (slot) => slot.name,
+      ),
+    ).toEqual(["first_tool", "second_tool"]);
     expect(slots.map((slot) => slot.params)).toEqual([
       { value: "first", marker: "first_tool" },
       { value: "second", marker: "second_tool" },

@@ -8,6 +8,8 @@ import SwiftUI
 @MainActor
 @Observable
 final class AppState {
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "app-state")
+
     private let isPreview: Bool
     private var isInitializing = true
     private var isApplyingRemoteTokenConfig = false
@@ -696,7 +698,10 @@ final class AppState {
                 remoteToken: self.remoteToken,
                 remoteTokenDirty: self.remoteTokenDirty))
         guard synced.changed else { return }
-        OpenClawConfigFile.saveDict(synced.root)
+        guard OpenClawConfigFile.saveDict(synced.root) else {
+            Self.logger.warning("gateway config sync rejected to protect persisted gateway auth/mode")
+            return
+        }
     }
 
     func triggerVoiceEars(ttl: TimeInterval? = 5) {

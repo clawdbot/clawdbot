@@ -508,10 +508,13 @@ cli note
     expect(secondDryRun.createdCount).toBe(0);
     expect(secondDryRun.updatedCount).toBe(0);
     expect(secondDryRun.skippedCount).toBe(1);
+    if (!applied.runId) {
+      throw new Error("Expected ChatGPT import dry-run apply runId");
+    }
 
     const rollback = await runWikiChatGptRollback({
       config,
-      runId: applied.runId!,
+      runId: applied.runId,
       json: true,
     });
     expect(rollback.alreadyRolledBack).toBe(false);

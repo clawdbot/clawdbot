@@ -37,7 +37,12 @@ describe("QQBot framework slash commands", () => {
       expect.arrayContaining(["bot-approve", "bot-clear-storage", "bot-logs", "bot-streaming"]),
     );
     for (const commandName of ["bot-approve", "bot-clear-storage", "bot-logs", "bot-streaming"]) {
-      expect(commands.find((command) => command.name === commandName)?.c2cOnly).toBe(true);
+      expect(commands).toContainEqual(
+        expect.objectContaining({
+          name: commandName,
+          c2cOnly: true,
+        }),
+      );
     }
   });
 
@@ -60,7 +65,12 @@ describe("QQBot framework slash commands", () => {
     const commands = registry.getFrameworkCommands();
 
     expect(commands.map((command) => command.name)).toEqual(["private-admin", "shared-admin"]);
-    expect(commands.find((command) => command.name === "private-admin")?.c2cOnly).toBe(true);
+    expect(commands).toContainEqual(
+      expect.objectContaining({
+        name: "private-admin",
+        c2cOnly: true,
+      }),
+    );
     expect(commands.find((command) => command.name === "shared-admin")?.c2cOnly).toBeUndefined();
   });
 

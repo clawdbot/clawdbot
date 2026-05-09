@@ -130,8 +130,12 @@ describe("slash-commands", () => {
     const result = await registerSingleStatusCommand(request);
 
     expect(result).toHaveLength(1);
-    expect(result[0]?.managed).toBe(false);
-    expect(result[0]?.id).toBe("cmd-1");
+    const firstCommand = result[0];
+    if (!firstCommand) {
+      throw new Error("expected Mattermost slash command result");
+    }
+    expect(firstCommand.managed).toBe(false);
+    expect(firstCommand.id).toBe("cmd-1");
     expect(request).toHaveBeenCalledTimes(1);
   });
 

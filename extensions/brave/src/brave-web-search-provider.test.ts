@@ -640,11 +640,16 @@ describe("brave web search provider", () => {
             mode: "web",
             status: 200,
             ok: true,
-            durationMs: expect.any(Number),
           }),
         ],
       ]),
     );
+    const responseLog = loggerInfoMock.mock.calls.find(
+      ([message]) => message === "brave http response",
+    );
+    const responsePayload = responseLog?.[1] as { durationMs?: unknown } | undefined;
+    expect(typeof responsePayload?.durationMs).toBe("number");
+    expect(responsePayload?.durationMs).toBeGreaterThanOrEqual(0);
     expect(JSON.stringify(loggerInfoMock.mock.calls)).not.toContain("brave-test-key");
     expect(JSON.stringify(loggerInfoMock.mock.calls)).not.toContain("X-Subscription-Token");
   });

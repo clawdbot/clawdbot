@@ -2,6 +2,14 @@
 import { describe, expect, it } from "vitest";
 import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "./usage-helpers.ts";
 
+function requireFirstTool(tools: Array<[string, number]>): [string, number] {
+  const tool = tools[0];
+  if (!tool) {
+    throw new Error("expected parsed tool summary entry");
+  }
+  return tool;
+}
+
 describe("usage-helpers", () => {
   it("tokenizes query terms including quoted strings", () => {
     const terms = extractQueryTerms('agent:main "model:gpt-5.2" has:errors');
@@ -40,7 +48,8 @@ describe("usage-helpers", () => {
     );
     expect(res.summary).toContain("read");
     expect(res.summary).toContain("exec");
-    expect(res.tools[0]?.[0]).toBe("read");
-    expect(res.tools[0]?.[1]).toBe(2);
+    const firstTool = requireFirstTool(res.tools);
+    expect(firstTool[0]).toBe("read");
+    expect(firstTool[1]).toBe(2);
   });
 });

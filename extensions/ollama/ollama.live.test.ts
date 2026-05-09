@@ -213,7 +213,7 @@ describe.skipIf(!LIVE)("ollama live", () => {
     const error = events.find((event) => (event as { type?: string }).type === "error");
 
     expect(error).toBeUndefined();
-    expect(events.some((event) => (event as { type?: string }).type === "done")).toBe(true);
+    expect(events.map((event) => (event as { type?: string }).type)).toContain("done");
     expect(payload?.model).toBe(CHAT_MODEL);
     expect(payload?.options?.num_ctx).toBe(4096);
     expect(payload?.options?.top_p).toBe(0.9);

@@ -222,7 +222,7 @@ describe("normalizeRegisteredProvider", () => {
         if (!provider) {
           throw new Error("expected provider");
         }
-        expect(provider).toMatchObject({ catalog: { run: expect.any(Function) } });
+        expect(typeof provider.catalog?.run).toBe("function");
         expect(provider.discovery).toBeUndefined();
       },
     },

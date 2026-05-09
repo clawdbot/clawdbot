@@ -149,7 +149,7 @@ describe("file log redaction", () => {
 
     const [line] = fs.readFileSync(logPath, "utf8").trim().split("\n");
     const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
-    expect(record.hostname).toEqual(expect.any(String));
+    expect(record.hostname).toBeTypeOf("string");
     expect(record.hostname).not.toBe("");
     expect(record.message).toBe("request completed");
   });

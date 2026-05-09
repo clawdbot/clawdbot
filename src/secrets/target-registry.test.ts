@@ -33,7 +33,6 @@ describe("secret target registry", () => {
   it("resolves config targets by exact path including sibling ref metadata", () => {
     const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
 
-    expect(target).not.toBeNull();
     expect(target?.entry?.id).toBe("channels.googlechat.serviceAccount");
     expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
   });
@@ -58,7 +57,6 @@ describe("secret target registry", () => {
       "apiKey",
     ]);
 
-    expect(target).not.toBeNull();
     expect(target?.entry?.id).toBe("plugins.entries.exa.config.webSearch.apiKey");
 
     const fetchTarget = resolveConfigSecretTargetByPath([
@@ -69,7 +67,6 @@ describe("secret target registry", () => {
       "webFetch",
       "apiKey",
     ]);
-    expect(fetchTarget).not.toBeNull();
     expect(fetchTarget?.entry?.id).toBe("plugins.entries.firecrawl.config.webFetch.apiKey");
   });
 
@@ -88,7 +85,6 @@ describe("secret target registry", () => {
       "apiKey",
     ]);
 
-    expect(target).not.toBeNull();
     expect(target?.entry?.id).toBe("plugins.entries.voice-call.config.tts.providers.*.apiKey");
   });
 });

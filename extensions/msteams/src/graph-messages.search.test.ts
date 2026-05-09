@@ -188,7 +188,7 @@ describe("searchMessagesMSTeams", () => {
       query: "nonexistent",
     });
 
-    expect(result.messages).toEqual([]);
+    expect(result.messages).toStrictEqual([]);
   });
 
   it("resolves user: target through conversation store", async () => {

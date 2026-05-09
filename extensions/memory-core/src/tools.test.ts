@@ -103,9 +103,9 @@ describe("memory_search unavailable payloads", () => {
         hits: 1,
       },
     });
-    expect((result.details as { debug?: { searchMs?: number } }).debug?.searchMs).toEqual(
-      expect.any(Number),
-    );
+    expect(
+      (result.details as { debug?: { searchMs?: number } }).debug?.searchMs,
+    ).toBeGreaterThanOrEqual(0);
   });
 
   it("uses explicit plugin context agent over synthetic active-memory session keys", async () => {

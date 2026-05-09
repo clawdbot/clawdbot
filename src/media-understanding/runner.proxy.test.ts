@@ -57,6 +57,18 @@ function createOpenAiAudioCfg(providerOverrides: Record<string, unknown> = {}): 
   } as unknown as OpenClawConfig;
 }
 
+function expectSingleOutputText(
+  result: Awaited<ReturnType<typeof runCapability>>,
+  expectedText: string,
+): void {
+  expect(result.outputs).toHaveLength(1);
+  const [output] = result.outputs;
+  if (!output) {
+    throw new Error("Expected media understanding output");
+  }
+  expect(output.text).toBe(expectedText);
+}
+
 async function runAudioCapabilityWithFetchCapture(params: {
   fixturePrefix: string;
   outputText: string;
@@ -83,7 +95,7 @@ async function runAudioCapabilityWithFetchCapture(params: {
       providerRegistry,
     });
 
-    expect(result.outputs[0]?.text).toBe(params.outputText);
+    expectSingleOutputText(result, params.outputText);
   });
   return seenFetchFn;
 }
@@ -154,7 +166,7 @@ describe("runCapability proxy fetch passthrough", () => {
         ]),
       });
 
-      expect(result.outputs[0]?.text).toBe("video ok");
+      expectSingleOutputText(result, "video ok");
       expect(seenFetchFn).toBe(proxyFetchMocks.proxyFetch);
     });
   });
@@ -200,9 +212,12 @@ describe("runCapability proxy fetch passthrough", () => {
         providerRegistry,
       });
 
-      expect(result.outputs[0]?.text).toBe("ok");
+      expectSingleOutputText(result, "ok");
     });
 
-    expect(seenRequest?.allowPrivateNetwork).toBe(true);
+    if (!seenRequest) {
+      throw new Error("Expected audio provider request options");
+    }
+    expect(seenRequest.allowPrivateNetwork).toBe(true);
   });
 });

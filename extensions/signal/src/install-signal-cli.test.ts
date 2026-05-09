@@ -82,6 +82,10 @@ function requireAsset(asset: ReleaseAsset | undefined, label: string): ReleaseAs
   return asset;
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("looksLikeArchive", () => {
   it("recognises .tar.gz", () => {
     expect(looksLikeArchive("foo.tar.gz")).toBe(true);
@@ -204,7 +208,7 @@ describe("downloadToFile", () => {
         downloadToFile("https://example.com/signal-cli.tgz", filePath, 5, 8),
       ).rejects.toThrow("declared 12");
 
-      await expect(fs.access(filePath)).rejects.toThrow();
+      await expectPathMissing(filePath);
     });
 
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
@@ -226,7 +230,7 @@ describe("downloadToFile", () => {
         downloadToFile("https://example.com/signal-cli.tgz", filePath, 5, 8),
       ).rejects.toThrow("8-byte download cap");
 
-      await expect(fs.access(filePath)).rejects.toThrow();
+      await expectPathMissing(filePath);
     });
 
     expect(fetchResult.release).toHaveBeenCalledTimes(1);

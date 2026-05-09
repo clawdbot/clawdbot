@@ -426,7 +426,7 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
-  it("does not throw when replay metadata is partially missing", async () => {
+  it("accepts replay metadata when optional fields are missing", async () => {
     const sink = vi.fn();
     const unregister = registerTarget({ path: "/hook-replay-partial", statusSink: sink });
     const payload = {

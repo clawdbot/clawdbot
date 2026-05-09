@@ -19,6 +19,66 @@ afterEach(() => {
   resetFacadeRuntimeStateForTest();
 });
 
+type IMessageOutbound = NonNullable<ReturnType<typeof createIMessageTestPlugin>["outbound"]>;
+type IMessageMessageAdapter = NonNullable<typeof imessagePlugin.message>;
+type IMessageMessageSender = NonNullable<IMessageMessageAdapter["send"]>;
+
+function requireOutbound(): IMessageOutbound {
+  const outbound = createIMessageTestPlugin().outbound;
+  if (!outbound) {
+    throw new Error("Expected iMessage test plugin outbound adapter");
+  }
+  return outbound;
+}
+
+function requireOutboundSendText(
+  outbound: IMessageOutbound,
+): NonNullable<IMessageOutbound["sendText"]> {
+  const sendText = outbound.sendText;
+  if (!sendText) {
+    throw new Error("Expected iMessage outbound sendText");
+  }
+  return sendText;
+}
+
+function requireOutboundSendMedia(
+  outbound: IMessageOutbound,
+): NonNullable<IMessageOutbound["sendMedia"]> {
+  const sendMedia = outbound.sendMedia;
+  if (!sendMedia) {
+    throw new Error("Expected iMessage outbound sendMedia");
+  }
+  return sendMedia;
+}
+
+function requireMessageAdapter(): IMessageMessageAdapter {
+  const adapter = imessagePlugin.message;
+  if (!adapter) {
+    throw new Error("Expected iMessage message adapter");
+  }
+  return adapter;
+}
+
+function requireMessageSendText(
+  adapter: IMessageMessageAdapter,
+): NonNullable<IMessageMessageSender["text"]> {
+  const text = adapter.send?.text;
+  if (!text) {
+    throw new Error("Expected iMessage message adapter text sender");
+  }
+  return text;
+}
+
+function requireMessageSendMedia(
+  adapter: IMessageMessageAdapter,
+): NonNullable<IMessageMessageSender["media"]> {
+  const media = adapter.send?.media;
+  if (!media) {
+    throw new Error("Expected iMessage message adapter media sender");
+  }
+  return media;
+}
+
 describe("createIMessageTestPlugin", () => {
   it("does not load the bundled iMessage facade by default", () => {
     expect(listImportedBundledPluginFacadeIds()).toEqual([]);
@@ -55,7 +115,9 @@ describe("createIMessageTestPlugin", () => {
   });
 
   it("backs declared durable final capabilities with delivery proofs", async () => {
-    const outbound = createIMessageTestPlugin().outbound!;
+    const outbound = requireOutbound();
+    const sendText = requireOutboundSendText(outbound);
+    const sendMedia = requireOutboundSendMedia(outbound);
     const sendIMessage = async () => ({ messageId: "imsg-1" });
 
     await verifyDurableFinalCapabilityProofs({
@@ -64,7 +126,7 @@ describe("createIMessageTestPlugin", () => {
       proofs: {
         text: async () => {
           await expect(
-            outbound.sendText?.({
+            sendText({
               cfg: {} as never,
               to: "+15551234567",
               text: "hello",
@@ -74,7 +136,7 @@ describe("createIMessageTestPlugin", () => {
         },
         media: async () => {
           await expect(
-            outbound.sendMedia?.({
+            sendMedia({
               cfg: {} as never,
               to: "+15551234567",
               text: "caption",
@@ -86,7 +148,7 @@ describe("createIMessageTestPlugin", () => {
         },
         replyTo: async () => {
           await expect(
-            outbound.sendText?.({
+            sendText({
               cfg: {} as never,
               to: "+15551234567",
               text: "reply",
@@ -96,7 +158,7 @@ describe("createIMessageTestPlugin", () => {
           ).resolves.toEqual({ channel: "imessage", messageId: "imsg-1" });
         },
         messageSendingHooks: () => {
-          expect(outbound.sendText).toBeTypeOf("function");
+          expect(sendText).toBeTypeOf("function");
         },
       },
     });
@@ -119,49 +181,52 @@ describe("createIMessageTestPlugin", () => {
         }),
       };
     };
+    const adapter = requireMessageAdapter();
+    const sendText = requireMessageSendText(adapter);
+    const sendMedia = requireMessageSendMedia(adapter);
 
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "imessageMessage",
-      adapter: imessagePlugin.message!,
+      adapter,
       proofs: {
         text: async () => {
-          const result = await imessagePlugin.message?.send?.text?.({
+          const result = await sendText({
             cfg: {} as never,
             to: "+15551234567",
             text: "hello",
             deps: { imessage: sendIMessage },
-          } as Parameters<NonNullable<typeof imessagePlugin.message.send.text>>[0] & {
+          } as Parameters<typeof sendText>[0] & {
             deps: { imessage: typeof sendIMessage };
           });
-          expect(result?.receipt.platformMessageIds).toEqual(["imsg-text-1"]);
+          expect(result.receipt.platformMessageIds).toEqual(["imsg-text-1"]);
         },
         media: async () => {
-          const result = await imessagePlugin.message?.send?.media?.({
+          const result = await sendMedia({
             cfg: {} as never,
             to: "+15551234567",
             text: "caption",
             mediaUrl: "/tmp/image.png",
             mediaLocalRoots: ["/tmp"],
             deps: { imessage: sendIMessage },
-          } as Parameters<NonNullable<typeof imessagePlugin.message.send.media>>[0] & {
+          } as Parameters<typeof sendMedia>[0] & {
             deps: { imessage: typeof sendIMessage };
           });
-          expect(result?.receipt.platformMessageIds).toEqual(["imsg-media-1"]);
+          expect(result.receipt.platformMessageIds).toEqual(["imsg-media-1"]);
         },
         replyTo: async () => {
-          const result = await imessagePlugin.message?.send?.text?.({
+          const result = await sendText({
             cfg: {} as never,
             to: "+15551234567",
             text: "reply",
             replyToId: "reply-1",
             deps: { imessage: sendIMessage },
-          } as Parameters<NonNullable<typeof imessagePlugin.message.send.text>>[0] & {
+          } as Parameters<typeof sendText>[0] & {
             deps: { imessage: typeof sendIMessage };
           });
-          expect(result?.receipt.replyToId).toBe("reply-1");
+          expect(result.receipt.replyToId).toBe("reply-1");
         },
         messageSendingHooks: () => {
-          expect(imessagePlugin.message?.send?.text).toBeTypeOf("function");
+          expect(sendText).toBeTypeOf("function");
         },
       },
     });

@@ -145,9 +145,12 @@ function selectorSpecificity(selector: string): [number, number, number] {
   const ids = selector.match(/#[\w-]+/g)?.length ?? 0;
   const classes = selector.match(/\.[\w-]+/g)?.length ?? 0;
   const withoutIdsOrClasses = selector.replace(/#[\w-]+|\.[\w-]+/g, " ");
-  const elements = withoutIdsOrClasses
-    .split(/[\s>+~]+/)
-    .filter((part) => /^[a-z][\w-]*$/i.test(part)).length;
+  let elements = 0;
+  for (const part of withoutIdsOrClasses.split(/[\s>+~]+/)) {
+    if (/^[a-z][\w-]*$/i.test(part)) {
+      elements++;
+    }
+  }
   return [ids, classes, elements];
 }
 

@@ -10,7 +10,13 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
     baseEnv: NodeJS.ProcessEnv,
     keys: Iterable<string>,
   ): NodeJS.ProcessEnv => {
-    const denied = new Set([...keys].map((key) => key.trim().toUpperCase()).filter(Boolean));
+    const denied = new Set<string>();
+    for (const key of keys) {
+      const normalized = key.trim().toUpperCase();
+      if (normalized) {
+        denied.add(normalized);
+      }
+    }
     const env = { ...baseEnv };
     for (const key of Object.keys(env)) {
       if (denied.has(key.toUpperCase())) {

@@ -33,7 +33,7 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
         },
         files: ["package.json", "index.ts", "dist/index.js"],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("flags missing explicit runtimeExtensions outputs", () => {

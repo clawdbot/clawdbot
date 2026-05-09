@@ -210,10 +210,10 @@ describe("sessions_spawn tool", () => {
       },
     });
     const schema = tool.parameters as {
-      properties?: {
-        thread?: { description?: string; enum?: string[]; type?: string };
-        mode?: { description?: string; enum?: string[]; type?: string };
-      };
+      properties?: Record<
+        string,
+        { description?: string; enum?: string[]; type?: string } | undefined
+      >;
     };
 
     expect(schema.properties?.thread).toBeUndefined();
@@ -236,10 +236,10 @@ describe("sessions_spawn tool", () => {
       },
     });
     const schema = tool.parameters as {
-      properties?: {
-        thread?: { description?: string; enum?: string[]; type?: string };
-        mode?: { description?: string; enum?: string[]; type?: string };
-      };
+      properties?: Record<
+        string,
+        { description?: string; enum?: string[]; type?: string } | undefined
+      >;
     };
 
     const thread = requireSchemaProperty(schema.properties, "thread");

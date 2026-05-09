@@ -178,6 +178,10 @@ describe("QmdMemoryManager", () => {
     return value;
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+
   async function createManager(params?: {
     mode?: "full" | "status" | "cli";
     cfg?: OpenClawConfig;
@@ -484,8 +488,12 @@ describe("QmdMemoryManager", () => {
     });
 
     const { manager } = await createManager({ mode: "full" });
-    expect(releaseUpdate).not.toBeNull();
-    (releaseUpdate as (() => void) | null)?.();
+    (
+      releaseUpdate ??
+      (() => {
+        throw new Error("Expected qmd update release callback");
+      })
+    )();
     await manager?.close();
   });
 
@@ -2468,8 +2476,8 @@ describe("QmdMemoryManager", () => {
       isMcporterCommand(call[0]),
     );
     expect(mcporterCalls.length).toBeGreaterThan(0);
-    expect(mcporterCalls.some((call: unknown[]) => (call[1] as string[])[0] === "daemon")).toBe(
-      false,
+    expect(mcporterCalls.map((call: unknown[]) => (call[1] as string[])[0])).not.toContain(
+      "daemon",
     );
     expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("cold-start"));
 
@@ -3396,8 +3404,9 @@ describe("QmdMemoryManager", () => {
     });
 
     expect(results).toHaveLength(4);
-    expect(results.some((entry) => entry.source === "memory")).toBe(true);
-    expect(results.some((entry) => entry.source === "sessions")).toBe(true);
+    expect(results.map((entry) => entry.source)).toEqual(
+      expect.arrayContaining(["memory", "sessions"]),
+    );
     await manager.close();
   });
 
@@ -3646,23 +3655,38 @@ describe("QmdMemoryManager", () => {
     const firstSync = first.manager.sync({ reason: "manual", force: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(embedChildren).toHaveLength(1);
-    expect(withFileLockMock).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        retries: expect.objectContaining({
-          retries: expect.any(Number),
-          maxTimeout: 10_000,
-        }),
-        stale: expect.any(Number),
-      }),
-      expect.any(Function),
-    );
-    const lockOptions = withFileLockMock.mock.calls[0]?.[1] as {
-      retries: { retries: number };
-      stale: number;
-    };
-    expect(lockOptions.retries.retries).toBeGreaterThanOrEqual(90);
-    expect(lockOptions.stale).toBeGreaterThanOrEqual(15 * 60 * 1000);
+    const lockCall = withFileLockMock.mock.calls[0] as
+      | [
+          string,
+          {
+            retries: {
+              retries: number;
+              factor: number;
+              minTimeout: number;
+              maxTimeout: number;
+              randomize: boolean;
+            };
+            stale: number;
+          },
+          () => Promise<unknown>,
+        ]
+      | undefined;
+    if (!lockCall) {
+      throw new Error("Expected qmd embed lock call");
+    }
+    const [lockPath, lockOptions, lockTask] = lockCall;
+    expect(lockPath.endsWith(path.join("qmd", "embed.lock"))).toBe(true);
+    expect(lockOptions).toEqual({
+      retries: {
+        retries: 90,
+        factor: 1.2,
+        minTimeout: 250,
+        maxTimeout: 10_000,
+        randomize: true,
+      },
+      stale: 15 * 60 * 1000,
+    });
+    expect(typeof lockTask).toBe("function");
 
     const secondSync = second.manager.sync({ reason: "manual", force: true });
     await vi.advanceTimersByTimeAsync(0);
@@ -4964,7 +4988,7 @@ describe("QmdMemoryManager", () => {
             await fs.rm(defaultModelsDir, { recursive: true, force: true });
           },
           assert: async () => {
-            await expect(fs.lstat(customModelsDir)).rejects.toThrow();
+            await expectPathMissing(customModelsDir);
             expect(logWarnMock).not.toHaveBeenCalledWith(
               expect.stringContaining("failed to symlink qmd models directory"),
             );
@@ -4990,11 +5014,14 @@ describe("QmdMemoryManager", () => {
 });
 
 function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }

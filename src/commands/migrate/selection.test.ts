@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import {
   applyMigrationPluginSelection,
+  applyMigrationSelectedPluginItemIds,
   applyMigrationSelectedSkillItemIds,
   applyMigrationSkillSelection,
+  formatMigrationPluginSelectionHint,
+  getDefaultMigrationPluginSelectionValues,
+  getSelectableMigrationPluginItems,
   getDefaultMigrationSkillSelectionValues,
   MIGRATION_SKILL_SELECTION_SKIP,
   MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
@@ -12,6 +16,7 @@ import {
   MIGRATION_SKILL_NOT_SELECTED_REASON,
   reconcileInteractiveMigrationShortcutValues,
   reconcileInteractiveMigrationSkillToggleValues,
+  resolveInteractiveMigrationPluginSelection,
   resolveInteractiveMigrationSkillSelection,
 } from "./selection.js";
 
@@ -40,12 +45,14 @@ function pluginItem(params: {
   id: string;
   name: string;
   status?: MigrationItem["status"];
+  reason?: string;
 }): MigrationItem {
   return {
     id: params.id,
     kind: "plugin",
     action: "install",
     status: params.status ?? "planned",
+    reason: params.reason,
     source: `openai-curated/${params.name}`,
     target: `plugins.entries.codex.config.codexPlugins.plugins.${params.name}`,
     details: {
@@ -87,15 +94,25 @@ function codexPluginConfigItem(pluginNames: string[]): MigrationItem {
 }
 
 function plan(items: MigrationItem[]): MigrationPlan {
+  const countStatus = (status: MigrationItem["status"]): number => {
+    let count = 0;
+    for (const item of items) {
+      if (item.status === status) {
+        count += 1;
+      }
+    }
+    return count;
+  };
+
   return {
     providerId: "codex",
     source: "/tmp/codex",
     summary: {
       total: items.length,
-      planned: items.filter((item) => item.status === "planned").length,
+      planned: countStatus("planned"),
       migrated: 0,
-      skipped: items.filter((item) => item.status === "skipped").length,
-      conflicts: items.filter((item) => item.status === "conflict").length,
+      skipped: countStatus("skipped"),
+      conflicts: countStatus("conflict"),
       errors: 0,
       sensitive: 0,
     },
@@ -192,7 +209,7 @@ describe("applyMigrationSkillSelection", () => {
     );
 
     expect(selected.summary).toMatchObject({ planned: 0, skipped: 2 });
-    expect(selected.items.every((item) => item.status === "skipped")).toBe(true);
+    expect(selected.items.map((item) => item.status)).toEqual(["skipped", "skipped"]);
   });
 
   it("defaults interactive selection to planned skills only", () => {
@@ -435,6 +452,78 @@ describe("applyMigrationPluginSelection", () => {
         }),
       ]),
     );
+  });
+
+  it("allows interactive selection to choose no plugins", () => {
+    const selected = applyMigrationSelectedPluginItemIds(
+      plan([
+        pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
+        pluginItem({ id: "plugin:gmail", name: "gmail" }),
+        codexPluginConfigItem(["google-calendar", "gmail"]),
+      ]),
+      new Set(),
+    );
+
+    expect(selected.summary).toMatchObject({ planned: 0, skipped: 3 });
+    expect(selected.items.every((item) => item.status === "skipped")).toBe(true);
+  });
+
+  it("defaults interactive plugin selection to planned plugins", () => {
+    expect(
+      getDefaultMigrationPluginSelectionValues([
+        pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
+        pluginItem({
+          id: "plugin:gmail",
+          name: "gmail",
+          status: "conflict",
+          reason: "plugin exists",
+        }),
+      ]),
+    ).toEqual(["plugin:google-calendar"]);
+  });
+
+  it("includes conflicting plugins in the selector with a conflict hint", () => {
+    const items = [
+      pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
+      pluginItem({
+        id: "plugin:gmail",
+        name: "gmail",
+        status: "conflict",
+        reason: "plugin exists",
+      }),
+    ];
+
+    expect(getSelectableMigrationPluginItems(plan(items)).map((item) => item.id)).toEqual([
+      "plugin:google-calendar",
+      "plugin:gmail",
+    ]);
+    expect(formatMigrationPluginSelectionHint(items[1])).toBe(
+      "openai-curated; conflict: plugin exists",
+    );
+  });
+
+  it("resolves interactive plugin special options with toggle-off precedence", () => {
+    const items = [
+      pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
+      pluginItem({ id: "plugin:gmail", name: "gmail" }),
+    ];
+
+    expect(
+      resolveInteractiveMigrationPluginSelection(items, [
+        MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
+        MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+      ]),
+    ).toEqual({ action: "select", selectedItemIds: new Set() });
+    expect(
+      resolveInteractiveMigrationPluginSelection(items, [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON]),
+    ).toEqual({
+      action: "select",
+      selectedItemIds: new Set(["plugin:google-calendar", "plugin:gmail"]),
+    });
+    expect(resolveInteractiveMigrationPluginSelection(items, ["plugin:gmail"])).toEqual({
+      action: "select",
+      selectedItemIds: new Set(["plugin:gmail"]),
+    });
   });
 
   it("accepts item ids as non-interactive plugin selectors", () => {

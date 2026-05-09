@@ -37,11 +37,10 @@ describe("transcribeOpenAiCompatibleAudio pinDns", () => {
     });
 
     expect(result.text).toBe("ok");
-    expect(postTranscriptionRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pinDns: false,
-        body: expect.any(FormData),
-      }),
-    );
+    const request = postTranscriptionRequestMock.mock.calls[0]?.[0] as
+      | { pinDns?: boolean; body?: unknown }
+      | undefined;
+    expect(request?.pinDns).toBe(false);
+    expect(request?.body).toBeInstanceOf(FormData);
   });
 });

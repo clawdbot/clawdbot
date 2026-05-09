@@ -119,7 +119,6 @@ describe("buildTelegramMessageContext thread binding override", () => {
         senderId: "42",
       }),
     );
-    expect(ctx).not.toBeNull();
     expect(ctx?.route.accountId).toBe("work");
     expect(ctx?.route.matchedBy).toBe("binding.channel");
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-2");

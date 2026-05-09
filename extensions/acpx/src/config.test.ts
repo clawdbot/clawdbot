@@ -16,7 +16,7 @@ describe("embedded acpx plugin config", () => {
     expect(resolved.permissionMode).toBe("approve-reads");
     expect(resolved.nonInteractivePermissions).toBe("fail");
     expect(resolved.timeoutSeconds).toBe(120);
-    expect(resolved.agents).toEqual({});
+    expect(resolved.agents).toStrictEqual({});
   });
 
   it("keeps explicit timeoutSeconds config", () => {

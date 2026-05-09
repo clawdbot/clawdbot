@@ -12,6 +12,17 @@ function hasFinding(
   return findings.some((finding) => finding.checkId === checkId && finding.severity === "warn");
 }
 
+function requireFinding(
+  checkId: "tools.exec.safe_bin_trusted_dirs_risky",
+  findings: ReturnType<typeof collectExecRuntimeFindings>,
+) {
+  const finding = findings.find((entry) => entry.checkId === checkId);
+  if (!finding) {
+    throw new Error(`Expected ${checkId} finding`);
+  }
+  return finding;
+}
+
 describe("security audit exec safe-bin findings", () => {
   it.each([
     {
@@ -136,13 +147,11 @@ describe("security audit exec safe-bin findings", () => {
       },
     } satisfies OpenClawConfig);
 
-    const riskyFinding = findings.find(
-      (finding) => finding.checkId === "tools.exec.safe_bin_trusted_dirs_risky",
-    );
-    expect(riskyFinding?.severity).toBe("warn");
-    expect(riskyFinding?.detail).toContain(riskyGlobalTrustedDirs[0]);
-    expect(riskyFinding?.detail).toContain(riskyGlobalTrustedDirs[1]);
-    expect(riskyFinding?.detail).toContain("agents.list.ops.tools.exec");
+    const riskyFinding = requireFinding("tools.exec.safe_bin_trusted_dirs_risky", findings);
+    expect(riskyFinding.severity).toBe("warn");
+    expect(riskyFinding.detail).toContain(riskyGlobalTrustedDirs[0]);
+    expect(riskyFinding.detail).toContain(riskyGlobalTrustedDirs[1]);
+    expect(riskyFinding.detail).toContain("agents.list.ops.tools.exec");
   });
 
   it("ignores non-risky absolute dirs", () => {

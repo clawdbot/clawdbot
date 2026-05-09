@@ -224,7 +224,7 @@ snapshots:
       });
 
       expect(exitCode).toBe(1);
-      expect(stdoutChunks).toEqual([]);
+      expect(stdoutChunks).toStrictEqual([]);
       expect(stderrChunks.join("")).toContain("Found 1 high or higher advisories");
     } finally {
       await rm(tempDir, { recursive: true, force: true });

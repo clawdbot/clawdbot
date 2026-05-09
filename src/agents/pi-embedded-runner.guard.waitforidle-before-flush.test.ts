@@ -22,10 +22,13 @@ function toolResult(id: string, text: string): AgentMessage {
 }
 
 function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
   const promise = new Promise<T>((r) => {
     resolve = r;
   });
+  if (!resolve) {
+    throw new Error("Expected wait-for-idle deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 

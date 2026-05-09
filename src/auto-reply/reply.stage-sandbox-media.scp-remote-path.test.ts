@@ -65,6 +65,10 @@ function createRemoteContexts(remotePath: string) {
   return { ctx, sessionCtx };
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("stageSandboxMedia scp remote paths", () => {
   it("rejects remote attachment filenames with shell metacharacters before spawning scp", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
@@ -81,7 +85,7 @@ describe("stageSandboxMedia scp remote paths", () => {
       });
 
       expect(childProcessMocks.spawn).not.toHaveBeenCalled();
-      await expect(fs.stat(join(remoteCacheDir, basename(remotePath)))).rejects.toThrow();
+      await expectPathMissing(join(remoteCacheDir, basename(remotePath)));
       expect(ctx.MediaPath).toBe(remotePath);
       expect(sessionCtx.MediaPath).toBe(remotePath);
       expect(ctx.MediaUrl).toBe(remotePath);
@@ -113,7 +117,7 @@ describe("stageSandboxMedia scp remote paths", () => {
       try {
         const safeDirStats = await fs.stat(expectedSafeDir);
         expect(safeDirStats.isDirectory()).toBe(true);
-        await expect(fs.stat(join(CONFIG_DIR, "escape"))).rejects.toThrow();
+        await expectPathMissing(join(CONFIG_DIR, "escape"));
       } finally {
         await fs.rm(expectedSafeDir, { recursive: true, force: true });
       }

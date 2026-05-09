@@ -346,7 +346,7 @@ describe("plugins cli install", () => {
       runPluginsCommand(["plugins", "install", "alpha", "--marketplace", "local/repo", "--link"]),
     ).rejects.toThrow("__exit__:1");
 
-    expect(runtimeErrors.at(-1)).toContain("`--link` is not supported with `--marketplace`.");
+    expect(runtimeErrors.at(-1)).toContain("--link is not supported with --marketplace.");
     expect(installPluginFromMarketplace).not.toHaveBeenCalled();
   });
 
@@ -355,7 +355,7 @@ describe("plugins cli install", () => {
       runPluginsCommand(["plugins", "install", "./plugin", "--link", "--force"]),
     ).rejects.toThrow("__exit__:1");
 
-    expect(runtimeErrors.at(-1)).toContain("`--force` is not supported with `--link`.");
+    expect(runtimeErrors.at(-1)).toContain("--force is not supported with --link.");
     expect(installPluginFromMarketplace).not.toHaveBeenCalled();
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
@@ -475,8 +475,10 @@ describe("plugins cli install", () => {
         nextConfig: enabledCfg,
       }),
     );
-    expect(runtimeLogs.some((line) => line.includes("slot adjusted"))).toBe(true);
-    expect(runtimeLogs.some((line) => line.includes("Installed plugin: alpha"))).toBe(true);
+    expect(runtimeLogs).toEqual(expect.arrayContaining([expect.stringContaining("slot adjusted")]));
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("Installed plugin: alpha")]),
+    );
   });
 
   it("passes force through as overwrite mode for marketplace installs", async () => {
@@ -539,7 +541,9 @@ describe("plugins cli install", () => {
       }),
     });
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
-    expect(runtimeLogs.some((line) => line.includes("Installed plugin: demo"))).toBe(true);
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("Installed plugin: demo")]),
+    );
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
 
@@ -618,7 +622,9 @@ describe("plugins cli install", () => {
     });
     expect(enablePluginInConfig).not.toHaveBeenCalled();
     expect(applyExclusiveSlotSelection).not.toHaveBeenCalled();
-    expect(runtimeLogs.some((line) => line.includes("requires configuration first"))).toBe(true);
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("requires configuration first")]),
+    );
   });
 
   it("enables config-gated bundled installs when provider-backed config is explicit", async () => {
@@ -656,7 +662,9 @@ describe("plugins cli install", () => {
 
     expect(enablePluginInConfig).toHaveBeenCalled();
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
-    expect(runtimeLogs.some((line) => line.includes("requires configuration first"))).toBe(false);
+    expect(runtimeLogs).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("requires configuration first")]),
+    );
   });
 
   it("passes force through as overwrite mode for ClawHub installs", async () => {
@@ -1240,7 +1248,7 @@ describe("plugins cli install", () => {
 
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
-    expect(runtimeErrors.at(-1)).toContain("unsupported npm: spec: missing package");
+    expect(runtimeErrors.at(-1)).toContain("Unsupported npm plugin spec: missing package.");
   });
 
   it("installs directly from git when git: prefix is used", async () => {
@@ -1287,7 +1295,7 @@ describe("plugins cli install", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(installPluginFromGitSpec).not.toHaveBeenCalled();
-    expect(runtimeErrors.at(-1)).toContain("use `git:<repo>@<ref>`");
+    expect(runtimeErrors.at(-1)).toContain("openclaw plugins install git:<repo>@<ref>");
   });
 
   it("passes dangerous force unsafe install to marketplace installs", async () => {
@@ -1807,7 +1815,9 @@ describe("plugins cli install", () => {
         path: localHookDir,
       }),
     );
-    expect(runtimeLogs.some((line) => line.includes("Installed hook pack: demo-hooks"))).toBe(true);
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("Installed hook pack: demo-hooks")]),
+    );
   });
 
   it("still falls back to npm hook pack when dangerous force unsafe install is set for non-security errors", async () => {
@@ -1862,7 +1872,9 @@ describe("plugins cli install", () => {
         spec: "@acme/demo-hooks",
       }),
     );
-    expect(runtimeLogs.some((line) => line.includes("Installed hook pack: demo-hooks"))).toBe(true);
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("Installed hook pack: demo-hooks")]),
+    );
   });
 
   it("does not fall back to npm when explicit ClawHub rejects a real package", async () => {
@@ -1899,7 +1911,9 @@ describe("plugins cli install", () => {
       }),
     );
     expect(writeConfigFile).toHaveBeenCalledWith(installedCfg);
-    expect(runtimeLogs.some((line) => line.includes("Installed hook pack: demo-hooks"))).toBe(true);
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("Installed hook pack: demo-hooks")]),
+    );
   });
 
   it("passes force through as overwrite mode for hook-pack npm fallback installs", async () => {

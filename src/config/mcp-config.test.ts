@@ -107,7 +107,7 @@ describe("config mcp config", () => {
       if (!reloaded.ok) {
         throw new Error("expected MCP config to reload");
       }
-      expect(reloaded.mcpServers).toEqual({});
+      expect(reloaded.mcpServers).toStrictEqual({});
     });
   });
 

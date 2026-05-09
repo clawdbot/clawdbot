@@ -224,7 +224,9 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
 
     await channelsStatusCommand({ probe: false }, runtime as never);
 
-    expect(errors.some((line) => line.includes("Gateway not reachable"))).toBe(true);
+    expect(errors).toEqual(
+      expect.arrayContaining([expect.stringContaining("Gateway not reachable")]),
+    );
     expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
       expect.objectContaining({
         commandName: "channels status",

@@ -10,7 +10,7 @@ const LIVE = isLiveTestEnabled(["GEMINI_LIVE_TEST"]);
 const describeLive = LIVE && GEMINI_KEY ? describe : describe.skip;
 
 describeLive("gemini live switch", () => {
-  const googleModels = ["gemini-3-pro-preview", "gemini-2.5-pro"] as const;
+  const googleModels = ["gemini-3.1-pro-preview", "gemini-2.5-pro"] as const;
 
   for (const modelId of googleModels) {
     it(`handles unsigned tool calls from Antigravity when switching to ${modelId}`, async () => {

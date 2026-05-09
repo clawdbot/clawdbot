@@ -267,7 +267,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   describe("CLI session handoff (issue #29774)", () => {
     it("passes the cron abort signal to CLI runs and drops late CLI results", async () => {
       const abortController = new AbortController();
-      let markCliStarted!: () => void;
+      let markCliStarted: (() => void) | undefined;
       const cliStarted = new Promise<void>((resolve) => {
         markCliStarted = resolve;
       });
@@ -275,6 +275,9 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       isCliProviderMock.mockReturnValue(true);
       runCliAgentMock.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
         expect(params.abortSignal).toBe(abortController.signal);
+        if (!markCliStarted) {
+          throw new Error("Expected CLI start marker callback to be initialized");
+        }
         markCliStarted();
         await new Promise<void>((resolve) => {
           params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });

@@ -24,11 +24,12 @@ describe("resolveSafeTimeoutDelayMs", () => {
 describe("setSafeTimeout", () => {
   it("arms setTimeout with the clamped delay", () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const callback = () => undefined;
 
-    const timer = setSafeTimeout(() => undefined, 3_000_000_000);
+    const timer = setSafeTimeout(callback, 3_000_000_000);
     clearTimeout(timer);
 
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+    expect(timeoutSpy).toHaveBeenCalledWith(callback, MAX_SAFE_TIMEOUT_DELAY_MS);
     timeoutSpy.mockRestore();
   });
 });

@@ -45,7 +45,7 @@ describe("transcript events", () => {
     cleanup.push(onSessionTranscriptUpdate(first));
     cleanup.push(onSessionTranscriptUpdate(second));
 
-    expect(() => emitSessionTranscriptUpdate("/tmp/session.jsonl")).not.toThrow();
+    expect(emitSessionTranscriptUpdate("/tmp/session.jsonl")).toBeUndefined();
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).toHaveBeenCalledTimes(1);
   });

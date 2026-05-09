@@ -292,7 +292,7 @@ describe("setSseHeaders", () => {
     const { res, setHeader } = makeMockHttpResponse();
     // Ensure flushHeaders is not defined on the mock response.
     expect((res as unknown as { flushHeaders?: () => void }).flushHeaders).toBeUndefined();
-    expect(() => setSseHeaders(res)).not.toThrow();
+    setSseHeaders(res);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/event-stream; charset=utf-8");
   });
 });
@@ -312,7 +312,7 @@ describe("watchClientDisconnect", () => {
     const { req, res } = buildReqRes(null, null);
     const controller = new AbortController();
     const cleanup = watchClientDisconnect(req, res, controller);
-    expect(() => cleanup()).not.toThrow();
+    cleanup();
     expect(controller.signal.aborted).toBe(false);
   });
 

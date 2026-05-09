@@ -40,6 +40,16 @@ function loadablePluginOrigins(entries: Array<[string, PluginOrigin]>) {
   return new Map(entries);
 }
 
+type RuntimeConfigAssignment = ResolverContext["assignments"][number];
+
+function requireAssignment(context: ResolverContext, index: number): RuntimeConfigAssignment {
+  const assignment = context.assignments[index];
+  if (!assignment) {
+    throw new Error(`expected runtime config assignment ${index}`);
+  }
+  return assignment;
+}
+
 function createAcpxMcpSecretConfig(params: {
   plugins?: Record<string, unknown>;
   entry?: Record<string, unknown>;
@@ -141,10 +151,9 @@ describe("collectPluginConfigAssignments", () => {
     });
 
     expect(context.assignments).toHaveLength(1);
-    expect(context.assignments[0]?.path).toBe(
-      "plugins.entries.acpx.config.mcpServers.github.env.GITHUB_TOKEN",
-    );
-    expect(context.assignments[0]?.expected).toBe("string");
+    const assignment = requireAssignment(context, 0);
+    expect(assignment.path).toBe("plugins.entries.acpx.config.mcpServers.github.env.GITHUB_TOKEN");
+    expect(assignment.expected).toBe("string");
   });
 
   it("resolves assignments via apply callback", () => {
@@ -177,7 +186,7 @@ describe("collectPluginConfigAssignments", () => {
     });
 
     expect(context.assignments).toHaveLength(1);
-    context.assignments[0]?.apply("resolved-key-value");
+    requireAssignment(context, 0).apply("resolved-key-value");
 
     const entries = config.plugins?.entries as Record<string, Record<string, unknown>>;
     const mcpServers = (entries?.acpx?.config as Record<string, unknown>)?.mcpServers as Record<
@@ -185,7 +194,10 @@ describe("collectPluginConfigAssignments", () => {
       Record<string, unknown>
     >;
     const env = mcpServers?.mcp1?.env as Record<string, unknown>;
-    expect(env?.API_KEY).toBe("resolved-key-value");
+    if (!env) {
+      throw new Error("expected acpx mcp env config");
+    }
+    expect(env.API_KEY).toBe("resolved-key-value");
   });
 
   it("collects across multiple acpx servers only", () => {
@@ -382,10 +394,10 @@ describe("collectPluginConfigAssignments", () => {
     });
 
     expect(context.assignments).toHaveLength(2);
-    expect(context.assignments[0]?.path).toBe(
+    expect(requireAssignment(context, 0).path).toBe(
       "plugins.entries.acpx.config.mcpServers.s1.env.INLINE",
     );
-    expect(context.assignments[1]?.path).toBe(
+    expect(requireAssignment(context, 1).path).toBe(
       "plugins.entries.acpx.config.mcpServers.s1.env.SECOND",
     );
   });

@@ -295,11 +295,12 @@ describe("message lifecycle primitives", () => {
     expect(ctx.shouldAckAfter("receive_record")).toBe(false);
     expect(ctx.shouldAckAfter("durable_send")).toBe(true);
 
+    const beforeAck = Date.now();
     await ctx.ack();
     await ctx.ack();
     expect(onAck).toHaveBeenCalledTimes(1);
     expect(ctx.ackState).toBe("acked");
-    expect(ctx.ackedAt).toEqual(expect.any(Number));
+    expect(ctx.ackedAt).toBeGreaterThanOrEqual(beforeAck);
 
     await ctx.nack(new Error("offset failed"));
     expect(onNack).toHaveBeenCalledWith(expect.any(Error));

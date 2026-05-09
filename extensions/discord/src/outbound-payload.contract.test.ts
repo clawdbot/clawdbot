@@ -6,6 +6,16 @@ import {
 import { describe, vi } from "vitest";
 import { discordOutbound } from "./outbound-adapter.js";
 
+type DiscordSendPayload = NonNullable<typeof discordOutbound.sendPayload>;
+
+function requireDiscordSendPayload(): DiscordSendPayload {
+  const sendPayload = discordOutbound.sendPayload;
+  if (!sendPayload) {
+    throw new Error("Expected Discord outbound sendPayload");
+  }
+  return sendPayload;
+}
+
 function createDiscordHarness(params: OutboundPayloadHarnessParams) {
   const sendDiscord = vi.fn();
   primeChannelOutboundSendMock(
@@ -22,8 +32,9 @@ function createDiscordHarness(params: OutboundPayloadHarnessParams) {
       sendDiscord,
     },
   };
+  const sendPayload = requireDiscordSendPayload();
   return {
-    run: async () => await discordOutbound.sendPayload!(ctx),
+    run: async () => await sendPayload(ctx),
     sendMock: sendDiscord,
     to: ctx.to,
   };

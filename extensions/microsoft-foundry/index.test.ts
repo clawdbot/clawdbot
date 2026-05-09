@@ -53,7 +53,31 @@ function registerProvider() {
     }),
   );
   expect(registerProviderMock).toHaveBeenCalledTimes(1);
-  return registerProviderMock.mock.calls[0]?.[0];
+  const firstCall = registerProviderMock.mock.calls[0];
+  if (!firstCall) {
+    throw new Error("expected Microsoft Foundry provider registration");
+  }
+  return firstCall[0];
+}
+
+type FoundryProvider = ReturnType<typeof registerProvider>;
+
+function requirePrepareRuntimeAuth(
+  provider: FoundryProvider,
+): NonNullable<FoundryProvider["prepareRuntimeAuth"]> {
+  const prepareRuntimeAuth = provider.prepareRuntimeAuth;
+  expect(prepareRuntimeAuth).toBeTypeOf("function");
+  if (!prepareRuntimeAuth) {
+    throw new Error("expected Microsoft Foundry runtime auth hook");
+  }
+  return prepareRuntimeAuth;
+}
+
+function requireRuntimeAuthResult(result: { apiKey?: string; baseUrl?: string } | undefined) {
+  if (!result) {
+    throw new Error("expected Microsoft Foundry runtime auth result");
+  }
+  return result;
 }
 
 const defaultFoundryBaseUrl = "https://example.services.ai.azure.com/openai/v1";
@@ -276,27 +300,29 @@ describe("microsoft-foundry plugin", () => {
 
   it("preserves the model-derived base URL for Entra runtime auth refresh", async () => {
     const provider = registerProvider();
+    const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
     mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValueOnce(buildEntraProfileStore());
 
-    const prepared = await provider.prepareRuntimeAuth?.(buildFoundryRuntimeAuthContext());
+    const prepared = requireRuntimeAuthResult(
+      await prepareRuntimeAuth(buildFoundryRuntimeAuthContext()),
+    );
 
-    expect(prepared?.baseUrl).toBe("https://example.services.ai.azure.com/openai/v1");
+    expect(prepared.baseUrl).toBe("https://example.services.ai.azure.com/openai/v1");
   });
 
   it("retries Entra token refresh after a failed attempt", async () => {
     const provider = registerProvider();
+    const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
     mockAzureCliLoginFailure();
     mockAzureCliToken({ accessToken: "retry-token", expiresInMs: 10 * 60_000 });
     ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
 
     const runtimeContext = buildFoundryRuntimeAuthContext();
 
-    await expect(provider.prepareRuntimeAuth?.(runtimeContext)).rejects.toThrow(
-      "Azure CLI is not logged in",
-    );
+    await expect(prepareRuntimeAuth(runtimeContext)).rejects.toThrow("Azure CLI is not logged in");
 
-    await expect(provider.prepareRuntimeAuth?.(runtimeContext)).resolves.toMatchObject({
+    await expect(prepareRuntimeAuth(runtimeContext)).resolves.toMatchObject({
       apiKey: "retry-token",
     });
     expect(execFileMock).toHaveBeenCalledTimes(2);
@@ -304,23 +330,25 @@ describe("microsoft-foundry plugin", () => {
 
   it("dedupes concurrent Entra token refreshes for the same profile", async () => {
     const provider = registerProvider();
+    const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
     mockAzureCliToken({ accessToken: "deduped-token", expiresInMs: 60_000, delayMs: 10 });
     ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
 
     const runtimeContext = buildFoundryRuntimeAuthContext();
 
     const [first, second] = await Promise.all([
-      provider.prepareRuntimeAuth?.(runtimeContext),
-      provider.prepareRuntimeAuth?.(runtimeContext),
+      prepareRuntimeAuth(runtimeContext),
+      prepareRuntimeAuth(runtimeContext),
     ]);
 
     expect(execFileMock).toHaveBeenCalledTimes(1);
-    expect(first?.apiKey).toBe("deduped-token");
-    expect(second?.apiKey).toBe("deduped-token");
+    expect(requireRuntimeAuthResult(first).apiKey).toBe("deduped-token");
+    expect(requireRuntimeAuthResult(second).apiKey).toBe("deduped-token");
   });
 
   it("clears failed refresh state so later concurrent retries succeed", async () => {
     const provider = registerProvider();
+    const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
     mockAzureCliLoginFailure(10);
     mockAzureCliToken({ accessToken: "recovered-token", expiresInMs: 10 * 60_000, delayMs: 10 });
     ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
@@ -328,19 +356,19 @@ describe("microsoft-foundry plugin", () => {
     const runtimeContext = buildFoundryRuntimeAuthContext();
 
     const failed = await Promise.allSettled([
-      provider.prepareRuntimeAuth?.(runtimeContext),
-      provider.prepareRuntimeAuth?.(runtimeContext),
+      prepareRuntimeAuth(runtimeContext),
+      prepareRuntimeAuth(runtimeContext),
     ]);
-    expect(failed.filter((result) => result.status !== "rejected")).toEqual([]);
+    expect(failed.every((result) => result.status === "rejected")).toBe(true);
     expect(execFileMock).toHaveBeenCalledTimes(1);
 
     const [first, second] = await Promise.all([
-      provider.prepareRuntimeAuth?.(runtimeContext),
-      provider.prepareRuntimeAuth?.(runtimeContext),
+      prepareRuntimeAuth(runtimeContext),
+      prepareRuntimeAuth(runtimeContext),
     ]);
     expect(execFileMock).toHaveBeenCalledTimes(2);
-    expect(first?.apiKey).toBe("recovered-token");
-    expect(second?.apiKey).toBe("recovered-token");
+    expect(requireRuntimeAuthResult(first).apiKey).toBe("recovered-token");
+    expect(requireRuntimeAuthResult(second).apiKey).toBe("recovered-token");
   });
 
   it("refreshes again when a cached token is too close to expiry", async () => {

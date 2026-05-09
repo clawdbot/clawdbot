@@ -170,7 +170,7 @@ describe("loadSessionLearnings", () => {
   it("returns empty array when file doesn't exist", async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
     const learnings = await loadSessionLearnings(tmpDir, "nonexistent");
-    expect(learnings).toEqual([]);
+    expect(learnings).toStrictEqual([]);
   });
 
   it("reads existing learnings", async () => {
@@ -229,7 +229,7 @@ describe("loadSessionLearnings", () => {
       "Legacy learning",
       "New learning",
     ]);
-    await expect(loadSessionLearnings(tmpDir, "msteams/user1")).resolves.toEqual([]);
+    await expect(loadSessionLearnings(tmpDir, "msteams/user1")).resolves.toStrictEqual([]);
     await expect(
       import("node:fs/promises").then((fs) => fs.readFile(migratedFile, "utf-8")),
     ).resolves.toContain("Legacy learning");

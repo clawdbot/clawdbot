@@ -180,7 +180,7 @@ describe("runMemoryFlushIfNeeded", () => {
     };
     expect(persisted.main.sessionId).toBe("session-rotated");
     expect(persisted.main.compactionCount).toBe(2);
-    expect(persisted.main.memoryFlushCompactionCount).toBe(2);
+    expect(persisted.main.memoryFlushCompactionCount).toBe(1);
     expect(persisted.main.memoryFlushAt).toBe(1_700_000_000_000);
   });
 

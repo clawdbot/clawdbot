@@ -35,7 +35,7 @@ describe("channel runtime context helpers", () => {
 
     const scoped = createTaskScopedChannelRuntime({});
     expect(scoped.channelRuntime).toBeUndefined();
-    expect(() => scoped.dispose()).not.toThrow();
+    expect(scoped.dispose()).toBeUndefined();
   });
 
   it("disposes only task-scoped registrations", () => {

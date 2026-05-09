@@ -211,7 +211,8 @@ describe("bootstrap prompt warnings", () => {
       mode: "once",
     });
     expect(first.warningShown).toBe(true);
-    expect(first.signature).toEqual(expect.any(String));
+    expect(first.signature).toBeTypeOf("string");
+    expect(first.signature).not.toBe("");
     expect(JSON.parse(first.signature ?? "{}")).toMatchObject({
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
@@ -474,7 +475,12 @@ describe("bootstrap prompt warnings", () => {
       injectLegacyWarning(optimizedTurns[2] ?? "", warningLines),
     ];
     const cacheHitRate = (turns: string[]) => {
-      const hits = turns.slice(1).filter((turn, index) => turn === turns[index]).length;
+      let hits = 0;
+      for (let index = 1; index < turns.length; index++) {
+        if (turns[index] === turns[index - 1]) {
+          hits++;
+        }
+      }
       return hits / Math.max(1, turns.length - 1);
     };
 

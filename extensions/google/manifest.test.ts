@@ -98,6 +98,7 @@ describe("google manifest model catalog", () => {
     for (const provider of GOOGLE_CHAT_PROVIDERS) {
       expect(manifest.modelIdNormalization?.providers?.[provider]?.aliases).toMatchObject({
         "gemini-3-pro": "gemini-3.1-pro-preview",
+        "gemini-3-pro-preview": "gemini-3.1-pro-preview",
       });
     }
   });

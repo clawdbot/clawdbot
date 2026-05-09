@@ -13,6 +13,14 @@ import {
   touchGenericCurrentConversationBinding,
   unbindGenericCurrentConversationBindings,
 } from "./current-conversation-bindings.js";
+import type { SessionBindingRecord } from "./session-binding.types.js";
+
+function expectSessionBinding(bound: SessionBindingRecord | null): SessionBindingRecord {
+  if (bound === null) {
+    throw new Error("Expected current-conversation binding");
+  }
+  return bound;
+}
 
 function setMinimalCurrentConversationRegistry(): void {
   setActivePluginRegistry(
@@ -315,7 +323,7 @@ describe("generic current-conversation bindings", () => {
       },
     });
 
-    expect(bound).not.toBeNull();
+    expectSessionBinding(bound);
 
     touchGenericCurrentConversationBinding(
       "generic:workspace\u241fdefault\u241f\u241fuser:U123",

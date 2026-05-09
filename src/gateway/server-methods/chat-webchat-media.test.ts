@@ -52,7 +52,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
       [
         {
-          text: "Reasoning:\n_step_",
+          text: "step",
           mediaUrl: audioPath,
           trustedLocalMedia: true,
           isReasoning: true,

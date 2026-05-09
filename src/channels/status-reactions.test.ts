@@ -60,6 +60,53 @@ function expectSetEmojiCall(calls: Array<{ method: string; emoji: string }>, emo
   expect(calls).toContainEqual({ method: "set", emoji });
 }
 
+function collectEmojisForMethod(
+  calls: Array<{ method: string; emoji: string }>,
+  method: string,
+): string[] {
+  const emojis: string[] = [];
+  for (const call of calls) {
+    if (call.method === method) {
+      emojis.push(call.emoji);
+    }
+  }
+  return emojis;
+}
+
+function countCallsForMethod(calls: Array<{ method: string; emoji: string }>, method: string) {
+  let count = 0;
+  for (const call of calls) {
+    if (call.method === method) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function countCallsForEmoji(calls: Array<{ method: string; emoji: string }>, emoji: string) {
+  let count = 0;
+  for (const call of calls) {
+    if (call.emoji === emoji) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function countCallsForMethodAndEmoji(
+  calls: Array<{ method: string; emoji: string }>,
+  method: string,
+  emoji: string,
+) {
+  let count = 0;
+  for (const call of calls) {
+    if (call.method === method && call.emoji === emoji) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function expectArrayContainsAll(values: readonly string[], expected: readonly string[]) {
   expected.forEach((value) => {
     expect(values).toContain(value);
@@ -264,7 +311,7 @@ describe("createStatusReactionController", () => {
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
 
     // Should only have the last one (exec → display emoji)
-    const setEmojis = calls.filter((c) => c.method === "set").map((c) => c.emoji);
+    const setEmojis = collectEmojisForMethod(calls, "set");
     expect(setEmojis).toEqual(["🛠️"]);
   });
 
@@ -292,7 +339,7 @@ describe("createStatusReactionController", () => {
     void controller.setThinking();
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
 
-    const setEmojis = calls.filter((call) => call.method === "set").map((call) => call.emoji);
+    const setEmojis = collectEmojisForMethod(calls, "set");
     expect(setEmojis).toEqual([DEFAULT_EMOJIS.thinking]);
   });
 
@@ -325,7 +372,7 @@ describe("createStatusReactionController", () => {
 
     await controller.setDone();
 
-    const removeEmojis = calls.filter((call) => call.method === "remove").map((call) => call.emoji);
+    const removeEmojis = collectEmojisForMethod(calls, "remove");
     expect(removeEmojis).toEqual(expect.arrayContaining(["👀", DEFAULT_EMOJIS.thinking, "🛠️"]));
     expect(removeEmojis).not.toContain(DEFAULT_EMOJIS.done);
   });
@@ -354,10 +401,7 @@ describe("createStatusReactionController", () => {
     void controller.setThinking();
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
 
-    const thinkingSets = calls.filter(
-      (call) => call.method === "set" && call.emoji === DEFAULT_EMOJIS.thinking,
-    );
-    expect(thinkingSets).toHaveLength(1);
+    expect(countCallsForMethodAndEmoji(calls, "set", DEFAULT_EMOJIS.thinking)).toBe(1);
     expect(calls).not.toContainEqual({ method: "remove", emoji: DEFAULT_EMOJIS.thinking });
   });
 
@@ -371,9 +415,8 @@ describe("createStatusReactionController", () => {
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
 
     // Should only have set calls, no remove
-    const removeCalls = calls.filter((c) => c.method === "remove");
-    expect(removeCalls).toHaveLength(0);
-    expect(calls.filter((c) => c.method === "set").length).toBeGreaterThan(0);
+    expect(countCallsForMethod(calls, "remove")).toBe(0);
+    expect(calls.some((c) => c.method === "set")).toBe(true);
   });
 
   it("should clear all known emojis when adapter supports removeReaction", async () => {
@@ -385,8 +428,7 @@ describe("createStatusReactionController", () => {
     await controller.clear();
 
     // Should have removed multiple emojis
-    const removeCalls = calls.filter((c) => c.method === "remove");
-    expect(removeCalls.length).toBeGreaterThan(0);
+    expect(countCallsForMethod(calls, "remove")).toBeGreaterThan(0);
   });
 
   it("should handle clear gracefully when adapter lacks removeReaction", async () => {
@@ -395,8 +437,7 @@ describe("createStatusReactionController", () => {
     await controller.clear();
 
     // Should not throw, no remove calls
-    const removeCalls = calls.filter((c) => c.method === "remove");
-    expect(removeCalls).toHaveLength(0);
+    expect(countCallsForMethod(calls, "remove")).toBe(0);
   });
 
   it("should restore initial emoji", async () => {
@@ -497,8 +538,7 @@ describe("createStatusReactionController", () => {
     await runUpdate(controller);
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.stallSoftMs / 2);
 
-    const stallCalls = calls.filter((c) => c.emoji === DEFAULT_EMOJIS.stallSoft);
-    expect(stallCalls).toHaveLength(0);
+    expect(countCallsForEmoji(calls, DEFAULT_EMOJIS.stallSoft)).toBe(0);
   });
 
   it("should call onError callback when adapter throws", async () => {

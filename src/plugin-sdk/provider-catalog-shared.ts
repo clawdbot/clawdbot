@@ -13,6 +13,7 @@ import type {
   ModelCatalogModel,
   ModelCatalogTieredCost,
 } from "../model-catalog/types.js";
+import { normalizeGooglePreviewModelId } from "./provider-model-id-normalize.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
 export type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
@@ -158,6 +159,17 @@ function resolveConfiguredProviderModels(
   return Array.isArray(providerConfig.models) ? providerConfig.models : [];
 }
 
+function normalizeConfiguredProviderCatalogModelId(id: string): string {
+  const trimmed = id.trim();
+  const googlePrefix = "google/";
+  if (!trimmed.startsWith(googlePrefix)) {
+    return trimmed;
+  }
+  const modelId = trimmed.slice(googlePrefix.length);
+  const normalizedModelId = normalizeGooglePreviewModelId(modelId);
+  return normalizedModelId === modelId ? trimmed : `${googlePrefix}${normalizedModelId}`;
+}
+
 export function readConfiguredProviderCatalogEntries(params: {
   config?: OpenClawConfig;
   providerId: string;
@@ -174,7 +186,9 @@ export function readConfiguredProviderCatalogEntries(params: {
     if (!id) {
       continue;
     }
-    const name = (typeof model.name === "string" ? model.name : id).trim() || id;
+    const normalizedId = normalizeConfiguredProviderCatalogModelId(id);
+    const name =
+      (typeof model.name === "string" ? model.name : normalizedId).trim() || normalizedId;
     const contextWindow =
       typeof model.contextWindow === "number" && model.contextWindow > 0
         ? model.contextWindow
@@ -183,7 +197,7 @@ export function readConfiguredProviderCatalogEntries(params: {
     const input = normalizeConfiguredCatalogModelInput(model.input);
     entries.push({
       provider,
-      id,
+      id: normalizedId,
       name,
       ...(contextWindow ? { contextWindow } : {}),
       ...(reasoning !== undefined ? { reasoning } : {}),

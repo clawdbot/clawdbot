@@ -70,9 +70,13 @@ describe("mattermost setup contract", () => {
         },
         expectedAccountId: "default",
         assertPatchedConfig: (cfg) => {
-          expect(cfg.channels?.mattermost?.enabled).toBe(true);
-          expect(cfg.channels?.mattermost?.botToken).toBe("test-token");
-          expect(cfg.channels?.mattermost?.baseUrl).toBe("https://chat.example.com");
+          const mattermostConfig = cfg.channels?.mattermost;
+          if (!mattermostConfig) {
+            throw new Error("expected Mattermost config patch");
+          }
+          expect(mattermostConfig.enabled).toBe(true);
+          expect(mattermostConfig.botToken).toBe("test-token");
+          expect(mattermostConfig.baseUrl).toBe("https://chat.example.com");
         },
       },
       {

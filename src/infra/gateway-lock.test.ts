@@ -10,6 +10,8 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { acquireGatewayLock, GatewayLockError, type GatewayLockOptions } from "./gateway-lock.js";
 
+type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
+
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-lock-" });
 let fixtureRoot = "";
 const realNow = Date.now.bind(Date);
@@ -45,6 +47,14 @@ async function acquireForTest(
     lockDir: resolveTestLockDir(),
     ...opts,
   });
+}
+
+function expectGatewayLock(lock: Awaited<ReturnType<typeof acquireGatewayLock>>): GatewayLock {
+  if (lock === null) {
+    throw new Error("Expected gateway lock");
+  }
+  expect(typeof lock.release).toBe("function");
+  return lock;
 }
 
 function resolveLockPath(env: NodeJS.ProcessEnv) {
@@ -175,7 +185,7 @@ describe("gateway lock", () => {
     vi.useRealTimers();
     const env = await makeEnv();
     const lock = await acquireForTest(env, { timeoutMs: 50 });
-    expect(lock).not.toBeNull();
+    const acquiredLock = expectGatewayLock(lock);
 
     const pending = acquireForTest(env, {
       timeoutMs: 15,
@@ -183,9 +193,9 @@ describe("gateway lock", () => {
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
-    await lock?.release();
+    await acquiredLock.release();
     const lock2 = await acquireForTest(env);
-    await lock2?.release();
+    await expectGatewayLock(lock2).release();
   });
 
   it("treats recycled linux pid as stale when start time mismatches", async () => {
@@ -204,9 +214,9 @@ describe("gateway lock", () => {
       pollIntervalMs: 5,
       platform: "linux",
     });
-    expect(lock).not.toBeNull();
+    const acquiredLock = expectGatewayLock(lock);
 
-    await lock?.release();
+    await acquiredLock.release();
     spy.mockRestore();
   });
 
@@ -259,8 +269,7 @@ describe("gateway lock", () => {
       platform: "darwin",
       port: 18789,
     });
-    expect(lock).not.toBeNull();
-    await lock?.release();
+    await expectGatewayLock(lock).release();
     connectSpy.mockRestore();
   });
 
@@ -329,8 +338,7 @@ describe("gateway lock", () => {
       port: 18789,
       readProcessCmdline: () => ["chrome.exe", "--no-sandbox"],
     });
-    expect(lock).not.toBeNull();
-    await lock?.release();
+    await expectGatewayLock(lock).release();
 
     connectSpy.mockRestore();
   });
@@ -394,8 +402,7 @@ describe("gateway lock", () => {
       port: 18789,
       readProcessCmdline: () => ["/Applications/Safari.app/Contents/MacOS/Safari"],
     });
-    expect(lock).not.toBeNull();
-    await lock?.release();
+    await expectGatewayLock(lock).release();
 
     connectSpy.mockRestore();
   });

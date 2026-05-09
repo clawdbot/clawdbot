@@ -142,9 +142,12 @@ describe("mattermost setup", () => {
   it("validates env and explicit credential requirements", () => {
     const validateInput = mattermostSetupAdapter.validateInput;
     expect(validateInput).toBeTypeOf("function");
+    if (!validateInput) {
+      throw new Error("Expected Mattermost setup validateInput");
+    }
 
     expect(
-      validateInput!({
+      validateInput({
         accountId: "secondary",
         input: { useEnv: true },
       } as never),
@@ -152,7 +155,7 @@ describe("mattermost setup", () => {
 
     normalizeMattermostBaseUrl.mockReturnValue(undefined);
     expect(
-      validateInput!({
+      validateInput({
         accountId: DEFAULT_ACCOUNT_ID,
         input: { useEnv: false, botToken: "tok", httpUrl: "not-a-url" },
       } as never),
@@ -160,7 +163,7 @@ describe("mattermost setup", () => {
 
     normalizeMattermostBaseUrl.mockReturnValue("https://chat.example.com");
     expect(
-      validateInput!({
+      validateInput({
         accountId: DEFAULT_ACCOUNT_ID,
         input: { useEnv: false, botToken: "tok", httpUrl: "https://chat.example.com" },
       } as never),
@@ -388,8 +391,12 @@ describe("mattermost setup", () => {
       ([params]) => (params as { message: string }).message,
     );
     expect(textMessages).toEqual(["Enter Mattermost bot token", "Enter Mattermost base URL"]);
-    expect(result.cfg.channels?.mattermost?.botToken).toBe("bot-token");
-    expect(result.cfg.channels?.mattermost?.baseUrl).toBe("https://chat.example.com");
+    const mattermostConfig = result.cfg.channels?.mattermost;
+    if (!mattermostConfig) {
+      throw new Error("expected Mattermost config");
+    }
+    expect(mattermostConfig.botToken).toBe("bot-token");
+    expect(mattermostConfig.baseUrl).toBe("https://chat.example.com");
     expect(result.accountId).toBe(DEFAULT_ACCOUNT_ID);
   });
 });

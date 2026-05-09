@@ -60,6 +60,16 @@ function requireFirstCommandRegistration(
   return registration;
 }
 
+function joinContextFragments(...fragments: Array<string | undefined>): string {
+  const present: string[] = [];
+  for (const fragment of fragments) {
+    if (fragment) {
+      present.push(fragment);
+    }
+  }
+  return present.join("\n\n");
+}
+
 describe("host-hook fixture plugin contract", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -960,9 +970,11 @@ describe("host-hook fixture plugin contract", () => {
     );
 
     expect(
-      [queuedContext.prependContext, queuedContext.appendContext, hookContext?.prependContext]
-        .filter(Boolean)
-        .join("\n\n"),
+      joinContextFragments(
+        queuedContext.prependContext,
+        queuedContext.appendContext,
+        hookContext?.prependContext,
+      ),
     ).toContain("approval workflow resumed");
     expect(hookContext?.prependContext).toBe("fixture turn context");
   });
@@ -1976,7 +1988,7 @@ describe("host-hook fixture plugin contract", () => {
 
   it("does not let stale scheduler cleanup delete a newer job generation", async () => {
     let releaseCleanup: (() => void) | undefined;
-    let markCleanupStarted!: () => void;
+    let markCleanupStarted: (() => void) | undefined;
     const cleanupStartedPromise = new Promise<void>((resolve) => {
       markCleanupStarted = resolve;
     });
@@ -1994,6 +2006,9 @@ describe("host-hook fixture plugin contract", () => {
           sessionKey: "agent:main:main",
           kind: "monitor",
           cleanup: async () => {
+            if (!markCleanupStarted) {
+              throw new Error("Expected scheduler cleanup start callback to be initialized");
+            }
             markCleanupStarted();
             await new Promise<void>((resolve) => {
               releaseCleanup = resolve;
@@ -2027,7 +2042,10 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    releaseCleanup?.();
+    if (!releaseCleanup) {
+      throw new Error("Expected scheduler cleanup release callback to be initialized");
+    }
+    releaseCleanup();
     await expect(cleanupPromise).resolves.toMatchObject({ failures: [] });
     expect(listPluginSessionSchedulerJobs("scheduler-race")).toEqual([
       {

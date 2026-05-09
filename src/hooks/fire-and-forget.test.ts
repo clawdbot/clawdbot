@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireAndForgetBoundedHook, fireAndForgetHook } from "./fire-and-forget.js";
 
+function requireFirstLog(logger: ReturnType<typeof vi.fn>): string {
+  const message = logger.mock.calls[0]?.[0];
+  if (typeof message !== "string") {
+    throw new Error("expected string log message");
+  }
+  return message;
+}
+
 describe("fireAndForgetHook", () => {
   it("logs rejection errors as sanitized single-line messages", async () => {
     const logger = vi.fn();
@@ -11,8 +19,9 @@ describe("fireAndForgetHook", () => {
     );
     await Promise.resolve();
     expect(logger).toHaveBeenCalledWith(expect.stringMatching(/^hook failed: boom forged secret/));
-    expect(logger.mock.calls[0]?.[0]).not.toContain("\n");
-    expect(logger.mock.calls[0]?.[0]).not.toContain("sk-test1234567890");
+    const message = requireFirstLog(logger);
+    expect(message).not.toContain("\n");
+    expect(message).not.toContain("sk-test1234567890");
   });
 
   it("does not log for resolved tasks", async () => {

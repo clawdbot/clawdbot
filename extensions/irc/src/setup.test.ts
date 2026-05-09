@@ -278,21 +278,24 @@ describe("irc setup", () => {
     const applyAccountConfig = ircSetupAdapter.applyAccountConfig;
     expect(validateInput).toBeTypeOf("function");
     expect(applyAccountConfig).toBeTypeOf("function");
+    if (!validateInput) {
+      throw new Error("Expected IRC setup validateInput");
+    }
 
     expect(
-      validateInput!({
+      validateInput({
         input: { host: "", nick: "openclaw" },
       } as never),
     ).toBe("IRC requires host.");
 
     expect(
-      validateInput!({
+      validateInput({
         input: { host: "irc.libera.chat", nick: "" },
       } as never),
     ).toBe("IRC requires nick.");
 
     expect(
-      validateInput!({
+      validateInput({
         input: { host: "irc.libera.chat", nick: "openclaw" },
       } as never),
     ).toBeNull();

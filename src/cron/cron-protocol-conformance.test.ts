@@ -69,9 +69,7 @@ describe("cron protocol conformance", () => {
     for (const relPath of UI_FILES) {
       const content = await fs.readFile(path.join(cwd, relPath), "utf-8");
       for (const mode of modes) {
-        expect(content.includes(`"${mode}"`), `${relPath} missing delivery mode ${mode}`).toBe(
-          true,
-        );
+        expect(content, `${relPath} missing delivery mode ${mode}`).toContain(`"${mode}"`);
       }
     }
 
@@ -80,7 +78,7 @@ describe("cron protocol conformance", () => {
       const content = await fs.readFile(path.join(cwd, relPath), "utf-8");
       for (const mode of modes) {
         const pattern = new RegExp(`\\bcase\\s+${mode}\\b`);
-        expect(pattern.test(content), `${relPath} missing case ${mode}`).toBe(true);
+        expect(content, `${relPath} missing case ${mode}`).toMatch(pattern);
       }
     }
   });
@@ -88,15 +86,15 @@ describe("cron protocol conformance", () => {
   it("cron status shape matches gateway fields in UI + Swift", async () => {
     const cwd = process.cwd();
     const uiTypes = await fs.readFile(path.join(cwd, "ui/src/ui/types.ts"), "utf-8");
-    expect(uiTypes.includes("export type CronStatus")).toBe(true);
-    expect(uiTypes.includes("jobs:")).toBe(true);
-    expect(uiTypes.includes("jobCount")).toBe(false);
+    expect(uiTypes).toContain("export type CronStatus");
+    expect(uiTypes).toContain("jobs:");
+    expect(uiTypes).not.toContain("jobCount");
 
     const [swiftRelPath] = await resolveSwiftFiles(cwd, SWIFT_STATUS_CANDIDATES);
     const swiftPath = path.join(cwd, swiftRelPath);
     const swift = await fs.readFile(swiftPath, "utf-8");
-    expect(swift.includes("struct CronSchedulerStatus")).toBe(true);
-    expect(swift.includes("let jobs:")).toBe(true);
+    expect(swift).toContain("struct CronSchedulerStatus");
+    expect(swift).toContain("let jobs:");
   });
 
   it("cron job state schema keeps the full failover reason set", () => {

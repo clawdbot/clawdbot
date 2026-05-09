@@ -131,6 +131,31 @@ function hasIMessageEchoMatch(params: {
   return false;
 }
 
+/**
+ * Per-group `systemPrompt` resolution. Mirrors `resolveWhatsAppGroupSystemPrompt`
+ * in `extensions/whatsapp/src/system-prompt.ts`:
+ *
+ * 1. If the matched per-`chat_id` entry exists AND defines `systemPrompt` (key
+ *    is present, value is non-null), use it. Trim whitespace; if the trim
+ *    leaves an empty string, return `undefined` and DO NOT fall through to the
+ *    wildcard. This is how operators say "this specific group has no prompt"
+ *    without inheriting from `groups["*"]`.
+ * 2. Otherwise, return the wildcard `groups["*"].systemPrompt` (trimmed; empty
+ *    after trim → `undefined`).
+ */
+export function resolveIMessageGroupSystemPrompt(params: {
+  groupConfig: unknown;
+  defaultConfig: unknown;
+}): string | undefined {
+  const specific = params.groupConfig as { systemPrompt?: string | null } | undefined;
+  if (specific != null && specific.systemPrompt != null) {
+    return specific.systemPrompt.trim() || undefined;
+  }
+  const wildcard = (params.defaultConfig as { systemPrompt?: string | null } | undefined)
+    ?.systemPrompt;
+  return wildcard != null ? wildcard.trim() || undefined : undefined;
+}
+
 type IMessageInboundDispatchDecision = {
   kind: "dispatch";
   isGroup: boolean;
@@ -150,6 +175,10 @@ type IMessageInboundDispatchDecision = {
   // Used for allowlist checks for control commands.
   effectiveDmAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
+  // Forwarded as ctxPayload.GroupSystemPrompt for group messages. Resolved
+  // from `channels.imessage.groups.<chat_id>.systemPrompt` (or the `"*"`
+  // wildcard) at gate time. Always undefined for DMs.
+  groupSystemPrompt?: string;
 };
 
 type IMessageInboundDecision =
@@ -526,6 +555,18 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "no mention" };
   }
 
+  // Per-chat_id `systemPrompt` wins; fall back to the `groups["*"]` wildcard
+  // ONLY when the matched group does not define the key at all. If the matched
+  // group sets `systemPrompt: ""` the wildcard is suppressed (no prompt is
+  // applied to that specific group). Mirrors the resolution semantic in
+  // `extensions/whatsapp/src/system-prompt.ts`.
+  const groupSystemPrompt = isGroup
+    ? resolveIMessageGroupSystemPrompt({
+        groupConfig: groupListPolicy.groupConfig,
+        defaultConfig: groupListPolicy.defaultConfig,
+      })
+    : undefined;
+
   return {
     kind: "dispatch",
     isGroup,
@@ -544,6 +585,7 @@ export function resolveIMessageInboundDecision(params: {
     commandAuthorized,
     effectiveDmAllowFrom,
     effectiveGroupAllowFrom,
+    groupSystemPrompt,
   };
 }
 
@@ -665,6 +707,7 @@ export function buildIMessageInboundContext(params: {
     ChatType: decision.isGroup ? "group" : "direct",
     ConversationLabel: fromLabel,
     GroupSubject: decision.isGroup ? (params.message.chat_name ?? undefined) : undefined,
+    GroupSystemPrompt: decision.isGroup ? decision.groupSystemPrompt : undefined,
     GroupMembers: decision.isGroup
       ? (params.message.participants ?? []).filter(Boolean).join(", ")
       : undefined,

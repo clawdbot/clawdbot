@@ -131,9 +131,19 @@ const authRuntimeMock = vi.hoisted(() => {
             continue;
           }
           const stats = store.usageStats?.[profileId];
-          const expiry = [stats?.cooldownUntil, stats?.disabledUntil]
-            .filter((value): value is number => isActive(value, ts))
-            .toSorted((a, b) => a - b)[0];
+          const cooldownUntil = stats?.cooldownUntil;
+          const disabledUntil = stats?.disabledUntil;
+          let expiry: number | undefined;
+          if (isActive(cooldownUntil, ts)) {
+            expiry = cooldownUntil;
+          }
+          if (
+            disabledUntil !== undefined &&
+            isActive(disabledUntil, ts) &&
+            (expiry === undefined || disabledUntil < expiry)
+          ) {
+            expiry = disabledUntil;
+          }
           if (expiry !== undefined && (soonest === null || expiry < soonest)) {
             soonest = expiry;
           }

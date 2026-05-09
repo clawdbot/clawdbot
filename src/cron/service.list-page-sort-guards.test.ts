@@ -20,7 +20,7 @@ function createBaseJob(overrides?: Partial<CronJob>): CronJob {
 }
 
 describe("cron listPage sort guards", () => {
-  it("does not throw when sorting by name with malformed name fields", async () => {
+  it("keeps malformed name fields sortable", async () => {
     const jobs = [
       createBaseJob({ id: "job-a", name: undefined as unknown as string }),
       createBaseJob({ id: "job-b", name: "beta" }),
@@ -31,7 +31,7 @@ describe("cron listPage sort guards", () => {
     expect(page.jobs).toHaveLength(2);
   });
 
-  it("does not throw when tie-break sorting encounters missing ids", async () => {
+  it("keeps missing ids sortable during tie-breaks", async () => {
     const nextRunAtMs = Date.parse("2026-02-27T15:30:00.000Z");
     const jobs = [
       createBaseJob({

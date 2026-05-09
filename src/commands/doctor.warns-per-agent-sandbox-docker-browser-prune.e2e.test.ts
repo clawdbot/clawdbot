@@ -44,18 +44,17 @@ describe("doctor command", () => {
 
     await doctorCommand(createDoctorRuntime(), { nonInteractive: true });
 
-    expect(
-      terminalNoteMock.mock.calls.some(([message, title]) => {
-        if (title !== "Sandbox" || typeof message !== "string") {
-          return false;
-        }
-        const normalized = message.replace(/\s+/g, " ").trim();
-        return (
-          normalized.includes('agents.list (id "work") sandbox docker') &&
-          normalized.includes('scope resolves to "shared"')
-        );
-      }),
-    ).toBe(true);
+    const matchingSandboxNotes = terminalNoteMock.mock.calls.filter(([message, title]) => {
+      if (title !== "Sandbox" || typeof message !== "string") {
+        return false;
+      }
+      const normalized = message.replace(/\s+/g, " ").trim();
+      return (
+        normalized.includes('agents.list (id "work") sandbox docker') &&
+        normalized.includes('scope resolves to "shared"')
+      );
+    });
+    expect(matchingSandboxNotes.length).toBeGreaterThan(0);
   }, 30_000);
 
   it("does not warn when only the active workspace is present", async () => {
@@ -82,9 +81,8 @@ describe("doctor command", () => {
 
     await doctorCommand(createDoctorRuntime(), { nonInteractive: true });
 
-    expect(terminalNoteMock.mock.calls.some(([_, title]) => title === "Extra workspace")).toBe(
-      false,
-    );
+    const noteTitles = terminalNoteMock.mock.calls.map(([_, title]) => title);
+    expect(noteTitles).not.toContain("Extra workspace");
 
     homedirSpy.mockRestore();
     existsSpy.mockRestore();

@@ -11,6 +11,8 @@ import {
   toTrajectoryToolDefinitions,
 } from "./runtime.js";
 
+type TrajectoryRuntimeRecorder = NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
+
 const tempDirs: string[] = [];
 
 function makeTempDir(): string {
@@ -24,6 +26,16 @@ afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function expectTrajectoryRuntimeRecorder(
+  recorder: ReturnType<typeof createTrajectoryRuntimeRecorder>,
+): TrajectoryRuntimeRecorder {
+  if (recorder === null) {
+    throw new Error("Expected trajectory runtime recorder");
+  }
+  expect(typeof recorder.recordEvent).toBe("function");
+  return recorder;
+}
 
 describe("trajectory runtime", () => {
   it("resolves a session-adjacent trajectory file by default", () => {
@@ -63,8 +75,8 @@ describe("trajectory runtime", () => {
       },
     });
 
-    expect(recorder).not.toBeNull();
-    recorder?.recordEvent("context.compiled", {
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("context.compiled", {
       systemPrompt: "system prompt",
       headers: [{ name: "Authorization", value: "Bearer sk-test-secret-token" }],
       command: "curl -H 'Authorization: Bearer sk-other-secret-token'",
@@ -102,7 +114,8 @@ describe("trajectory runtime", () => {
       },
     });
 
-    recorder?.recordEvent("context.compiled", {
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("context.compiled", {
       prompt: "x".repeat(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1),
     });
 
@@ -132,18 +145,19 @@ describe("trajectory runtime", () => {
       },
     });
 
-    recorder?.recordEvent("context.compiled", {
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("context.compiled", {
       prompt: "x".repeat(180),
     });
-    recorder?.recordEvent("prompt.submitted", {
+    runtimeRecorder.recordEvent("prompt.submitted", {
       prompt: "y".repeat(180),
     });
-    recorder?.recordEvent("model.completed", {
+    runtimeRecorder.recordEvent("model.completed", {
       get prompt() {
         throw new Error("stopped recorder should not read dropped payloads");
       },
     });
-    await recorder?.flush();
+    await runtimeRecorder.flush();
 
     const parsed = writes.map((line) => JSON.parse(line));
     expect(parsed.map((event) => event.type)).toContain("trace.truncated");
@@ -170,7 +184,7 @@ describe("trajectory runtime", () => {
       },
     });
 
-    expect(recorder).not.toBeNull();
+    expectTrajectoryRuntimeRecorder(recorder);
     const pointer = JSON.parse(
       fs.readFileSync(resolveTrajectoryPointerFilePath(sessionFile), "utf8"),
     ) as { runtimeFile?: string };

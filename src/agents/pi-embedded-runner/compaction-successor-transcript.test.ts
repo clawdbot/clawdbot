@@ -179,9 +179,11 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(entries.find((entry) => entry.id === staleModelId)).toBeUndefined();
     expect(entries.find((entry) => entry.id === staleThinkingId)).toBeUndefined();
     expect(entries.find((entry) => entry.id === staleSessionInfoId)).toBeUndefined();
-    expect(entries.filter((entry) => entry.type === "model_change")).toHaveLength(1);
-    expect(entries.filter((entry) => entry.type === "thinking_level_change")).toHaveLength(1);
-    expect(entries.filter((entry) => entry.type === "session_info")).toHaveLength(1);
+    const countEntryType = (type: (typeof entries)[number]["type"]) =>
+      entries.reduce((count, entry) => count + (entry.type === type ? 1 : 0), 0);
+    expect(countEntryType("model_change")).toBe(1);
+    expect(countEntryType("thinking_level_change")).toBe(1);
+    expect(countEntryType("session_info")).toBe(1);
     expect(entries.find((entry) => entry.type === "model_change")).toMatchObject({
       provider: "openai",
       modelId: "gpt-5.2",

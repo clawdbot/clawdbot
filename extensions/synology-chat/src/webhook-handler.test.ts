@@ -16,6 +16,16 @@ type TestLog = {
   error: (...args: unknown[]) => void;
 };
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function makeAccount(
   overrides: Partial<ResolvedSynologyChatAccount> = {},
 ): ResolvedSynologyChatAccount {
@@ -240,8 +250,8 @@ describe("createWebhookHandler", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     // Default maxInFlightPerKey is 8; 12 total requests leaves 4 rejected with 429.
-    expect(responses.filter((res) => res._status === 0)).toHaveLength(8);
-    expect(responses.filter((res) => res._status === 429)).toHaveLength(4);
+    expect(countMatching(responses, (res) => res._status === 0)).toBe(8);
+    expect(countMatching(responses, (res) => res._status === 429)).toBe(4);
 
     for (const req of requests) {
       req.emit("end");

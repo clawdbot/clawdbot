@@ -179,14 +179,18 @@ describe("custom theme import helpers", () => {
     );
 
     expect(imported.label).toBe("Light Green");
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z",
-      expect.objectContaining({
-        headers: { accept: "application/json" },
-        redirect: "error",
-        signal: expect.any(AbortSignal),
-      }),
-    );
+    const fetchMock = vi.mocked(fetchImpl);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [fetchUrl, fetchOptions] = fetchMock.mock.calls[0] as [
+      string,
+      { headers?: unknown; redirect?: unknown; signal?: unknown },
+    ];
+    expect(fetchUrl).toBe("https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z");
+    expect(fetchOptions).toMatchObject({
+      headers: { accept: "application/json" },
+      redirect: "error",
+    });
+    expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("rejects oversized tweakcn theme responses before parsing", async () => {
@@ -299,7 +303,11 @@ describe("custom theme import helpers", () => {
   it("parses stored imported themes and rejects malformed records", () => {
     const imported = createImportedTheme();
 
-    expect(parseImportedCustomTheme(imported)?.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
+    const parsed = parseImportedCustomTheme(imported);
+    if (!parsed) {
+      throw new Error("Expected imported custom theme to parse");
+    }
+    expect(parsed.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
     expect(parseImportedCustomTheme({ ...imported, light: {} })).toBeNull();
   });
 

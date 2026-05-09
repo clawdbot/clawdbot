@@ -327,9 +327,9 @@ describe("monitorDiscordProvider", () => {
 
     expect(monitorLifecycleMock).not.toHaveBeenCalled();
     expect(disconnect).toHaveBeenCalledTimes(1);
-    expect(() =>
+    expect(
       emitter.emit("error", new Error("Max reconnect attempts (0) reached after code 1005")),
-    ).not.toThrow();
+    ).toBe(true);
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("suppressed late gateway reconnect-exhausted error after dispose"),
     );
@@ -1105,26 +1105,26 @@ describe("monitorDiscordProvider", () => {
     });
 
     await vi.waitFor(() =>
-      expect(
-        vi
-          .mocked(runtime.log)
-          .mock.calls.some((call) => String(call[0]).includes("deploy-commands:done")),
-      ).toBe(true),
+      expect(vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]))).toEqual(
+        expect.arrayContaining([expect.stringContaining("deploy-commands:done")]),
+      ),
     );
 
     const messages = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]));
-    expect(messages.some((msg) => msg.includes("fetch-application-id:start"))).toBe(true);
-    expect(messages.some((msg) => msg.includes("fetch-application-id:done"))).toBe(true);
-    expect(messages.some((msg) => msg.includes("deploy-commands:schedule"))).toBe(true);
-    expect(messages.some((msg) => msg.includes("deploy-commands:scheduled"))).toBe(true);
-    expect(messages.some((msg) => msg.includes("deploy-commands:done"))).toBe(true);
-    expect(messages.some((msg) => msg.includes("fetch-bot-identity:start"))).toBe(true);
-    expect(messages.some((msg) => msg.includes("fetch-bot-identity:done"))).toBe(true);
-    expect(
-      messages.some(
-        (msg) => msg.includes("gateway-debug") && msg.includes("Gateway websocket opened"),
-      ),
-    ).toBe(true);
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("fetch-application-id:start"),
+        expect.stringContaining("fetch-application-id:done"),
+        expect.stringContaining("deploy-commands:schedule"),
+        expect.stringContaining("deploy-commands:scheduled"),
+        expect.stringContaining("deploy-commands:done"),
+        expect.stringContaining("fetch-bot-identity:start"),
+        expect.stringContaining("fetch-bot-identity:done"),
+      ]),
+    );
+    expect(messages).toEqual(
+      expect.arrayContaining([expect.stringMatching(/gateway-debug.*Gateway websocket opened/)]),
+    );
   });
 
   it("keeps Discord startup chatter quiet by default", async () => {
@@ -1136,6 +1136,8 @@ describe("monitorDiscordProvider", () => {
     });
 
     const messages = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]));
-    expect(messages.some((msg) => msg.includes("discord startup ["))).toBe(false);
+    expect(messages).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("discord startup [")]),
+    );
   });
 });

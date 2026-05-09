@@ -119,7 +119,7 @@ describeLive("xai live", () => {
       const doneMessage = await collectDoneMessage(
         stream as AsyncIterable<{ type: string; message?: AssistantLikeMessage }>,
       );
-      expect(doneMessage.content).toEqual(expect.any(Array));
+      expect(Array.isArray(doneMessage.content)).toBe(true);
       const payload = requireLiveValue(capturedPayload, "captured xAI payload");
       if ("tool_stream" in payload) {
         expect(payload.tool_stream).toBe(true);
@@ -130,7 +130,9 @@ describeLive("xai live", () => {
         : [];
       expect(payloadTools.length).toBeGreaterThan(0);
       const firstFunction = payloadTools[0]?.function;
-      expect(firstFunction && typeof firstFunction === "object").toBe(true);
+      expect(firstFunction).not.toBeNull();
+      expect(typeof firstFunction).toBe("object");
+      expect(Array.isArray(firstFunction)).toBe(false);
       expect([undefined, false]).toContain((firstFunction as Record<string, unknown>).strict);
     });
   }, 90_000);
@@ -168,7 +170,10 @@ describeLive("xai live", () => {
         message?: string;
       };
 
-      const errorMessage = [details.error, details.message].filter(Boolean).join(" ");
+      const errorMessage =
+        details.error && details.message
+          ? `${details.error} ${details.message}`
+          : details.error || details.message || "";
       if (isBillingErrorMessage(errorMessage)) {
         console.warn(`[xai:live] skip web-search: billing drift: ${errorMessage}`);
         return;

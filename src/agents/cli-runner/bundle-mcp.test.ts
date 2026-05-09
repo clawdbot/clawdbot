@@ -36,7 +36,7 @@ describe("prepareCliBundleMcpConfig", () => {
     const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
       mcpServers?: Record<string, unknown>;
     };
-    expect(raw.mcpServers).toEqual({});
+    expect(raw.mcpServers).toStrictEqual({});
 
     await prepared.cleanup?.();
   });

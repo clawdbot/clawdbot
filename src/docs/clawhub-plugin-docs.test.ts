@@ -42,7 +42,9 @@ describe("ClawHub plugin docs", () => {
 
     expect(validateExternalCodePluginPackageJson(packageJson).issues).toEqual([]);
     expect(typeof pluginManifest.id).toBe("string");
-    expect(pluginManifest.configSchema).toEqual(expect.any(Object));
+    expect(pluginManifest.configSchema).not.toBeNull();
+    expect(typeof pluginManifest.configSchema).toBe("object");
+    expect(Array.isArray(pluginManifest.configSchema)).toBe(false);
   });
 
   it("does not tell plugin authors to use bare clawhub publish", async () => {

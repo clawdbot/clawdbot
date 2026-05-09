@@ -224,7 +224,6 @@ describe("resolveDriveCommentEventTurn", () => {
       createClient: () => client as never,
     });
 
-    expect(turn).not.toBeNull();
     expect(turn?.senderId).toBe("ou_509d4d7ace4a9addec2312676ffcba9b");
     expect(turn?.messageId).toBe("drive-comment:10d9d60b990db39f96a4c2fd357fb877");
     expect(turn?.fileType).toBe("docx");

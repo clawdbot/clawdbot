@@ -292,7 +292,12 @@ describe("loader", () => {
 
       const event = createInternalHookEvent("command", "new", "test-session");
       await triggerInternalHook(event);
-      expect(event.messages.filter((message) => message === "reloadable-hook")).toHaveLength(1);
+      expect(
+        event.messages.reduce(
+          (count, message) => count + (message === "reloadable-hook" ? 1 : 0),
+          0,
+        ),
+      ).toBe(1);
     });
 
     it("should support named exports", async () => {

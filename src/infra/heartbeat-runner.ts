@@ -16,6 +16,7 @@ import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { isNestedAgentLane } from "../agents/lanes.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
+import { formatReasoningMessage } from "../agents/pi-embedded-utils.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -639,10 +640,26 @@ function resolveHeartbeatReasoningPayloads(
   replyResult: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload[] {
   const payloads = Array.isArray(replyResult) ? replyResult : replyResult ? [replyResult] : [];
-  return payloads.filter((payload) => {
+  const reasoningPayloads: ReplyPayload[] = [];
+  for (const payload of payloads) {
     const text = typeof payload.text === "string" ? payload.text : "";
-    return text.trimStart().startsWith("Reasoning:");
-  });
+    const hasLegacyReasoningPrefix = text.trimStart().startsWith("Reasoning:");
+    if (payload.isReasoning !== true && !hasLegacyReasoningPrefix) {
+      continue;
+    }
+
+    const formattedText = hasLegacyReasoningPrefix ? text : formatReasoningMessage(text);
+    if (!formattedText.trim()) {
+      continue;
+    }
+
+    const deliverablePayload: ReplyPayload = { ...payload, text: formattedText };
+    delete deliverablePayload.isReasoning;
+    delete deliverablePayload.mediaUrl;
+    delete deliverablePayload.mediaUrls;
+    reasoningPayloads.push(deliverablePayload);
+  }
+  return reasoningPayloads;
 }
 
 async function restoreHeartbeatUpdatedAt(params: {

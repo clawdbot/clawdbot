@@ -322,7 +322,10 @@ describe("resolveSandboxContext", () => {
       workspaceDir,
     });
 
-    expect(result).not.toBeNull();
+    expect(result).toMatchObject({ workspaceDir: expect.any(String) });
+    if (!result) {
+      throw new Error("expected sandbox workspace resolution");
+    }
     expect(syncSkillsToWorkspaceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sourceWorkspaceDir: workspaceDir,

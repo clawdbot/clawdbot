@@ -50,6 +50,13 @@ function makePrompter(confirmValue: boolean): DoctorPrompter {
   };
 }
 
+function requireAuthConfig(config: OpenClawConfig): NonNullable<OpenClawConfig["auth"]> {
+  if (!config.auth) {
+    throw new Error("expected repaired auth config");
+  }
+  return config.auth;
+}
+
 beforeEach(() => {
   resolvePluginProvidersMock.mockReset();
   resolvePluginProvidersMock.mockReturnValue([]);
@@ -144,13 +151,14 @@ describe("maybeRepairLegacyOAuthProfileIds", () => {
       provider: "anthropic",
       legacyProfileId: "anthropic:default",
     });
-    expect(next.auth?.profiles?.["anthropic:default"]).toBeUndefined();
-    expect(next.auth?.profiles?.["anthropic:user@example.com"]).toMatchObject({
+    const auth = requireAuthConfig(next);
+    expect(auth.profiles?.["anthropic:default"]).toBeUndefined();
+    expect(auth.profiles?.["anthropic:user@example.com"]).toMatchObject({
       provider: "anthropic",
       mode: "oauth",
       email: "user@example.com",
     });
-    expect(next.auth?.order?.anthropic).toEqual(["anthropic:user@example.com"]);
+    expect(auth.order?.anthropic).toEqual(["anthropic:user@example.com"]);
   });
 
   it("strips provider-controlled terminal escapes from repair prompts", async () => {

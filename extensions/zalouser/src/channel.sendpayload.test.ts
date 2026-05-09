@@ -29,6 +29,47 @@ function baseCtx(payload: ReplyPayload) {
   };
 }
 
+type ZalouserOutbound = NonNullable<typeof zalouserPlugin.outbound>;
+type ZalouserSendPayload = NonNullable<ZalouserOutbound["sendPayload"]>;
+type ZalouserMessageAdapter = NonNullable<typeof zalouserPlugin.message>;
+type ZalouserMessageSender = NonNullable<ZalouserMessageAdapter["send"]>;
+
+function requireZalouserSendPayload(): ZalouserSendPayload {
+  const sendPayload = zalouserPlugin.outbound?.sendPayload;
+  if (!sendPayload) {
+    throw new Error("Expected Zalouser outbound sendPayload");
+  }
+  return sendPayload;
+}
+
+function requireZalouserMessageAdapter(): ZalouserMessageAdapter {
+  const adapter = zalouserPlugin.message;
+  if (!adapter) {
+    throw new Error("Expected Zalouser message adapter");
+  }
+  return adapter;
+}
+
+function requireZalouserTextSender(
+  adapter: ZalouserMessageAdapter,
+): NonNullable<ZalouserMessageSender["text"]> {
+  const text = adapter.send?.text;
+  if (!text) {
+    throw new Error("Expected Zalouser message adapter text sender");
+  }
+  return text;
+}
+
+function requireZalouserMediaSender(
+  adapter: ZalouserMessageAdapter,
+): NonNullable<ZalouserMessageSender["media"]> {
+  const media = adapter.send?.media;
+  if (!media) {
+    throw new Error("Expected Zalouser message adapter media sender");
+  }
+  return media;
+}
+
 describe("zalouserPlugin outbound sendPayload", () => {
   let mockedSend: ReturnType<typeof vi.mocked<(typeof import("./send.js"))["sendMessageZalouser"]>>;
 
@@ -47,8 +88,9 @@ describe("zalouserPlugin outbound sendPayload", () => {
 
   it("group target delegates with isGroup=true and stripped threadId", async () => {
     mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-g1" } as never);
+    const sendPayload = requireZalouserSendPayload();
 
-    const result = await zalouserPlugin.outbound!.sendPayload!({
+    const result = await sendPayload({
       ...baseCtx({ text: "hello group" }),
       to: "group:1471383327500481391",
     });
@@ -63,8 +105,9 @@ describe("zalouserPlugin outbound sendPayload", () => {
 
   it("treats bare numeric targets as direct chats for backward compatibility", async () => {
     mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-d1" } as never);
+    const sendPayload = requireZalouserSendPayload();
 
-    const result = await zalouserPlugin.outbound!.sendPayload!({
+    const result = await sendPayload({
       ...baseCtx({ text: "hello" }),
       to: "987654321",
     });
@@ -79,8 +122,9 @@ describe("zalouserPlugin outbound sendPayload", () => {
 
   it("preserves provider-native group ids when sending to raw g- targets", async () => {
     mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-g-native" } as never);
+    const sendPayload = requireZalouserSendPayload();
 
-    const result = await zalouserPlugin.outbound!.sendPayload!({
+    const result = await sendPayload({
       ...baseCtx({ text: "hello native group" }),
       to: "g-1471383327500481391",
     });
@@ -96,8 +140,9 @@ describe("zalouserPlugin outbound sendPayload", () => {
   it("passes long markdown through once so formatting happens before chunking", async () => {
     const text = `**${"a".repeat(2501)}**`;
     mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-code" } as never);
+    const sendPayload = requireZalouserSendPayload();
 
-    const result = await zalouserPlugin.outbound!.sendPayload!({
+    const result = await sendPayload({
       ...baseCtx({ text }),
       to: "987654321",
     });
@@ -136,33 +181,34 @@ describe("zalouserPlugin outbound sendPayload", () => {
             }),
           },
     );
+    const adapter = requireZalouserMessageAdapter();
+    const sendText = requireZalouserTextSender(adapter);
+    const sendMedia = requireZalouserMediaSender(adapter);
 
     await expect(
       verifyChannelMessageAdapterCapabilityProofs({
         adapterName: "zalouser",
-        adapter: zalouserPlugin.message!,
+        adapter,
         proofs: {
           text: async () => {
-            const result = await zalouserPlugin.message?.send?.text?.({
+            const result = await sendText({
               cfg: {},
               to: "user:987654321",
               text: "hello",
             });
-            expect(result?.receipt.platformMessageIds).toEqual(["zlu-text-1"]);
+            expect(result.receipt.platformMessageIds).toEqual(["zlu-text-1"]);
           },
           media: async () => {
-            const result = await zalouserPlugin.message?.send?.media?.({
+            const result = await sendMedia({
               cfg: {},
               to: "user:987654321",
               text: "image",
               mediaUrl: "https://example.com/image.png",
             });
-            expect(result?.receipt.platformMessageIds).toEqual(["zlu-media-1"]);
+            expect(result.receipt.platformMessageIds).toEqual(["zlu-media-1"]);
           },
           messageSendingHooks: () => {
-            expect(zalouserPlugin.message?.durableFinal?.capabilities?.messageSendingHooks).toBe(
-              true,
-            );
+            expect(adapter.durableFinal?.capabilities?.messageSendingHooks).toBe(true);
           },
         },
       }),
@@ -194,8 +240,9 @@ describe("zalouserPlugin outbound payload contract", () => {
       text: "",
       payload: params.payload,
     };
+    const sendPayload = requireZalouserSendPayload();
     return {
-      run: async () => await zalouserPlugin.outbound!.sendPayload!(ctx),
+      run: async () => await sendPayload(ctx),
       sendMock: mockedSend,
       to: "987654321",
     };

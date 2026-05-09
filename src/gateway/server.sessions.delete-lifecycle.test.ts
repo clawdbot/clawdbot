@@ -345,8 +345,8 @@ test("sessions.delete returns unavailable when active run does not stop", async 
   >;
   expect(store["agent:main:discord:group:dev"]?.sessionId).toBe("sess-active");
   const filesAfterDeleteAttempt = await fs.readdir(dir);
-  expect(filesAfterDeleteAttempt.some((f) => f.startsWith("sess-active.jsonl.deleted."))).toBe(
-    false,
+  expect(filesAfterDeleteAttempt).not.toContainEqual(
+    expect.stringMatching(/^sess-active\.jsonl\.deleted\./),
   );
 
   ws.close();

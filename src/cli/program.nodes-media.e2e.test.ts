@@ -74,7 +74,10 @@ describe("cli program (nodes media)", () => {
     runtime.error.mockClear();
 
     await expect(parseProgram.parseAsync(args, { from: "user" })).rejects.toThrow(/exit/i);
-    expect(runtime.error.mock.calls.some(([msg]) => expectedError.test(String(msg)))).toBe(true);
+    const matchingErrors = runtime.error.mock.calls
+      .map(([msg]) => String(msg))
+      .filter((msg) => expectedError.test(msg));
+    expect(matchingErrors.length).toBeGreaterThan(0);
   }
 
   async function runAndExpectUrlPayloadMediaFile(params: {
@@ -110,11 +113,16 @@ describe("cli program (nodes media)", () => {
     expect(facings).toEqual(["back", "front"]);
 
     const out = getFirstRuntimeLogLine();
-    const mediaPaths = out
-      .split("\n")
-      .filter((l) => l.startsWith("MEDIA:"))
-      .map((l) => l.replace(/^MEDIA:/, ""))
-      .filter(Boolean);
+    const mediaPaths: string[] = [];
+    for (const line of out.split("\n")) {
+      if (!line.startsWith("MEDIA:")) {
+        continue;
+      }
+      const mediaPath = line.replace(/^MEDIA:/, "");
+      if (mediaPath.length > 0) {
+        mediaPaths.push(mediaPath);
+      }
+    }
     expect(mediaPaths).toHaveLength(2);
     expect(mediaPaths[0]).toContain("openclaw-camera-snap-");
     expect(mediaPaths[1]).toContain("openclaw-camera-snap-");

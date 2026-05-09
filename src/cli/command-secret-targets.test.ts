@@ -104,8 +104,9 @@ describe("command secret target ids", () => {
     });
 
     expect(scoped.targetIds.size).toBeGreaterThan(0);
-    expect([...scoped.targetIds].every((id) => id.startsWith("channels.discord."))).toBe(true);
-    expect([...scoped.targetIds].some((id) => id.startsWith("channels.telegram."))).toBe(false);
+    const targetIds = [...scoped.targetIds];
+    expect(targetIds.every((id) => id.startsWith("channels.discord."))).toBe(true);
+    expect(targetIds.some((id) => id.startsWith("channels.telegram."))).toBe(false);
   });
 
   it("does not coerce missing accountId to default when channel is scoped", () => {

@@ -379,7 +379,10 @@ describe("doctor state integrity oauth dir checks", () => {
       }),
     );
     const files = fs.readdirSync(sessionsDir);
-    expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
+    const archivedOrphanTranscripts = files.filter((name) =>
+      name.startsWith("orphan-session.jsonl.deleted."),
+    );
+    expect(archivedOrphanTranscripts.length).toBeGreaterThan(0);
   });
 
   it("does not auto-archive orphan transcripts from non-interactive repair mode", async () => {
@@ -401,7 +404,10 @@ describe("doctor state integrity oauth dir checks", () => {
     );
     const files = fs.readdirSync(sessionsDir);
     expect(files).toContain("orphan-session.jsonl");
-    expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(false);
+    const archivedOrphanTranscripts = files.filter((name) =>
+      name.startsWith("orphan-session.jsonl.deleted."),
+    );
+    expect(archivedOrphanTranscripts).toEqual([]);
   });
 
   it.skipIf(process.platform === "win32")(
@@ -440,7 +446,9 @@ describe("doctor state integrity oauth dir checks", () => {
         await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
         expect(fs.existsSync(transcriptPath)).toBe(true);
-        expect(fs.readdirSync(sessionsDir).some((name) => name.includes(".deleted."))).toBe(false);
+        expect(fs.readdirSync(sessionsDir)).not.toEqual(
+          expect.arrayContaining([expect.stringContaining(".deleted.")]),
+        );
         expect(stateIntegrityText()).not.toContain("These .jsonl files are no longer referenced");
       } finally {
         fs.rmSync(symlinkHome, { force: true, recursive: true });
@@ -573,7 +581,9 @@ describe("doctor state integrity oauth dir checks", () => {
     const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
     const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
     expect(store["agent:main:main"]?.sessionId).toBe("mixed-session");
-    expect(Object.keys(store).some((key) => key.includes("heartbeat-recovered"))).toBe(false);
+    expect(Object.keys(store)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("heartbeat-recovered")]),
+    );
     expect(confirmRuntimeRepair).not.toHaveBeenCalledWith(
       expect.objectContaining({
         message: expect.stringContaining("Move heartbeat-owned main session"),

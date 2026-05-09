@@ -31,6 +31,16 @@ vi.mock("../../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 describe("waitForAgentJob", () => {
   async function runLifecycleScenario(params: {
     runIdPrefix: string;
@@ -74,10 +84,11 @@ describe("waitForAgentJob", () => {
 
       await vi.advanceTimersByTimeAsync(15_000);
       const snapshot = await snapshotPromise;
-      expect(snapshot).not.toBeNull();
-      expect(snapshot?.status).toBe("timeout");
-      expect(snapshot?.startedAt).toBe(100);
-      expect(snapshot?.endedAt).toBe(200);
+      expect(snapshot).toMatchObject({
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -89,10 +100,11 @@ describe("waitForAgentJob", () => {
       startedAt: 300,
       endedAt: 400,
     });
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.status).toBe("ok");
-    expect(snapshot?.startedAt).toBe(300);
-    expect(snapshot?.endedAt).toBe(400);
+    expect(snapshot).toMatchObject({
+      status: "ok",
+      startedAt: 300,
+      endedAt: 400,
+    });
   });
 
   it("ignores transient aborted end events when the same run later succeeds", async () => {
@@ -119,10 +131,11 @@ describe("waitForAgentJob", () => {
     });
 
     const snapshot = await waitPromise;
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.status).toBe("ok");
-    expect(snapshot?.startedAt).toBe(500);
-    expect(snapshot?.endedAt).toBe(700);
+    expect(snapshot).toMatchObject({
+      status: "ok",
+      startedAt: 500,
+      endedAt: 700,
+    });
   });
 
   it("lets a later aborted timeout replace a pending lifecycle error", async () => {
@@ -149,10 +162,11 @@ describe("waitForAgentJob", () => {
 
       await vi.advanceTimersByTimeAsync(15_000);
       const snapshot = await waitPromise;
-      expect(snapshot).not.toBeNull();
-      expect(snapshot?.status).toBe("timeout");
-      expect(snapshot?.startedAt).toBe(800);
-      expect(snapshot?.endedAt).toBe(1_000);
+      expect(snapshot).toMatchObject({
+        status: "timeout",
+        startedAt: 800,
+        endedAt: 1_000,
+      });
       expect(snapshot?.error).toBeUndefined();
     } finally {
       vi.useRealTimers();
@@ -183,11 +197,12 @@ describe("waitForAgentJob", () => {
 
       await vi.advanceTimersByTimeAsync(15_000);
       const snapshot = await waitPromise;
-      expect(snapshot).not.toBeNull();
-      expect(snapshot?.status).toBe("error");
-      expect(snapshot?.startedAt).toBe(1_100);
-      expect(snapshot?.endedAt).toBe(1_300);
-      expect(snapshot?.error).toBe("final error");
+      expect(snapshot).toMatchObject({
+        status: "error",
+        startedAt: 1_100,
+        endedAt: 1_300,
+        error: "final error",
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -1161,7 +1176,7 @@ describe("exec approval handlers", () => {
       expect.objectContaining({ id, decision: "allow-once" }),
       undefined,
     );
-    expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
+    expect(broadcasts.map((entry) => entry.event)).toContain("exec.approval.resolved");
   });
 
   it("treats duplicate same-decision exec resolves as idempotent during grace", async () => {
@@ -1207,7 +1222,7 @@ describe("exec approval handlers", () => {
 
     expect(firstResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     expect(repeatResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(broadcasts.filter((entry) => entry.event === "exec.approval.resolved")).toHaveLength(
+    expect(countMatching(broadcasts, (entry) => entry.event === "exec.approval.resolved")).toBe(
       resolvedBroadcastCount,
     );
     expect(conflictingResolveRespond).toHaveBeenCalledWith(
@@ -1483,7 +1498,7 @@ describe("exec approval handlers", () => {
       },
     });
     const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    expect(requested).toBeTruthy();
+    expect(requested).toEqual(expect.objectContaining({ event: "exec.approval.requested" }));
     const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
     expect(request["commandAnalysis"]).toEqual(
       expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),

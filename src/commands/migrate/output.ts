@@ -3,6 +3,10 @@ import type { MigrationApplyResult, MigrationItem, MigrationPlan } from "../../p
 import { writeRuntimeJson } from "../../runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
+import {
+  formatMigrationPluginSelectionLabel,
+  getSelectableMigrationPluginItems,
+} from "./selection.js";
 import type { MigrateApplyOptions } from "./types.js";
 
 function formatCount(value: number, label: string): string {
@@ -32,6 +36,16 @@ export function formatMigrationPlan(plan: MigrationPlan): string[] {
     }
   }
   const visibleItems = plan.items.slice(0, 25);
+  const visibleItemIds = new Set(visibleItems.map((item) => item.id));
+  const pluginItems = getSelectableMigrationPluginItems(plan);
+  const hasPluginHiddenByTruncation = pluginItems.some((item) => !visibleItemIds.has(item.id));
+  if (plan.providerId === "codex" && hasPluginHiddenByTruncation) {
+    lines.push("");
+    lines.push(theme.heading("Native Codex plugins:"));
+    for (const item of pluginItems) {
+      lines.push(`- ${formatMigrationPluginSelectionLabel(item)}`);
+    }
+  }
   if (visibleItems.length > 0) {
     lines.push("");
     lines.push(theme.heading("Items:"));

@@ -132,7 +132,7 @@ describe("sendMessageIrc cfg threading", () => {
       direction: "outbound",
     });
     expect(result.target).toBe("#room");
-    expect(result.messageId).toEqual(expect.any(String));
+    expect(result.messageId).toBeTypeOf("string");
     expect(result.messageId.length).toBeGreaterThan(0);
     expect(result.receipt).toMatchObject({
       primaryPlatformMessageId: "irc-msg-1",
@@ -191,7 +191,7 @@ describe("sendMessageIrc cfg threading", () => {
     expect(hoisted.loadConfig).not.toHaveBeenCalled();
     expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello");
     expect(result.target).toBe("#room");
-    expect(result.messageId).toEqual(expect.any(String));
+    expect(result.messageId).toBeTypeOf("string");
     expect(result.messageId.length).toBeGreaterThan(0);
   });
 

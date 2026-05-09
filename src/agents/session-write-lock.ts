@@ -61,6 +61,7 @@ type LockInspectionDetails = Pick<
 >;
 
 const SESSION_LOCKS = createFileLockManager("openclaw.session-write-lock");
+let resolveProcessStartTimeForLock = getProcessStartTime;
 
 function isFileLockError(error: unknown, code: string): boolean {
   return (error as { code?: unknown } | null)?.code === code;
@@ -312,7 +313,7 @@ function inspectLockPayload(
   const pidRecycled =
     pidAlive && pid !== null && storedStarttime !== null
       ? (() => {
-          const currentStarttime = getProcessStartTime(pid);
+          const currentStarttime = resolveProcessStartTimeForLock(pid);
           return currentStarttime !== null && currentStarttime !== storedStarttime;
         })()
       : false;
@@ -419,7 +420,7 @@ function shouldTreatAsOrphanSelfLock(params: {
     return params.reclaimLockWithoutStarttime;
   }
 
-  const currentStarttime = getProcessStartTime(process.pid);
+  const currentStarttime = resolveProcessStartTimeForLock(process.pid);
   return currentStarttime !== null && currentStarttime === storedStarttime;
 }
 
@@ -543,7 +544,7 @@ export async function acquireSessionWriteLock(params: {
         metadata: { maxHoldMs },
         payload: () => {
           const createdAt = new Date().toISOString();
-          const starttime = getProcessStartTime(process.pid);
+          const starttime = resolveProcessStartTimeForLock(process.pid);
           const lockPayload: LockFilePayload = { pid: process.pid, createdAt };
           if (starttime !== null) {
             lockPayload.starttime = starttime;
@@ -591,6 +592,9 @@ export const __testing = {
   handleTerminationSignal,
   releaseAllLocksSync,
   runLockWatchdogCheck,
+  setProcessStartTimeResolverForTest(resolver: ((pid: number) => number | null) | null): void {
+    resolveProcessStartTimeForLock = resolver ?? getProcessStartTime;
+  },
 };
 
 export async function drainSessionWriteLockStateForTest(): Promise<void> {
@@ -603,4 +607,5 @@ export function resetSessionWriteLockStateForTest(): void {
   releaseAllLocksSync();
   stopWatchdogTimer();
   unregisterCleanupHandlers();
+  resolveProcessStartTimeForLock = getProcessStartTime;
 }

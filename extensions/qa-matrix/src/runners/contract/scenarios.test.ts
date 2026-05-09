@@ -68,6 +68,10 @@ function requireMatrixQaScenario(id: string): (typeof MATRIX_QA_SCENARIOS)[numbe
   return scenario;
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 function matrixQaScenarioContext(): MatrixQaScenarioContext {
   return {
     baseUrl: "http://127.0.0.1:28008/",
@@ -938,8 +942,8 @@ describe("matrix live qa scenarios", () => {
     const topology = scenarioTesting.buildMatrixQaTopologyForScenarios({
       defaultRoomName: "OpenClaw Matrix QA run",
       scenarios: [
-        MATRIX_QA_SCENARIOS.find((scenario) => scenario.id === "matrix-e2ee-basic-reply")!,
-        MATRIX_QA_SCENARIOS.find((scenario) => scenario.id === "matrix-e2ee-thread-follow-up")!,
+        requireMatrixQaScenario("matrix-e2ee-basic-reply"),
+        requireMatrixQaScenario("matrix-e2ee-thread-follow-up"),
       ],
     });
 
@@ -1984,7 +1988,7 @@ describe("matrix live qa scenarios", () => {
         },
       });
 
-      await expect(stat(syncStorePath)).rejects.toThrow();
+      await expectPathMissing(syncStorePath);
       expect(registerWithToken).toHaveBeenCalledWith(
         expect.objectContaining({
           registrationToken: "registration-token",
@@ -4818,8 +4822,8 @@ describe("matrix live qa scenarios", () => {
         startupVerification: "off",
         userId: "@cli-owner:matrix-qa.test",
       });
-      await expect(readFile(configPath, "utf8")).rejects.toThrow();
-      await expect(readdir(String(cliEnv?.OPENCLAW_STATE_DIR))).rejects.toThrow();
+      await expectPathMissing(configPath);
+      await expectPathMissing(String(cliEnv?.OPENCLAW_STATE_DIR));
       expect(acceptVerification).toHaveBeenCalledWith("owner-request");
       expect(confirmVerificationSas).toHaveBeenCalledWith("owner-request");
       expect(deleteOwnDevices).toHaveBeenCalledWith(["CLIDEVICE"]);
@@ -4871,7 +4875,7 @@ describe("matrix live qa scenarios", () => {
             plugins?: { allow?: string[]; entries?: { matrix?: unknown } };
           };
           expect(initialConfig.channels?.matrix?.enabled).toBe(true);
-          expect(initialConfig.channels?.matrix?.accounts).toEqual({});
+          expect(initialConfig.channels?.matrix?.accounts).toStrictEqual({});
           expect(initialConfig.plugins?.allow).toContain("matrix");
           expect(initialConfig.plugins?.entries?.matrix).toEqual({ enabled: true });
         }

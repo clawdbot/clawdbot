@@ -18,6 +18,16 @@ type AuditFixture = {
 const OPENAI_API_KEY_MARKER = "OPENAI_API_KEY"; // pragma: allowlist secret
 const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
 
+function countNonEmptyLines(value: string): number {
+  let count = 0;
+  for (const line of value.split("\n")) {
+    if (line.trim().length > 0) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
@@ -220,8 +230,12 @@ describe("secrets audit", () => {
     expect(report.status).toBe("findings");
     expect(report.summary.plaintextCount).toBeGreaterThan(0);
     expect(report.summary.shadowedRefCount).toBeGreaterThan(0);
-    expect(hasFinding(report, (entry) => entry.code === "REF_SHADOWED")).toBe(true);
-    expect(hasFinding(report, (entry) => entry.code === "PLAINTEXT_FOUND")).toBe(true);
+    expect(report.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "REF_SHADOWED" }),
+        expect.objectContaining({ code: "PLAINTEXT_FOUND" }),
+      ]),
+    );
   });
 
   it("does not mutate legacy auth.json during audit", async () => {
@@ -234,7 +248,9 @@ describe("secrets audit", () => {
     });
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expect(hasFinding(report, (entry) => entry.code === "LEGACY_RESIDUE")).toBe(true);
+    expect(report.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "LEGACY_RESIDUE" })]),
+    );
     const authJsonStat = await fs.stat(fixture.authJsonPath);
     expect(authJsonStat.isFile()).toBe(true);
     await expect(fs.stat(fixture.authStorePath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -245,9 +261,13 @@ describe("secrets audit", () => {
     await fs.writeFile(fixture.authJsonPath, "{invalid-json", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expect(hasFinding(report, (entry) => entry.file === fixture.authStorePath)).toBe(true);
-    expect(hasFinding(report, (entry) => entry.file === fixture.authJsonPath)).toBe(true);
-    expect(hasFinding(report, (entry) => entry.code === "REF_UNRESOLVED")).toBe(true);
+    expect(report.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ file: fixture.authStorePath }),
+        expect.objectContaining({ file: fixture.authJsonPath }),
+        expect.objectContaining({ code: "REF_UNRESOLVED" }),
+      ]),
+    );
   });
 
   it("skips exec ref resolution during audit unless explicitly allowed", async () => {
@@ -324,7 +344,7 @@ describe("secrets audit", () => {
     expect(report.summary.unresolvedRefCount).toBe(0);
 
     const callLog = await fs.readFile(execLogPath, "utf8");
-    const callCount = callLog.split("\n").filter((line) => line.trim().length > 0).length;
+    const callCount = countNonEmptyLines(callLog);
     expect(callCount).toBe(1);
   });
 
@@ -388,7 +408,7 @@ describe("secrets audit", () => {
     expect(report.summary.unresolvedRefCount).toBeGreaterThanOrEqual(2);
 
     const callLog = await fs.readFile(execLogPath, "utf8");
-    const callCount = callLog.split("\n").filter((line) => line.trim().length > 0).length;
+    const callCount = countNonEmptyLines(callLog);
     expect(callCount).toBe(1);
   });
 

@@ -62,7 +62,10 @@ type TelegramReasoningSplit = {
   answerText?: string;
 };
 
-export function splitTelegramReasoningText(text?: string): TelegramReasoningSplit {
+export function splitTelegramReasoningText(
+  text?: string,
+  isReasoning?: boolean,
+): TelegramReasoningSplit {
   if (typeof text !== "string") {
     return {};
   }
@@ -80,6 +83,10 @@ export function splitTelegramReasoningText(text?: string): TelegramReasoningSpli
 
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
+
+  if (isReasoning === true) {
+    return { reasoningText: formatReasoningMessage(taggedReasoning || strippedAnswer || text) };
+  }
 
   if (!taggedReasoning && strippedAnswer === text) {
     return { answerText: text };

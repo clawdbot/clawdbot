@@ -83,7 +83,6 @@ describe("tool-cards", () => {
     expect(container.textContent).toContain("Tool call");
     expect(container.textContent).not.toContain("Tool input");
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
-    expect(summaryButton).not.toBeNull();
     expect(summaryButton?.getAttribute("aria-expanded")).toBe("false");
   });
 
@@ -130,7 +129,8 @@ describe("tool-cards", () => {
     expect(rawToggle?.getAttribute("aria-expanded")).toBe("false");
     expect(rawBody?.hidden).toBe(true);
 
-    rawToggle?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(rawToggle).toBeInstanceOf(HTMLButtonElement);
+    rawToggle!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(rawToggle?.getAttribute("aria-expanded")).toBe("true");
     expect(rawBody?.hidden).toBe(false);
@@ -174,9 +174,10 @@ describe("tool-cards", () => {
     );
 
     const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
-    sidebarButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
+    expect(sidebarButton?.classList.contains("chat-tool-card__action-btn")).toBe(true);
+    sidebarButton!.click();
 
-    expect(sidebarButton).not.toBeNull();
     expect(onOpenSidebar).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "canvas",

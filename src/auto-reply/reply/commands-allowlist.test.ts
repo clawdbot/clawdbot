@@ -59,6 +59,17 @@ function normalizeTelegramAllowFromEntries(values: Array<string | number>): stri
   return formatAllowFromLowercase({ allowFrom: values, stripPrefixRe: /^(telegram|tg):/i });
 }
 
+function normalizeAllowlistValues(values: Array<string | number>): string[] {
+  const normalized: string[] = [];
+  for (const value of values) {
+    const entry = String(value).trim();
+    if (entry) {
+      normalized.push(entry);
+    }
+  }
+  return normalized;
+}
+
 function resolveTelegramTestAccount(
   cfg: OpenClawConfig,
   accountId?: string | null,
@@ -128,7 +139,7 @@ const whatsappAllowlistTestPlugin: ChannelPlugin = {
     channelId: "whatsapp",
     resolveAccount: ({ cfg }) =>
       (cfg.channels?.whatsapp as DmGroupAllowlistTestSectionConfig | undefined) ?? {},
-    normalize: ({ values }) => values.map((value) => String(value).trim()).filter(Boolean),
+    normalize: ({ values }) => normalizeAllowlistValues(values),
     resolveDmAllowFrom: (account) => account.allowFrom,
     resolveGroupAllowFrom: (account) => account.groupAllowFrom,
     resolveDmPolicy: () => undefined,
@@ -154,7 +165,7 @@ function createLegacyAllowlistPlugin(channelId: "discord" | "slack"): ChannelPlu
       channelId,
       resolveAccount: ({ cfg }) =>
         (cfg.channels?.[channelId] as DmGroupAllowlistTestSectionConfig | undefined) ?? {},
-      normalize: ({ values }) => values.map((value) => String(value).trim()).filter(Boolean),
+      normalize: ({ values }) => normalizeAllowlistValues(values),
       resolveDmAllowFrom: (account) => account.allowFrom ?? account.dm?.allowFrom,
       resolveGroupPolicy: () => undefined,
       resolveGroupOverrides: () => undefined,

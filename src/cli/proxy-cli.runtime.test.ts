@@ -464,6 +464,7 @@ describe("proxy cli runtime", () => {
     const { runDebugProxyRunCommand } = await import("./proxy-cli.runtime.js");
     const { getDebugProxyCaptureStore } = await import("../proxy-capture/store.sqlite.js");
 
+    const beforeRun = Date.now();
     await expect(
       runDebugProxyRunCommand({
         commandArgs: ["does-not-exist"],
@@ -478,6 +479,6 @@ describe("proxy cli runtime", () => {
     );
     const [session] = store.listSessions(5);
     expect(session?.mode).toBe("proxy-run");
-    expect(session?.endedAt).toEqual(expect.any(Number));
+    expect(session?.endedAt).toBeGreaterThanOrEqual(beforeRun);
   });
 });

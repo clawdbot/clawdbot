@@ -25,13 +25,25 @@ describe("Ollama provider", () => {
   const fetchCallUrls = (fetchMock: ReturnType<typeof vi.fn>): string[] =>
     fetchMock.mock.calls.map(([input]) => String(input));
 
+  const countFetchCallUrls = (fetchMock: ReturnType<typeof vi.fn>, suffix: string): number =>
+    fetchCallUrls(fetchMock).reduce((count, url) => count + (url.endsWith(suffix) ? 1 : 0), 0);
+
+  const countWarnCallsIncluding = (warnSpy: ReturnType<typeof vi.spyOn>, text: string): number => {
+    let count = 0;
+    for (const [message] of warnSpy.mock.calls) {
+      if (String(message).includes(text)) {
+        count++;
+      }
+    }
+    return count;
+  };
+
   const expectDiscoveryCallCounts = (
     fetchMock: ReturnType<typeof vi.fn>,
     params: { tags: number; show: number },
   ) => {
-    const urls = fetchCallUrls(fetchMock);
-    expect(urls.filter((url) => url.endsWith("/api/tags"))).toHaveLength(params.tags);
-    expect(urls.filter((url) => url.endsWith("/api/show"))).toHaveLength(params.show);
+    expect(countFetchCallUrls(fetchMock, "/api/tags")).toBe(params.tags);
+    expect(countFetchCallUrls(fetchMock, "/api/show")).toBe(params.show);
   };
 
   async function withOllamaApiKey<T>(run: () => Promise<T>): Promise<T> {
@@ -148,7 +160,7 @@ describe("Ollama provider", () => {
         env: { OLLAMA_API_KEY: "test-key" },
       });
 
-      expect(fetchCallUrls(fetchMock).filter((url) => url.endsWith("/api/tags"))).toHaveLength(1);
+      expect(countFetchCallUrls(fetchMock, "/api/tags")).toBe(1);
 
       // Native API strips /v1 suffix via resolveOllamaApiBase()
       expect(provider?.baseUrl).toBe("http://192.168.20.14:11434");
@@ -272,9 +284,7 @@ describe("Ollama provider", () => {
         env: { VITEST: "", NODE_ENV: "development" },
       });
 
-      expect(
-        warnSpy.mock.calls.filter(([message]) => String(message).includes("Ollama")).length,
-      ).toBeGreaterThan(0);
+      expect(countWarnCallsIncluding(warnSpy, "Ollama")).toBeGreaterThan(0);
       warnSpy.mockRestore();
     });
   });

@@ -46,6 +46,16 @@ const mockReaddirSync = vi.fn();
 const mockSettingsExistsSync = vi.fn();
 const mockSettingsReadFileSync = vi.fn();
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 describe("resolveGeminiCliSelectedAuthType", () => {
   const ENV_KEYS = ["GOOGLE_GENAI_USE_GCA"] as const;
 
@@ -520,7 +530,7 @@ describe("extractGeminiCliCredentials", () => {
 
     // First call
     const result1 = extractGeminiCliCredentials();
-    expect(result1).not.toBeNull();
+    expectFakeCliCredentials(result1);
 
     // Second call should use cache (readFileSync not called again)
     const readCount = mockReadFileSync.mock.calls.length;
@@ -843,8 +853,10 @@ describe("loginGeminiCliOAuth", () => {
     });
 
     await runProjectDiscoveryExpectingProjectId("env-project");
-    expect(requests.filter(({ url }) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
-    expect(requests.some(({ url }) => url.includes("v1internal:onboardUser"))).toBe(false);
+    expect(countMatching(requests, ({ url }) => url.includes("v1internal:loadCodeAssist"))).toBe(3);
+    expect(requests.map(({ url }) => url)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("v1internal:onboardUser")]),
+    );
   });
 
   it("skips loadCodeAssist entirely when Gemini CLI is configured for personal OAuth", async () => {

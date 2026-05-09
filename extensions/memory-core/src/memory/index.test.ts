@@ -275,11 +275,10 @@ describe("memory index", () => {
     result: Awaited<ReturnType<typeof getMemorySearchManager>>,
     missingMessage = "manager missing",
   ): MemoryIndexManager {
-    expect(result.manager).not.toBeNull();
     if (!result.manager) {
       throw new Error(missingMessage);
     }
-    return result.manager as MemoryIndexManager;
+    return result.manager as unknown as MemoryIndexManager;
   }
 
   async function getPersistentManager(cfg: TestCfg): Promise<MemoryIndexManager> {
@@ -377,10 +376,14 @@ describe("memory index", () => {
     expect(embedBatchInputCalls).toBeGreaterThan(0);
 
     const imageResults = await manager.search("image");
-    expect(imageResults.some((result) => result.path.endsWith("diagram.png"))).toBe(true);
+    expect(imageResults.map((result) => result.path)).toContainEqual(
+      expect.stringMatching(/diagram\.png$/),
+    );
 
     const audioResults = await manager.search("audio");
-    expect(audioResults.some((result) => result.path.endsWith("meeting.wav"))).toBe(true);
+    expect(audioResults.map((result) => result.path)).toContainEqual(
+      expect.stringMatching(/meeting\.wav$/),
+    );
   });
 
   it("finds keyword matches via hybrid search when query embedding is zero", async () => {

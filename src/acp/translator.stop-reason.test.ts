@@ -203,7 +203,8 @@ describe("acp translator stop reason mapping", () => {
     const promptPromise = promptAgent(agent, sessionId);
 
     await vi.waitFor(() => {
-      expect(runId).toEqual(expect.any(String));
+      expect(runId).toBeTypeOf("string");
+      expect(runId).not.toBe("");
     });
     const capturedRunId = requireValue(runId, "chat.send run id");
 

@@ -931,7 +931,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       serviceEnvironment: {
         HOME: "/from-service",
         OPENCLAW_PORT: "3000",
-        PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        PATH: "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         TMPDIR: "/tmp",
       },
     });
@@ -953,7 +953,9 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
 
-    expect(plan.environment.PATH).toBe("/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
+    expect(plan.environment.PATH).toBe(
+      "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    );
   });
 
   it("drops legacy inline env values when the key is now managed by .env", async () => {

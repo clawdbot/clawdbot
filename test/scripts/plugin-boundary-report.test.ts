@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { createPluginBoundaryReport } from "../../scripts/plugin-boundary-report.js";
 
+function requirePluginSdkSummary(summary: {
+  pluginSdk?: {
+    crossOwnerReservedImportCount?: unknown;
+    unusedReservedCount?: unknown;
+  };
+}) {
+  if (!summary.pluginSdk) {
+    throw new Error("Expected plugin SDK summary");
+  }
+  return summary.pluginSdk;
+}
+
 describe("plugin-boundary-report", () => {
   it("emits compact CI-safe summary JSON", () => {
     const result = createPluginBoundaryReport([
@@ -20,8 +32,9 @@ describe("plugin-boundary-report", () => {
     };
 
     expect(result).toMatchObject({ exitCode: 0, stderr: "" });
-    expect(summary.pluginSdk?.crossOwnerReservedImportCount).toBe(0);
-    expect(summary.pluginSdk?.unusedReservedCount).toBe(0);
+    const pluginSdk = requirePluginSdkSummary(summary);
+    expect(pluginSdk.crossOwnerReservedImportCount).toBe(0);
+    expect(pluginSdk.unusedReservedCount).toBe(0);
     expect(["private-core-bridge", "private-package-core-integrated"]).toContain(
       summary.memoryHostSdk?.implementation,
     );

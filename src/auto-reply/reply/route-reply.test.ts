@@ -204,7 +204,7 @@ describe("routeReply", () => {
   });
 
   it("suppresses reasoning payloads", async () => {
-    await expectSlackNoDelivery({ text: "Reasoning:\n_step_", isReasoning: true });
+    await expectSlackNoDelivery({ text: "step", isReasoning: true });
   });
 
   it("drops silent token payloads", async () => {

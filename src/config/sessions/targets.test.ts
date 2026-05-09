@@ -42,6 +42,16 @@ function createCustomRootCfg(customRoot: string, defaultAgentId = "ops"): OpenCl
   };
 }
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 async function resolveTargetsForCustomRoot(home: string, agentIds: string[]) {
   const customRoot = path.join(home, "custom-state");
   const storePaths = await createAgentSessionStores(customRoot, agentIds);
@@ -186,7 +196,7 @@ describe("resolveAllAgentSessionStoreTargets", () => {
       const targets = await resolveAllAgentSessionStoreTargets(cfg, { env: process.env });
 
       expectTargetsToContainStores(targets, storePaths);
-      expect(targets.filter((target) => target.storePath === storePaths.ops)).toHaveLength(1);
+      expect(countMatching(targets, (target) => target.storePath === storePaths.ops)).toBe(1);
     });
   });
 
@@ -195,7 +205,7 @@ describe("resolveAllAgentSessionStoreTargets", () => {
       const { storePaths, targets } = await resolveTargetsForCustomRoot(home, ["ops", "retired"]);
 
       expectTargetsToContainStores(targets, storePaths);
-      expect(targets.filter((target) => target.storePath === storePaths.ops)).toHaveLength(1);
+      expect(countMatching(targets, (target) => target.storePath === storePaths.ops)).toBe(1);
     });
   });
 

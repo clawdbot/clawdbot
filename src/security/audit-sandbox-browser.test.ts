@@ -14,6 +14,17 @@ function hasFinding(
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
 }
 
+function requireFinding(
+  checkId: "sandbox.browser_container.hash_epoch_stale",
+  findings: Array<{ checkId: string; severity: string; detail: string }>,
+) {
+  const finding = findings.find((entry) => entry.checkId === checkId);
+  if (!finding) {
+    throw new Error(`Expected ${checkId} finding`);
+  }
+  return finding;
+}
+
 describe("security audit sandbox browser findings", () => {
   it("warns when sandbox browser containers have missing or stale hash labels", async () => {
     const findings = await collectSandboxBrowserHashLabelFindings({
@@ -49,10 +60,8 @@ describe("security audit sandbox browser findings", () => {
 
     expect(hasFinding("sandbox.browser_container.hash_label_missing", "warn", findings)).toBe(true);
     expect(hasFinding("sandbox.browser_container.hash_epoch_stale", "warn", findings)).toBe(true);
-    const staleEpoch = findings.find(
-      (finding) => finding.checkId === "sandbox.browser_container.hash_epoch_stale",
-    );
-    expect(staleEpoch?.detail).toContain("openclaw-sbx-browser-old");
+    const staleEpoch = requireFinding("sandbox.browser_container.hash_epoch_stale", findings);
+    expect(staleEpoch.detail).toContain("openclaw-sbx-browser-old");
   });
 
   it("skips sandbox browser hash label checks when docker inspect is unavailable", async () => {

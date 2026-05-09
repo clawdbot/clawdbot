@@ -2,6 +2,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
+import { normalizeAgentModelMapForConfig } from "./model-input.js";
 import {
   applyProviderConfigDefaultsForConfig,
   normalizeProviderConfigForConfigDefaults,
@@ -255,7 +256,11 @@ export function applyModelDefaults(
   if (!existingAgent) {
     return mutated ? nextCfg : cfg;
   }
-  const existingModels = existingAgent.models ?? {};
+  const rawExistingModels = existingAgent.models ?? {};
+  const existingModels = normalizeAgentModelMapForConfig(rawExistingModels);
+  if (existingModels !== rawExistingModels) {
+    mutated = true;
+  }
   if (Object.keys(existingModels).length === 0) {
     return mutated ? nextCfg : cfg;
   }

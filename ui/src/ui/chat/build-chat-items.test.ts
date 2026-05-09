@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../types/chat-types.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
 
+const SENDER_METADATA_BLOCK =
+  'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
+
 function createProps(overrides: Partial<BuildChatItemsProps> = {}): BuildChatItemsProps {
   return {
     sessionKey: "main",
@@ -148,7 +151,51 @@ describe("buildChatItems", () => {
       }),
     );
 
-    expect(items).toEqual([]);
+    expect(items).toStrictEqual([]);
+  });
+
+  it("suppresses active sender metadata streams before rendering", () => {
+    const items = buildChatItems(
+      createProps({
+        stream: SENDER_METADATA_BLOCK,
+        streamStartedAt: 1,
+      }),
+    );
+
+    expect(items).toStrictEqual([]);
+  });
+
+  it("strips sender metadata from active stream text that has visible content", () => {
+    const items = buildChatItems(
+      createProps({
+        stream: `${SENDER_METADATA_BLOCK}\n\nVisible reply`,
+        streamStartedAt: 1,
+      }),
+    );
+
+    expect(items).toEqual([
+      {
+        kind: "stream",
+        key: "stream:main:1",
+        text: "Visible reply",
+        startedAt: 1,
+      },
+    ]);
+  });
+
+  it("suppresses metadata-only history messages before grouping", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: SENDER_METADATA_BLOCK,
+          senderLabel: "openclaw-control-ui",
+          timestamp: 1,
+        },
+      ],
+    });
+
+    expect(groups).toStrictEqual([]);
   });
 
   it("renders only the last 100 history messages and shows a hidden-count notice", () => {
@@ -261,7 +308,46 @@ describe("buildChatItems", () => {
     });
 
     expect(canvasBlocksIn(groups[0])).toHaveLength(1);
-    expect(canvasBlocksIn(groups[1])).toEqual([]);
+    expect(canvasBlocksIn(groups[1])).toStrictEqual([]);
+  });
+
+  it("preserves a metadata-only assistant anchor when lifting canvas previews", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          id: "assistant-metadata-anchor",
+          role: "assistant",
+          content: SENDER_METADATA_BLOCK,
+          timestamp: 1_000,
+        },
+      ],
+      toolMessages: [
+        {
+          id: "tool-canvas-for-empty-anchor",
+          role: "tool",
+          toolCallId: "call-canvas-empty-anchor",
+          toolName: "canvas_render",
+          content: JSON.stringify({
+            kind: "canvas",
+            view: {
+              backend: "canvas",
+              id: "cv_empty_anchor",
+              url: "/__openclaw__/canvas/documents/cv_empty_anchor/index.html",
+              title: "Empty anchor demo",
+              preferred_height: 320,
+            },
+            presentation: {
+              target: "assistant_message",
+            },
+          }),
+          timestamp: 1_001,
+        },
+      ],
+    });
+
+    expect(
+      groups.some((group) => firstMessageContent(group).some((block) => isCanvasBlock(block))),
+    ).toBe(true);
   });
 
   it("does not lift generic view handles from non-canvas payloads", () => {
@@ -300,7 +386,7 @@ describe("buildChatItems", () => {
       ],
     });
 
-    expect(canvasBlocksIn(groups[0])).toEqual([]);
+    expect(canvasBlocksIn(groups[0])).toStrictEqual([]);
   });
 
   it("lifts streamed canvas toolresult blocks into the assistant bubble", () => {

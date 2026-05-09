@@ -11,6 +11,16 @@ import {
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
+function collectNonEmptyLines(text: string): string[] {
+  const lines: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (line.trim().length > 0) {
+      lines.push(line);
+    }
+  }
+  return lines;
+}
+
 test("lists and patches session store via sessions.* RPC", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   const now = Date.now();
@@ -150,7 +160,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
 
   expect(list1.ok).toBe(true);
   expect(list1.payload?.path).toBe(storePath);
-  expect(list1.payload?.sessions.some((s) => s.key === "global")).toBe(false);
+  expect(list1.payload?.sessions.map((session) => session.key)).not.toContain("global");
   expect(list1.payload?.defaults?.modelProvider).toBe("anthropic");
   const main = list1.payload?.sessions.find((s) => s.key === "agent:main:main");
   expect(main?.totalTokens).toBeUndefined();
@@ -321,8 +331,8 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const listAfterCleanup = await directSessionReq<{
     sessions: Array<{ key: string }>;
   }>("sessions.list", {});
-  expect(listAfterCleanup.payload?.sessions.some((s) => s.key === "agent:main:subagent:one")).toBe(
-    false,
+  expect(listAfterCleanup.payload?.sessions.map((session) => session.key)).not.toContain(
+    "agent:main:subagent:one",
   );
 
   piSdkMock.enabled = true;
@@ -378,12 +388,12 @@ test("lists and patches session store via sessions.* RPC", async () => {
   });
   expect(compacted.ok).toBe(true);
   expect(compacted.payload?.compacted).toBe(true);
-  const compactedLines = (await fs.readFile(path.join(dir, "sess-main.jsonl"), "utf-8"))
-    .split(/\r?\n/)
-    .filter((l) => l.trim().length > 0);
+  const compactedLines = collectNonEmptyLines(
+    await fs.readFile(path.join(dir, "sess-main.jsonl"), "utf-8"),
+  );
   expect(compactedLines).toHaveLength(3);
   const filesAfterCompact = await fs.readdir(dir);
-  expect(filesAfterCompact.some((f) => f.startsWith("sess-main.jsonl.bak."))).toBe(true);
+  expect(filesAfterCompact).toContainEqual(expect.stringMatching(/^sess-main\.jsonl\.bak\./));
 
   const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
     key: "agent:main:discord:group:dev",
@@ -394,11 +404,11 @@ test("lists and patches session store via sessions.* RPC", async () => {
     sessions: Array<{ key: string }>;
   }>("sessions.list", {});
   expect(listAfterDelete.ok).toBe(true);
-  expect(
-    listAfterDelete.payload?.sessions.some((s) => s.key === "agent:main:discord:group:dev"),
-  ).toBe(false);
+  expect(listAfterDelete.payload?.sessions.map((session) => session.key)).not.toContain(
+    "agent:main:discord:group:dev",
+  );
   const filesAfterDelete = await fs.readdir(dir);
-  expect(filesAfterDelete.some((f) => f.startsWith("sess-group.jsonl.deleted."))).toBe(true);
+  expect(filesAfterDelete).toContainEqual(expect.stringMatching(/^sess-group\.jsonl\.deleted\./));
 
   const reset = await directSessionReq<{
     ok: true;
@@ -425,7 +435,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(storeAfterReset["agent:main:main"]?.lastAccountId).toBe("work");
   expect(storeAfterReset["agent:main:main"]?.lastThreadId).toBe("1737500000.123456");
   const filesAfterReset = await fs.readdir(dir);
-  expect(filesAfterReset.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(true);
+  expect(filesAfterReset).toContainEqual(expect.stringMatching(/^sess-main\.jsonl\.reset\./));
 
   const badThinking = await directSessionReq("sessions.patch", {
     key: "agent:main:main",

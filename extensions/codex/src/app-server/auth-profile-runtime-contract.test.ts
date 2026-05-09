@@ -112,7 +112,7 @@ function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "
     seenAuthProfileIds,
     seenAgentDirs,
     async waitForMethod(method: string) {
-      await vi.waitFor(() => expect(requests.some((entry) => entry.method === method)).toBe(true), {
+      await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain(method), {
         interval: 1,
       });
     },

@@ -30,6 +30,10 @@ async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<vo
   }
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("restart sentinel", () => {
   it("writes and consumes a sentinel", async () => {
     await withRestartSentinelStateDir(async () => {
@@ -69,7 +73,7 @@ describe("restart sentinel", () => {
       const read = await readRestartSentinel();
       expect(read).toBeNull();
 
-      await expect(fs.stat(filePath)).rejects.toThrow();
+      await expectPathMissing(filePath);
     });
   });
 
@@ -80,7 +84,7 @@ describe("restart sentinel", () => {
       await fs.writeFile(filePath, JSON.stringify({ version: 2, payload: null }), "utf-8");
 
       await expect(readRestartSentinel()).resolves.toBeNull();
-      await expect(fs.stat(filePath)).rejects.toThrow();
+      await expectPathMissing(filePath);
     });
   });
 

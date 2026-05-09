@@ -143,8 +143,12 @@ describe("i18n", () => {
 
   it("keeps the version label available in shipped locales", () => {
     for (const [locale, value] of Object.entries(shippedLocales)) {
-      expect((value.common as { version?: string }).version, locale).toEqual(expect.any(String));
-      expect((value.common as { version?: string }).version?.trim(), locale).not.toBe("");
+      const version = (value.common as { version?: unknown }).version;
+      expect(version, locale).toBeTypeOf("string");
+      if (typeof version !== "string") {
+        throw new Error(`expected ${locale} common.version to be a string`);
+      }
+      expect(version.trim(), locale).not.toBe("");
     }
   });
 

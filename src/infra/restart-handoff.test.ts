@@ -10,6 +10,7 @@ import {
   readGatewayRestartHandoffSync,
   writeGatewayRestartHandoffSync,
 } from "./restart-handoff.js";
+import type { GatewayRestartHandoff } from "./restart-handoff.js";
 
 const tempDirs: string[] = [];
 
@@ -24,6 +25,16 @@ function createHandoffEnv(): NodeJS.ProcessEnv {
 
 function handoffPath(env: NodeJS.ProcessEnv): string {
   return path.join(env.OPENCLAW_STATE_DIR ?? "", GATEWAY_SUPERVISOR_RESTART_HANDOFF_FILENAME);
+}
+
+function expectWrittenHandoff(
+  opts: Parameters<typeof writeGatewayRestartHandoffSync>[0],
+): GatewayRestartHandoff {
+  const handoff = writeGatewayRestartHandoffSync(opts);
+  if (handoff === null) {
+    throw new Error("Expected gateway restart handoff to be written");
+  }
+  return handoff;
 }
 
 describe("gateway restart handoff", () => {
@@ -68,16 +79,14 @@ describe("gateway restart handoff", () => {
   it("consumes a fresh handoff by exited pid instead of current process pid", () => {
     const env = createHandoffEnv();
 
-    expect(
-      writeGatewayRestartHandoffSync({
-        env,
-        pid: process.pid + 1,
-        reason: "update.run",
-        restartKind: "update-process",
-        supervisorMode: "systemd",
-        createdAt: 2_000,
-      }),
-    ).not.toBeNull();
+    expectWrittenHandoff({
+      env,
+      pid: process.pid + 1,
+      reason: "update.run",
+      restartKind: "update-process",
+      supervisorMode: "systemd",
+      createdAt: 2_000,
+    });
 
     expect(
       consumeGatewayRestartHandoffForExitedProcessSync({
@@ -97,15 +106,13 @@ describe("gateway restart handoff", () => {
   it("rejects handoffs for a different exited pid and clears them", () => {
     const env = createHandoffEnv();
 
-    expect(
-      writeGatewayRestartHandoffSync({
-        env,
-        pid: 111,
-        restartKind: "full-process",
-        supervisorMode: "external",
-        createdAt: 1_000,
-      }),
-    ).not.toBeNull();
+    expectWrittenHandoff({
+      env,
+      pid: 111,
+      restartKind: "full-process",
+      supervisorMode: "external",
+      createdAt: 1_000,
+    });
 
     expect(
       consumeGatewayRestartHandoffForExitedProcessSync({
@@ -120,16 +127,14 @@ describe("gateway restart handoff", () => {
   it("rejects a handoff when the supplied process instance does not match", () => {
     const env = createHandoffEnv();
 
-    expect(
-      writeGatewayRestartHandoffSync({
-        env,
-        pid: 111,
-        processInstanceId: "gateway-instance-1",
-        restartKind: "full-process",
-        supervisorMode: "external",
-        createdAt: 1_000,
-      }),
-    ).not.toBeNull();
+    expectWrittenHandoff({
+      env,
+      pid: 111,
+      processInstanceId: "gateway-instance-1",
+      restartKind: "full-process",
+      supervisorMode: "external",
+      createdAt: 1_000,
+    });
 
     expect(
       consumeGatewayRestartHandoffForExitedProcessSync({
@@ -168,16 +173,14 @@ describe("gateway restart handoff", () => {
   it("rejects expired and oversized handoff files", () => {
     const env = createHandoffEnv();
 
-    expect(
-      writeGatewayRestartHandoffSync({
-        env,
-        pid: 111,
-        restartKind: "full-process",
-        supervisorMode: "external",
-        createdAt: 1_000,
-        ttlMs: 1_000,
-      }),
-    ).not.toBeNull();
+    expectWrittenHandoff({
+      env,
+      pid: 111,
+      restartKind: "full-process",
+      supervisorMode: "external",
+      createdAt: 1_000,
+      ttlMs: 1_000,
+    });
     expect(readGatewayRestartHandoffSync(env, 2_001)).toBeNull();
 
     fs.writeFileSync(handoffPath(env), "x".repeat(8192), { encoding: "utf8", mode: 0o600 });
@@ -231,14 +234,12 @@ describe("gateway restart handoff", () => {
       return;
     }
 
-    expect(
-      writeGatewayRestartHandoffSync({
-        env,
-        pid: 12_345,
-        restartKind: "full-process",
-        supervisorMode: "external",
-      }),
-    ).not.toBeNull();
+    expectWrittenHandoff({
+      env,
+      pid: 12_345,
+      restartKind: "full-process",
+      supervisorMode: "external",
+    });
 
     expect(fs.readFileSync(targetPath, "utf8")).toBe("keep");
     expect(fs.lstatSync(handoffPath(env)).isSymbolicLink()).toBe(false);

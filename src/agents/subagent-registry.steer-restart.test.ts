@@ -67,6 +67,17 @@ vi.mock("../config/sessions.js", () => {
 const announceSpy = vi.fn(async (_params: unknown) => true);
 const runSubagentEndedHookMock = vi.fn(async (_event?: unknown, _ctx?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.fn();
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 const noopContextEngine = {
   info: { id: "test-context-engine", name: "Test context engine" },
   ingest: async () => ({ ingested: false }),
@@ -136,7 +147,7 @@ describe("subagent registry steer restarts", () => {
   };
 
   const createDeferredAnnounceResolver = (): ((value: boolean) => void) => {
-    let resolveAnnounce!: (value: boolean) => void;
+    let resolveAnnounce: ((value: boolean) => void) | undefined;
     announceSpy.mockImplementationOnce(
       () =>
         new Promise<boolean>((resolve) => {
@@ -144,6 +155,9 @@ describe("subagent registry steer restarts", () => {
         }),
     );
     return (value: boolean) => {
+      if (!resolveAnnounce) {
+        throw new Error("Expected subagent announcement resolver to be initialized");
+      }
       resolveAnnounce(value);
     };
   };
@@ -566,9 +580,10 @@ describe("subagent registry steer restarts", () => {
 
     const run = listMainRuns()[0];
     expect(run?.outcome).toMatchObject({ status: "error", error: "manual kill" });
-    expect(run?.outcome?.startedAt).toEqual(expect.any(Number));
-    expect(run?.outcome?.endedAt).toEqual(expect.any(Number));
-    expect(run?.outcome?.elapsedMs).toEqual(expect.any(Number));
+    expect(run?.outcome?.startedAt).toBeTypeOf("number");
+    expect(run?.outcome?.endedAt).toBeTypeOf("number");
+    expect(run?.outcome?.elapsedMs).toBeTypeOf("number");
+    expect(run?.outcome?.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(run?.outcome?.endedAt).toBeGreaterThanOrEqual(run?.outcome?.startedAt ?? 0);
     expect(run?.cleanupHandled).toBe(true);
     expect(typeof run?.cleanupCompletedAt).toBe("number");
@@ -683,7 +698,7 @@ describe("subagent registry steer restarts", () => {
       const childRunIds = announceSpy.mock.calls.map(
         (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
       );
-      expect(childRunIds.filter((id) => id === "run-parent")).toHaveLength(1);
+      expect(countMatching(childRunIds, (id) => id === "run-parent")).toBe(1);
     });
 
     emitLifecycleEnd("run-child");
@@ -691,15 +706,15 @@ describe("subagent registry steer restarts", () => {
       const childRunIds = announceSpy.mock.calls.map(
         (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
       );
-      expect(childRunIds.filter((id) => id === "run-parent")).toHaveLength(2);
-      expect(childRunIds.filter((id) => id === "run-child")).toHaveLength(1);
+      expect(countMatching(childRunIds, (id) => id === "run-parent")).toBe(2);
+      expect(countMatching(childRunIds, (id) => id === "run-child")).toBe(1);
     });
 
     const childRunIds = announceSpy.mock.calls.map(
       (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
     );
-    expect(childRunIds.filter((id) => id === "run-parent")).toHaveLength(2);
-    expect(childRunIds.filter((id) => id === "run-child")).toHaveLength(1);
+    expect(countMatching(childRunIds, (id) => id === "run-parent")).toBe(2);
+    expect(countMatching(childRunIds, (id) => id === "run-child")).toBe(1);
   });
 
   it("retries completion-mode announce delivery with backoff and then gives up after retry limit", async () => {

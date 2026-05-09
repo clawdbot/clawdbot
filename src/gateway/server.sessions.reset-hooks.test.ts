@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
-import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   bootstrapCacheMocks,
@@ -211,7 +211,9 @@ test("sessions.reset returns unavailable when active run does not stop", async (
   >;
   expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
   const filesAfterResetAttempt = await fs.readdir(dir);
-  expect(filesAfterResetAttempt.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(false);
+  expect(filesAfterResetAttempt).not.toContainEqual(
+    expect.stringMatching(/^sess-main\.jsonl\.reset\./),
+  );
 });
 
 test("sessions.reset emits before_reset for the entry actually reset in the writer slot", async () => {
@@ -401,10 +403,73 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
   expect(startEvent).toMatchObject({
     resumedFrom: "sess-parent-hooks",
   });
-  expect((startEvent as { sessionId?: string } | undefined)?.sessionId).toEqual(expect.any(String));
+  expect((startEvent as { sessionId?: string } | undefined)?.sessionId).toBeTypeOf("string");
+  expect((startEvent as { sessionId?: string } | undefined)?.sessionId).not.toBe("");
   expect((startEvent as { sessionKey?: string } | undefined)?.sessionKey).toMatch(
     /^agent:main:dashboard:/,
   );
+});
+
+test("sessions.create with emitCommandHooks=true resets parent in place when session.dmScope is 'main' (#77434)", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-parent-dms.jsonl");
+  await fs.writeFile(
+    transcriptPath,
+    `${JSON.stringify({
+      type: "message",
+      id: "m1",
+      message: { role: "user", content: "hello before /new" },
+    })}\n`,
+    "utf-8",
+  );
+
+  testState.sessionConfig = { dmScope: "main" };
+  try {
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-parent-dms",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const result = await directSessionReq<{
+      ok: boolean;
+      key: string;
+      sessionId: string;
+      runStarted: boolean;
+    }>("sessions.create", {
+      parentSessionKey: "main",
+      emitCommandHooks: true,
+    });
+    expect(result.ok).toBe(true);
+    // Reset-in-place: response key matches the parent main key, NOT a dashboard child.
+    expect(result.payload?.key).toBe("agent:main:main");
+    expect(result.payload?.runStarted).toBe(false);
+    expect(result.payload?.sessionId).not.toBe("sess-parent-dms");
+
+    expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
+    const [endEvent] = (
+      sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
+    )[0] ?? [undefined, undefined];
+    const [startEvent] = (
+      sessionLifecycleHookMocks.runSessionStart.mock.calls as unknown as Array<[unknown, unknown]>
+    )[0] ?? [undefined, undefined];
+    expect(endEvent).toMatchObject({
+      sessionId: "sess-parent-dms",
+      sessionKey: "agent:main:main",
+      reason: "new",
+    });
+    expect(startEvent).toMatchObject({
+      sessionKey: "agent:main:main",
+      resumedFrom: "sess-parent-dms",
+    });
+  } finally {
+    testState.sessionConfig = undefined;
+  }
 });
 
 test("sessions.create without emitCommandHooks does not fire command:new hook (#76957)", async () => {

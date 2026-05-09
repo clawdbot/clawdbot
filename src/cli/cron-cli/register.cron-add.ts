@@ -232,7 +232,7 @@ export function registerCronAddCommand(cron: Command) {
 
           const name = normalizeOptionalString(opts.name) ?? "";
           if (!name) {
-            throw new Error("--name is required");
+            throw new Error("Cron job name is required. Pass --name <name>.");
           }
 
           const description = normalizeOptionalString(opts.description);

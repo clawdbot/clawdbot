@@ -140,6 +140,6 @@ describe("syncPluginVersions", () => {
 
     const checkSummary = syncPluginVersions(rootDir, { write: false });
 
-    expect(checkSummary.changelogged).toEqual([]);
+    expect(checkSummary.changelogged).toStrictEqual([]);
   });
 });

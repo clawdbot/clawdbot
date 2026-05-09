@@ -118,9 +118,7 @@ describe("Slack live QA runtime helpers", () => {
       },
     ]);
     expect(result.scenarios[0]?.details).toContain("Missing OPENCLAW_QA_CONVEX_SITE_URL");
-    await expect(fs.stat(result.reportPath)).resolves.toMatchObject({
-      isFile: expect.any(Function),
-    });
+    await expect(fs.stat(result.reportPath).then((stats) => stats.isFile())).resolves.toBe(true);
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
       channelId: string;
       credentials: { kind: string; role?: string; source: string };

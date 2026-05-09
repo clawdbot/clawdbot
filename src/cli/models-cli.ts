@@ -3,6 +3,7 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js";
+import { formatCliCommand } from "./command-format.js";
 
 function runModelsCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action);
@@ -14,7 +15,7 @@ function rejectAgentScopedModelWrite(command: Command, commandName: "set" | "set
     return;
   }
   throw new Error(
-    `\`openclaw models ${commandName}\` does not support \`--agent\`; it only updates global model defaults. Remove \`--agent\` or use agent config to set a per-agent model override.`,
+    `openclaw models ${commandName} does not support --agent; it only updates global model defaults. Remove --agent, or run ${formatCliCommand("openclaw agents list")} and set the per-agent model in agent config.`,
   );
 }
 

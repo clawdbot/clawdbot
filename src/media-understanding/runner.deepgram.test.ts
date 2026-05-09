@@ -116,7 +116,12 @@ describe("runCapability deepgram provider options", () => {
         media,
         providerRegistry,
       });
-      expect(result.outputs[0]?.text).toBe("ok");
+      expect(result.outputs).toHaveLength(1);
+      const [output] = result.outputs;
+      if (!output) {
+        throw new Error("Expected Deepgram media output");
+      }
+      expect(output.text).toBe("ok");
       expect(seenBaseUrl).toBe("https://entry.example");
       expect(seenHeaders).toMatchObject({
         "X-Provider": "1",

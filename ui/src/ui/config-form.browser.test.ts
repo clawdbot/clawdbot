@@ -34,6 +34,14 @@ const rootSchema = {
 };
 const rootAnalysis = analyzeConfigSchema(rootSchema);
 
+function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
+  expect(element instanceof Element, label).toBe(true);
+  if (!(element instanceof Element)) {
+    throw new Error(`missing ${label}`);
+  }
+  return element;
+}
+
 describe("config form renderer", () => {
   it("renders inputs and patches values", () => {
     const onPatch = vi.fn();
@@ -53,48 +61,51 @@ describe("config form renderer", () => {
       container,
     );
 
-    const tokenInput: HTMLInputElement | null = container.querySelector(
-      '#config-section-gateway input.cfg-input[type="text"]',
+    const tokenInput = expectElement(
+      container.querySelector<HTMLInputElement>(
+        '#config-section-gateway input.cfg-input[type="text"]',
+      ),
+      "gateway token input",
     );
-    expect(tokenInput).not.toBeNull();
-    if (!tokenInput) {
-      return;
-    }
     tokenInput.value = "abc123";
     tokenInput.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["gateway", "auth", "token"], "abc123");
 
-    const tokenButton = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".cfg-segmented__btn"),
-    ).find((btn) => btn.textContent?.trim() === "token");
-    expect(tokenButton).not.toBeUndefined();
-    tokenButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const tokenButton = expectElement(
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".cfg-segmented__btn")).find(
+        (btn) => btn.textContent?.trim() === "token",
+      ),
+      "token segmented button",
+    );
+    tokenButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["mode"], "token");
 
-    const checkbox: HTMLInputElement | null = container.querySelector("input[type='checkbox']");
-    expect(checkbox).not.toBeNull();
-    if (!checkbox) {
-      return;
-    }
+    const checkbox = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='checkbox']"),
+      "enabled checkbox",
+    );
     checkbox.checked = true;
     checkbox.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["enabled"], true);
 
-    const addButton = container.querySelector(".cfg-array__add");
-    expect(addButton).not.toBeUndefined();
-    addButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const addButton = expectElement(container.querySelector(".cfg-array__add"), "array add button");
+    addButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], ["+1", ""]);
 
-    const removeButton = container.querySelector(".cfg-array__item-remove");
-    expect(removeButton).not.toBeUndefined();
-    removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const removeButton = expectElement(
+      container.querySelector(".cfg-array__item-remove"),
+      "array remove button",
+    );
+    removeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], []);
 
-    const tailnetButton = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".cfg-segmented__btn"),
-    ).find((btn) => btn.textContent?.trim() === "tailnet");
-    expect(tailnetButton).not.toBeUndefined();
-    tailnetButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const tailnetButton = expectElement(
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".cfg-segmented__btn")).find(
+        (btn) => btn.textContent?.trim() === "tailnet",
+      ),
+      "tailnet segmented button",
+    );
+    tailnetButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["bind"], "tailnet");
   });
 
@@ -168,9 +179,11 @@ describe("config form renderer", () => {
       container,
     );
 
-    const removeButton = container.querySelector(".cfg-map__item-remove");
-    expect(removeButton).not.toBeUndefined();
-    removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const removeButton = expectElement(
+      container.querySelector(".cfg-map__item-remove"),
+      "map remove button",
+    );
+    removeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["slack"], {});
   });
 
@@ -324,13 +337,12 @@ describe("config form renderer", () => {
       container,
     );
 
-    const apiKeyInput: HTMLInputElement | null = container.querySelector(
-      "#config-section-models .cfg-map__item-value input.cfg-input[type='text']",
+    const apiKeyInput = expectElement(
+      container.querySelector<HTMLInputElement>(
+        "#config-section-models .cfg-map__item-value input.cfg-input[type='text']",
+      ),
+      "provider api key input",
     );
-    expect(apiKeyInput).not.toBeNull();
-    if (!apiKeyInput) {
-      return;
-    }
     apiKeyInput.value = "new-key";
     apiKeyInput.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["models", "providers", "openai", "apiKey"], "new-key");
@@ -404,9 +416,11 @@ describe("config form renderer", () => {
       container,
     );
 
-    const removeButton = container.querySelector(".cfg-map__item-remove");
-    expect(removeButton).not.toBeNull();
-    removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const removeButton = expectElement(
+      container.querySelector(".cfg-map__item-remove"),
+      "accounts remove button",
+    );
+    removeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["accounts"], {});
   });
 });

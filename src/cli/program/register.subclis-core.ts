@@ -168,11 +168,6 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerDocsCli",
     },
     {
-      commandNames: ["path"],
-      loadModule: () => import("../path-cli.js"),
-      exportName: "registerPathCli",
-    },
-    {
       commandNames: ["qa"],
       loadModule: loadPrivateQaCliModule,
       exportName: "registerQaLabCli",

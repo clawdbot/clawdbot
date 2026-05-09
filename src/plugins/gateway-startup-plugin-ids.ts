@@ -629,7 +629,10 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     rootConfig: activationSourceConfig,
   };
   const requiredAgentHarnessRuntimes = new Set(
-    collectConfiguredAgentHarnessRuntimes(activationSourceConfig, params.env),
+    collectConfiguredAgentHarnessRuntimes(activationSourceConfig, params.env, {
+      includeEnvRuntime: false,
+      includeLegacyAgentRuntimes: false,
+    }),
   );
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);

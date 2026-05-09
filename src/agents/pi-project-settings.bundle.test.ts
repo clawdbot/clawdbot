@@ -530,6 +530,6 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
       },
     });
 
-    expect(snapshot).toEqual({});
+    expect(snapshot).toStrictEqual({});
   });
 });

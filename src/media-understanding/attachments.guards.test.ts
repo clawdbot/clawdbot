@@ -10,7 +10,7 @@ describe("media-understanding selectAttachments guards", () => {
         attachments: undefined as unknown as MediaAttachment[],
         policy: { prefer: "path" },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("returns no selections when attachments is not an array", () => {
@@ -20,7 +20,7 @@ describe("media-understanding selectAttachments guards", () => {
         attachments: { malformed: true } as unknown as MediaAttachment[],
         policy: { prefer: "url" },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("returns no selections for malformed attachment entries", () => {
@@ -35,6 +35,6 @@ describe("media-understanding selectAttachments guards", () => {
         ] as unknown as MediaAttachment[],
         policy: { prefer: "path" },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

@@ -426,8 +426,12 @@ describe("logs cli", () => {
       const messages = noticeRecords
         .filter((record) => record.type === "notice")
         .map((record) => record.message ?? "");
-      expect(messages.some((message) => message.includes("gateway disconnected"))).toBe(true);
-      expect(messages.some((message) => message.includes("gateway reconnected"))).toBe(true);
+      expect(messages).toEqual(
+        expect.arrayContaining([expect.stringContaining("gateway disconnected")]),
+      );
+      expect(messages).toEqual(
+        expect.arrayContaining([expect.stringContaining("gateway reconnected")]),
+      );
       expect(stdoutWrites.join("")).toContain('"type":"meta"');
       expect(exitSpy).toHaveBeenCalledWith(1);
     });

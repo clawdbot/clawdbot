@@ -323,7 +323,7 @@ describe("Session Store Cache", () => {
 
     // Should return empty store
     const loaded = loadSessionStore(nonExistentPath);
-    expect(loaded).toEqual({});
+    expect(loaded).toStrictEqual({});
   });
 
   it("should handle invalid JSON gracefully", () => {
@@ -332,7 +332,7 @@ describe("Session Store Cache", () => {
 
     // Should return empty store
     const loaded = loadSessionStore(storePath);
-    expect(loaded).toEqual({});
+    expect(loaded).toStrictEqual({});
   });
 
   it("should refresh cache when file is rewritten within the same mtime tick", async () => {

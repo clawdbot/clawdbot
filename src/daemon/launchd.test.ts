@@ -55,6 +55,16 @@ const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
 );
 const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function createDefaultLaunchdEnv(): Record<string, string | undefined> {
   return {
     HOME: "/Users/test",
@@ -417,9 +427,11 @@ describe("launchd bootstrap repair", () => {
 
     const { serviceId } = expectLaunchctlEnableBootstrapOrder(env);
     expect(repair).toEqual({ ok: true, status: "already-loaded" });
-    expect(state.launchctlCalls.filter((call) => call[0] === "kickstart")).toEqual([
-      ["kickstart", serviceId],
+    expect(state.launchctlCalls.find((call) => call[0] === "kickstart")).toEqual([
+      "kickstart",
+      serviceId,
     ]);
+    expect(countMatching(state.launchctlCalls, (call) => call[0] === "kickstart")).toBe(1);
   });
 
   it("skips kickstart when already-loaded service is actively running", async () => {
@@ -443,9 +455,11 @@ describe("launchd bootstrap repair", () => {
 
     const { serviceId } = expectLaunchctlEnableBootstrapOrder(env);
     expect(repair).toEqual({ ok: true, status: "already-loaded" });
-    expect(state.launchctlCalls.filter((call) => call[0] === "kickstart")).toEqual([
-      ["kickstart", serviceId],
+    expect(state.launchctlCalls.find((call) => call[0] === "kickstart")).toEqual([
+      "kickstart",
+      serviceId,
     ]);
+    expect(countMatching(state.launchctlCalls, (call) => call[0] === "kickstart")).toBe(1);
   });
 
   it("keeps genuine bootstrap failures as failures", async () => {

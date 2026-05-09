@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { normalizeMessage } from "./message-normalizer.ts";
 
+const SENDER_METADATA_BLOCK =
+  'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
+
 describe("message-normalizer", () => {
   describe("normalizeMessage", () => {
     beforeEach(() => {
@@ -27,6 +30,24 @@ describe("message-normalizer", () => {
         id: "msg-1",
         senderLabel: null,
       });
+    });
+
+    it("strips sender metadata blocks before displaying message text", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: `${SENDER_METADATA_BLOCK}\n\nVisible reply`,
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "Visible reply" }]);
+    });
+
+    it("drops standalone sender metadata blocks before display", () => {
+      const result = normalizeMessage({
+        role: "system",
+        content: SENDER_METADATA_BLOCK,
+      });
+
+      expect(result.content).toStrictEqual([]);
     });
 
     it("does not reinterpret directive-like user string content", () => {
@@ -286,7 +307,7 @@ describe("message-normalizer", () => {
       });
 
       expect(result.replyTarget).toEqual({ kind: "current" });
-      expect(result.content).toEqual([]);
+      expect(result.content).toStrictEqual([]);
     });
 
     it("preserves structured attachment content items", () => {
@@ -360,7 +381,7 @@ describe("message-normalizer", () => {
 
     it("handles missing content", () => {
       const result = normalizeMessage({ role: "user" });
-      expect(result.content).toEqual([]);
+      expect(result.content).toStrictEqual([]);
     });
 
     it("uses current timestamp when not provided", () => {

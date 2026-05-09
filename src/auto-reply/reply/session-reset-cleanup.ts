@@ -1,5 +1,5 @@
 import { drainSystemEventEntries } from "../../infra/system-events.js";
-import { clearSessionQueues, type ClearSessionQueueResult } from "./queue.js";
+import { clearSessionQueues, type ClearSessionQueueResult } from "./queue/cleanup.js";
 
 export type ClearSessionResetRuntimeStateResult = ClearSessionQueueResult & {
   systemEventsCleared: number;

@@ -364,12 +364,13 @@ describe("clearExpiredCooldowns", () => {
   });
 
   it("clears expired cooldownUntil and resets errorCount", () => {
+    const lastFailureAt = Date.now() - 120_000;
     const store = makeStore({
       "anthropic:default": {
         cooldownUntil: Date.now() - 1_000,
         errorCount: 4,
         failureCounts: { rate_limit: 3, timeout: 1 },
-        lastFailureAt: Date.now() - 120_000,
+        lastFailureAt,
       },
     });
 
@@ -380,7 +381,7 @@ describe("clearExpiredCooldowns", () => {
     expect(stats?.errorCount).toBe(0);
     expect(stats?.failureCounts).toBeUndefined();
     // lastFailureAt preserved for failureWindowMs decay
-    expect(stats?.lastFailureAt).toEqual(expect.any(Number));
+    expect(stats?.lastFailureAt).toBe(lastFailureAt);
   });
 
   it("clears expired disabledUntil and disabledReason", () => {
@@ -610,6 +611,7 @@ describe("markAuthProfileUsed", () => {
 
     storeMocks.updateAuthProfileStoreWithLock.mockResolvedValue(null);
 
+    const beforeUsed = Date.now();
     await markAuthProfileUsed({
       store,
       profileId: "anthropic:default",
@@ -622,7 +624,7 @@ describe("markAuthProfileUsed", () => {
     );
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
     expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
-    expect(store.usageStats?.["anthropic:default"]?.lastUsed).toEqual(expect.any(Number));
+    expect(store.usageStats?.["anthropic:default"]?.lastUsed).toBeGreaterThanOrEqual(beforeUsed);
   });
 
   it("adopts locked store usage stats without saving locally when lock update succeeds", async () => {

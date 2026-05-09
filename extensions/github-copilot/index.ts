@@ -18,7 +18,11 @@ import {
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
-import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
+import {
+  PROVIDER_ID,
+  fetchCopilotModelCatalog,
+  resolveCopilotForwardCompatModel,
+} from "./models.js";
 import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
 import { wrapCopilotProviderStream } from "./stream.js";
 
@@ -373,6 +377,7 @@ export default definePluginEntry({
             return null;
           }
           let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+          let copilotApiToken: string | undefined;
           if (githubToken) {
             try {
               const token = await resolveCopilotApiToken({
@@ -380,14 +385,32 @@ export default definePluginEntry({
                 env: ctx.env,
               });
               baseUrl = token.baseUrl;
+              copilotApiToken = token.token;
             } catch {
               baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+            }
+          }
+          // Try to fetch the live model catalog from Copilot's /models
+          // endpoint so the runtime tracks per-account entitlements and
+          // accurate context windows (max_context_window_tokens) without
+          // manifest churn. On any failure we return an empty model list,
+          // which lets the static manifest catalog continue to be the
+          // visible fallback for users.
+          let discoveredModels: Awaited<ReturnType<typeof fetchCopilotModelCatalog>> = [];
+          if (copilotApiToken) {
+            try {
+              discoveredModels = await fetchCopilotModelCatalog({
+                copilotApiToken,
+                baseUrl,
+              });
+            } catch {
+              discoveredModels = [];
             }
           }
           return {
             provider: {
               baseUrl,
-              models: [],
+              models: discoveredModels,
             },
           };
         },

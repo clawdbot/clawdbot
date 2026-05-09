@@ -34,6 +34,14 @@ afterAll(() => {
 
 const TEST_BASE_URL = "https://api.githubcopilot.test";
 
+function shouldContinueAutoSelection(error: Error): boolean {
+  const shouldContinue = githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection;
+  if (!shouldContinue) {
+    throw new Error("GitHub Copilot embedding adapter did not expose auto-selection fallback");
+  }
+  return shouldContinue(error);
+}
+
 function buildModelsResponse(models: Array<{ id: string; supported_endpoints?: unknown }>) {
   return { data: models };
 }
@@ -242,25 +250,19 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
   });
 
   it("treats token parsing and discovery failures as auto-fallback errors", () => {
+    expect(shouldContinueAutoSelection(new Error("Copilot token response missing token"))).toBe(
+      true,
+    );
     expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
-        new Error("Copilot token response missing token"),
-      ),
-    ).toBe(true);
-    expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
+      shouldContinueAutoSelection(
         new Error("Unexpected response from GitHub Copilot token endpoint"),
       ),
     ).toBe(true);
     expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
+      shouldContinueAutoSelection(
         new Error("GitHub Copilot model discovery returned invalid JSON"),
       ),
     ).toBe(true);
-    expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
-        new Error("Network timeout"),
-      ),
-    ).toBe(false);
+    expect(shouldContinueAutoSelection(new Error("Network timeout"))).toBe(false);
   });
 });

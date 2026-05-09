@@ -529,7 +529,8 @@ describe("gateway server agent", () => {
     if (!ackPayload || !finalPayload) {
       throw new Error("missing websocket payload");
     }
-    expect(ackPayload.runId).toEqual(expect.any(String));
+    expect(ackPayload.runId).toBeTypeOf("string");
+    expect(ackPayload.runId).not.toBe("");
     expect(finalPayload.runId).toBe(ackPayload.runId);
     expect(finalPayload.status).toBe("ok");
   });

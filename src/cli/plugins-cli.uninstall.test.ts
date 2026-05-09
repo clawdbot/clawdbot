@@ -104,8 +104,12 @@ describe("plugins cli uninstall", () => {
     expect(planPluginUninstall).toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
-    expect(runtimeLogs.some((line) => line.includes("Dry run, no changes made."))).toBe(true);
-    expect(runtimeLogs.some((line) => line.includes("context engine slot"))).toBe(true);
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("Dry run, no changes made.")]),
+    );
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("context engine slot")]),
+    );
   });
 
   it("uninstalls with --force and --keep-files without prompting", async () => {
@@ -515,7 +519,9 @@ describe("plugins cli uninstall", () => {
     );
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({});
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
-    expect(runtimeLogs.some((line) => line.includes("channel config (channels.alpha)"))).toBe(true);
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("channel config (channels.alpha)")]),
+    );
     expect(runtimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
   });
 

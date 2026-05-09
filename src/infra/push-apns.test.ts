@@ -589,7 +589,8 @@ describe("push APNs send semantics", () => {
         },
       },
     });
-    expect(sent?.signature).toEqual(expect.any(String));
+    expect(sent?.signature).toBeTypeOf("string");
+    expect(sent?.signature).not.toBe("");
     expect(result).toMatchObject({
       ok: true,
       status: 202,

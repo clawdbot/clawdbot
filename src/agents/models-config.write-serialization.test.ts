@@ -166,7 +166,7 @@ describe("models-config write serialization", () => {
       await expect(fs.access(path.join(result.agentDir, "models.json"))).resolves.toBeUndefined();
       await expect(
         fs.access(path.join(home, ".openclaw", "agents", "main", "agent", "models.json")),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
@@ -247,15 +247,28 @@ describe("models-config write serialization", () => {
 
       let inFlightWrites = 0;
       let maxInFlightWrites = 0;
+      let markFirstModelsWriteStarted: () => void = () => {};
+      const firstModelsWriteStarted = new Promise<void>((resolve) => {
+        markFirstModelsWriteStarted = resolve;
+      });
+      let releaseModelsWrites: () => void = () => {};
+      const modelsWritesCanContinue = new Promise<void>((resolve) => {
+        releaseModelsWrites = resolve;
+      });
+      let modelsWriteCount = 0;
       writePrivateStoreTextWriteMock.mockImplementation(
         async (params: { filePath: string; rootDir: string; content: string | Uint8Array }) => {
           const isModelsWrite = path.basename(params.filePath) === "models.json";
           if (isModelsWrite) {
+            modelsWriteCount += 1;
             inFlightWrites += 1;
             if (inFlightWrites > maxInFlightWrites) {
               maxInFlightWrites = inFlightWrites;
             }
-            await new Promise((resolve) => setTimeout(resolve, 10));
+            if (modelsWriteCount === 1) {
+              markFirstModelsWriteStarted();
+            }
+            await modelsWritesCanContinue;
           }
           try {
             if (!actualPrivateFileStore) {
@@ -273,7 +286,14 @@ describe("models-config write serialization", () => {
         },
       );
 
-      await Promise.all([ensureOpenClawModelsJson(first), ensureOpenClawModelsJson(second)]);
+      const writes = Promise.all([
+        ensureOpenClawModelsJson(first),
+        ensureOpenClawModelsJson(second),
+      ]);
+      await firstModelsWriteStarted;
+      await Promise.resolve();
+      releaseModelsWrites();
+      await writes;
 
       expect(maxInFlightWrites).toBe(1);
       const parsed = await readGeneratedModelsJson<{

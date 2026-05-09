@@ -89,8 +89,9 @@ async function createHeartbeatAgentsWorkspace() {
 }
 
 function expectHeartbeatExcludedAndAgentsKept(files: WorkspaceBootstrapFile[]) {
-  expect(files.some((file) => file.name === "HEARTBEAT.md")).toBe(false);
-  expect(files.some((file) => file.name === "AGENTS.md")).toBe(true);
+  const fileNames = files.map((file) => file.name);
+  expect(fileNames).not.toContain("HEARTBEAT.md");
+  expect(fileNames).toContain("AGENTS.md");
 }
 
 describe("resolveBootstrapFilesForRun", () => {
@@ -103,7 +104,8 @@ describe("resolveBootstrapFilesForRun", () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
-    expect(files.some((file) => file.path === path.join(workspaceDir, "EXTRA.md"))).toBe(true);
+    const filePaths = files.map((file) => file.path);
+    expect(filePaths).toContain(path.join(workspaceDir, "EXTRA.md"));
   });
 
   it("drops malformed hook files with missing/invalid paths", async () => {
@@ -166,9 +168,10 @@ describe("resolveBootstrapContextForRun", () => {
 
     const result = await resolveBootstrapContextForRun({ workspaceDir });
 
-    expect(result.bootstrapFiles.some((file) => file.name === "BOOTSTRAP.md")).toBe(true);
-    expect(result.contextFiles.some((file) => file.path.endsWith("BOOTSTRAP.md"))).toBe(true);
-    expect(result.contextFiles.some((file) => file.path.endsWith("AGENTS.md"))).toBe(true);
+    const bootstrapFileNames = result.bootstrapFiles.map((file) => file.name);
+    expect(bootstrapFileNames).toContain("BOOTSTRAP.md");
+    const contextFileNames = result.contextFiles.map((file) => path.basename(file.path));
+    expect(contextFileNames).toEqual(expect.arrayContaining(["BOOTSTRAP.md", "AGENTS.md"]));
   });
 
   it("uses heartbeat-only bootstrap files in lightweight heartbeat mode", async () => {
@@ -183,7 +186,8 @@ describe("resolveBootstrapContextForRun", () => {
     });
 
     expect(files.length).toBeGreaterThan(0);
-    expect(files.every((file) => file.name === "HEARTBEAT.md")).toBe(true);
+    const nonHeartbeatFiles = files.filter((file) => file.name !== "HEARTBEAT.md");
+    expect(nonHeartbeatFiles).toEqual([]);
   });
 
   it("keeps bootstrap context empty in lightweight cron mode", async () => {
@@ -258,7 +262,8 @@ describe("resolveBootstrapContextForRun", () => {
       },
     });
 
-    expect(files.some((file) => file.name === "HEARTBEAT.md")).toBe(true);
+    const fileNames = files.map((file) => file.name);
+    expect(fileNames).toContain("HEARTBEAT.md");
   });
 });
 

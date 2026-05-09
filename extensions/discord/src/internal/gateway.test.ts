@@ -484,15 +484,15 @@ describe("GatewayPlugin", () => {
     expect(gateway.ws).toBeNull();
     expect(gateway.firstHeartbeatTimeout).toBeUndefined();
     expect(gateway.heartbeatInterval).toBeUndefined();
-    expect(() => vi.advanceTimersByTime(20)).not.toThrow();
+    vi.advanceTimersByTime(20);
     expect(send).not.toHaveBeenCalled();
-    expect(() =>
+    expect(
       (
         gateway as unknown as {
           sendHeartbeat(): void;
         }
       ).sendHeartbeat(),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("clears stale heartbeat timers before early reconnect exits", () => {

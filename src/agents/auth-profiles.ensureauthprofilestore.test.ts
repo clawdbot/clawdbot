@@ -977,7 +977,7 @@ describe("ensureAuthProfileStore", () => {
           "utf8",
         );
         const store = ensureAuthProfileStore(agentDir);
-        expect(store.profiles).toEqual({});
+        expect(store.profiles).toStrictEqual({});
         expect(warnSpy).toHaveBeenCalledTimes(1);
         expect(warnSpy).toHaveBeenCalledWith(
           "ignored invalid auth profile entries during store load",

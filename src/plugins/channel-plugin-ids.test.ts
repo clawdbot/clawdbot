@@ -1391,12 +1391,32 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("includes required agent harness owner plugins when the default runtime is forced", () => {
+  it("ignores legacy default agent runtime during startup planning", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
         agentRuntimeId: "codex",
         enabledPluginIds: ["codex"],
       }),
+      expected: ["demo-channel", "browser", "memory-core"],
+    });
+  });
+
+  it("includes required agent harness owner plugins for model runtime policy", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            codex: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
       expected: ["demo-channel", "browser", "codex", "memory-core"],
     });
   });
@@ -1411,57 +1431,94 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("includes required agent harness owner plugins when an agent override forces the runtime", () => {
+  it("ignores legacy per-agent runtime during startup planning", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
         agentRuntimeIds: ["codex"],
         enabledPluginIds: ["codex"],
       }),
-      expected: ["demo-channel", "browser", "codex", "memory-core"],
+      expected: ["demo-channel", "browser", "memory-core"],
     });
   });
 
-  it("includes required agent harness owner plugins when env forces the runtime", () => {
+  it("ignores env runtime overrides during startup planning", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
         enabledPluginIds: ["codex"],
       }),
       env: { OPENCLAW_AGENT_RUNTIME: "codex" },
-      expected: ["demo-channel", "browser", "codex", "memory-core"],
+      expected: ["demo-channel", "browser", "memory-core"],
     });
   });
 
-  it("includes required CLI backend owner plugins when the default runtime is forced", () => {
+  it("ignores legacy CLI backend runtime during startup planning", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
         agentRuntimeId: "demo-cli",
         enabledPluginIds: ["demo-provider-plugin"],
       }),
+      expected: ["demo-channel", "browser", "memory-core"],
+    });
+  });
+
+  it("includes required CLI backend owner plugins for provider runtime policy", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        models: {
+          providers: {
+            "demo-provider": {
+              baseUrl: "https://example.com",
+              models: [],
+              agentRuntime: { id: "demo-cli" },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "demo-provider-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
       expected: ["demo-channel", "browser", "demo-provider-plugin", "memory-core"],
     });
   });
 
-  it.each([
-    ["claude-cli", "anthropic"],
-    ["codex-cli", "openai"],
-    ["google-gemini-cli", "google"],
-  ] as const)("includes the bundled %s CLI backend owner at startup", (runtime, pluginId) => {
-    expectStartupPluginIdsCase({
-      config: createStartupConfig({
-        agentRuntimeId: runtime,
-      }),
-      expected: ["demo-channel", "browser", pluginId, "memory-core"],
-    });
-  });
-
-  it("does not include required CLI backend owner plugins when they are explicitly disabled", () => {
+  it("includes required CLI backend owner plugins for model runtime policy", () => {
     expectStartupPluginIdsCase({
       config: {
         agents: {
           defaults: {
-            agentRuntime: {
-              id: "demo-cli",
-              fallback: "none",
+            models: {
+              "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["demo-channel", "browser", "anthropic", "memory-core"],
+    });
+  });
+
+  it.each(["claude-cli", "codex-cli", "google-gemini-cli"] as const)(
+    "ignores legacy bundled %s runtime at startup",
+    (runtime) => {
+      expectStartupPluginIdsCase({
+        config: createStartupConfig({
+          agentRuntimeId: runtime,
+        }),
+        expected: ["demo-channel", "browser", "memory-core"],
+      });
+    },
+  );
+
+  it("does not include required CLI backend owner plugins when they are explicitly disabled", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        models: {
+          providers: {
+            "demo-provider": {
+              baseUrl: "https://example.com",
+              models: [],
+              agentRuntime: { id: "demo-cli" },
             },
           },
         },
@@ -1482,9 +1539,8 @@ describe("resolveGatewayStartupPluginIds", () => {
       config: {
         agents: {
           defaults: {
-            agentRuntime: {
-              id: "codex",
-              fallback: "none",
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
             },
           },
         },

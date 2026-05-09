@@ -486,7 +486,7 @@ describe("plugin interactive handlers", () => {
     };
 
     try {
-      expect(() => clearPluginInteractiveHandlers()).not.toThrow();
+      clearPluginInteractiveHandlers();
       const hydrated = globalStore[stateKey] as {
         interactiveHandlers?: Map<string, unknown>;
         callbackDedupe?: { clear: () => void };
@@ -496,7 +496,7 @@ describe("plugin interactive handlers", () => {
       if (!hydrated.callbackDedupe) {
         throw new Error("expected hydrated callback dedupe");
       }
-      expect(() => hydrated.callbackDedupe?.clear()).not.toThrow();
+      hydrated.callbackDedupe.clear();
       expect(hydrated.inflightCallbackDedupe).toBeInstanceOf(Set);
 
       const handler = vi.fn(async () => ({ handled: true }));
@@ -836,10 +836,13 @@ describe("plugin interactive handlers", () => {
   });
 
   it("dedupes concurrent interactive dispatches while a handler is still running", async () => {
-    let releaseHandler!: () => void;
+    let releaseHandler: (() => void) | undefined;
     const handlerGate = new Promise<void>((resolve) => {
       releaseHandler = resolve;
     });
+    if (!releaseHandler) {
+      throw new Error("Expected handler release callback to be initialized");
+    }
     const handler = vi.fn(async () => {
       await handlerGate;
       return { handled: true };
@@ -880,10 +883,13 @@ describe("plugin interactive handlers", () => {
   });
 
   it("releases inflight interactive dedupe keys after a handler failure", async () => {
-    let rejectHandler!: (error: Error) => void;
+    let rejectHandler: ((error: Error) => void) | undefined;
     const handlerGate = new Promise<never>((_, reject) => {
       rejectHandler = reject;
     });
+    if (!rejectHandler) {
+      throw new Error("Expected handler reject callback to be initialized");
+    }
     const handler = vi
       .fn(async () => ({ handled: true }))
       .mockImplementationOnce(async () => await handlerGate)

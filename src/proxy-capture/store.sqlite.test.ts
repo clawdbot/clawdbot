@@ -54,7 +54,7 @@ describe("DebugProxyCaptureStore", () => {
     const store = makeStore();
 
     store.close();
-    expect(() => store.close()).not.toThrow();
+    store.close();
     expect(store.isClosed).toBe(true);
   });
 

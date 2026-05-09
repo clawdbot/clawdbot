@@ -251,8 +251,8 @@ describe("google provider plugin hooks", () => {
     if (!bridge) {
       throw new Error("expected Google realtime bridge");
     }
-    expect(() => bridge.sendAudio(Buffer.alloc(160))).not.toThrow();
-    expect(() => bridge.setMediaTimestamp(20)).not.toThrow();
-    expect(() => bridge.sendUserMessage?.("hello")).not.toThrow();
+    expect(bridge.sendAudio(Buffer.alloc(160))).toBeUndefined();
+    expect(bridge.setMediaTimestamp(20)).toBeUndefined();
+    expect(bridge.sendUserMessage?.("hello")).toBeUndefined();
   });
 });

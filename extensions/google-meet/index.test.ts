@@ -50,6 +50,10 @@ import {
 } from "./src/transports/twilio.js";
 import type { GoogleMeetSession } from "./src/transports/types.js";
 
+type GoogleMeetManifestConfigSchema = JsonSchemaObject & {
+  properties?: Record<string, JsonSchemaObject & { properties?: Record<string, unknown> }>;
+};
+
 const voiceCallMocks = vi.hoisted(() => ({
   joinMeetViaVoiceCallGateway: vi.fn(async () => ({
     callId: "call-1",
@@ -119,6 +123,15 @@ function jsonResponse(value: unknown): Response {
     status: 200,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function requireGoogleMeetManifestConfigSchema(manifest: {
+  configSchema?: GoogleMeetManifestConfigSchema;
+}): GoogleMeetManifestConfigSchema {
+  if (!manifest.configSchema) {
+    throw new Error("Google Meet manifest did not include a config schema");
+  }
+  return manifest.configSchema;
 }
 
 function requestUrl(input: RequestInfo | URL): URL {
@@ -548,10 +561,9 @@ describe("google-meet plugin", () => {
       readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
     ) as {
       uiHints?: Record<string, unknown>;
-      configSchema?: JsonSchemaObject & {
-        properties?: Record<string, JsonSchemaObject & { properties?: Record<string, unknown> }>;
-      };
+      configSchema?: GoogleMeetManifestConfigSchema;
     };
+    const configSchema = requireGoogleMeetManifestConfigSchema(manifest);
     const entry = plugin as unknown as {
       configSchema: {
         uiHints?: Record<string, unknown>;
@@ -574,7 +586,7 @@ describe("google-meet plugin", () => {
       "chrome.bargeInCooldownMs": expect.objectContaining({ advanced: true }),
       "voiceCall.postDtmfSpeechDelayMs": expect.objectContaining({ advanced: true }),
     });
-    expect(manifest.configSchema?.properties?.chrome?.properties).toMatchObject({
+    expect(configSchema.properties?.chrome?.properties).toMatchObject({
       audioBufferBytes: expect.objectContaining({ type: "number", default: 4096 }),
       bargeInInputCommand: expect.objectContaining({
         type: "array",
@@ -584,11 +596,11 @@ describe("google-meet plugin", () => {
       bargeInPeakThreshold: expect.objectContaining({ type: "number", default: 2500 }),
       bargeInCooldownMs: expect.objectContaining({ type: "number", default: 900 }),
     });
-    expect(manifest.configSchema?.properties?.voiceCall?.properties).toMatchObject({
+    expect(configSchema.properties?.voiceCall?.properties).toMatchObject({
       postDtmfSpeechDelayMs: expect.objectContaining({ type: "number", default: 5000 }),
     });
     const result = validateJsonSchemaValue({
-      schema: manifest.configSchema!,
+      schema: configSchema,
       cacheKey: "google-meet.manifest.voice-call-post-dtmf-speech-delay",
       value: {
         voiceCall: {
@@ -1865,9 +1877,9 @@ describe("google-meet plugin", () => {
           }),
         ]),
       );
-      expect(result.details.checks?.some((check) => check.id === "chrome-local-audio-device")).toBe(
-        false,
-      );
+      expect(
+        result.details.checks?.filter((check) => check.id === "chrome-local-audio-device"),
+      ).toEqual([]);
       expect(runCommandWithTimeout).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });

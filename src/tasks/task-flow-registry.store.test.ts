@@ -110,11 +110,19 @@ describe("task-flow-registry store runtime", () => {
     });
 
     expect(saveSnapshot).toHaveBeenCalled();
-    const latestSnapshot = saveSnapshot.mock.calls.at(-1)?.[0] as {
+    const latestCall = saveSnapshot.mock.calls.at(-1);
+    if (!latestCall) {
+      throw new Error("Expected task flow snapshot save call");
+    }
+    const latestSnapshot = latestCall[0] as {
       flows: ReadonlyMap<string, TaskFlowRecord>;
     };
     expect(latestSnapshot.flows.size).toBe(2);
-    expect(latestSnapshot.flows.get("flow-restored")?.goal).toBe("Restored flow");
+    const restoredFlow = latestSnapshot.flows.get("flow-restored");
+    if (!restoredFlow) {
+      throw new Error("Expected restored task flow");
+    }
+    expect(restoredFlow.goal).toBe("Restored flow");
   });
 
   it("restores persisted wait-state, revision, and cancel intent from sqlite", async () => {

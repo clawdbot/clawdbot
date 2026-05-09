@@ -46,6 +46,16 @@ async function makeRoot(prefix: string): Promise<string> {
   return root;
 }
 
+function parseJsonLines<T>(raw: string): T[] {
+  const records: T[] = [];
+  for (const line of raw.trim().split("\n")) {
+    if (line.length > 0) {
+      records.push(JSON.parse(line) as T);
+    }
+  }
+  return records;
+}
+
 describe("mirrorCodexAppServerTranscript", () => {
   it("mirrors user and assistant messages into the Pi transcript", async () => {
     const sessionFile = await createTempSessionFile();
@@ -123,11 +133,9 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    const records = (await fs.readFile(sessionFile, "utf8"))
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
+    const records = parseJsonLines<{ type?: string; message?: { role?: string } }>(
+      await fs.readFile(sessionFile, "utf8"),
+    );
     expect(records.slice(1)).toHaveLength(2);
   });
 
@@ -290,11 +298,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     message?: { role?: string; content?: Array<{ text?: string }> };
   };
   function readFileMessages(raw: string): Array<{ role?: string; text?: string }> {
-    return raw
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as FileMessage)
+    return parseJsonLines<FileMessage>(raw)
       .filter((record) => record.type === "message")
       .map((record) => ({
         role: record.message?.role,

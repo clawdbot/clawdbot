@@ -167,7 +167,7 @@ describe("buildPeakErrorHours", () => {
     ]);
 
     const result = buildPeakErrorHours([session], "utc");
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("returns empty array when sessions have no message counts", () => {
@@ -190,7 +190,7 @@ describe("buildPeakErrorHours", () => {
     } as unknown as UsageSessionEntry;
 
     const result = buildPeakErrorHours([session], "utc");
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("limits results to at most 5 entries sorted by error rate", () => {

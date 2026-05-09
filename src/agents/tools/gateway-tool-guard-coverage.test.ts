@@ -21,13 +21,13 @@ function expectAllowed(
   currentConfig: Record<string, unknown>,
   patch: Record<string, unknown>,
 ): void {
-  expect(() =>
+  expect(
     assertGatewayConfigMutationAllowedForTest({
       action: "config.patch",
       currentConfig,
       raw: JSON.stringify(patch),
     }),
-  ).not.toThrow();
+  ).toBeUndefined();
 }
 
 function expectBlockedApply(
@@ -47,13 +47,13 @@ function expectAllowedApply(
   currentConfig: Record<string, unknown>,
   nextConfig: Record<string, unknown>,
 ): void {
-  expect(() =>
+  expect(
     assertGatewayConfigMutationAllowedForTest({
       action: "config.apply",
       currentConfig,
       raw: JSON.stringify(nextConfig),
     }),
-  ).not.toThrow();
+  ).toBeUndefined();
 }
 
 describe("gateway config mutation guard coverage", () => {

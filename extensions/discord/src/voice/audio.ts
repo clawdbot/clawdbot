@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import type { Readable } from "node:stream";
+import { resamplePcm } from "openclaw/plugin-sdk/realtime-voice";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -138,6 +139,67 @@ export async function decodeOpusStream(
     }
   }
   return chunks.length > 0 ? Buffer.concat(chunks) : Buffer.alloc(0);
+}
+
+export async function decodeOpusStreamChunks(
+  stream: Readable,
+  params: {
+    onChunk: (pcm48kStereo: Buffer) => void;
+    onVerbose: (message: string) => void;
+    onWarn: (message: string) => void;
+  },
+): Promise<void> {
+  const selected = createOpusDecoder({ onWarn: params.onWarn });
+  if (!selected) {
+    return;
+  }
+  params.onVerbose(`opus decoder: ${selected.name}`);
+  try {
+    for await (const chunk of stream) {
+      if (!chunk || !(chunk instanceof Buffer) || chunk.length === 0) {
+        continue;
+      }
+      const decoded = selected.decoder.decode(chunk);
+      if (decoded && decoded.length > 0) {
+        params.onChunk(Buffer.from(decoded));
+      }
+    }
+  } catch (err) {
+    if (shouldLogVerbose()) {
+      logVerbose(`discord voice: opus decode failed: ${formatErrorMessage(err)}`);
+    }
+  }
+}
+
+export function convertDiscordPcm48kStereoToRealtimePcm24kMono(pcm: Buffer): Buffer {
+  const frameCount = Math.floor(pcm.length / 4);
+  if (frameCount === 0) {
+    return Buffer.alloc(0);
+  }
+  const mono48k = Buffer.alloc(frameCount * 2);
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    const offset = frame * 4;
+    const left = pcm.readInt16LE(offset);
+    const right = pcm.readInt16LE(offset + 2);
+    mono48k.writeInt16LE(Math.round((left + right) / 2), frame * 2);
+  }
+  return resamplePcm(mono48k, SAMPLE_RATE, 24_000);
+}
+
+export function convertRealtimePcm24kMonoToDiscordPcm48kStereo(pcm: Buffer): Buffer {
+  const mono48k = resamplePcm(pcm, 24_000, SAMPLE_RATE);
+  const sampleCount = Math.floor(mono48k.length / 2);
+  if (sampleCount === 0) {
+    return Buffer.alloc(0);
+  }
+  const stereo = Buffer.alloc(sampleCount * 4);
+  for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex += 1) {
+    const sample = mono48k.readInt16LE(sampleIndex * 2);
+    const offset = sampleIndex * 4;
+    stereo.writeInt16LE(sample, offset);
+    stereo.writeInt16LE(sample, offset + 2);
+  }
+  return stereo;
 }
 
 function estimateDurationSeconds(pcm: Buffer): number {

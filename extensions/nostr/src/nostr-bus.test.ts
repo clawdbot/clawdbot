@@ -11,6 +11,16 @@ import { TEST_HEX_PRIVATE_KEY, TEST_NSEC } from "./test-fixtures.js";
 const UPPERCASE_HEX = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
 const INVALID_HEX = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg";
 
+function expectThrowsError(run: () => unknown): void {
+  let error: unknown;
+  try {
+    run();
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+}
+
 const uppercaseHexAcceptanceCases = [
   {
     name: "validatePrivateKey",
@@ -126,12 +136,12 @@ describe("validatePrivateKey", () => {
   describe("nsec format", () => {
     it("rejects invalid nsec (wrong checksum)", () => {
       const badNsec = "nsec1invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalid";
-      expect(() => validatePrivateKey(badNsec)).toThrow();
+      expectThrowsError(() => validatePrivateKey(badNsec));
     });
 
     it("rejects npub (wrong type)", () => {
       const npub = "npub1qypqxpq9qtpqscx7peytzfwtdjmcv0mrz5rjpej8vjppfkqfqy8s5epk55";
-      expect(() => validatePrivateKey(npub)).toThrow();
+      expectThrowsError(() => validatePrivateKey(npub));
     });
   });
 });
@@ -198,7 +208,7 @@ describe("getPublicKeyFromPrivate", () => {
   });
 
   it("throws for invalid private key", () => {
-    expect(() => getPublicKeyFromPrivate("invalid")).toThrow();
+    expectThrowsError(() => getPublicKeyFromPrivate("invalid"));
   });
 });
 

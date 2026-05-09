@@ -161,7 +161,7 @@ describe("deliverWebReply", () => {
   });
 
   it("suppresses payloads flagged as reasoning", async () => {
-    await expectReplySuppressed({ text: "Reasoning:\n_hidden_", isReasoning: true });
+    await expectReplySuppressed({ text: "hidden", isReasoning: true });
   });
 
   it("suppresses payloads that start with reasoning prefix text", async () => {

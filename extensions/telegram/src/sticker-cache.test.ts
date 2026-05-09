@@ -59,7 +59,11 @@ describe("sticker-cache", () => {
       };
 
       stickerCache.cacheSticker(sticker);
-      expect(stickerCache.getCachedSticker("unique123")).not.toBeNull();
+      const cachedSticker = stickerCache.getCachedSticker("unique123");
+      if (!cachedSticker) {
+        throw new Error("expected cached Telegram sticker");
+      }
+      expect(cachedSticker.fileUniqueId).toBe("unique123");
 
       jsonStoreMocks.store.value = null;
 
@@ -146,19 +150,28 @@ describe("sticker-cache", () => {
     it("finds stickers by description substring", () => {
       const results = stickerCache.searchStickers("fox");
       expect(results).toHaveLength(2);
-      expect(results.every((s) => s.description.toLowerCase().includes("fox"))).toBe(true);
+      expect(results.map((sticker) => sticker.fileUniqueId)).toEqual([
+        "fox-unique-1",
+        "fox-unique-2",
+      ]);
     });
 
     it("finds stickers by emoji", () => {
       const results = stickerCache.searchStickers("🦊");
       expect(results).toHaveLength(2);
-      expect(results.every((s) => s.emoji === "🦊")).toBe(true);
+      expect(results.map((sticker) => sticker.fileUniqueId)).toEqual([
+        "fox-unique-1",
+        "fox-unique-2",
+      ]);
     });
 
     it("finds stickers by set name", () => {
       const results = stickerCache.searchStickers("CuteFoxes");
       expect(results).toHaveLength(2);
-      expect(results.every((s) => s.setName === "CuteFoxes")).toBe(true);
+      expect(results.map((sticker) => sticker.fileUniqueId)).toEqual([
+        "fox-unique-1",
+        "fox-unique-2",
+      ]);
     });
 
     it("respects limit parameter", () => {

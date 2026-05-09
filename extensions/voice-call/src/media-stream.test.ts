@@ -40,12 +40,15 @@ const createDeferred = (): {
   resolve: () => void;
   reject: (error: Error) => void;
 } => {
-  let resolve!: () => void;
-  let reject!: (error: Error) => void;
+  let resolve: (() => void) | undefined;
+  let reject: ((error: Error) => void) | undefined;
   const promise = new Promise<void>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
     reject = rejectPromise;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 };
 
@@ -80,10 +83,13 @@ describe("MediaStreamHandler TTS queue", () => {
     const started: number[] = [];
     const finished: number[] = [];
 
-    let resolveFirst!: () => void;
+    let resolveFirst: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
       resolveFirst = resolve;
     });
+    if (!resolveFirst) {
+      throw new Error("Expected first TTS gate resolver to be initialized");
+    }
 
     const first = handler.queueTts("stream-1", async () => {
       started.push(1);
@@ -399,7 +405,7 @@ describe("MediaStreamHandler security hardening", () => {
 
       expect(closed.code).toBe(1008);
       expect(closed.reason).toBe("Start timeout");
-      expect(shouldAcceptStreamCalls).toEqual([]);
+      expect(shouldAcceptStreamCalls).toStrictEqual([]);
     } finally {
       await server.close();
     }
@@ -557,7 +563,6 @@ describe("MediaStreamHandler security hardening", () => {
     expect(secondSocket.write).toHaveBeenCalledOnce();
     expect(secondSocket.destroy).toHaveBeenCalledOnce();
 
-    expect(upgradeCallback).not.toBeNull();
     const completeUpgrade = upgradeCallback as ((ws: WebSocket) => void) | null;
     if (!completeUpgrade) {
       throw new Error("Expected upgrade callback to be registered");
@@ -619,11 +624,14 @@ describe("MediaStreamHandler security hardening", () => {
   });
 
   it("clears pending state after valid start", async () => {
+    const shouldAcceptStream = vi.fn(() => true);
     const handler = new MediaStreamHandler({
       transcriptionProvider: createStubSttProvider(),
       providerConfig: {},
-      preStartTimeoutMs: 40,
-      shouldAcceptStream: () => true,
+      maxPendingConnections: 1,
+      maxPendingConnectionsPerIp: 10,
+      preStartTimeoutMs: 5_000,
+      shouldAcceptStream,
     });
     const server = await startWsServer(handler);
 
@@ -637,9 +645,22 @@ describe("MediaStreamHandler security hardening", () => {
         }),
       );
 
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      await vi.waitFor(() => {
+        expect(shouldAcceptStream).toHaveBeenCalledWith(
+          expect.objectContaining({
+            callId: "CA123",
+            streamSid: "MZ123",
+            token: "token-123",
+          }),
+        );
+      });
       expect(ws.readyState).toBe(WebSocket.OPEN);
 
+      const second = await connectWs(server.url);
+      expect(second.readyState).toBe(WebSocket.OPEN);
+
+      second.close();
+      await waitForClose(second);
       ws.close();
       await waitForClose(ws);
     } finally {
@@ -891,7 +912,7 @@ describe("MediaStreamHandler security hardening", () => {
       const closed = await waitForClose(ws);
 
       expect(closed.code).toBe(1009);
-      expect(shouldAcceptStreamCalls).toEqual([]);
+      expect(shouldAcceptStreamCalls).toStrictEqual([]);
     } finally {
       await server.close();
     }

@@ -53,6 +53,26 @@ function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
 }
 
+async function raceWithTimeoutResult<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutResult: T,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(timeoutResult), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 function createMockAcpSessionManager() {
   return {
     resolveSession: (params: { cfg: OpenClawConfig; sessionKey: string }) => {
@@ -260,12 +280,11 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       expect(runtime.runTurn).toHaveBeenCalledTimes(1);
     });
     abortController.abort();
-    const outcome = await Promise.race([
+    const outcome = await raceWithTimeoutResult(
       dispatchPromise.then(() => "settled" as const),
-      new Promise<"pending">((resolve) => {
-        setTimeout(() => resolve("pending"), 100);
-      }),
-    ]);
+      100,
+      "pending" as const,
+    );
     releaseTurn?.();
     await dispatchPromise;
 

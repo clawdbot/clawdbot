@@ -224,7 +224,7 @@ describe("models-config", () => {
       provider: { baseUrl: "https://api.copilot.example", models: [] },
     });
 
-    expectCopilotProviderFromPlan(plan).toEqual({
+    expect(expectCopilotProviderFromPlan(plan)).toEqual({
       baseUrl: "https://api.copilot.example",
       models: [],
     });
@@ -235,7 +235,7 @@ describe("models-config", () => {
       provider: { baseUrl: "https://api.individual.githubcopilot.com", models: [] },
     });
 
-    expectCopilotProviderFromPlan(plan)?.toEqual({
+    expect(expectCopilotProviderFromPlan(plan)).toEqual({
       baseUrl: "https://api.individual.githubcopilot.com",
       models: [],
     });
@@ -271,6 +271,11 @@ function expectCopilotProviderFromPlan(
     plan.action === "write"
       ? (JSON.parse(plan.contents) as { providers?: Record<string, unknown> })
       : {};
-  expect(parsed.providers?.["github-copilot"]).toEqual(expect.any(Object));
-  return expect(parsed.providers?.["github-copilot"]);
+  const provider = parsed.providers?.["github-copilot"];
+  expect(provider).not.toBeNull();
+  expect(typeof provider).toBe("object");
+  if (provider === null || typeof provider !== "object") {
+    throw new Error("Expected GitHub Copilot provider config");
+  }
+  return provider;
 }

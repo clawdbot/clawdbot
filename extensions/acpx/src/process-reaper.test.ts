@@ -28,6 +28,20 @@ function cleanupDeps(processes: AcpxProcessInfo[]) {
   };
 }
 
+function collectMatching<T, U>(
+  items: readonly T[],
+  predicate: (item: T) => boolean,
+  map: (item: T) => U,
+): U[] {
+  const matches: U[] = [];
+  for (const item of items) {
+    if (predicate(item)) {
+      matches.push(map(item));
+    }
+  }
+  return matches;
+}
+
 describe("process reaper", () => {
   it("recognizes generated Codex and Claude wrappers only under the configured root", () => {
     expect(
@@ -237,9 +251,13 @@ describe("process reaper", () => {
 
     expect(result.skippedReason).toBeUndefined();
     expect(result.inspectedPids).toEqual([400, 401, 402, 403, 404, 405]);
-    expect(killed.filter((entry) => entry.signal === "SIGTERM").map((entry) => entry.pid)).toEqual([
-      402, 401, 400, 404, 403, 405,
-    ]);
+    expect(
+      collectMatching(
+        killed,
+        (entry) => entry.signal === "SIGTERM",
+        (entry) => entry.pid,
+      ),
+    ).toEqual([402, 401, 400, 404, 403, 405]);
   });
 
   it("keeps startup scans quiet when process listing is unavailable", async () => {

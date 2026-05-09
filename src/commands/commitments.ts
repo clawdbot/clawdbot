@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   listCommitments,
   markCommitmentsStatus,
@@ -35,7 +36,9 @@ function parseStatus(raw: string | undefined, runtime: RuntimeEnv): CommitmentSt
   if (STATUS_VALUES.has(status as CommitmentStatus)) {
     return status as CommitmentStatus;
   }
-  runtime.error(`Unknown commitment status: ${status}`);
+  runtime.error(
+    `Unknown commitment status: ${status}. Use one of: ${Array.from(STATUS_VALUES).join(", ")}.`,
+  );
   runtime.exit(1);
   return undefined;
 }
@@ -126,7 +129,9 @@ export async function commitmentsListCommand(
     runtime.log(info(`Agent filter: ${opts.agent}`));
   }
   if (commitments.length === 0) {
-    runtime.log("No commitments found.");
+    runtime.log(
+      `No commitments found. Run ${formatCliCommand("openclaw commitments --all")} to include dismissed and expired commitments.`,
+    );
     return;
   }
   for (const line of formatRows(commitments, isRich())) {
@@ -140,7 +145,9 @@ export async function commitmentsDismissCommand(
 ): Promise<void> {
   const ids = opts.ids.map((id) => id.trim()).filter(Boolean);
   if (ids.length === 0) {
-    runtime.error("At least one commitment id is required.");
+    runtime.error(
+      `At least one commitment id is required. Run ${formatCliCommand("openclaw commitments list")} to choose one.`,
+    );
     runtime.exit(1);
     return;
   }

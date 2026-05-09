@@ -249,7 +249,7 @@ describe("gateway auth", () => {
     });
   });
 
-  it("does not throw when req is missing socket", async () => {
+  it("authorizes matching token auth when req is missing socket", async () => {
     const res = await authorizeGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: false },
       connectAuth: { token: "secret" },
@@ -384,7 +384,7 @@ describe("gateway auth", () => {
       lockoutMs: 60_000,
       exemptLoopback: false,
     });
-    let releaseWhois!: () => void;
+    let releaseWhois: (() => void) | undefined;
     const whoisGate = new Promise<void>((resolve) => {
       releaseWhois = resolve;
     });
@@ -408,6 +408,9 @@ describe("gateway auth", () => {
     const first = authorizeGatewayConnect(baseParams);
     const second = authorizeGatewayConnect(baseParams);
 
+    if (!releaseWhois) {
+      throw new Error("Expected Tailscale whois release callback to be initialized");
+    }
     releaseWhois();
 
     const [firstResult, secondResult] = await Promise.all([first, second]);
@@ -550,12 +553,12 @@ describe("gateway auth", () => {
     });
 
     expect(auth.password).toBe("env-password");
-    expect(() =>
+    expect(
       assertGatewayAuthConfigured(auth, {
         mode: "password",
         password: rawPasswordRef,
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("throws generic error when password mode has no password at all", () => {

@@ -456,7 +456,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual(expectInputText("Generated media reply."));
-    expect(bridge.telemetry.toolMediaUrls).toEqual([]);
+    expect(bridge.telemetry.toolMediaUrls).toStrictEqual([]);
   });
 
   it("still applies legacy codex app-server extension factories after middleware", async () => {

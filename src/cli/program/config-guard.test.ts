@@ -128,8 +128,9 @@ describe("ensureConfigReady", () => {
     setInvalidSnapshot();
     const runtime = await runEnsureConfigReady(["message"]);
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Config invalid"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("config is invalid"));
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("doctor --fix"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("config validate"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 

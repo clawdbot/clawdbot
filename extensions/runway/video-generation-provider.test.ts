@@ -72,7 +72,11 @@ describe("runway video generation provider", () => {
       fetch,
     );
     expect(result.videos).toHaveLength(1);
-    expect(result.videos[0]?.fileName).toBe("video-1.webm");
+    const video = result.videos[0];
+    if (!video) {
+      throw new Error("expected Runway generated video");
+    }
+    expect(video.fileName).toBe("video-1.webm");
     expect(result.metadata).toEqual(
       expect.objectContaining({
         taskId: "task-1",

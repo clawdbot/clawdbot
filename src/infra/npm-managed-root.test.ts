@@ -205,7 +205,7 @@ describe("managed npm root", () => {
         packageName: "@openclaw/feishu",
         dependencySpec: "2026.5.2",
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/JSON|package\.json|not-json/i);
 
     await expect(fs.readFile(manifestPath, "utf8")).resolves.toBe("{not-json");
   });
@@ -398,8 +398,6 @@ describe("managed npm root", () => {
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
-        "--prefix",
-        ".",
         "openclaw",
       ],
       expect.objectContaining({

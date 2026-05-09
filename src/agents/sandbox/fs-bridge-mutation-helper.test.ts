@@ -56,6 +56,10 @@ function runWritePlan(args: string[], input?: string, env?: NodeJS.ProcessEnv) {
   });
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 const hasAbsolutePythonCandidate = SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES.some((candidate) =>
   existsSync(candidate),
 );
@@ -227,7 +231,7 @@ describe("sandbox pinned mutation helper", () => {
         const result = runMutation(["write", workspace, "alias", "escape.txt", "0"], "owned");
 
         expect(result.status).not.toBe(0);
-        await expect(fs.readFile(path.join(outside, "escape.txt"), "utf8")).rejects.toThrow();
+        await expectPathMissing(path.join(outside, "escape.txt"));
       });
     },
   );
@@ -243,7 +247,7 @@ describe("sandbox pinned mutation helper", () => {
       const result = runMutation(["mkdirp", workspace, "alias/nested"]);
 
       expect(result.status).not.toBe(0);
-      await expect(fs.readFile(path.join(outside, "nested"), "utf8")).rejects.toThrow();
+      await expectPathMissing(path.join(outside, "nested"));
     });
   });
 
@@ -259,7 +263,7 @@ describe("sandbox pinned mutation helper", () => {
       const result = runMutation(["remove", workspace, "", "link.txt", "0", "0"]);
 
       expect(result.status).toBe(0);
-      await expect(fs.readlink(path.join(workspace, "link.txt"))).rejects.toThrow();
+      await expectPathMissing(path.join(workspace, "link.txt"));
       await expect(fs.readFile(path.join(outside, "secret.txt"), "utf8")).resolves.toBe(
         "classified",
       );
@@ -292,7 +296,7 @@ describe("sandbox pinned mutation helper", () => {
         await expect(fs.readFile(path.join(workspace, "from.txt"), "utf8")).resolves.toBe(
           "payload",
         );
-        await expect(fs.readFile(path.join(outside, "escape.txt"), "utf8")).rejects.toThrow();
+        await expectPathMissing(path.join(outside, "escape.txt"));
       });
     },
   );
@@ -322,7 +326,7 @@ describe("sandbox pinned mutation helper", () => {
         await expect(
           fs.readFile(path.join(destRoot, "moved", "nested", "file.txt"), "utf8"),
         ).resolves.toBe("payload");
-        await expect(fs.stat(path.join(sourceRoot, "dir"))).rejects.toThrow();
+        await expectPathMissing(path.join(sourceRoot, "dir"));
       });
     },
   );
@@ -353,7 +357,7 @@ describe("sandbox pinned mutation helper", () => {
 
         expect(result.status).not.toBe(0);
         expect(result.stderr).toMatch(/hardlinked file/i);
-        await expect(fs.stat(path.join(destRoot, "copied.txt"))).rejects.toThrow();
+        await expectPathMissing(path.join(destRoot, "copied.txt"));
         await expect(fs.readFile(path.join(outsideRoot, "secret.txt"), "utf8")).resolves.toBe(
           "classified",
         );
@@ -397,7 +401,7 @@ describe("sandbox pinned mutation helper", () => {
         await expect(
           fs.readFile(path.join(sourceRoot, "dir", "nested", "linked.txt"), "utf8"),
         ).resolves.toBe("classified");
-        await expect(fs.stat(path.join(destRoot, "moved"))).rejects.toThrow();
+        await expectPathMissing(path.join(destRoot, "moved"));
         await expect(fs.readdir(destRoot)).resolves.toEqual([]);
       });
     },

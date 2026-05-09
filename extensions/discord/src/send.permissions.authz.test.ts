@@ -82,11 +82,13 @@ describe("discord guild permission authorization", () => {
         "user-1",
         EMPTY_DISCORD_TEST_OPTS,
       );
-      expect(result).not.toBeNull();
-      expect((result! & PermissionFlagsBits.ViewChannel) === PermissionFlagsBits.ViewChannel).toBe(
+      if (result === null) {
+        throw new Error("Expected guild permissions bitfield");
+      }
+      expect((result & PermissionFlagsBits.ViewChannel) === PermissionFlagsBits.ViewChannel).toBe(
         true,
       );
-      expect((result! & PermissionFlagsBits.KickMembers) === PermissionFlagsBits.KickMembers).toBe(
+      expect((result & PermissionFlagsBits.KickMembers) === PermissionFlagsBits.KickMembers).toBe(
         true,
       );
     });

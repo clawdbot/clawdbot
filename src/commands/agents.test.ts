@@ -305,8 +305,8 @@ describe("agents helpers", () => {
     };
 
     const result = pruneAgentConfig(cfg, "work");
-    expect(result.config.agents?.list?.some((agent) => agent.id === "work")).toBe(false);
-    expect(result.config.agents?.list?.some((agent) => agent.id === "home")).toBe(true);
+    expect(result.config.agents?.list?.map((agent) => agent.id)).not.toContain("work");
+    expect(result.config.agents?.list?.map((agent) => agent.id)).toContain("home");
     expect(result.config.bindings).toHaveLength(1);
     expect(result.config.bindings?.[0]?.agentId).toBe("home");
     expect(result.config.tools?.agentToAgent?.allow).toEqual(["home"]);

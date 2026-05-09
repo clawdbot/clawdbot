@@ -228,7 +228,7 @@ describe("resolveMentions", () => {
     });
 
     it("ignores out-of-range hexadecimal HTML entities in visible labels", () => {
-      expect(() =>
+      expect(
         resolveMentions({
           content: {
             msgtype: "m.text",
@@ -239,11 +239,11 @@ describe("resolveMentions", () => {
           text: "hello",
           mentionRegexes: [],
         }),
-      ).not.toThrow();
+      ).toEqual({ hasExplicitMention: false, wasMentioned: false });
     });
 
     it("ignores oversized decimal HTML entities in visible labels", () => {
-      expect(() =>
+      expect(
         resolveMentions({
           content: {
             msgtype: "m.text",
@@ -255,7 +255,7 @@ describe("resolveMentions", () => {
           text: "hello",
           mentionRegexes: [],
         }),
-      ).not.toThrow();
+      ).toEqual({ hasExplicitMention: false, wasMentioned: false });
     });
 
     it("does not detect mention when displayName is spoofed", () => {

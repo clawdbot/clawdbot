@@ -190,7 +190,9 @@ describe("onboard-search provider resolution", () => {
       provider: "default",
       id: "CUSTOM_SEARCH_API_KEY",
     });
-    expect(notes.some((note) => note.message.includes("CUSTOM_SEARCH_API_KEY"))).toBe(true);
+    expect(notes.map((note) => note.message)).toEqual(
+      expect.arrayContaining([expect.stringContaining("CUSTOM_SEARCH_API_KEY")]),
+    );
   });
 
   it("does not treat hard-disabled bundled providers as selectable credentials", () => {
@@ -249,7 +251,9 @@ describe("onboard-search provider resolution", () => {
 
     expect(result.tools?.web?.search?.provider).toBe("duckduckgo");
     expect(result.plugins?.entries?.duckduckgo?.enabled).toBe(true);
-    expect(notes.some((message) => message.includes("works without an API key"))).toBe(true);
+    expect(notes).toEqual(
+      expect.arrayContaining([expect.stringContaining("works without an API key")]),
+    );
   });
 
   it("uses the runtime onboarding search surface when no config is present", () => {

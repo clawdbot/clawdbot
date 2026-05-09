@@ -166,7 +166,8 @@ describe("channel-streaming", () => {
   });
 
   it("uses auto progress labels when no explicit label is configured", () => {
-    expect(DEFAULT_PROGRESS_DRAFT_LABELS.every((label) => label.endsWith("..."))).toBe(true);
+    const invalidLabels = DEFAULT_PROGRESS_DRAFT_LABELS.filter((label) => !label.endsWith("..."));
+    expect(invalidLabels).toEqual([]);
     expect(resolveChannelProgressDraftLabel({ random: () => 0 })).toBe(
       DEFAULT_PROGRESS_DRAFT_LABELS[0],
     );
@@ -210,16 +211,16 @@ describe("channel-streaming", () => {
         lines: [" tool: read ", "patch applied", "tests done"],
         formatLine: (line) => `\`${line}\``,
       }),
-    ).toBe("Shelling\n• `patch applied`\n• `tests done`");
+    ).toBe("• `patch applied`\n• `tests done`");
     expect(
       formatChannelProgressDraftText({
         entry,
         lines: ["🛠️ Exec", "plain update"],
       }),
-    ).toBe("Shelling\n🛠️ Exec\n• plain update");
+    ).toBe("🛠️ Exec\n• plain update");
   });
 
-  it("preserves progress labels above rolling lines", () => {
+  it("renders progress labels as rolling lines", () => {
     const entry = { streaming: { progress: { label: "Shelling", maxLines: 3 } } };
 
     expect(
@@ -227,7 +228,7 @@ describe("channel-streaming", () => {
         entry,
         lines: ["🛠️ Exec", "📖 Read", "🩹 Patch"],
       }),
-    ).toBe("Shelling\n🛠️ Exec\n📖 Read\n🩹 Patch");
+    ).toBe("🛠️ Exec\n📖 Read\n🩹 Patch");
   });
 
   it("renders structured progress lines with compact details", () => {

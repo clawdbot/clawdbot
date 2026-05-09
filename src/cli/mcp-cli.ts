@@ -5,12 +5,14 @@ import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
 } from "../config/mcp-config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -52,7 +54,7 @@ export function registerMcpCli(program: Command) {
           claudeChannelMode !== "on" &&
           claudeChannelMode !== "off"
         ) {
-          throw new Error("Invalid --claude-channel-mode value. Use auto, on, or off.");
+          throw new Error('Invalid --claude-channel-mode value. Use "auto", "on", or "off".');
         }
         await serveOpenClawChannelMcp({
           gatewayUrl: opts.url as string | undefined,
@@ -62,7 +64,9 @@ export function registerMcpCli(program: Command) {
           verbose: Boolean(opts.verbose),
         });
       } catch (err) {
-        defaultRuntime.error(String(err));
+        defaultRuntime.error(
+          `MCP server failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw mcp list")} to inspect configured servers.`,
+        );
         defaultRuntime.exit(1);
       }
     });
@@ -82,7 +86,9 @@ export function registerMcpCli(program: Command) {
       }
       const names = Object.keys(loaded.mcpServers).toSorted();
       if (names.length === 0) {
-        defaultRuntime.log(`No MCP servers configured in ${loaded.path}.`);
+        defaultRuntime.log(
+          `No MCP servers configured in ${loaded.path}. Add one with ${formatCliCommand('openclaw mcp set <name> \'{"command":"uvx","args":["context7-mcp"]}\'')}.`,
+        );
         return;
       }
       defaultRuntime.log(`MCP servers (${loaded.path}):`);
@@ -103,7 +109,9 @@ export function registerMcpCli(program: Command) {
       }
       const value = name ? loaded.mcpServers[name] : loaded.mcpServers;
       if (name && !value) {
-        fail(`No MCP server named "${name}" in ${loaded.path}.`);
+        fail(
+          `No MCP server named "${name}" in ${loaded.path}. Run ${formatCliCommand("openclaw mcp list")} to see configured servers.`,
+        );
       }
       if (opts.json) {
         printJson(value ?? {});
@@ -144,7 +152,9 @@ export function registerMcpCli(program: Command) {
         fail(result.error);
       }
       if (!result.removed) {
-        fail(`No MCP server named "${name}" in ${result.path}.`);
+        fail(
+          `No MCP server named "${name}" in ${result.path}. Run ${formatCliCommand("openclaw mcp list")} to see configured servers.`,
+        );
       }
       defaultRuntime.log(`Removed MCP server "${name}" from ${result.path}.`);
     });

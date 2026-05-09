@@ -48,8 +48,8 @@ describe("tokenjuice bundled plugin", () => {
 
     expect(createTokenjuiceOpenClawEmbeddedExtension).toHaveBeenCalledTimes(1);
     expect(tokenjuiceFactory).toHaveBeenCalledTimes(1);
-    expect(registerAgentToolResultMiddleware).toHaveBeenCalledWith(expect.any(Function), {
-      runtimes: ["pi", "codex"],
-    });
+    const registration = registerAgentToolResultMiddleware.mock.calls[0];
+    expect(typeof registration?.[0]).toBe("function");
+    expect(registration?.[1]).toEqual({ runtimes: ["pi", "codex"] });
   });
 });

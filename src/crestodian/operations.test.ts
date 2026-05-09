@@ -12,6 +12,14 @@ import {
 
 type TestConfig = Record<string, unknown>;
 
+function parseLastJsonLine(raw: string): unknown {
+  const lastLine = raw.trim().split("\n").at(-1);
+  if (!lastLine) {
+    throw new Error("Expected audit log to contain at least one JSON line");
+  }
+  return JSON.parse(lastLine) as unknown;
+}
+
 const mockConfig = vi.hoisted(() => {
   const initial = {};
   const state = {
@@ -550,7 +558,7 @@ describe("parseCrestodianOperation", () => {
     });
     expect(lines.join("\n")).toContain("[crestodian] done: doctor.fix");
     const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim().split("\n").at(-1)!);
+    const audit = parseLastJsonLine(await fs.readFile(auditPath, "utf8"));
     expect(audit).toMatchObject({
       operation: "doctor.fix",
       summary: "Ran doctor repairs",

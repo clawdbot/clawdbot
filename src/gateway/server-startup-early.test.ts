@@ -50,7 +50,7 @@ describe("startGatewayEarlyRuntime", () => {
       chatRunBuffers: new Map(),
       chatDeltaSentAt: new Map(),
       chatDeltaLastBroadcastLen: new Map(),
-      removeChatRun: () => {},
+      removeChatRun: () => undefined,
       agentRunSeq: new Map(),
       nodeSendToSession: () => {},
       skillsRefreshDelayMs: 30_000,

@@ -111,12 +111,18 @@ describe("buildInworldSpeechProvider", () => {
       allowSeed: true,
     };
 
-    expect(provider.parseDirectiveToken?.({ key: "voice", value: "Ashley", policy })).toEqual({
+    const parseDirectiveToken = provider.parseDirectiveToken;
+    expect(parseDirectiveToken).toBeTypeOf("function");
+    if (!parseDirectiveToken) {
+      throw new Error("expected Inworld directive parser");
+    }
+
+    expect(parseDirectiveToken({ key: "voice", value: "Ashley", policy })).toEqual({
       handled: true,
       overrides: { voiceId: "Ashley" },
     });
     expect(
-      provider.parseDirectiveToken?.({
+      parseDirectiveToken({
         key: "model",
         value: "inworld-tts-1.5-mini",
         policy,
@@ -125,7 +131,7 @@ describe("buildInworldSpeechProvider", () => {
       handled: true,
       overrides: { modelId: "inworld-tts-1.5-mini" },
     });
-    expect(provider.parseDirectiveToken?.({ key: "temperature", value: "0.7", policy })).toEqual({
+    expect(parseDirectiveToken({ key: "temperature", value: "0.7", policy })).toEqual({
       handled: true,
       overrides: { temperature: 0.7 },
     });

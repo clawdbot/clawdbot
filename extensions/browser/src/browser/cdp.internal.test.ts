@@ -35,6 +35,16 @@ function sendCdpResult(socket: WebSocket, id: number | undefined, result: Record
   socket.send(JSON.stringify({ id, result }));
 }
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function replyToPageEnable(msg: CdpMockMessage, socket: WebSocket): boolean {
   if (msg.method !== "Page.enable") {
     return false;
@@ -197,7 +207,7 @@ describe("cdp internal", () => {
         }
         if (msg.method === "Runtime.evaluate") {
           // Pre-capture viewport probe + post-capture probe.
-          const isPre = events.filter((m) => m === "Runtime.evaluate").length === 1;
+          const isPre = countMatching(events, (m) => m === "Runtime.evaluate") === 1;
           socket.send(
             JSON.stringify({
               id: msg.id,

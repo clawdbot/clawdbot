@@ -40,6 +40,16 @@ const FAST_WAIT_OPTS = { timeout: 1_000, interval: 2 } as const;
 let ws: WebSocket;
 let port: number;
 
+function countConnectedNodes(nodes: readonly { connected?: boolean }[] | undefined): number {
+  let count = 0;
+  for (const node of nodes ?? []) {
+    if (node.connected) {
+      count++;
+    }
+  }
+  return count;
+}
+
 function installCanvasNodePolicyForTest() {
   const registry = getActiveRuntimePluginRegistry();
   if (!registry) {
@@ -326,8 +336,7 @@ describe("gateway node command allowlist", () => {
           const listRes = await rpcReq<{
             nodes?: Array<{ nodeId: string; connected?: boolean }>;
           }>(ws, "node.list", {});
-          const nodes = listRes.payload?.nodes ?? [];
-          return nodes.filter((node) => node.connected).length;
+          return countConnectedNodes(listRes.payload?.nodes);
         }, FAST_WAIT_OPTS)
         .toBe(count);
     };
@@ -554,7 +563,7 @@ describe("gateway node command allowlist", () => {
             "node.list",
             {},
           );
-          return (listRes.payload?.nodes ?? []).filter((node) => node.connected).length;
+          return countConnectedNodes(listRes.payload?.nodes);
         }, FAST_WAIT_OPTS)
         .toBe(0);
 

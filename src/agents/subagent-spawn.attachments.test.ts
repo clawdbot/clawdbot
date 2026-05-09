@@ -36,7 +36,6 @@ describe("decodeStrictBase64", () => {
     const input = "hello world";
     const encoded = Buffer.from(input).toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);
-    expect(result).not.toBeNull();
     expect(result?.toString("utf8")).toBe(input);
   });
 
@@ -79,7 +78,6 @@ describe("decodeStrictBase64", () => {
     const exactBuf = Buffer.alloc(1024, 0x41);
     const encoded = exactBuf.toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);
-    expect(result).not.toBeNull();
     expect(result?.byteLength).toBe(1024);
   });
 });

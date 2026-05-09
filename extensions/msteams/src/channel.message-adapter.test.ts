@@ -24,6 +24,37 @@ vi.mock("./channel.runtime.js", () => ({
 
 import { msteamsPlugin } from "./channel.js";
 
+type MSTeamsMessageAdapter = NonNullable<typeof msteamsPlugin.message>;
+type MSTeamsMessageSender = NonNullable<MSTeamsMessageAdapter["send"]>;
+
+function requireMSTeamsMessageAdapter(): MSTeamsMessageAdapter {
+  const adapter = msteamsPlugin.message;
+  if (!adapter) {
+    throw new Error("Expected msteams channel message adapter");
+  }
+  return adapter;
+}
+
+function requireTextSender(
+  adapter: MSTeamsMessageAdapter,
+): NonNullable<MSTeamsMessageSender["text"]> {
+  const text = adapter.send?.text;
+  if (!text) {
+    throw new Error("Expected msteams message adapter text sender");
+  }
+  return text;
+}
+
+function requireMediaSender(
+  adapter: MSTeamsMessageAdapter,
+): NonNullable<MSTeamsMessageSender["media"]> {
+  const media = adapter.send?.media;
+  if (!media) {
+    throw new Error("Expected msteams message adapter media sender");
+  }
+  return media;
+}
+
 const cfg = {
   channels: {
     msteams: {
@@ -50,12 +81,9 @@ describe("msteams channel message adapter", () => {
   });
 
   it("backs declared durable-final capabilities with outbound send proofs", async () => {
-    const adapter = msteamsPlugin.message;
-    if (!adapter?.send?.text || !adapter.send.media) {
-      throw new Error("expected msteams channel message adapter with text and media senders");
-    }
-    const sendText = adapter.send.text;
-    const sendMedia = adapter.send.media;
+    const adapter = requireMSTeamsMessageAdapter();
+    const sendText = requireTextSender(adapter);
+    const sendMedia = requireMediaSender(adapter);
     expect(adapter.durableFinal?.capabilities?.replyTo).toBeUndefined();
     expect(adapter.durableFinal?.capabilities?.thread).toBeUndefined();
 
@@ -116,39 +144,40 @@ describe("msteams channel message adapter", () => {
   });
 
   it("backs declared live preview finalizer capabilities with adapter proofs", async () => {
-    const adapter = msteamsPlugin.message;
+    const adapter = requireMSTeamsMessageAdapter();
+    const sendText = requireTextSender(adapter);
 
     await verifyChannelMessageLiveCapabilityAdapterProofs({
       adapterName: "msteamsMessageAdapter",
-      adapter: adapter!,
+      adapter,
       proofs: {
         draftPreview: () => {
-          expect(adapter!.live?.capabilities?.nativeStreaming).toBe(true);
+          expect(adapter.live?.capabilities?.nativeStreaming).toBe(true);
         },
         previewFinalization: () => {
-          expect(adapter!.live?.finalizer?.capabilities?.finalEdit).toBe(true);
+          expect(adapter.live?.finalizer?.capabilities?.finalEdit).toBe(true);
         },
         progressUpdates: () => {
-          expect(adapter!.live?.capabilities?.draftPreview).toBe(true);
+          expect(adapter.live?.capabilities?.draftPreview).toBe(true);
         },
         nativeStreaming: () => {
-          expect(adapter!.live?.finalizer?.capabilities?.previewReceipt).toBe(true);
+          expect(adapter.live?.finalizer?.capabilities?.previewReceipt).toBe(true);
         },
       },
     });
 
     await verifyChannelMessageLiveFinalizerProofs({
       adapterName: "msteamsMessageAdapter",
-      adapter: adapter!,
+      adapter,
       proofs: {
         finalEdit: () => {
-          expect(adapter!.live?.capabilities?.previewFinalization).toBe(true);
+          expect(adapter.live?.capabilities?.previewFinalization).toBe(true);
         },
         normalFallback: () => {
-          expect(adapter!.send!.text).toBeTypeOf("function");
+          expect(sendText).toBeTypeOf("function");
         },
         previewReceipt: () => {
-          expect(adapter!.live?.capabilities?.nativeStreaming).toBe(true);
+          expect(adapter.live?.capabilities?.nativeStreaming).toBe(true);
         },
       },
     });

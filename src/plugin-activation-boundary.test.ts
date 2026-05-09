@@ -39,6 +39,7 @@ const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() =>
             google: {
               aliases: {
                 "gemini-3.1-pro": "gemini-3.1-pro-preview",
+                "gemini-3-pro-preview": "gemini-3.1-pro-preview",
               },
             },
             xai: {
@@ -136,6 +137,10 @@ describe("plugin activation boundary", () => {
     expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
     const staticNormalize = { allowPluginNormalization: false };
     expect(normalizeModelRef("google", "gemini-3.1-pro", staticNormalize)).toEqual({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+    });
+    expect(normalizeModelRef("google", "gemini-3-pro-preview", staticNormalize)).toEqual({
       provider: "google",
       model: "gemini-3.1-pro-preview",
     });

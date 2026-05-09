@@ -141,7 +141,8 @@ describe("plugin node capability helpers", () => {
     });
     expect(refreshed?.surface).toBe("canvas");
     expect(refreshed?.expiresAtMs).toBe(1_100);
-    expect(refreshed?.capability).toEqual(expect.any(String));
+    expect(refreshed?.capability).toBeTypeOf("string");
+    expect(refreshed?.capability).not.toBe("");
     expect(refreshed?.scopedUrl).toContain("/__openclaw__/cap/");
     expect(refreshed?.scopedUrl).not.toContain("old-token/__openclaw__/cap/");
     expect(client.pluginSurfaceUrls?.canvas).toBe(refreshed?.scopedUrl);

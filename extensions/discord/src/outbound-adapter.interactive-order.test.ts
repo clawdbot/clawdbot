@@ -10,6 +10,16 @@ await installDiscordOutboundModuleSpies(hoisted);
 
 const { discordOutbound } = await import("./outbound-adapter.js");
 
+type DiscordSendPayload = NonNullable<typeof discordOutbound.sendPayload>;
+
+function requireDiscordSendPayload(): DiscordSendPayload {
+  const sendPayload = discordOutbound.sendPayload;
+  if (!sendPayload) {
+    throw new Error("Expected Discord outbound sendPayload");
+  }
+  return sendPayload;
+}
+
 describe("discordOutbound shared interactive ordering", () => {
   beforeEach(() => {
     resetDiscordOutboundMocks(hoisted);
@@ -20,7 +30,8 @@ describe("discordOutbound shared interactive ordering", () => {
   });
 
   it("keeps shared text blocks in authored order without hoisting fallback text", async () => {
-    const result = await discordOutbound.sendPayload!({
+    const sendPayload = requireDiscordSendPayload();
+    const result = await sendPayload({
       cfg: {},
       to: "channel:123456",
       text: "",

@@ -53,7 +53,37 @@ type SupersededTelegramPreview = {
   textSnapshot: string;
   parseMode?: "HTML";
   visibleSinceMs?: number;
+  retain?: boolean;
 };
+
+function renderTelegramDraftPreview(
+  text: string,
+  renderText: ((text: string) => TelegramDraftPreview) | undefined,
+): TelegramDraftPreview {
+  const trimmed = text.trimEnd();
+  return renderText?.(trimmed) ?? { text: trimmed };
+}
+
+function findTelegramDraftChunkLength(
+  text: string,
+  maxChars: number,
+  renderText: ((text: string) => TelegramDraftPreview) | undefined,
+): number {
+  let best = 0;
+  let low = 1;
+  let high = text.length;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const renderedText = renderTelegramDraftPreview(text.slice(0, mid), renderText).text.trimEnd();
+    if (renderedText && renderedText.length <= maxChars) {
+      best = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return best;
+}
 
 export function createTelegramDraftStream(params: {
   api: Bot["api"];
@@ -79,6 +109,7 @@ export function createTelegramDraftStream(params: {
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
+  const allowThreadlessRetry = params.thread?.scope !== "dm";
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
   const replyParams =
     replyToMessageId != null
@@ -98,6 +129,8 @@ export function createTelegramDraftStream(params: {
   let lastSentParseMode: "HTML" | undefined;
   let previewRevision = 0;
   let generation = 0;
+  let deliveredTextOffset = 0;
+  let resetStreamToNewMessage: (options?: { keepPending?: boolean; resetOffset?: boolean }) => void;
   type PreviewSendParams = {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
@@ -121,7 +154,7 @@ export function createTelegramDraftStream(params: {
         usedThreadParams,
       };
     } catch (err) {
-      if (!usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
+      if (!allowThreadlessRetry || !usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
         throw err;
       }
       const threadlessParams: TelegramSendMessageParams = { ...sendParams };
@@ -198,13 +231,45 @@ export function createTelegramDraftStream(params: {
     if (!trimmed) {
       return false;
     }
-    const rendered = params.renderText?.(trimmed) ?? { text: trimmed };
+    const currentText = trimmed.slice(deliveredTextOffset).trimStart();
+    if (!currentText) {
+      return false;
+    }
+    const rendered = renderTelegramDraftPreview(currentText, params.renderText);
     const renderedText = rendered.text.trimEnd();
     const renderedParseMode = rendered.parseMode;
     if (!renderedText) {
       return false;
     }
     if (renderedText.length > maxChars) {
+      if (lastDeliveredText.length > deliveredTextOffset) {
+        const supersededMessageId = streamMessageId;
+        const supersededTextSnapshot = lastSentText;
+        const supersededParseMode = lastSentParseMode;
+        const supersededVisibleSinceMs = streamVisibleSinceMs;
+        deliveredTextOffset = lastDeliveredText.length;
+        resetStreamToNewMessage({ keepPending: true, resetOffset: false });
+        if (typeof supersededMessageId === "number") {
+          params.onSupersededPreview?.({
+            messageId: supersededMessageId,
+            textSnapshot: supersededTextSnapshot,
+            parseMode: supersededParseMode,
+            visibleSinceMs: supersededVisibleSinceMs,
+            retain: true,
+          });
+        }
+        return await sendOrEditStreamMessage(trimmed);
+      }
+      const chunkLength = findTelegramDraftChunkLength(currentText, maxChars, params.renderText);
+      if (chunkLength > 0) {
+        const sent = await sendOrEditStreamMessage(
+          trimmed.slice(0, deliveredTextOffset) + currentText.slice(0, chunkLength),
+        );
+        if (!sent) {
+          return false;
+        }
+        return await sendOrEditStreamMessage(trimmed);
+      }
       streamState.stopped = true;
       params.warn?.(
         `telegram stream preview stopped (text length ${renderedText.length} > ${maxChars})`,
@@ -248,6 +313,24 @@ export function createTelegramDraftStream(params: {
     sendOrEditStreamMessage,
   });
 
+  resetStreamToNewMessage = (options) => {
+    streamState.stopped = false;
+    streamState.final = false;
+    generation += 1;
+    messageSendAttempted = false;
+    streamMessageId = undefined;
+    streamVisibleSinceMs = undefined;
+    lastSentText = "";
+    lastSentParseMode = undefined;
+    if (options?.resetOffset !== false) {
+      deliveredTextOffset = 0;
+    }
+    if (!options?.keepPending) {
+      loop.resetPending();
+    }
+    loop.resetThrottleWindow();
+  };
+
   const clear = async () => {
     const messageId = await takeMessageIdAfterStop({
       stopForClear,
@@ -272,16 +355,7 @@ export function createTelegramDraftStream(params: {
   };
 
   const forceNewMessage = () => {
-    streamState.stopped = false;
-    streamState.final = false;
-    generation += 1;
-    messageSendAttempted = false;
-    streamMessageId = undefined;
-    streamVisibleSinceMs = undefined;
-    lastSentText = "";
-    lastSentParseMode = undefined;
-    loop.resetPending();
-    loop.resetThrottleWindow();
+    resetStreamToNewMessage();
   };
 
   const materialize = async (): Promise<number | undefined> => {

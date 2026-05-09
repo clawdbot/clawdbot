@@ -52,10 +52,13 @@ function createSyncResponse(nextBatch: string): ISyncResponse {
 }
 
 function createDeferred() {
-  let resolve!: () => void;
+  let resolve: (() => void) | undefined;
   const promise = new Promise<void>((resolvePromise) => {
     resolve = resolvePromise;
   });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
@@ -96,7 +99,17 @@ describe("FileBackedMatrixSyncStore", () => {
         type: "com.openclaw.test",
       },
     ]);
-    expect(savedSync?.roomsData.join?.["!room:example.org"]).toEqual(expect.any(Object));
+    expect(savedSync?.roomsData.join?.["!room:example.org"]).toMatchObject({
+      timeline: {
+        events: [
+          {
+            event_id: "$message",
+            sender: "@user:example.org",
+            type: "m.room.message",
+          },
+        ],
+      },
+    });
     expect(secondStore.hasSavedSyncFromCleanShutdown()).toBe(false);
   });
 

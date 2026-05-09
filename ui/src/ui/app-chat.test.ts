@@ -133,13 +133,35 @@ function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessio
 }
 
 function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
+}
+
+async function raceWithMacrotask(
+  promise: Promise<unknown>,
+  delayMs: number,
+): Promise<"resolved" | "pending"> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => "resolved" as const),
+      new Promise<"pending">((resolve) => {
+        timer = setTimeout(() => resolve("pending"), delayMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 describe("refreshChat", () => {
@@ -157,10 +179,7 @@ describe("refreshChat", () => {
     });
 
     const refresh = refreshChat(host);
-    const outcome = await Promise.race([
-      refresh.then(() => "resolved" as const),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const outcome = await raceWithMacrotask(refresh, 0);
 
     expect(outcome).toBe("resolved");
     expect(host.chatLoading).toBe(true);
@@ -194,10 +213,7 @@ describe("refreshChat", () => {
     });
 
     const refresh = refreshChat(host, { awaitHistory: true, scheduleScroll: false });
-    const pendingOutcome = await Promise.race([
-      refresh.then(() => "resolved" as const),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const pendingOutcome = await raceWithMacrotask(refresh, 0);
 
     expect(pendingOutcome).toBe("pending");
     history.resolve({
@@ -530,10 +546,7 @@ describe("refreshChat", () => {
         sessionKey: "main",
       });
 
-      const outcome = await Promise.race([
-        refreshChat(host).then(() => "resolved" as const),
-        new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 20)),
-      ]);
+      const outcome = await raceWithMacrotask(refreshChat(host), 20);
 
       expect(outcome).toBe("resolved");
       expect(host.chatMessages).toEqual([
@@ -588,7 +601,7 @@ describe("handleSendChat", () => {
     expect(confirm).toHaveBeenCalledWith("Start a new session? This will reset the current chat.");
     expect(request).not.toHaveBeenCalled();
     expect(host.chatMessage).toBe("keep this draft");
-    expect(host.chatMessages).toEqual([]);
+    expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatRunId).toBeNull();
     expect(host.refreshSessionsAfterChat.size).toBe(0);
   });
@@ -608,7 +621,7 @@ describe("handleSendChat", () => {
 
     expect(request).not.toHaveBeenCalled();
     expect(host.chatMessage).toBe("keep this draft");
-    expect(host.chatMessages).toEqual([]);
+    expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatRunId).toBeNull();
     expect(host.refreshSessionsAfterChat.size).toBe(0);
   });
@@ -670,7 +683,7 @@ describe("handleSendChat", () => {
     await handleSendChat(host);
 
     expect(onSlashAction).toHaveBeenCalledWith("new-session");
-    expect(host.chatQueue).toEqual([]);
+    expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
     expect(host.chatStream).toBe("Working...");
     expect(host.chatMessage).toBe("");
@@ -933,7 +946,7 @@ describe("handleSendChat", () => {
       }),
     );
     expect(host.chatMessage).toBe("send this");
-    expect(host.chatAttachments).toEqual([]);
+    expect(host.chatAttachments).toStrictEqual([]);
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
   });
 
@@ -1110,10 +1123,10 @@ describe("handleSendChat", () => {
         idempotencyKey: expect.any(String),
       }),
     );
-    expect(host.chatQueue).toEqual([]);
+    expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
     expect(host.chatStream).toBe("Working...");
-    expect(host.chatMessages).toEqual([]);
+    expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatMessage).toBe("");
     expect(navigateChatInputHistory(host, "up")).toBe(true);
     expect(host.chatMessage).toBe("/btw what changed?");
@@ -1142,7 +1155,7 @@ describe("handleSendChat", () => {
         deliver: false,
       }),
     );
-    expect(host.chatQueue).toEqual([]);
+    expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
   });
 
@@ -1168,7 +1181,7 @@ describe("handleSendChat", () => {
       }),
     );
     expect(host.chatRunId).toBeNull();
-    expect(host.chatMessages).toEqual([]);
+    expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatMessage).toBe("");
     expect(navigateChatInputHistory(host, "up")).toBe(true);
     expect(host.chatMessage).toBe("/btw summarize this");
@@ -1205,7 +1218,7 @@ describe("handleSendChat", () => {
     const second = handleSendChat(host, "same prompt");
 
     expect(request).toHaveBeenCalledTimes(1);
-    expect(host.chatQueue).toEqual([]);
+    expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatMessages).toHaveLength(1);
 
     sent.resolve({ runId: host.chatRunId, status: "started" });
@@ -1232,7 +1245,7 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(host.chatQueue).toEqual([]);
+    expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
     expect(host.chatStream).toBe("Working...");
     expect(host.chatMessage).toBe("/btw what changed?");
@@ -1269,7 +1282,7 @@ describe("handleSendChat", () => {
     await handleSendChat(host);
 
     expect(request).toHaveBeenCalledWith("sessions.reset", { key: "main" });
-    expect(host.chatMessages).toEqual([]);
+    expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatSideResult).toBeNull();
     expect(host.chatSideResultTerminalRuns?.size).toBe(0);
     expect(host.chatRunId).toBeNull();
@@ -1429,7 +1442,7 @@ describe("handleSendChat", () => {
 
     removeQueuedMessage(host, "queued");
 
-    expect(host.chatQueue).toEqual([]);
+    expect(host.chatQueue).toStrictEqual([]);
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:queued");
   });

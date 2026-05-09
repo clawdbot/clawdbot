@@ -101,6 +101,59 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     });
   });
+
+  it("normalizes retired Google Gemini model refs from provider config patches", () => {
+    const patch = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "google/gemini-3-pro-preview",
+            fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
+          },
+          models: {
+            "google/gemini-3-pro-preview": {
+              alias: "gemini",
+              params: { thinking: "high" },
+            },
+            "google/gemini-3.1-pro-preview": {
+              params: { maxTokens: 12_000 },
+            },
+          },
+        },
+      },
+    };
+
+    const next = applyProviderAuthConfigPatch({}, patch);
+
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
+    });
+    expect(next.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {
+        alias: "gemini",
+        params: { thinking: "high", maxTokens: 12_000 },
+      },
+    });
+  });
+
+  it("normalizes retired Google Gemini keys when replacing provider model maps", () => {
+    const patch = {
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3-pro-preview": {},
+          },
+        },
+      },
+    };
+
+    const next = applyProviderAuthConfigPatch(base, patch, { replaceDefaultModels: true });
+
+    expect(next.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {},
+    });
+  });
 });
 
 describe("applyDefaultModel", () => {
@@ -200,6 +253,30 @@ describe("applyDefaultModel", () => {
     expect(next.agents?.defaults?.models).toEqual({
       "anthropic/claude-sonnet-4-6": {},
       "google/gemini-3.1-pro-preview": {},
+    });
+  });
+
+  it("normalizes existing retired Google Gemini model keys before writing defaults", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3-pro-preview": {
+              alias: "gemini",
+              params: { thinking: "high" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = applyDefaultModel(config, "google/gemini-3.1-pro-preview");
+
+    expect(next.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {
+        alias: "gemini",
+        params: { thinking: "high" },
+      },
     });
   });
 

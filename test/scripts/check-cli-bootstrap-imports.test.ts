@@ -70,8 +70,8 @@ describe("check-cli-bootstrap-imports", () => {
     writeFixture(root, "dist/light.js", `import path from "node:path";\nvoid path;\n`);
     writeGatewayRunChunk(root);
 
-    expect(collectCliBootstrapExternalImportErrors({ rootDir: root })).toEqual([]);
-    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([]);
+    expect(collectCliBootstrapExternalImportErrors({ rootDir: root })).toStrictEqual([]);
+    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toStrictEqual([]);
   });
 
   it("reports external packages in the static bootstrap graph", () => {

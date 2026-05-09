@@ -232,7 +232,9 @@ describe("installPluginFromPath", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('Plugin file "payload" installation blocked');
     }
-    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("dangerous code pattern")]),
+    );
   });
 
   it("allows plain file installs with dangerous code patterns when forced unsafe install is set", async () => {

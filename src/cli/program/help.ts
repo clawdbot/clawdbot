@@ -9,6 +9,7 @@ import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
 import type { ProgramContext } from "./context.js";
 import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
+import { formatCliParseErrorOutput } from "./error-output.js";
 import { getSubCliCommandsWithSubcommands } from "./subcli-descriptors.js";
 
 const CLI_NAME = resolveCliName();
@@ -21,22 +22,17 @@ const ROOT_COMMANDS_HINT =
   "Hint: commands suffixed with * have subcommands. Run <command> --help for details.";
 
 const EXAMPLES = [
-  ["openclaw models --help", "Show detailed help for the models command."],
-  [
-    "openclaw channels login --verbose",
-    "Link personal WhatsApp Web and show QR + connection logs.",
-  ],
-  [
-    'openclaw message send --target +15555550123 --message "Hi" --json',
-    "Send via your web session and print JSON result.",
-  ],
-  ["openclaw gateway --port 18789", "Run the WebSocket Gateway locally."],
+  ["openclaw onboard", "Run guided setup for a local Gateway, workspace, auth, and channels."],
+  ["openclaw status", "Check Gateway, channel, model, and recent-session status."],
+  ["openclaw doctor --fix", "Repair common config, service, plugin, and channel problems."],
+  ["openclaw channels status", "See connected messaging accounts and login state."],
   ["openclaw --dev gateway", "Run a dev Gateway (isolated state/config) on ws://127.0.0.1:19001."],
-  ["openclaw gateway --force", "Kill anything bound to the default gateway port, then start it."],
-  ["openclaw gateway ...", "Gateway control via WebSocket."],
+  ["openclaw gateway run --force", "Start the Gateway and replace anything bound to its port."],
+  ["openclaw models status", "Show model/provider auth health before running agents."],
+  ["openclaw plugins list", "Inspect enabled, disabled, and installed plugins."],
   [
     'openclaw agent --to +15555550123 --message "Run summary" --deliver',
-    "Talk directly to the agent using the Gateway; optionally send the WhatsApp reply.",
+    "Run one agent turn through the Gateway and optionally deliver the reply.",
   ],
   [
     'openclaw message send --channel telegram --target @mychat --message "Hi"',
@@ -106,7 +102,7 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     writeErr: (str) => {
       process.stderr.write(formatHelpOutput(str));
     },
-    outputError: (str, write) => write(theme.error(str)),
+    outputError: (str, write) => write(formatCliParseErrorOutput(str, { argv: process.argv })),
   });
 
   if (

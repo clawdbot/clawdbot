@@ -62,21 +62,23 @@ describe("session-compaction-checkpoints", () => {
 
       expect(copyFileSyncSpy).not.toHaveBeenCalled();
       expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
-      expect(snapshot).not.toBeNull();
-      expect(snapshot?.leafId).toBe(leafId);
-      expect(snapshot?.sessionFile).not.toBe(sessionFile);
-      expect(snapshot?.sessionFile).toContain(".checkpoint.");
-      expect(fsSync.existsSync(snapshot!.sessionFile)).toBe(true);
-      expect(await fs.readFile(snapshot!.sessionFile, "utf-8")).toBe(originalBefore);
+      expect(snapshot).toMatchObject({ leafId });
+      if (!snapshot) {
+        throw new Error("expected checkpoint snapshot");
+      }
+      expect(snapshot.sessionFile).not.toBe(sessionFile);
+      expect(snapshot.sessionFile).toContain(".checkpoint.");
+      expect(fsSync.existsSync(snapshot.sessionFile)).toBe(true);
+      expect(await fs.readFile(snapshot.sessionFile, "utf-8")).toBe(originalBefore);
 
       session.appendCompaction("checkpoint summary", leafId, 123, { ok: true });
 
-      expect(await fs.readFile(snapshot!.sessionFile, "utf-8")).toBe(originalBefore);
+      expect(await fs.readFile(snapshot.sessionFile, "utf-8")).toBe(originalBefore);
       expect(await fs.readFile(sessionFile, "utf-8")).not.toBe(originalBefore);
 
       await cleanupCompactionCheckpointSnapshot(snapshot);
 
-      expect(fsSync.existsSync(snapshot!.sessionFile)).toBe(false);
+      expect(fsSync.existsSync(snapshot.sessionFile)).toBe(false);
       expect(fsSync.existsSync(sessionFile)).toBe(true);
     } finally {
       copyFileSyncSpy.mockRestore();
@@ -119,11 +121,12 @@ describe("session-compaction-checkpoints", () => {
 
       expect(copyFileSyncSpy).not.toHaveBeenCalled();
       expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
-      expect(snapshot).not.toBeNull();
-      expect(snapshot?.sessionId).toBe(sessionId);
-      expect(snapshot?.leafId).toBe(leafId);
-      expect(snapshot?.sessionFile).not.toBe(sessionFile);
-      expect(snapshot?.sessionFile).toContain(".checkpoint.");
+      expect(snapshot).toMatchObject({ sessionId, leafId });
+      if (!snapshot) {
+        throw new Error("expected checkpoint snapshot");
+      }
+      expect(snapshot.sessionFile).not.toBe(sessionFile);
+      expect(snapshot.sessionFile).toContain(".checkpoint.");
     } finally {
       await cleanupCompactionCheckpointSnapshot(snapshot);
       copyFileSyncSpy.mockRestore();
@@ -155,7 +158,7 @@ describe("session-compaction-checkpoints", () => {
       expect(snapshot).toBeNull();
       expect(copyFileSyncSpy).not.toHaveBeenCalled();
       expect(MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES).toBeGreaterThan(64);
-      expect(fsSync.readdirSync(dir).filter((file) => file.includes(".checkpoint."))).toEqual([]);
+      expect(fsSync.readdirSync(dir).some((file) => file.includes(".checkpoint."))).toBe(false);
     } finally {
       copyFileSyncSpy.mockRestore();
     }
@@ -194,15 +197,19 @@ describe("session-compaction-checkpoints", () => {
 
       expect(openSpy).not.toHaveBeenCalled();
       expect(forkSpy).not.toHaveBeenCalled();
-      expect(forked).not.toBeNull();
-      expect(forked?.sessionFile).not.toBe(sessionFile);
-      expect(forked?.sessionId).toEqual(expect.any(String));
+      expect(forked).toMatchObject({ sessionFile: expect.any(String) });
+      if (!forked) {
+        throw new Error("expected forked checkpoint transcript");
+      }
+      expect(forked.sessionFile).not.toBe(sessionFile);
+      expect(forked.sessionId).toBeTypeOf("string");
+      expect(forked.sessionId).not.toBe("");
     } finally {
       openSpy.mockRestore();
       forkSpy.mockRestore();
     }
 
-    const forkedLines = (await fs.readFile(forked!.sessionFile, "utf-8")).trim().split(/\r?\n/);
+    const forkedLines = (await fs.readFile(forked.sessionFile, "utf-8")).trim().split(/\r?\n/);
     const forkedEntries = forkedLines.map((line) => JSON.parse(line) as Record<string, unknown>);
     const sourceEntries = (await fs.readFile(sessionFile, "utf-8"))
       .trim()
@@ -217,7 +224,7 @@ describe("session-compaction-checkpoints", () => {
 
     expect(forkedEntries[0]).toMatchObject({
       type: "session",
-      id: forked!.sessionId,
+      id: forked.sessionId,
       cwd: dir,
       parentSession: sessionFile,
     });
@@ -273,15 +280,18 @@ describe("session-compaction-checkpoints", () => {
       sessionDir: dir,
     });
 
-    expect(forked).not.toBeNull();
-    const forkedEntries = (await fs.readFile(forked!.sessionFile, "utf-8"))
+    expect(forked).toMatchObject({ sessionFile: expect.any(String) });
+    if (!forked) {
+      throw new Error("expected forked checkpoint transcript");
+    }
+    const forkedEntries = (await fs.readFile(forked.sessionFile, "utf-8"))
       .trim()
       .split(/\r?\n/)
       .map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(forkedEntries[0]).toMatchObject({
       type: "session",
       version: CURRENT_SESSION_VERSION,
-      id: forked!.sessionId,
+      id: forked.sessionId,
       parentSession: legacySessionFile,
     });
     expect(forkedEntries[1]).toMatchObject({
@@ -289,15 +299,17 @@ describe("session-compaction-checkpoints", () => {
       parentId: null,
       message: expect.objectContaining({ content: "legacy first" }),
     });
-    expect(forkedEntries[1]?.id).toEqual(expect.any(String));
+    expect(forkedEntries[1]?.id).toBeTypeOf("string");
+    expect(forkedEntries[1]?.id).not.toBe("");
     expect(forkedEntries[2]).toMatchObject({
       type: "message",
       parentId: forkedEntries[1]?.id,
       message: expect.objectContaining({ content: "legacy second" }),
     });
-    expect(forkedEntries[2]?.id).toEqual(expect.any(String));
+    expect(forkedEntries[2]?.id).toBeTypeOf("string");
+    expect(forkedEntries[2]?.id).not.toBe("");
 
-    const messages = SessionManager.open(forked!.sessionFile, dir).buildSessionContext().messages;
+    const messages = SessionManager.open(forked.sessionFile, dir).buildSessionContext().messages;
     expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
       "legacy first",
       "legacy second",
@@ -368,7 +380,11 @@ describe("session-compaction-checkpoints", () => {
       createdAt: now + 100,
     });
 
-    expect(stored).not.toBeNull();
+    expect(stored?.preCompaction).toMatchObject({
+      sessionId,
+      sessionFile: currentSnapshotFile,
+      leafId: "current-leaf",
+    });
     expect(fsSync.existsSync(existingCheckpoints[0].preCompaction.sessionFile)).toBe(false);
     expect(fsSync.existsSync(existingCheckpoints[1].preCompaction.sessionFile)).toBe(false);
     expect(fsSync.existsSync(existingCheckpoints[2].preCompaction.sessionFile)).toBe(true);

@@ -125,6 +125,35 @@ describe("iMessage sent-message echo cache", () => {
     expect(dirMode).toBe(0o700);
   });
 
+  it("retains entries written hours earlier so catchup replay sees own outbound rows", () => {
+    // Catchup's default maxAgeMinutes is 120 (2h). The persisted-echo TTL must
+    // be >= that window, otherwise the agent's own outbound rows from before
+    // a gateway gap fall out of dedupe before catchup re-feeds the inbound
+    // rows around them — and the agent's replies to itself land back in the
+    // inbound pipeline as if they were external sends. Regression guard for
+    // the echo-cache retention extension that ships with #78649.
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-echo-ttl-"));
+    tempDirs.push(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T12:00:00Z"));
+    rememberPersistedIMessageEcho({
+      scope: "acct:imessage:+1555",
+      text: "agent reply from before the gap",
+      messageId: "guid-pre-gap",
+    });
+
+    // Advance 3 hours — past the legacy 2-min TTL but well within the 12 h
+    // retention required by the maxAgeMinutes=720 clamp.
+    vi.setSystemTime(new Date("2026-05-08T15:00:00Z"));
+    const cache = createSentMessageCache();
+    expect(cache.has("acct:imessage:+1555", { text: "agent reply from before the gap" })).toBe(
+      true,
+    );
+    expect(cache.has("acct:imessage:+1555", { messageId: "guid-pre-gap" })).toBe(true);
+  });
+
   it("clamps pre-existing sent-echoes.jsonl from older 0644/0755 to 0600/0700", () => {
     // Older gateway versions wrote with default modes. After upgrade, the next
     // remember must clamp the existing file/dir back to owner-only.

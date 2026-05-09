@@ -52,6 +52,16 @@ vi.mock("./tools/agent-step.js", () => ({
 const callGatewayMock = getCallGatewayMock();
 const RUN_TIMEOUT_SECONDS = 1;
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function buildDiscordCleanupHooks(onDelete: (key: string | undefined) => void) {
   return {
     onAgentSubagentSpawn: (params: unknown) => {
@@ -235,7 +245,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       () =>
         ctx.waitCalls.some((call) => call.runId === child.runId) &&
         patchCalls.some((call) => call.label === "my-task") &&
-        ctx.calls.filter((call) => call.method === "agent").length >= 2,
+        countMatching(ctx.calls, (call) => call.method === "agent") >= 2,
     );
     if (!child.sessionKey) {
       throw new Error("missing child sessionKey");
@@ -371,7 +381,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
 
     await waitForSessionsSpawnEvent(
       "lifecycle cleanup",
-      () => ctx.calls.filter((call) => call.method === "agent").length >= 2 && Boolean(deletedKey),
+      () => countMatching(ctx.calls, (call) => call.method === "agent") >= 2 && Boolean(deletedKey),
     );
 
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
@@ -437,7 +447,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     );
     await waitForSessionsSpawnEvent(
       "main agent cleanup trigger",
-      () => ctx.calls.filter((call) => call.method === "agent").length >= 2,
+      () => countMatching(ctx.calls, (call) => call.method === "agent") >= 2,
     );
     await waitForSessionsSpawnEvent("delete cleanup", () => Boolean(deletedKey));
 
@@ -563,7 +573,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
 
     await waitForSessionsSpawnEvent(
       "account-aware lifecycle announce",
-      () => ctx.calls.filter((call) => call.method === "agent").length >= 2,
+      () => countMatching(ctx.calls, (call) => call.method === "agent") >= 2,
     );
     await waitForRunCleanup(child.sessionKey);
 

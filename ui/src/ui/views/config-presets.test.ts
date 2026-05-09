@@ -7,7 +7,9 @@ describe("detectActivePreset", () => {
     for (const preset of CONFIG_PRESETS) {
       const defaults = preset.patch.agents.defaults;
 
-      expect(() => OpenClawSchema.parse(preset.patch), preset.id).not.toThrow();
+      expect(OpenClawSchema.safeParse(preset.patch), preset.id).toMatchObject({
+        success: true,
+      });
       expect(defaults.bootstrapMaxChars, preset.id).toBeGreaterThan(0);
       expect(defaults.bootstrapTotalMaxChars, preset.id).toBeGreaterThan(0);
       expect(defaults.bootstrapTotalMaxChars, preset.id).toBeGreaterThanOrEqual(

@@ -332,7 +332,7 @@ describe("processEvent (functional)", () => {
     expect(answeredCallId).toBe("call-2");
   });
 
-  it("when hangup throws, logs and does not throw", () => {
+  it("removes active call even when hangup rejects", () => {
     const provider = createProvider({
       hangupCall: async (): Promise<void> => {
         throw new Error("provider down");
@@ -348,7 +348,7 @@ describe("processEvent (functional)", () => {
       from: "+15553333333",
     });
 
-    expect(() => processEvent(ctx, event)).not.toThrow();
+    processEvent(ctx, event);
     expect(ctx.activeCalls.size).toBe(0);
   });
 
@@ -575,7 +575,7 @@ describe("processEvent (functional)", () => {
       throw new Error("expected retryable error call to remain active");
     }
     expect(call.state).toBe("active");
-    expect(Array.from(ctx.processedEventIds)).toEqual([]);
-    expect(call.processedEventIds).toEqual([]);
+    expect(Array.from(ctx.processedEventIds)).toStrictEqual([]);
+    expect(call.processedEventIds).toStrictEqual([]);
   });
 });

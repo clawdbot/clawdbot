@@ -10,6 +10,7 @@ import type {
   ChannelCapabilitiesDisplayLine,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
@@ -229,12 +230,20 @@ export async function channelsCapabilitiesCommand(
   const rawTarget = normalizeOptionalString(opts.target) ?? "";
 
   if (opts.account && (!rawChannel || rawChannel === "all")) {
-    runtime.error(danger("--account requires a specific --channel."));
+    runtime.error(
+      danger(
+        `--account requires a specific --channel. Run ${formatCliCommand("openclaw channels list")} to choose one.`,
+      ),
+    );
     runtime.exit(1);
     return;
   }
   if (rawTarget && (!rawChannel || rawChannel === "all")) {
-    runtime.error(danger("--target requires a specific --channel."));
+    runtime.error(
+      danger(
+        `--target requires a specific --channel. Run ${formatCliCommand("openclaw channels list")} to choose one.`,
+      ),
+    );
     runtime.exit(1);
     return;
   }
@@ -287,7 +296,11 @@ export async function channelsCapabilitiesCommand(
         })();
 
   if (!selected || selected.length === 0) {
-    runtime.error(danger(`Unknown channel "${rawChannel}".`));
+    runtime.error(
+      danger(
+        `Unknown channel "${rawChannel}". Run ${formatCliCommand("openclaw channels list")} to see installed channels.`,
+      ),
+    );
     runtime.exit(1);
     return;
   }

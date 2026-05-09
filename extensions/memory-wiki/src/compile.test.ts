@@ -26,6 +26,10 @@ describe("compileMemoryWikiVault", () => {
     return path.join(suiteRoot, `case-${caseId++}`);
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+
   it("writes root and directory indexes for native markdown", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
@@ -368,7 +372,7 @@ describe("compileMemoryWikiVault", () => {
 
     await compileMemoryWikiVault(config);
 
-    await expect(fs.access(path.join(rootDir, "reports", "open-questions.md"))).rejects.toThrow();
+    await expectPathMissing(path.join(rootDir, "reports", "open-questions.md"));
   });
 
   it("writes agent directory, relationship, provenance, and privacy reports", async () => {

@@ -32,6 +32,7 @@ const CODEX_PLUGIN_NATIVE_CONFIG_PATH = [
   "config",
   "codexPlugins",
 ] as const;
+const MIGRATION_REASON_PLUGIN_EXISTS = "plugin exists";
 
 export type CodexPluginMigrationConfigEntry = {
   configKey: string;
@@ -107,12 +108,42 @@ function uniquePluginConfigKey(
   return sanitizeName(`${base}-${next}`) || base;
 }
 
-function buildPluginItems(plugins: readonly CodexPluginSource[]): MigrationItem[] {
+function readExistingCodexPluginEntries(
+  config: MigrationProviderContext["config"],
+): Record<string, unknown> {
+  const entries = readMigrationConfigPath(config as Record<string, unknown>, [
+    ...CODEX_PLUGIN_NATIVE_CONFIG_PATH,
+    "plugins",
+  ]);
+  return isRecord(entries) ? entries : {};
+}
+
+function hasExistingCodexPluginEntry(
+  existingEntries: Record<string, unknown>,
+  configKey: string,
+  pluginName: string,
+): boolean {
+  if (existingEntries[configKey] !== undefined) {
+    return true;
+  }
+  return Object.values(existingEntries).some((entry) => {
+    if (!isRecord(entry)) {
+      return false;
+    }
+    return entry.pluginName === pluginName;
+  });
+}
+
+function buildPluginItems(
+  ctx: MigrationProviderContext,
+  plugins: readonly CodexPluginSource[],
+): MigrationItem[] {
   const baseCounts = new Map<string, number>();
   for (const plugin of plugins.filter((entry) => entry.migratable)) {
     const base = sanitizeName(plugin.pluginName ?? plugin.name) || "codex-plugin";
     baseCounts.set(base, (baseCounts.get(base) ?? 0) + 1);
   }
+  const existingPluginEntries = readExistingCodexPluginEntries(ctx.config);
   const usedCounts = new Map<string, number>();
   let manualIndex = 0;
   const items: MigrationItem[] = [];
@@ -123,11 +154,16 @@ function buildPluginItems(plugins: readonly CodexPluginSource[]): MigrationItem[
       plugin.pluginName
     ) {
       const configKey = uniquePluginConfigKey(plugin, baseCounts, usedCounts);
+      const conflict =
+        !ctx.overwrite &&
+        hasExistingCodexPluginEntry(existingPluginEntries, configKey, plugin.pluginName);
       items.push(
         createMigrationItem({
           id: `plugin:${configKey}`,
           kind: "plugin",
           action: "install",
+          status: conflict ? "conflict" : "planned",
+          reason: conflict ? MIGRATION_REASON_PLUGIN_EXISTS : undefined,
           source: plugin.source,
           target: `plugins.entries.codex.config.codexPlugins.plugins.${configKey}`,
           message: `Install Codex plugin "${plugin.pluginName}" in the OpenClaw-managed Codex app-server runtime.`,
@@ -188,9 +224,15 @@ function readExistingAllowDestructiveActions(
   return typeof value === "boolean" ? value : undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 export function buildCodexPluginsConfigValue(
   entries: readonly CodexPluginMigrationConfigEntry[],
-  params: { config?: MigrationProviderContext["config"] } = {},
+  params: {
+    config?: MigrationProviderContext["config"];
+  } = {},
 ): Record<string, unknown> {
   const plugins = Object.fromEntries(
     entries
@@ -204,18 +246,19 @@ export function buildCodexPluginsConfigValue(
         },
       ]),
   );
+  const config: Record<string, unknown> = {
+    codexPlugins: {
+      enabled: true,
+      allow_destructive_actions:
+        params.config === undefined
+          ? false
+          : (readExistingAllowDestructiveActions(params.config) ?? false),
+      plugins,
+    },
+  };
   return {
     enabled: true,
-    config: {
-      codexPlugins: {
-        enabled: true,
-        allow_destructive_actions:
-          params.config === undefined
-            ? false
-            : (readExistingAllowDestructiveActions(params.config) ?? false),
-        plugins,
-      },
-    },
+    config,
   };
 }
 
@@ -231,7 +274,43 @@ export function hasCodexPluginConfigConflict(
     return true;
   }
   const nativeConfig = (value.config as Record<string, unknown> | undefined)?.codexPlugins;
-  return hasMigrationConfigPatchConflict(config, CODEX_PLUGIN_NATIVE_CONFIG_PATH, nativeConfig);
+  if (!isRecord(nativeConfig)) {
+    return hasMigrationConfigPatchConflict(config, CODEX_PLUGIN_NATIVE_CONFIG_PATH, nativeConfig);
+  }
+  const existingNativeConfig = readMigrationConfigPath(
+    config as Record<string, unknown>,
+    CODEX_PLUGIN_NATIVE_CONFIG_PATH,
+  );
+  if (existingNativeConfig === undefined) {
+    return false;
+  }
+  if (!isRecord(existingNativeConfig)) {
+    return true;
+  }
+  if (existingNativeConfig.enabled !== undefined && existingNativeConfig.enabled !== true) {
+    return true;
+  }
+  const allowDestructiveActions = nativeConfig.allow_destructive_actions;
+  if (
+    existingNativeConfig.allow_destructive_actions !== undefined &&
+    existingNativeConfig.allow_destructive_actions !== allowDestructiveActions
+  ) {
+    return true;
+  }
+  const plugins = nativeConfig.plugins;
+  if (!isRecord(plugins)) {
+    return false;
+  }
+  return Object.entries(plugins).some(([configKey, plugin]) => {
+    if (!isRecord(plugin)) {
+      return existingNativeConfig[configKey] !== undefined;
+    }
+    return hasExistingCodexPluginEntry(
+      readExistingCodexPluginEntries(config),
+      configKey,
+      typeof plugin.pluginName === "string" ? plugin.pluginName : configKey,
+    );
+  });
 }
 
 function buildPluginConfigItem(
@@ -239,6 +318,7 @@ function buildPluginConfigItem(
   pluginItems: readonly MigrationItem[],
 ): MigrationItem | undefined {
   const entries = pluginItems
+    .filter((item) => item.status === "planned")
     .map((item) => readCodexPluginMigrationConfigEntry(item, true))
     .filter((entry): entry is CodexPluginMigrationConfigEntry => entry !== undefined);
   if (entries.length === 0) {
@@ -280,7 +360,7 @@ export async function buildCodexMigrationPlan(
       overwrite: ctx.overwrite,
     })),
   );
-  const pluginItems = buildPluginItems(source.plugins);
+  const pluginItems = buildPluginItems(ctx, source.plugins);
   items.push(...pluginItems);
   const pluginConfigItem = buildPluginConfigItem(ctx, pluginItems);
   if (pluginConfigItem) {
@@ -303,7 +383,7 @@ export async function buildCodexMigrationPlan(
   const warnings = [
     ...(items.some((item) => item.status === "conflict")
       ? [
-          "Conflicts were found. Re-run with --overwrite to replace conflicting skill targets after item-level backups.",
+          "Conflicts were found. Re-run with --overwrite to replace conflicting migration targets after item-level backups.",
         ]
       : []),
     ...(source.plugins.length > 0

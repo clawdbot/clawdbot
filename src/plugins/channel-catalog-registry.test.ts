@@ -111,7 +111,7 @@ describe("listChannelCatalogEntries", () => {
       },
     });
 
-    expect(() => module.listChannelCatalogEntries({ env: ENV })).not.toThrow();
+    expect(module.listChannelCatalogEntries({ env: ENV })).toEqual([]);
 
     expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
     expect(discoverSpy).toHaveBeenCalledTimes(1);

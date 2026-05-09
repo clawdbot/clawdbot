@@ -276,8 +276,7 @@ describe("agents delete command", () => {
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
       // Workspace should still exist — it was shared
-      const stat = await fs.stat(sharedWorkspace).catch(() => null);
-      expect(stat).not.toBeNull();
+      await expect(fs.stat(sharedWorkspace)).resolves.toEqual(expect.any(Object));
 
       // The JSON output should report why the workspace was retained.
       const jsonOutput = readJsonLogs();

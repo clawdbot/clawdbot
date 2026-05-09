@@ -14,7 +14,7 @@ export function applyNonInteractiveSkillsConfig(params: {
 
   const nodeManager = opts.nodeManager ?? "npm";
   if (!["npm", "pnpm", "bun"].includes(nodeManager)) {
-    runtime.error("Invalid --node-manager (use npm, pnpm, or bun)");
+    runtime.error('Invalid --node-manager. Use "npm", "pnpm", or "bun".');
     runtime.exit(1);
     return nextConfig;
   }

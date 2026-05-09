@@ -204,7 +204,7 @@ describe("models cli", () => {
       command: modelsSetImageCommand,
     },
   ])("rejects parent --agent for models $label", async ({ args, command }) => {
-    await expect(runModelsCommand(args)).rejects.toThrow("does not support `--agent`");
+    await expect(runModelsCommand(args)).rejects.toThrow("does not support --agent");
 
     expect(command).not.toHaveBeenCalled();
   });

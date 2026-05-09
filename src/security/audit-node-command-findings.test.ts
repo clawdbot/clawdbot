@@ -19,6 +19,20 @@ function expectDetailText(params: {
   }
 }
 
+function requireFinding(
+  findings: ReturnType<
+    typeof collectNodeDenyCommandPatternFindings | typeof collectNodeDangerousAllowCommandFindings
+  >,
+  checkId: string,
+  label: string,
+) {
+  const finding = findings.find((entry) => entry.checkId === checkId);
+  if (!finding) {
+    throw new Error(`Expected ${checkId} finding for ${label}`);
+  }
+  return finding;
+}
+
 describe("security audit node command findings", () => {
   it("evaluates ineffective gateway.nodes.denyCommands entries", () => {
     const cases = [
@@ -72,12 +86,14 @@ describe("security audit node command findings", () => {
 
     for (const testCase of cases) {
       const findings = collectNodeDenyCommandPatternFindings(testCase.cfg);
-      const finding = findings.find(
-        (entry) => entry.checkId === "gateway.nodes.deny_commands_ineffective",
+      const finding = requireFinding(
+        findings,
+        "gateway.nodes.deny_commands_ineffective",
+        testCase.name,
       );
-      expect(finding?.severity, testCase.name).toBe("warn");
+      expect(finding.severity, testCase.name).toBe("warn");
       expectDetailText({
-        detail: finding?.detail,
+        detail: finding.detail,
         name: testCase.name,
         includes: testCase.detailIncludes,
         excludes: "detailExcludes" in testCase ? testCase.detailExcludes : [],
@@ -147,9 +163,14 @@ describe("security audit node command findings", () => {
         expect(finding, testCase.name).toBeUndefined();
         continue;
       }
-      expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
+      const dangerousFinding = requireFinding(
+        findings,
+        "gateway.nodes.allow_commands_dangerous",
+        testCase.name,
+      );
+      expect(dangerousFinding.severity, testCase.name).toBe(testCase.expectedSeverity);
       expectDetailText({
-        detail: finding?.detail,
+        detail: dangerousFinding.detail,
         name: testCase.name,
         includes: ["camera.snap", "screen.record"],
       });

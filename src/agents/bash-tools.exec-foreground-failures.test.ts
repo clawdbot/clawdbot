@@ -48,7 +48,8 @@ describe("exec foreground failures", () => {
       exitCode: null,
       aggregated: "",
     });
-    expect((result.details as { durationMs?: number }).durationMs).toEqual(expect.any(Number));
+    expect((result.details as { durationMs?: number }).durationMs).toBeTypeOf("number");
+    expect((result.details as { durationMs?: number }).durationMs).toBeGreaterThanOrEqual(0);
   });
 
   it("rejects invalid host values before launching a command", async () => {

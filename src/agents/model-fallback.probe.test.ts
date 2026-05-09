@@ -73,6 +73,7 @@ let setLoggerOverride: LoggerModule["setLoggerOverride"];
 
 const makeCfg = makeModelFallbackCfg;
 let cleanupLogCapture: (() => void) | undefined;
+const OPENAI_PROBE_CANDIDATE = { provider: "openai", model: "gpt-4.1-mini" } as const;
 
 async function loadModelFallbackProbeModules() {
   const authProfilesStoreModule = await import("./auth-profiles/store.js");
@@ -209,7 +210,7 @@ describe("runWithModelFallback – probe logic", () => {
     mockedGetSoonestCooldownExpiry.mockReturnValue(params.soonest);
     mockedResolveProfilesUnavailableReason.mockReturnValue(params.reason);
     return modelFallbackTesting.resolveCooldownDecision({
-      candidate: { provider: "openai", model: "gpt-4.1-mini" },
+      candidate: OPENAI_PROBE_CANDIDATE,
       isPrimary: params.isPrimary ?? true,
       requestedModel: params.requestedModel ?? true,
       hasFallbackCandidates: params.hasFallbackCandidates ?? true,
@@ -223,6 +224,17 @@ describe("runWithModelFallback – probe logic", () => {
       >[0]["authRuntime"],
       authStore: { version: 1, profiles: {} },
       profileIds: ["openai-profile-1"],
+    });
+  }
+
+  function expectOpenAiProbeSuspension(
+    decision: ReturnType<ModelFallbackModule["__testing"]["resolveCooldownDecision"]>,
+    reason: "rate_limit" | "billing",
+  ) {
+    expect(decision).toEqual({
+      type: "suspend_lanes",
+      reason,
+      leaderCandidate: OPENAI_PROBE_CANDIDATE,
     });
   }
 
@@ -323,13 +335,14 @@ describe("runWithModelFallback – probe logic", () => {
     ).toEqual({ type: "attempt", reason: "rate_limit", markProbe: true });
 
     _probeThrottleInternals.lastProbeAttempt.set("recent-openai", NOW - 10_000);
-    expect(
+    expectOpenAiProbeSuspension(
       resolveOpenAiCooldownDecision({
         reason: "rate_limit",
         soonest: NOW + 30 * 1000,
         throttleKey: "recent-openai",
       }),
-    ).toMatchObject({ type: "skip", reason: "rate_limit" });
+      "rate_limit",
+    );
   });
 
   it("logs primary metadata on probe success and failure fallback decisions", async () => {
@@ -633,13 +646,14 @@ describe("runWithModelFallback – probe logic", () => {
     const agentBKey = _probeThrottleInternals.resolveProbeThrottleKey("openai", "/tmp/agent-b");
     _probeThrottleInternals.lastProbeAttempt.set(agentAKey, NOW - 10_000);
 
-    expect(
+    expectOpenAiProbeSuspension(
       resolveOpenAiCooldownDecision({
         reason: "rate_limit",
         soonest: NOW + 30 * 1000,
         throttleKey: agentAKey,
       }),
-    ).toMatchObject({ type: "skip", reason: "rate_limit" });
+      "rate_limit",
+    );
     expect(
       resolveOpenAiCooldownDecision({
         reason: "rate_limit",
@@ -666,11 +680,12 @@ describe("runWithModelFallback – probe logic", () => {
         soonest: NOW + 60 * 1000,
       }),
     ).toEqual({ type: "attempt", reason: "billing", markProbe: true });
-    expect(
+    expectOpenAiProbeSuspension(
       resolveOpenAiCooldownDecision({
         reason: "billing",
         soonest: NOW + 30 * 60 * 1000,
       }),
-    ).toMatchObject({ type: "skip", reason: "billing" });
+      "billing",
+    );
   });
 });

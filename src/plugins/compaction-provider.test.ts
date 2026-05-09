@@ -28,6 +28,14 @@ function makeProvider(id: string, label?: string): CompactionProvider {
   };
 }
 
+function requireCompactionProvider(id: string): CompactionProvider {
+  const provider = getCompactionProvider(id);
+  if (!provider) {
+    throw new Error(`Expected compaction provider ${id}`);
+  }
+  return provider;
+}
+
 describe("compaction provider registry", () => {
   it("starts empty", () => {
     expect(listCompactionProviderIds()).toEqual([]);
@@ -88,8 +96,8 @@ describe("compaction provider registry", () => {
   it("calls summarize and returns expected result", async () => {
     registerCompactionProvider(makeProvider("my-compactor"));
 
-    const provider = getCompactionProvider("my-compactor");
-    const result = await provider!.summarize({ messages: [] });
+    const provider = requireCompactionProvider("my-compactor");
+    const result = await provider.summarize({ messages: [] });
 
     expect(result).toBe("summary-from-my-compactor");
   });

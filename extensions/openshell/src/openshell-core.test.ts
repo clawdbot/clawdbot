@@ -272,8 +272,10 @@ describe("openshell fs bridges", () => {
         data: "owned",
         mkdir: true,
       }),
-    ).rejects.toThrow();
-    await expect(fs.stat(path.join(outsideDir, "escape.txt"))).rejects.toThrow();
+    ).rejects.toThrow("Sandbox path escapes allowed mounts");
+    await expect(fs.stat(path.join(outsideDir, "escape.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
     expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
   });
@@ -302,7 +304,7 @@ describe("openshell fs bridges", () => {
         data: "owned",
         mkdir: true,
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow("Sandbox boundary checks failed");
     await expect(fs.readlink(path.join(workspaceDir, "link.txt"))).resolves.toBe("existing.txt");
     await expect(fs.readFile(linkedTarget, "utf8")).resolves.toBe("keep");
     expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();

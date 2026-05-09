@@ -443,7 +443,8 @@ describe("verifyPlivoWebhook", () => {
     );
 
     expect(first.ok).toBe(true);
-    expect(first.verifiedRequestKey).toEqual(expect.any(String));
+    expect(first.verifiedRequestKey).toBeTypeOf("string");
+    expect(first.verifiedRequestKey).not.toBe("");
     expect(second.ok).toBe(true);
     expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
     expect(second.isReplay).toBe(true);

@@ -82,7 +82,7 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
 
-    expect(registeredCommands.some((entry) => entry.command === "alpha_skill")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "beta_skill")).toBe(false);
+    expect(registeredCommands.map((entry) => entry.command)).toContain("alpha_skill");
+    expect(registeredCommands.map((entry) => entry.command)).not.toContain("beta_skill");
   });
 });

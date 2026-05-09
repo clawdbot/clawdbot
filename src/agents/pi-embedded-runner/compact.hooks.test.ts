@@ -54,10 +54,13 @@ type Deferred<T> = {
 };
 
 function createDeferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
+  let resolve: ((value: T) => void) | undefined;
   const promise = new Promise<T>((promiseResolve) => {
     resolve = promiseResolve;
   });
+  if (!resolve) {
+    throw new Error("Expected compaction deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 

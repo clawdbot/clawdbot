@@ -305,12 +305,15 @@ describe("promoteMatrixDirectRoomCandidate", () => {
 
   it("serializes concurrent m.direct writes so distinct mappings are not lost", async () => {
     let directContent: Record<string, string[]> = {};
-    let releaseFirstWrite!: () => void;
+    let releaseFirstWrite: (() => void) | undefined;
     const firstWriteStarted = new Promise<void>((resolve) => {
       releaseFirstWrite = () => {
         resolve();
       };
     });
+    if (!releaseFirstWrite) {
+      throw new Error("Expected first m.direct write release callback to be initialized");
+    }
     let writeCount = 0;
     const setAccountData = vi.fn(async (_eventType: string, content: Record<string, string[]>) => {
       writeCount += 1;

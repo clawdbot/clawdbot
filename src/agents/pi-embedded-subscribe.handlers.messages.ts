@@ -34,7 +34,6 @@ import {
   extractAssistantVisibleText,
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
-  formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
@@ -692,7 +691,7 @@ export function handleMessageEnd(
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
       : "";
-  const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
+  const trimmedReasoning = rawThinking ? rawThinking.trim() : "";
   const trimmedText = text.trim();
   const parsedText = trimmedText
     ? parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text)
@@ -770,18 +769,18 @@ export function handleMessageEnd(
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
     ctx.state.includeReasoning &&
-    formattedReasoning &&
+    trimmedReasoning &&
     onBlockReply &&
-    formattedReasoning !== ctx.state.lastReasoningSent,
+    trimmedReasoning !== ctx.state.lastReasoningSent,
   );
   const shouldEmitReasoningBeforeAnswer =
     shouldEmitReasoning && ctx.state.blockReplyBreak === "message_end" && !addedDuringMessage;
   const maybeEmitReasoning = () => {
-    if (!shouldEmitReasoning || !formattedReasoning) {
+    if (!shouldEmitReasoning || !trimmedReasoning) {
       return;
     }
-    ctx.state.lastReasoningSent = formattedReasoning;
-    ctx.emitBlockReply({ text: formattedReasoning, isReasoning: true });
+    ctx.state.lastReasoningSent = trimmedReasoning;
+    ctx.emitBlockReply({ text: trimmedReasoning, isReasoning: true });
   };
 
   if (shouldEmitReasoningBeforeAnswer) {

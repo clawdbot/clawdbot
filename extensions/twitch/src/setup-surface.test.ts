@@ -113,11 +113,11 @@ describe("setup surface helpers", () => {
       const result = await promptUsername(mockPrompter, null);
 
       expect(result).toBe("mybot");
-      expect(mockPromptText).toHaveBeenCalledWith({
-        message: "Twitch bot username",
-        initialValue: "",
-        validate: expect.any(Function),
-      });
+      const promptArgs = mockPromptText.mock.calls[0]?.[0];
+      expect(promptArgs?.message).toBe("Twitch bot username");
+      expect(promptArgs?.initialValue).toBe("");
+      expect(promptArgs?.validate?.("")).toBe("Required");
+      expect(promptArgs?.validate?.("mybot")).toBeUndefined();
     });
   });
 
@@ -128,11 +128,11 @@ describe("setup surface helpers", () => {
       const result = await promptClientId(mockPrompter, null);
 
       expect(result).toBe("abc123xyz");
-      expect(mockPromptText).toHaveBeenCalledWith({
-        message: "Twitch Client ID",
-        initialValue: "",
-        validate: expect.any(Function),
-      });
+      const promptArgs = mockPromptText.mock.calls[0]?.[0];
+      expect(promptArgs?.message).toBe("Twitch Client ID");
+      expect(promptArgs?.initialValue).toBe("");
+      expect(promptArgs?.validate?.("")).toBe("Required");
+      expect(promptArgs?.validate?.("abc123xyz")).toBeUndefined();
     });
   });
 
@@ -155,7 +155,7 @@ describe("setup surface helpers", () => {
 
       const result = await promptRefreshTokenSetup(mockPrompter, mockAccount);
 
-      expect(result).toEqual({});
+      expect(result).toStrictEqual({});
       expect(mockPromptConfirm).toHaveBeenCalledWith({
         message: "Enable automatic token refresh (requires client secret and refresh token)?",
         initialValue: false,
@@ -200,8 +200,10 @@ describe("setup surface helpers", () => {
       );
 
       // Should return config with username and clientId
-      expect(result).not.toBeNull();
-      const defaultAccount = result?.cfg.channels?.twitch?.accounts?.default as
+      if (!result) {
+        throw new Error("expected Twitch env-token setup result");
+      }
+      const defaultAccount = result.cfg.channels?.twitch?.accounts?.default as
         | { username?: string; clientId?: string }
         | undefined;
       expect(defaultAccount?.username).toBe("testbot");

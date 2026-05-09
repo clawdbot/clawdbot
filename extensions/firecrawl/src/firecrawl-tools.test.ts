@@ -82,7 +82,11 @@ describe("firecrawl tools", () => {
 
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webSearch.apiKey");
-    expect(applied.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.firecrawl;
+    if (!pluginEntry) {
+      throw new Error("expected Firecrawl plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("parses scrape payloads into wrapped external-content results", () => {
@@ -215,9 +219,9 @@ describe("firecrawl tools", () => {
   });
 
   it("blocks private and non-http scrape targets before Firecrawl requests", () => {
-    expect(() =>
+    expect(
       firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("https://example.com/page"),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     for (const blockedUrl of [
       "http://localhost/admin",
@@ -348,7 +352,11 @@ describe("firecrawl tools", () => {
 
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webFetch.apiKey");
-    expect(applied.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.firecrawl;
+    if (!pluginEntry) {
+      throw new Error("expected Firecrawl fetch plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("passes proxy and storeInCache through the fetch provider tool", async () => {

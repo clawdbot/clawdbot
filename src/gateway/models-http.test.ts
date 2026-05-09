@@ -46,6 +46,17 @@ async function getModels(pathname: string, headers?: Record<string, string>) {
   });
 }
 
+async function expectFirstModelId(): Promise<string> {
+  const list = (await (await getModels("/v1/models")).json()) as {
+    data?: Array<{ id?: string }>;
+  };
+  const firstId = list.data?.[0]?.id;
+  if (typeof firstId !== "string") {
+    throw new Error("Expected /v1/models to return at least one string model id");
+  }
+  return firstId;
+}
+
 describe("OpenAI-compatible models HTTP API (e2e)", () => {
   it("serves /v1/models when compatibility endpoints are enabled", async () => {
     const res = await getModels("/v1/models");
@@ -62,12 +73,8 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
   });
 
   it("serves /v1/models/{id}", async () => {
-    const list = (await (await getModels("/v1/models")).json()) as {
-      data?: Array<{ id?: string }>;
-    };
-    const firstId = list.data?.[0]?.id;
-    expect(typeof firstId).toBe("string");
-    const res = await getModels(`/v1/models/${encodeURIComponent(firstId!)}`);
+    const firstId = await expectFirstModelId();
+    const res = await getModels(`/v1/models/${encodeURIComponent(firstId)}`);
     expect(res.status).toBe(200);
     const json = (await res.json()) as { id?: string; object?: string };
     expect(json.object).toBe("model");
@@ -99,12 +106,8 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
   });
 
   it("rejects /v1/models/{id} without read access", async () => {
-    const list = (await (await getModels("/v1/models")).json()) as {
-      data?: Array<{ id?: string }>;
-    };
-    const firstId = list.data?.[0]?.id;
-    expect(typeof firstId).toBe("string");
-    const res = await getModels(`/v1/models/${encodeURIComponent(firstId!)}`, {
+    const firstId = await expectFirstModelId();
+    const res = await getModels(`/v1/models/${encodeURIComponent(firstId)}`, {
       "x-openclaw-scopes": "operator.approvals",
     });
     expect(res.status).toBe(403);

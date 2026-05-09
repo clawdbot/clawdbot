@@ -79,7 +79,6 @@ describe("gateway device.pair.approve caller scope guard", () => {
       expect(approve.error?.message).toBe("missing scope: operator.admin");
 
       const paired = await getPairedDevice(approverIdentity.identity.deviceId);
-      expect(paired).not.toBeNull();
       expect(paired?.approvedScopes).toEqual(["operator.admin"]);
     } finally {
       pairingWs?.close();
@@ -138,7 +137,7 @@ describe("gateway device.pair.approve caller scope guard", () => {
       expect(reject.error?.message).toBe("device pairing rejection denied");
 
       const stillPending = await getPendingDevicePairing(request.request.requestId);
-      expect(stillPending).not.toBeNull();
+      expect(stillPending?.requestId).toBe(request.request.requestId);
     } finally {
       pairingWs?.close();
       started.ws.close();

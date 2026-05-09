@@ -1943,7 +1943,8 @@ describe("short-term dreaming trigger", () => {
     const result = await runShortTermDreamingPromotionIfTriggered({
       cleanedBody: [
         "[cron:e795558c-a273-4124-ba88-d4916688d977 Memory Dreaming Promotion] __openclaw_memory_core_short_term_promotion_dream__",
-        "Current time: Thursday, April 16th, 2026 - 3:10 PM (America/Los_Angeles) / 2026-04-16 22:10 UTC",
+        "Current time: Thursday, April 16th, 2026 - 3:10 PM (America/Los_Angeles)",
+        "Reference UTC: 2026-04-16 22:10 UTC",
       ].join("\n"),
       trigger: "cron",
       workspaceDir,

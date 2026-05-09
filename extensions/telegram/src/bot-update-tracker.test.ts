@@ -15,10 +15,13 @@ async function flushTrackerMicrotasks() {
 }
 
 function deferred() {
-  let resolve!: () => void;
+  let resolve: (() => void) | undefined;
   const promise = new Promise<void>((resolvePromise) => {
     resolve = resolvePromise;
   });
+  if (!resolve) {
+    throw new Error("Expected tracker deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 

@@ -398,11 +398,12 @@ describe("bedrock mantle discovery", () => {
       fetchFn: mockFetch as unknown as typeof fetch,
     });
 
-    expect(provider).not.toBeNull();
-    expect(provider?.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/v1");
-    expect(provider?.api).toBe("openai-completions");
-    expect(provider?.auth).toBe("api-key");
-    expect(provider?.apiKey).toBe("env:AWS_BEARER_TOKEN_BEDROCK");
+    expect(provider).toMatchObject({
+      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
+      api: "openai-completions",
+      auth: "api-key",
+      apiKey: "env:AWS_BEARER_TOKEN_BEDROCK",
+    });
     expect(provider?.models).toHaveLength(2);
     expect(
       provider?.models?.find((model) => model.id === "anthropic.claude-opus-4-7"),
@@ -447,8 +448,7 @@ describe("bedrock mantle discovery", () => {
       tokenProviderFactory,
     });
 
-    expect(provider).not.toBeNull();
-    expect(provider?.apiKey).toBe(MANTLE_IAM_TOKEN_MARKER);
+    expect(provider).toMatchObject({ apiKey: MANTLE_IAM_TOKEN_MARKER });
     expect(tokenProvider).toHaveBeenCalledTimes(1);
     expect(mockFetch).toHaveBeenCalledWith(
       "https://bedrock-mantle.us-east-1.api.aws/v1/models",

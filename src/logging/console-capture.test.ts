@@ -177,7 +177,7 @@ describe("enableConsoleCapture", () => {
     enableConsoleCapture();
     const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
     epipe.code = "EPIPE";
-    expect(() => stream.emit("error", epipe)).not.toThrow();
+    expect(stream.emit("error", epipe)).toBe(true);
   });
 
   it("rethrows non-EPIPE errors on stdout", () => {

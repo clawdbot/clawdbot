@@ -582,7 +582,12 @@ describe("runCli exit behavior", () => {
     try {
       const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
       await vi.waitFor(() => {
-        expect(processOnceSpy.mock.calls.filter(([event]) => event === "exit")).toHaveLength(2);
+        expect(
+          processOnceSpy.mock.calls.reduce(
+            (count, [event]) => count + (event === "exit" ? 1 : 0),
+            0,
+          ),
+        ).toBe(2);
       });
 
       const exitHandler = processOnceSpy.mock.calls.find(([event]) => event === "exit")?.[1];
@@ -761,9 +766,9 @@ describe("runCli exit behavior", () => {
     try {
       expect(() => handler(new Error("boom"))).toThrow("process.exit(1)");
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        "[openclaw] Uncaught exception:",
-        expect.stringContaining("boom"),
+        "[openclaw] OpenClaw hit an unexpected runtime error.",
       );
+      expect(consoleErrorSpy).toHaveBeenCalledWith("[openclaw] Reason: boom");
       expect(restoreTerminalStateMock).toHaveBeenCalledWith("uncaught exception", {
         resumeStdinIfPaused: false,
       });
@@ -800,7 +805,7 @@ describe("runCli exit behavior", () => {
       const hostUnreachable = Object.assign(new Error("connect EHOSTUNREACH 149.154.167.220:443"), {
         code: "EHOSTUNREACH",
       });
-      expect(() => handler(hostUnreachable)).not.toThrow();
+      expect(handler(hostUnreachable)).toBeUndefined();
       expect(consoleWarnSpy).toHaveBeenCalledWith(
         "[openclaw] Non-fatal uncaught exception (continuing):",
         expect.stringContaining("EHOSTUNREACH"),

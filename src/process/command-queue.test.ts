@@ -38,10 +38,13 @@ let setCommandLaneConcurrency: CommandQueueModule["setCommandLaneConcurrency"];
 let waitForActiveTasks: CommandQueueModule["waitForActiveTasks"];
 
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
+  let resolve: (() => void) | undefined;
   const promise = new Promise<void>((r) => {
     resolve = r;
   });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
@@ -100,7 +103,7 @@ describe("command queue", () => {
 
   it("resetAllLanes is safe when no lanes have been created", () => {
     expect(getActiveTaskCount()).toBe(0);
-    expect(() => resetAllLanes()).not.toThrow();
+    resetAllLanes();
     expect(getActiveTaskCount()).toBe(0);
   });
 
@@ -145,12 +148,9 @@ describe("command queue", () => {
 
     vi.useFakeTimers();
     try {
-      let releaseFirst!: () => void;
-      const blocker = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
+      const blocker = createDeferred();
       const first = enqueueCommand(async () => {
-        await blocker;
+        await blocker.promise;
       });
 
       const second = enqueueCommand(async () => {}, {
@@ -162,11 +162,11 @@ describe("command queue", () => {
       });
 
       await vi.advanceTimersByTimeAsync(6);
-      releaseFirst();
+      blocker.resolve();
       await Promise.all([first, second]);
 
-      expect(waited).not.toBeNull();
-      expect(waited as unknown as number).toBeGreaterThanOrEqual(5);
+      expect(typeof waited).toBe("number");
+      expect(waited).toBeGreaterThanOrEqual(5);
       expect(queuedAhead).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -255,14 +255,11 @@ describe("command queue", () => {
     const lane = `reset-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 1);
 
-    let resolve1!: () => void;
-    const blocker = new Promise<void>((r) => {
-      resolve1 = r;
-    });
+    const blocker = createDeferred();
 
     // Start a task that blocks the lane
     const task1 = enqueueCommandInLane(lane, async () => {
-      await blocker;
+      await blocker.promise;
     });
 
     expect(getActiveTaskCount()).toBeGreaterThanOrEqual(1);
@@ -282,7 +279,7 @@ describe("command queue", () => {
 
     // Complete the stale in-flight task; generation mismatch makes its
     // completion path a no-op for queue bookkeeping.
-    resolve1();
+    blocker.resolve();
     await task1;
 
     // task2 should have been pumped by resetAllLanes's drain pass.
@@ -454,34 +451,28 @@ describe("command queue", () => {
     const lane = `drain-snapshot-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 2);
 
-    let resolve1!: () => void;
-    const blocker1 = new Promise<void>((r) => {
-      resolve1 = r;
-    });
-    let resolve2!: () => void;
-    const blocker2 = new Promise<void>((r) => {
-      resolve2 = r;
-    });
+    const blocker1 = createDeferred();
+    const blocker2 = createDeferred();
     const firstStarted = createDeferred();
 
     const first = enqueueCommandInLane(lane, async () => {
       firstStarted.resolve();
-      await blocker1;
+      await blocker1.promise;
     });
     await firstStarted.promise;
     const drainPromise = waitForActiveTasks(2000);
 
     // Starts after waitForActiveTasks snapshot and should not block drain completion.
     const second = enqueueCommandInLane(lane, async () => {
-      await blocker2;
+      await blocker2.promise;
     });
     expect(getActiveTaskCount()).toBeGreaterThanOrEqual(2);
 
-    resolve1();
+    blocker1.resolve();
     const { drained } = await drainPromise;
     expect(drained).toBe(true);
 
-    resolve2();
+    blocker2.resolve();
     await Promise.all([first, second]);
   });
 
@@ -567,7 +558,7 @@ describe("command queue", () => {
       // resetAllLanes calls notifyActiveTaskWaiters → Array.from(state.activeTaskWaiters).
       // Without the migration this would throw:
       //   TypeError: undefined is not iterable
-      expect(() => resetAllLanes()).not.toThrow();
+      resetAllLanes();
 
       // waitForActiveTasks also accesses activeTaskWaiters.
       await expect(waitForActiveTasks(0)).resolves.toEqual({ drained: true });
@@ -593,27 +584,24 @@ describe("command queue", () => {
     );
     const lane = `shared-state-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-    let release!: () => void;
-    const blocker = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const blocker = createDeferred();
 
     commandQueueA.resetAllLanes();
 
     try {
       const task = commandQueueA.enqueueCommandInLane(lane, async () => {
-        await blocker;
+        await blocker.promise;
         return "done";
       });
 
       expect(commandQueueB.getQueueSize(lane)).toBe(1);
       expect(commandQueueB.getActiveTaskCount()).toBe(1);
 
-      release();
+      blocker.resolve();
       await expect(task).resolves.toBe("done");
       expect(commandQueueB.getQueueSize(lane)).toBe(0);
     } finally {
-      release();
+      blocker.resolve();
       commandQueueA.resetAllLanes();
     }
   });

@@ -27,7 +27,6 @@ import type { ToolResultFormat } from "../../pi-embedded-subscribe.shared-types.
 import {
   extractAssistantThinking,
   extractAssistantVisibleText,
-  formatReasoningMessage,
 } from "../../pi-embedded-utils.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
@@ -283,7 +282,7 @@ export function buildEmbeddedRunPayloads(params: {
   const reasoningText = suppressAssistantArtifacts
     ? ""
     : params.lastAssistant && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
-      ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
+      ? extractAssistantThinking(params.lastAssistant)
       : "";
   if (reasoningText) {
     replyItems.push({ text: reasoningText, isReasoning: true });

@@ -256,7 +256,7 @@ describe("bundled plugin postinstall", () => {
     await fs.writeFile(path.join(extensionsDir, "acpx", "package.json"), "{}\n");
     const warn = vi.fn();
 
-    expect(() =>
+    expect(
       runBundledPluginPostinstall({
         env: { HOME: "/tmp/home" },
         packageRoot,
@@ -265,7 +265,7 @@ describe("bundled plugin postinstall", () => {
         }),
         log: { log: vi.fn(), warn },
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     expect(warn).toHaveBeenCalledWith(
       "[postinstall] could not prune bundled plugin source node_modules: Error: locked",
@@ -566,7 +566,7 @@ describe("bundled plugin postinstall", () => {
   it("keeps legacy plugin runtime deps cleanup non-fatal", () => {
     const warn = vi.fn();
 
-    expect(() =>
+    expect(
       pruneLegacyPluginRuntimeDepsState({
         env: { HOME: "/home/alice" },
         existsSync: vi.fn(() => true),
@@ -576,7 +576,7 @@ describe("bundled plugin postinstall", () => {
         log: { log: vi.fn(), warn },
         homedir: () => "/home/alice",
       }),
-    ).not.toThrow();
+    ).toEqual([]);
 
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -645,13 +645,13 @@ describe("bundled plugin postinstall", () => {
       return readFileSyncOriginal(filePath, options);
     });
 
-    expect(() =>
+    expect(
       pruneInstalledPackageDist({
         packageRoot,
         readFileSync,
         log: { log: vi.fn(), warn: vi.fn() },
       }),
-    ).not.toThrow();
+    ).toEqual(["dist/stale.js"]);
 
     await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -701,12 +701,12 @@ describe("bundled plugin postinstall", () => {
     await fs.writeFile(staleFile, "export {};\n");
     const warn = vi.fn();
 
-    expect(() =>
+    expect(
       runBundledPluginPostinstall({
         packageRoot,
         log: { log: vi.fn(), warn },
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     await expectPathExists(staleFile);
     expect(warn).toHaveBeenCalledWith(
@@ -723,12 +723,12 @@ describe("bundled plugin postinstall", () => {
     await fs.writeFile(inventoryPath, "{not-json}\n");
     const warn = vi.fn();
 
-    expect(() =>
+    expect(
       runBundledPluginPostinstall({
         packageRoot,
         log: { log: vi.fn(), warn },
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     await expectPathExists(currentFile);
     expect(warn).toHaveBeenCalledWith(

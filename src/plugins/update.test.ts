@@ -12,6 +12,24 @@ function appBundledPluginRoot(pluginId: string): string {
   return bundledPluginRootAt(APP_ROOT, pluginId);
 }
 
+function requireExpectedPluginId(params: { expectedPluginId?: string }): string {
+  if (!params.expectedPluginId) {
+    throw new Error("Expected npm install params to include expectedPluginId");
+  }
+  return params.expectedPluginId;
+}
+
+function requirePluginPackageName(
+  plugins: Array<{ pluginId: string; packageName: string }>,
+  pluginId: string,
+): string {
+  const plugin = plugins.find((candidate) => candidate.pluginId === pluginId);
+  if (!plugin) {
+    throw new Error(`Expected plugin fixture ${pluginId}`);
+  }
+  return plugin.packageName;
+}
+
 const installPluginFromNpmSpecMock = vi.fn();
 const installPluginFromMarketplaceMock = vi.fn();
 const installPluginFromClawHubMock = vi.fn();
@@ -872,12 +890,12 @@ describe("updateNpmInstalledPlugins", () => {
     }
     installPluginFromNpmSpecMock.mockImplementation(
       (params: { expectedPluginId?: string; spec: string }) => {
-        const pluginId = params.expectedPluginId!;
+        const pluginId = requireExpectedPluginId(params);
         for (const { pluginId: installedPluginId } of plugins) {
           fs.rmSync(peerLinkPath(installedPluginId), { recursive: true, force: true });
         }
         linkPeer(pluginId);
-        const packageName = plugins.find((plugin) => plugin.pluginId === pluginId)!.packageName;
+        const packageName = requirePluginPackageName(plugins, pluginId);
         return Promise.resolve(
           createSuccessfulNpmUpdateResult({
             pluginId,

@@ -136,7 +136,10 @@ describe("sweepCronRunSessions", () => {
     expect(result.pruned).toBe(1);
     expect(fs.existsSync(runTranscript)).toBe(false);
     const files = fs.readdirSync(tmpDir);
-    expect(files.some((name) => name.startsWith(`${runSessionId}.jsonl.deleted.`))).toBe(true);
+    const archivedRunTranscripts = files.filter((name) =>
+      name.startsWith(`${runSessionId}.jsonl.deleted.`),
+    );
+    expect(archivedRunTranscripts.length).toBeGreaterThan(0);
   });
 
   it("does not archive external transcript paths for pruned runs", async () => {

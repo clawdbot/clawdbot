@@ -646,9 +646,11 @@ describe("update-cli", () => {
     await updateCliShared.tryWriteCompletionCache(root, false);
 
     const logs = vi.mocked(runtimeCapture.log).mock.calls.map((call) => String(call[0]));
-    expect(logs.some((line) => line.includes("timed out after 30s"))).toBe(true);
-    expect(logs.some((line) => line.includes("openclaw completion --write-state"))).toBe(true);
-    expect(logs.some((line) => line.includes("Error: spawnSync"))).toBe(false);
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("timed out after 30s")]));
+    expect(logs).toEqual(
+      expect.arrayContaining([expect.stringContaining("openclaw completion --write-state")]),
+    );
+    expect(logs).not.toEqual(expect.arrayContaining([expect.stringContaining("Error: spawnSync")]));
   });
 
   it("respawns into the updated package root before running post-update tasks", async () => {
@@ -1427,7 +1429,7 @@ describe("update-cli", () => {
         await updateCommand({ dryRun: true });
       },
       assert: () => {
-        expect(vi.mocked(defaultRuntime.exit).mock.calls.some((call) => call[0] === 1)).toBe(false);
+        expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
         expect(runGatewayUpdate).not.toHaveBeenCalled();
       },
     },
@@ -2967,8 +2969,8 @@ describe("update-cli", () => {
       },
       assert: () => {
         const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
-        expect(logLines.some((line) => line.includes("Daemon restarted successfully."))).toBe(
-          false,
+        expect(logLines).not.toEqual(
+          expect.arrayContaining([expect.stringContaining("Daemon restarted successfully.")]),
         );
       },
     },
@@ -3296,9 +3298,11 @@ describe("update-cli", () => {
       .mocked(defaultRuntime.error)
       .mock.calls.some((call) => String(call[0]).includes("Downgrade confirmation required."));
     expect(downgradeMessageSeen).toBe(shouldExit);
-    expect(vi.mocked(defaultRuntime.exit).mock.calls.some((call) => call[0] === 1)).toBe(
-      shouldExit,
-    );
+    if (shouldExit) {
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    } else {
+      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    }
     expect(vi.mocked(runGatewayUpdate).mock.calls.length > 0).toBe(false);
     expect(
       vi

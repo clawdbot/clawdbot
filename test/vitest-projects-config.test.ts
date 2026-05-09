@@ -32,13 +32,30 @@ import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
 
+function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
+  if (!config.test) {
+    throw new Error("expected vitest test config");
+  }
+  return config.test as NonNullable<T["test"]>;
+}
+
+function requireWebOptimizer(testConfig: {
+  deps?: { optimizer?: { web?: { enabled?: boolean } } };
+}) {
+  const webOptimizer = testConfig.deps?.optimizer?.web;
+  if (!webOptimizer) {
+    throw new Error("expected vitest web optimizer config");
+  }
+  return webOptimizer;
+}
+
 afterEach(() => {
   patternFiles.cleanup();
 });
 
 describe("projects vitest config", () => {
   it("defines the native root project list for all non-live Vitest lanes", () => {
-    expect(baseConfig.test?.projects).toEqual([...rootVitestProjects]);
+    expect(requireTestConfig(baseConfig).projects).toEqual([...rootVitestProjects]);
   });
 
   it("disables vite env-file loading for vitest lanes", () => {
@@ -102,11 +119,11 @@ describe("projects vitest config", () => {
 
   it("gives contract project configs unique names", () => {
     expect([
-      contractChannelSurfaceConfig.test?.name,
-      contractChannelConfigConfig.test?.name,
-      contractChannelRegistryConfig.test?.name,
-      contractChannelSessionConfig.test?.name,
-      contractPluginConfig.test?.name,
+      requireTestConfig(contractChannelSurfaceConfig).name,
+      requireTestConfig(contractChannelConfigConfig).name,
+      requireTestConfig(contractChannelRegistryConfig).name,
+      requireTestConfig(contractChannelSessionConfig).name,
+      requireTestConfig(contractPluginConfig).name,
     ]).toEqual([
       "contracts-channel-surface",
       "contracts-channel-config",
@@ -150,21 +167,23 @@ describe("projects vitest config", () => {
 
   it("keeps the root ui lane aligned with the shared jsdom setup", () => {
     const config = createUiVitestConfig();
-    expect(config.test.environment).toBe("jsdom");
-    expect(config.test.isolate).toBe(false);
-    expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
-    const setupFiles = normalizeConfigPaths(config.test.setupFiles);
+    const testConfig = requireTestConfig(config);
+    expect(testConfig.environment).toBe("jsdom");
+    expect(testConfig.isolate).toBe(false);
+    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
+    const setupFiles = normalizeConfigPaths(testConfig.setupFiles);
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
     expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
-    expect(config.test.deps?.optimizer?.web?.enabled).toBe(true);
+    expect(requireWebOptimizer(testConfig).enabled).toBe(true);
   });
 
   it("keeps the unit-ui shard aligned with the shared jsdom setup", () => {
-    expect(unitUiConfig.test?.environment).toBe("jsdom");
-    expect(unitUiConfig.test?.isolate).toBe(false);
-    expect(normalizeConfigPath(unitUiConfig.test?.runner)).toBe("test/non-isolated-runner.ts");
+    const testConfig = requireTestConfig(unitUiConfig);
+    expect(testConfig.environment).toBe("jsdom");
+    expect(testConfig.isolate).toBe(false);
+    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
     expect(unitUiIncludePatterns).toContain("ui/src/ui/views/dreaming.test.ts");
-    const setupFiles = normalizeConfigPaths(unitUiConfig.test?.setupFiles);
+    const setupFiles = normalizeConfigPaths(testConfig.setupFiles);
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
     expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
   });
@@ -182,8 +201,9 @@ describe("projects vitest config", () => {
   });
 
   it("keeps the bundled lane on thread workers with the non-isolated runner", () => {
-    expect(bundledConfig.test?.pool).toBe("threads");
-    expect(bundledConfig.test?.isolate).toBe(false);
-    expect(normalizeConfigPath(bundledConfig.test?.runner)).toBe("test/non-isolated-runner.ts");
+    const testConfig = requireTestConfig(bundledConfig);
+    expect(testConfig.pool).toBe("threads");
+    expect(testConfig.isolate).toBe(false);
+    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
   });
 });

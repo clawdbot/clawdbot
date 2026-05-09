@@ -47,13 +47,20 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function expectRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toEqual(expect.any(Object));
+  expect(value, label).not.toBeNull();
+  expect(typeof value, label).toBe("object");
   expect(Array.isArray(value), label).toBe(false);
   return value as Record<string, unknown>;
 }
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function expectNonEmptyString(value: unknown, label: string): string {
+  const text = readString(value);
+  expect(text, label).not.toBeNull();
+  return text as string;
 }
 
 function readStringArray(value: unknown): string[] {
@@ -120,8 +127,8 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("canvas.snapshot", payload);
-      expect(readString(obj.format)).not.toBeNull();
-      expect(readString(obj.base64)).not.toBeNull();
+      expectNonEmptyString(obj.format, "canvas.snapshot format");
+      expectNonEmptyString(obj.base64, "canvas.snapshot base64");
     },
   },
   "canvas.a2ui.push": {
@@ -154,7 +161,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("camera.snap", payload);
-      expect(readString(obj.base64)).not.toBeNull();
+      expectNonEmptyString(obj.base64, "camera.snap base64");
     },
   },
   "camera.clip": {
@@ -163,7 +170,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("camera.clip", payload);
-      expect(readString(obj.base64)).not.toBeNull();
+      expectNonEmptyString(obj.base64, "camera.clip base64");
     },
   },
   "location.get": {
@@ -188,8 +195,8 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("device.info", payload);
-      expect(readString(obj.systemName)).not.toBeNull();
-      expect(readString(obj.systemVersion)).not.toBeNull();
+      expectNonEmptyString(obj.systemName, "device.info systemName");
+      expectNonEmptyString(obj.systemVersion, "device.info systemVersion");
     },
   },
   "device.permissions": {
@@ -238,7 +245,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("sms.search", payload);
-      expect(typeof obj.count === "number" || typeof obj.count === "string").toBe(true);
+      expect(["number", "string"]).toContain(typeof obj.count);
       expect(Array.isArray(obj.messages)).toBe(true);
     },
   },
@@ -248,7 +255,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("debug.logs", payload);
-      expect(readString(obj.logs)).not.toBeNull();
+      expectNonEmptyString(obj.logs, "debug.logs logs");
     },
   },
   "debug.ed25519": {
@@ -257,7 +264,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("debug.ed25519", payload);
-      expect(readString(obj.diagnostics)).not.toBeNull();
+      expectNonEmptyString(obj.diagnostics, "debug.ed25519 diagnostics");
     },
   },
 };

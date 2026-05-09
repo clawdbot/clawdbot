@@ -55,6 +55,14 @@ function createRequestWithConfigGet() {
   });
 }
 
+function requireRequestCall(request: ReturnType<typeof vi.fn>, index = 0): unknown[] {
+  const call = request.mock.calls[index];
+  if (!call) {
+    throw new Error("expected client request call");
+  }
+  return call;
+}
+
 describe("applyConfigSnapshot", () => {
   it("does not clobber form edits while dirty", () => {
     const state = createState();
@@ -392,7 +400,7 @@ describe("resetConfigPendingChanges", () => {
     resetConfigPendingChanges(state);
 
     expect(state.configFormDirty).toBe(false);
-    expect(state.configForm).toEqual({});
+    expect(state.configForm).toStrictEqual({});
     expect(state.configRaw).toBe("");
   });
 });
@@ -573,8 +581,9 @@ describe("applyConfig", () => {
 
     await applyConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.apply");
-    const params = request.mock.calls[0]?.[1] as {
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.apply");
+    const params = call[1] as {
       raw: string;
       baseHash: string;
       sessionKey: string;
@@ -615,8 +624,9 @@ describe("saveConfig", () => {
 
     await saveConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.set");
-    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
     expect(params.baseHash).toBe("hash-original");
   });
 
@@ -645,8 +655,9 @@ describe("saveConfig", () => {
 
     await saveConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.set");
-    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
     const parsed = JSON.parse(params.raw) as {
       gateway: { port: unknown; enabled: unknown };
     };
@@ -670,8 +681,9 @@ describe("saveConfig", () => {
 
     await saveConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.set");
-    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
     const parsed = JSON.parse(params.raw) as {
       gateway: { port: unknown };
     };

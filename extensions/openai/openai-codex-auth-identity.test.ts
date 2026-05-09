@@ -72,6 +72,6 @@ describe("resolveCodexAuthIdentity", () => {
   });
 
   it("returns no metadata when token parsing yields no identity", () => {
-    expect(resolveCodexAuthIdentity({ accessToken: "not-a-jwt-token" })).toEqual({});
+    expect(resolveCodexAuthIdentity({ accessToken: "not-a-jwt-token" })).toStrictEqual({});
   });
 });

@@ -437,7 +437,7 @@ describe("writeCliImages", () => {
         useResume: false,
       });
 
-      expect(argv.filter((arg) => arg === "--image")).toHaveLength(1);
+      expect(argv.reduce((count, arg) => count + (arg === "--image" ? 1 : 0), 0)).toBe(1);
       expect(argv[argv.indexOf("--image") + 1]).toContain("openclaw-cli-images");
       await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(
         Buffer.from(explicitImage.data, "base64"),

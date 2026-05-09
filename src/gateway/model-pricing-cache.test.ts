@@ -914,7 +914,8 @@ describe("model-pricing-cache", () => {
       await vi.waitFor(() => expect(abortedUrls).toHaveLength(2));
       await vi.dynamicImportSettled();
 
-      expect(setTimeoutSpy.mock.calls.some(([, delay]) => delay === 24 * 60 * 60_000)).toBe(false);
+      const scheduledDelays = setTimeoutSpy.mock.calls.map(([, delay]) => delay);
+      expect(scheduledDelays).not.toContain(24 * 60 * 60_000);
       expect(
         getCachedGatewayModelPricing({ provider: "anthropic", model: "claude-opus-4-6" }),
       ).toBeUndefined();

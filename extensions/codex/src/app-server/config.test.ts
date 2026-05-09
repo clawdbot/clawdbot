@@ -131,7 +131,7 @@ describe("Codex app-server config", () => {
           approvalPolicy: "always",
         },
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 
   it("requires a websocket url when websocket transport is configured", () => {
@@ -529,7 +529,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
 
     expect(config.codexPlugins).toBeUndefined();
-    expect(resolveCodexPluginsPolicy(config).pluginPolicies).toEqual([]);
+    expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([]);
   });
 
   it("treats configured and environment commands as explicit overrides", () => {

@@ -58,7 +58,6 @@ describe("createWebChannelStatusController", () => {
     // The gateway health policy checks `connected === true && lastTransportActivityAt != null`
     // to decide whether to run stale-socket detection. Both must be present.
     expect(last.connected).toBe(true);
-    expect(last.lastTransportActivityAt).not.toBeNull();
-    expect(typeof last.lastTransportActivityAt).toBe("number");
+    expect(last.lastTransportActivityAt).toBe(1000);
   });
 });

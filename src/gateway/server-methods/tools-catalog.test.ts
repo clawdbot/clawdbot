@@ -94,9 +94,10 @@ describe("tools.catalog handler", () => {
         }
       | undefined;
     expect(payload?.agentId).toBe("main");
-    expect(payload?.groups.some((group) => group.source === "plugin")).toBe(false);
-    const media = payload?.groups.find((group) => group.id === "media");
-    expect(media?.tools.some((tool) => tool.id === "tts" && tool.source === "core")).toBe(true);
+    const groups = payload?.groups ?? [];
+    expect(groups.some((group) => group.source === "plugin")).toBe(false);
+    const media = groups.find((group) => group.id === "media");
+    expect(media?.tools.map((tool) => `${tool.source}:${tool.id}`) ?? []).toContain("core:tts");
   });
 
   it("includes plugin groups with plugin metadata", async () => {

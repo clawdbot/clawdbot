@@ -150,7 +150,7 @@ describe("plugin state keyed store", () => {
         ),
       );
 
-      expect(attempts.filter(Boolean)).toHaveLength(1);
+      expect(attempts.reduce((count, attempt) => count + (attempt ? 1 : 0), 0)).toBe(1);
       const stored = await store.lookup("claim");
       if (stored === undefined) {
         throw new Error("expected winning plugin-state claim");
@@ -465,7 +465,8 @@ describe("plugin state keyed store", () => {
     await withOpenClawTestState({ label: "plugin-state-probe" }, async () => {
       const result = probePluginStateStore();
       expect(result.ok).toBe(true);
-      expect(result.steps.every((step) => step.ok)).toBe(true);
+      const failedSteps = result.steps.filter((step) => !step.ok);
+      expect(failedSteps).toEqual([]);
       expect(JSON.stringify(result)).not.toContain("probe-value");
     });
   });

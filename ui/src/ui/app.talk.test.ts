@@ -59,6 +59,9 @@ describe("OpenClawApp Talk controls", () => {
     expect(startMock).toHaveBeenCalledOnce();
     expect(stopMock).not.toHaveBeenCalled();
     expect(app.realtimeTalkStatus).toBe("connecting");
-    expect(app.realtimeTalkSession).not.toBeNull();
+    expect(app.realtimeTalkSession).toMatchObject({
+      start: startMock,
+      stop: stopMock,
+    });
   });
 });

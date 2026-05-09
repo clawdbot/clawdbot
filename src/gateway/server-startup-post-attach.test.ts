@@ -396,7 +396,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("waits for deferred startup plugin attachment before channel sidecars", async () => {
     const events: string[] = [];
-    let finishAttachment!: () => void;
+    let finishAttachment: (() => void) | undefined;
     const attachmentFinished = new Promise<void>((resolve) => {
       finishAttachment = () => {
         events.push("startup-loaded-end");
@@ -439,6 +439,9 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     expect(startGatewaySidecars).not.toHaveBeenCalled();
 
+    if (!finishAttachment) {
+      throw new Error("Expected startup plugin attachment release callback to be initialized");
+    }
     finishAttachment();
     await runtimePromise;
 
@@ -517,7 +520,7 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   it("waits for sidecars by default before returning", async () => {
-    let resumeSidecars!: () => void;
+    let resumeSidecars: (() => void) | undefined;
     const sidecarsReady = new Promise<{ pluginServices: null }>((resolve) => {
       resumeSidecars = () => resolve({ pluginServices: null });
     });
@@ -539,6 +542,9 @@ describe("startGatewayPostAttachRuntime", () => {
     await Promise.resolve();
     expect(returned).toBe(false);
 
+    if (!resumeSidecars) {
+      throw new Error("Expected gateway sidecar resume callback to be initialized");
+    }
     resumeSidecars();
     await runtimePromise;
     expect(returned).toBe(true);
@@ -604,7 +610,7 @@ describe("startGatewayPostAttachRuntime", () => {
     await withEnvAsync(
       { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
       async () => {
-        let resolvePrewarm!: () => void;
+        let resolvePrewarm: (() => void) | undefined;
         const prewarmPrimaryModel = vi.fn(
           async () =>
             await new Promise<undefined>((resolve) => {
@@ -649,6 +655,9 @@ describe("startGatewayPostAttachRuntime", () => {
         );
         await sidecarsPromise;
 
+        if (!resolvePrewarm) {
+          throw new Error("Expected primary model prewarm resolver to be initialized");
+        }
         resolvePrewarm();
         await Promise.resolve();
       },
@@ -656,7 +665,7 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   it("keeps startup-gated methods unavailable while sidecars are still resuming", async () => {
-    let resumeSidecars!: () => void;
+    let resumeSidecars: (() => void) | undefined;
     const sidecarsReady = new Promise<{ pluginServices: null }>((resolve) => {
       resumeSidecars = () => resolve({ pluginServices: null });
     });
@@ -684,6 +693,9 @@ describe("startGatewayPostAttachRuntime", () => {
     expect([...unavailableGatewayMethods]).toEqual([...STARTUP_UNAVAILABLE_GATEWAY_METHODS]);
     expect(hoisted.startPluginServices).not.toHaveBeenCalled();
 
+    if (!resumeSidecars) {
+      throw new Error("Expected gateway sidecar resume callback to be initialized");
+    }
     resumeSidecars();
     await vi.waitFor(() => {
       expect([...unavailableGatewayMethods]).toEqual([]);
@@ -916,6 +928,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     broadcast: vi.fn(),
     tailscaleMode: "off",
     resetOnExit: false,
+    preserveFunnel: false,
     controlUiBasePath: "/",
     logTailscale: {
       info: vi.fn(),

@@ -21,7 +21,9 @@ const makePayload = (overrides: Partial<IMessagePayload> = {}): IMessagePayload 
 
 describe("combineIMessagePayloads", () => {
   it("throws on empty input", () => {
-    expect(() => combineIMessagePayloads([])).toThrowError();
+    expect(() => combineIMessagePayloads([])).toThrow(
+      "combineIMessagePayloads: cannot combine empty payloads",
+    );
   });
 
   it("returns the lone payload unchanged when only one entry", () => {

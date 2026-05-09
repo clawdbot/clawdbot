@@ -94,6 +94,10 @@ function applyRuntimeToolsAllow<T extends { name: string }>(tools: T[], toolsAll
 
 type OpenClawCodingTool = ReturnType<typeof createOpenClawCodingTools>[number];
 
+function toolNameList(tools: readonly { name: string }[]): string[] {
+  return tools.map((tool) => tool.name);
+}
+
 function requireTool(tools: OpenClawCodingTool[], name: string): OpenClawCodingTool {
   const tool = tools.find((candidate) => candidate.name === name);
   if (!tool) {
@@ -354,23 +358,23 @@ describe("createOpenClawCodingTools", () => {
 
   it("enforces apply_patch availability and canonical names across model/provider constraints", () => {
     const defaultTools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
-    expect(defaultTools.some((tool) => tool.name === "exec")).toBe(true);
-    expect(defaultTools.some((tool) => tool.name === "process")).toBe(true);
-    expect(defaultTools.some((tool) => tool.name === "apply_patch")).toBe(false);
+    expect(toolNameList(defaultTools)).toContain("exec");
+    expect(toolNameList(defaultTools)).toContain("process");
+    expect(toolNameList(defaultTools)).not.toContain("apply_patch");
 
     const openAiTools = createOpenClawCodingTools({
       config: testConfig,
       modelProvider: "openai",
       modelId: "gpt-5.4",
     });
-    expect(openAiTools.some((tool) => tool.name === "apply_patch")).toBe(true);
+    expect(toolNameList(openAiTools)).toContain("apply_patch");
 
     const codexTools = createOpenClawCodingTools({
       config: testConfig,
       modelProvider: "openai-codex",
       modelId: "gpt-5.4",
     });
-    expect(codexTools.some((tool) => tool.name === "apply_patch")).toBe(true);
+    expect(toolNameList(codexTools)).toContain("apply_patch");
 
     const disabledConfig: OpenClawConfig = {
       tools: {
@@ -384,14 +388,14 @@ describe("createOpenClawCodingTools", () => {
       modelProvider: "openai",
       modelId: "gpt-5.4",
     });
-    expect(disabledOpenAiTools.some((tool) => tool.name === "apply_patch")).toBe(false);
+    expect(toolNameList(disabledOpenAiTools)).not.toContain("apply_patch");
 
     const anthropicTools = createOpenClawCodingTools({
       config: disabledConfig,
       modelProvider: "anthropic",
       modelId: "claude-opus-4-6",
     });
-    expect(anthropicTools.some((tool) => tool.name === "apply_patch")).toBe(false);
+    expect(toolNameList(anthropicTools)).not.toContain("apply_patch");
 
     const allowModelsConfig: OpenClawConfig = {
       tools: {
@@ -405,14 +409,14 @@ describe("createOpenClawCodingTools", () => {
       modelProvider: "openai",
       modelId: "gpt-5.4",
     });
-    expect(allowed.some((tool) => tool.name === "apply_patch")).toBe(true);
+    expect(toolNameList(allowed)).toContain("apply_patch");
 
     const denied = createOpenClawCodingTools({
       config: allowModelsConfig,
       modelProvider: "openai",
       modelId: "gpt-5.4-mini",
     });
-    expect(denied.some((tool) => tool.name === "apply_patch")).toBe(false);
+    expect(toolNameList(denied)).not.toContain("apply_patch");
 
     const oauthTools = createOpenClawCodingTools({
       config: testConfig,
@@ -666,7 +670,7 @@ describe("createOpenClawCodingTools", () => {
         },
       } as OpenClawConfig,
     });
-    expect(subagentAllowOnly.some((tool) => tool.name === "browser")).toBe(false);
+    expect(toolNameList(subagentAllowOnly)).not.toContain("browser");
 
     const profileStageAlsoAllow = createOpenClawCodingTools({
       sessionKey: "agent:main:subagent:test",
@@ -675,20 +679,20 @@ describe("createOpenClawCodingTools", () => {
         tools: { profile: "coding", alsoAllow: ["browser"] },
       } as OpenClawConfig,
     });
-    expect(profileStageAlsoAllow.some((tool) => tool.name === "browser")).toBe(true);
+    expect(toolNameList(profileStageAlsoAllow)).toContain("browser");
   });
 
   it("can keep message available when a cron route needs it under the coding profile", () => {
     const codingTools = createOpenClawCodingTools({
       config: { tools: { profile: "coding" } },
     });
-    expect(codingTools.some((tool) => tool.name === "message")).toBe(false);
+    expect(toolNameList(codingTools)).not.toContain("message");
 
     const cronTools = createOpenClawCodingTools({
       config: { tools: { profile: "coding" } },
       forceMessageTool: true,
     });
-    expect(cronTools.some((tool) => tool.name === "message")).toBe(true);
+    expect(toolNameList(cronTools)).toContain("message");
   });
 
   it("keeps heartbeat response available for heartbeat runs under the coding profile", () => {
@@ -699,7 +703,7 @@ describe("createOpenClawCodingTools", () => {
       forceHeartbeatTool: true,
     });
 
-    expect(codingTools.some((tool) => tool.name === "heartbeat_respond")).toBe(true);
+    expect(toolNameList(codingTools)).toContain("heartbeat_respond");
   });
 
   it("enables heartbeat response when visible replies are message-tool-only", () => {
@@ -711,7 +715,7 @@ describe("createOpenClawCodingTools", () => {
       trigger: "heartbeat",
     });
 
-    expect(tools.some((tool) => tool.name === "heartbeat_respond")).toBe(true);
+    expect(toolNameList(tools)).toContain("heartbeat_respond");
   });
 
   it("can keep message available when a cron route needs it under a provider coding profile", () => {
@@ -720,7 +724,7 @@ describe("createOpenClawCodingTools", () => {
       modelProvider: "openai",
       modelId: "gpt-5.4",
     });
-    expect(providerProfileTools.some((tool) => tool.name === "message")).toBe(false);
+    expect(toolNameList(providerProfileTools)).not.toContain("message");
 
     const cronTools = createOpenClawCodingTools({
       config: { tools: { byProvider: { openai: { profile: "coding" } } } },
@@ -728,7 +732,7 @@ describe("createOpenClawCodingTools", () => {
       modelId: "gpt-5.4",
       forceMessageTool: true,
     });
-    expect(cronTools.some((tool) => tool.name === "message")).toBe(true);
+    expect(toolNameList(cronTools)).toContain("message");
   });
 
   it.each(providerAliasCases)(
@@ -812,7 +816,7 @@ describe("createOpenClawCodingTools", () => {
       senderIsOwner: true,
     });
 
-    expect(xaiTools.some((tool) => tool.name === "web_search")).toBe(false);
+    expect(toolNameList(xaiTools)).not.toContain("web_search");
     for (const tool of xaiTools) {
       const violations = findUnsupportedSchemaKeywords(
         tool.parameters,
@@ -889,9 +893,9 @@ describe("createOpenClawCodingTools", () => {
       },
     });
     const tools = createOpenClawCodingTools({ sandbox });
-    expect(tools.some((tool) => tool.name === "exec")).toBe(true);
-    expect(tools.some((tool) => tool.name === "read")).toBe(false);
-    expect(tools.some((tool) => tool.name === "browser")).toBe(false);
+    expect(toolNameList(tools)).toContain("exec");
+    expect(toolNameList(tools)).not.toContain("read");
+    expect(toolNameList(tools)).not.toContain("browser");
   });
 
   it("hard-disables write/edit when sandbox workspaceAccess is ro", () => {
@@ -907,9 +911,9 @@ describe("createOpenClawCodingTools", () => {
       },
     });
     const tools = createOpenClawCodingTools({ sandbox });
-    expect(tools.some((tool) => tool.name === "read")).toBe(true);
-    expect(tools.some((tool) => tool.name === "write")).toBe(false);
-    expect(tools.some((tool) => tool.name === "edit")).toBe(false);
+    expect(toolNameList(tools)).toContain("read");
+    expect(toolNameList(tools)).not.toContain("write");
+    expect(toolNameList(tools)).not.toContain("edit");
   });
 
   it("accepts canonical parameters for read/write/edit", async () => {

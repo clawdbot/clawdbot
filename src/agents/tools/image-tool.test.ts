@@ -533,7 +533,7 @@ async function expectImageToolExecOk(
 }
 
 function requireImageTool<T>(tool: T | null | undefined): T {
-  expect(tool).not.toBeNull();
+  expect(typeof (tool as { execute?: unknown } | null | undefined)?.execute).toBe("function");
   if (!tool) {
     throw new Error("expected image tool");
   }
@@ -654,7 +654,7 @@ describe("image tool implicit imageModel config", () => {
         deferAutoModelResolution: true,
       });
 
-      expect(tool).not.toBeNull();
+      expect(typeof tool?.execute).toBe("function");
       expect(resolveDefaultMediaModelSpy).not.toHaveBeenCalled();
       expect(resolveAutoMediaKeyProvidersSpy).not.toHaveBeenCalled();
     });
@@ -673,7 +673,7 @@ describe("image tool implicit imageModel config", () => {
         ...createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
         fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -700,7 +700,7 @@ describe("image tool implicit imageModel config", () => {
         ...createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
         fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -801,7 +801,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
         createDefaultImageFallbackExpectation("minimax-portal/MiniMax-VL-01"),
       );
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -814,7 +814,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "opencode/gpt-5-nano",
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -827,7 +827,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "opencode-go/kimi-k2.6",
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -842,7 +842,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
         createDefaultImageFallbackExpectation("zai/glm-4.6v"),
       );
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -871,7 +871,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "acme/vision-1",
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -933,7 +933,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "amazon-bedrock/vision-1",
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -1098,7 +1098,7 @@ describe("image tool implicit imageModel config", () => {
         primary: "openai/gpt-5.4-mini",
       });
       const tool = createImageTool({ config: cfg, agentDir, modelHasVision: true });
-      expect(tool).not.toBeNull();
+      expect(typeof tool?.execute).toBe("function");
       expect(tool?.description).toContain(
         "Only use this tool when images were NOT already provided",
       );

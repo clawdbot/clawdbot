@@ -95,12 +95,6 @@ describe("subagent registry persistence resume", () => {
     });
   };
 
-  const flushQueuedRegistryWork = async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  };
-
   beforeAll(async () => {
     vi.resetModules();
     mod = await import("./subagent-registry.js");
@@ -194,7 +188,6 @@ describe("subagent registry persistence resume", () => {
 
     mod.initSubagentRegistry();
 
-    await flushQueuedRegistryWork();
     await vi.waitFor(() => expect(announceSpy).toHaveBeenCalled(), {
       timeout: 1_000,
       interval: 10,

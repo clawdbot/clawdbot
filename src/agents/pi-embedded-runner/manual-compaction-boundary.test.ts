@@ -58,14 +58,13 @@ function messageText(message: AgentMessage): string {
   if (!Array.isArray(content)) {
     return "";
   }
-  return content
-    .map((block) =>
-      block && typeof block === "object" && "text" in block && typeof block.text === "string"
-        ? block.text
-        : "",
-    )
-    .filter(Boolean)
-    .join(" ");
+  const textBlocks: string[] = [];
+  for (const block of content) {
+    if (block && typeof block === "object" && "text" in block && typeof block.text === "string") {
+      textBlocks.push(block.text);
+    }
+  }
+  return textBlocks.join(" ");
 }
 
 function requireString(value: string | undefined, label: string): string {

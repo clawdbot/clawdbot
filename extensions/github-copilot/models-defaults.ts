@@ -1,5 +1,5 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { resolveCopilotTransportApi } from "./models.js";
+import { resolveCopilotTransportApi, resolveStaticCopilotModelOverride } from "./model-metadata.js";
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8192;
@@ -26,6 +26,7 @@ const DEFAULT_MODEL_IDS = [
   "gpt-5.4",
   "gpt-5.4-mini",
   "gpt-5.4-nano",
+  "gpt-5.5",
   "grok-code-fast-1",
   "raptor-mini",
   "goldeneye",
@@ -40,14 +41,16 @@ export function buildCopilotModelDefinition(modelId: string): ModelDefinitionCon
   if (!id) {
     throw new Error("Model id required");
   }
+  const staticOverride = resolveStaticCopilotModelOverride(id);
   return {
     id,
-    name: id,
-    api: resolveCopilotTransportApi(id),
-    reasoning: false,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    name: staticOverride?.name ?? id,
+    api: staticOverride?.api ?? resolveCopilotTransportApi(id),
+    reasoning: staticOverride?.reasoning ?? false,
+    input: staticOverride?.input ?? ["text", "image"],
+    cost: staticOverride?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: staticOverride?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    maxTokens: staticOverride?.maxTokens ?? DEFAULT_MAX_TOKENS,
+    ...(staticOverride?.compat ? { compat: staticOverride.compat } : {}),
   };
 }

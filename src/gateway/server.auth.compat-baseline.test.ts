@@ -217,7 +217,7 @@ describe("gateway auth compatibility baseline", () => {
       });
       expect(rotated.ok).toBe(true);
       const rotatedToken = rotated.ok ? rotated.entry.token : "";
-      expect(rotatedToken).toEqual(expect.any(String));
+      expect(rotatedToken).toBeTypeOf("string");
       expect(rotatedToken.length).toBeGreaterThan(0);
 
       const ws = await openWs(port);

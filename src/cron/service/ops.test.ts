@@ -160,7 +160,7 @@ describe("cron service ops seam coverage", () => {
     );
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeat).not.toHaveBeenCalled();
-    expect(state.timer).not.toBeNull();
+    expect(state.timer).toEqual(expect.anything());
 
     const persisted = (await loadCronStore(storePath)) as {
       jobs: CronJob[];
@@ -179,7 +179,8 @@ describe("cron service ops seam coverage", () => {
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)
       .filter((delay): delay is number => typeof delay === "number");
-    expect(delays.some((delay) => delay > 0)).toBe(true);
+    const positiveDelays = delays.filter((delay) => delay > 0);
+    expect(positiveDelays.length).toBeGreaterThan(0);
 
     timeoutSpy.mockRestore();
     stop(state);

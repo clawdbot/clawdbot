@@ -538,7 +538,7 @@ describe("OpenAIWebSocketManager", () => {
 
     it("is safe to call before connect()", () => {
       const manager = buildManager();
-      expect(() => manager.close()).not.toThrow();
+      expect(manager.close()).toBeUndefined();
       expect(manager.connectionState).toBe("closed");
     });
   });
@@ -775,7 +775,7 @@ describe("OpenAIWebSocketManager", () => {
       lastSocket().simulateError(new Error("SSL handshake failed"));
       await p;
 
-      expect(errors.some((e) => e.message === "SSL handshake failed")).toBe(true);
+      expect(errors.map((error) => error.message)).toContain("SSL handshake failed");
     });
 
     it("handles multiple successive socket errors without crashing", async () => {
@@ -790,8 +790,9 @@ describe("OpenAIWebSocketManager", () => {
       await p;
 
       expect(errors.length).toBeGreaterThanOrEqual(2);
-      expect(errors.some((e) => e.message === "first error")).toBe(true);
-      expect(errors.some((e) => e.message === "second error")).toBe(true);
+      expect(errors.map((error) => error.message)).toEqual(
+        expect.arrayContaining(["first error", "second error"]),
+      );
     });
   });
 

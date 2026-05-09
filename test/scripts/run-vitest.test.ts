@@ -32,7 +32,7 @@ describe("scripts/run-vitest", () => {
         OPENCLAW_VITEST_ENABLE_MAGLEV: "1",
         PATH: "/usr/bin",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("parses the optional no-output timeout env", () => {

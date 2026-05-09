@@ -91,6 +91,7 @@ describe("assertNotRoot", () => {
     process.getuid = () => 0;
     assertNotRoot({});
     const output = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
-    expect(output).toContain("non-root user");
+    expect(output).toContain("service user");
+    expect(output).toContain("sudo -u <service-user> -H openclaw");
   });
 });

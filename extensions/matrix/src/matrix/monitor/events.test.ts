@@ -593,8 +593,10 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
     await flushTasks();
     const bodies = getSentNoticeBodies(sendMessage);
-    expect(bodies.some((body) => body.includes("SAS emoji:"))).toBe(true);
-    expect(bodies.some((body) => body.includes("SAS decimal: 6158 1986 3513"))).toBe(true);
+    expect(bodies).toEqual(expect.arrayContaining([expect.stringContaining("SAS emoji:")]));
+    expect(bodies).toEqual(
+      expect.arrayContaining([expect.stringContaining("SAS decimal: 6158 1986 3513")]),
+    );
   });
 
   it("rehydrates an in-progress DM verification before resolving SAS notices", async () => {
@@ -961,7 +963,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
       await vi.waitFor(() => {
         const bodies = getSentNoticeBodies(sendMessage);
-        expect(bodies.some((body) => body.includes("SAS emoji:"))).toBe(true);
+        expect(bodies).toEqual(expect.arrayContaining([expect.stringContaining("SAS emoji:")]));
       });
     } finally {
       vi.useRealTimers();
@@ -1215,11 +1217,13 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     });
 
     await flushTasks();
-    expect(
-      getSentNoticeBodies(sendMessage).some((body) => body.includes("SAS decimal: 6158 1986 3513")),
-    ).toBe(true);
+    expect(getSentNoticeBodies(sendMessage)).toEqual(
+      expect.arrayContaining([expect.stringContaining("SAS decimal: 6158 1986 3513")]),
+    );
     const bodies = getSentNoticeBodies(sendMessage);
-    expect(bodies.some((body) => body.includes("SAS decimal: 1111 2222 3333"))).toBe(false);
+    expect(bodies).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("SAS decimal: 1111 2222 3333")]),
+    );
   });
 
   it("preserves strict-room SAS fallback when active DM inspection cannot resolve a room", async () => {
@@ -1321,11 +1325,13 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     });
 
     await flushTasks();
-    expect(
-      getSentNoticeBodies(sendMessage).some((body) => body.includes("SAS decimal: 6158 1986 3513")),
-    ).toBe(true);
+    expect(getSentNoticeBodies(sendMessage)).toEqual(
+      expect.arrayContaining([expect.stringContaining("SAS decimal: 6158 1986 3513")]),
+    );
     const bodies = getSentNoticeBodies(sendMessage);
-    expect(bodies.some((body) => body.includes("SAS decimal: 1111 2222 3333"))).toBe(false);
+    expect(bodies).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("SAS decimal: 1111 2222 3333")]),
+    );
   });
 
   it("does not emit SAS notices for cancelled verification events", async () => {
@@ -1803,7 +1809,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     }
   });
 
-  it("does not throw when getUserId fails during decrypt guidance lookup", async () => {
+  it("logs decrypt guidance when getUserId fails during lookup", async () => {
     const { logger, logVerboseMessage, failedDecryptListener } = createHarness({
       accountId: "ops",
       selfUserIdError: new Error("lookup failed"),

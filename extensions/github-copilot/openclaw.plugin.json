@@ -165,6 +165,15 @@
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
           },
           {
+            "id": "gpt-5.5",
+            "name": "GPT-5.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
             "id": "gpt-5.4-mini",
             "name": "GPT-5.4 mini",
             "reasoning": true,
@@ -210,7 +219,7 @@
       }
     },
     "discovery": {
-      "github-copilot": "static"
+      "github-copilot": "refreshable"
     }
   },
   "contracts": {

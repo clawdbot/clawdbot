@@ -3,6 +3,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createOpenClawTestState, withOpenClawTestState } from "./openclaw-test-state.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("openclaw test state", () => {
   it("creates an isolated home layout with spawn env and restores process env", async () => {
     const previousHome = process.env.HOME;
@@ -26,7 +30,7 @@ describe("openclaw test state", () => {
       expect(state.env.OPENCLAW_CONFIG_PATH).toBe(state.configPath);
       expect(process.env.HOME).toBe(state.home);
       expect(process.env.OPENCLAW_HOME).toBe(state.home);
-      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual({});
+      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toStrictEqual({});
     } finally {
       await state.cleanup();
     }
@@ -35,7 +39,7 @@ describe("openclaw test state", () => {
     expect(process.env.OPENCLAW_HOME).toBe(previousOpenClawHome);
     expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
     expect(process.env.OPENCLAW_CONFIG_PATH).toBe(previousConfigPath);
-    await expect(fs.stat(state.root)).rejects.toThrow();
+    await expectPathMissing(state.root);
   });
 
   it("supports state-only layout without overriding HOME", async () => {
@@ -51,7 +55,7 @@ describe("openclaw test state", () => {
         expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
         expect(process.env.OPENCLAW_CONFIG_PATH).toBe(state.configPath);
         expect(state.env.HOME).toBe(previousHome);
-        await expect(fs.stat(state.configPath)).rejects.toThrow();
+        await expectPathMissing(state.configPath);
       },
     );
   });

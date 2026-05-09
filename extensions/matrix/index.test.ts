@@ -75,7 +75,8 @@ describe("matrix plugin", () => {
     if (!entry.setChannelRuntime) {
       throw new Error("expected Matrix runtime setter");
     }
-    expect(() => entry.setChannelRuntime?.({ marker: "runtime" } as never)).not.toThrow();
+    entry.setChannelRuntime({ marker: "runtime" } as never);
+    expect(runtimeMocks.setMatrixRuntime).not.toHaveBeenCalled();
   });
 
   it("wires CLI metadata through the bundled entry", () => {

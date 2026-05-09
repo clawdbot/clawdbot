@@ -1421,7 +1421,16 @@ async function buildResponsesPayload(
       exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-FALLBACK-OK",
     );
   }
-  if (QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(allInputText)) {
+  if (/\bmarker\b/i.test(prompt) && exactReplyDirective) {
+    return buildAssistantEvents(exactReplyDirective);
+  }
+  if (/\bmarker\b/i.test(prompt) && exactMarkerDirective) {
+    return buildAssistantEvents(exactMarkerDirective);
+  }
+  const isTelegramCurrentSessionStatusTurn =
+    QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(prompt) ||
+    (Boolean(toolOutput) && QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(allInputText));
+  if (isTelegramCurrentSessionStatusTurn) {
     if (!toolOutput && hasDeclaredTool(body, "session_status")) {
       return buildToolCallEventsWithArgs("session_status", { sessionKey: "current" });
     }

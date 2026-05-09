@@ -9,6 +9,13 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
+function expectProcessPid(pid: number | undefined): number {
+  if (pid == null) {
+    throw new Error("Expected spawned process to expose a pid");
+  }
+  return pid;
+}
+
 describe("managed-child-process", () => {
   it("maps forwarded signals to shell-compatible exit codes", () => {
     expect(signalExitCode("SIGHUP")).toBe(129);
@@ -56,6 +63,7 @@ process.exitCode = await runManagedCommand({
     const runner = spawn(process.execPath, [runnerPath], {
       stdio: "ignore",
     });
+    const runnerPid = expectProcessPid(runner.pid);
     let childPid = 0;
 
     try {
@@ -65,14 +73,14 @@ process.exitCode = await runManagedCommand({
       expect(Number.isInteger(childPid)).toBe(true);
       expect(isProcessAlive(childPid)).toBe(true);
 
-      process.kill(runner.pid!, "SIGTERM");
+      process.kill(runnerPid, "SIGTERM");
       const result = await waitForClose(runner);
 
       expect(result).toEqual({ code: 143, signal: null });
       await waitFor(() => !isProcessAlive(childPid), 10_000);
     } finally {
-      if (runner.pid && isProcessAlive(runner.pid)) {
-        process.kill(runner.pid, "SIGKILL");
+      if (isProcessAlive(runnerPid)) {
+        process.kill(runnerPid, "SIGKILL");
       }
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");

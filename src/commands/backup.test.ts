@@ -88,10 +88,17 @@ describe("backup commands", () => {
     plan: Awaited<ReturnType<typeof resolveBackupPlanFromDisk>>,
   ) {
     expect(plan.included).toHaveLength(1);
-    expect(plan.included[0]?.kind).toBe("state");
+    const [included] = plan.included;
+    expect(included).toMatchObject({ kind: "state" });
     expect(plan.skipped).toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: "workspace", reason: "covered" })]),
     );
+  }
+
+  function expectOnlyAssetKind(assets: Array<{ kind: string }>, kind: string) {
+    expect(assets).toHaveLength(1);
+    const [asset] = assets;
+    expect(asset).toMatchObject({ kind });
   }
 
   it("collapses default config, credentials, and workspace into the state backup root", async () => {
@@ -210,8 +217,11 @@ describe("backup commands", () => {
       expect(result.archivePath).toBe(
         path.join(backupDir, `${buildBackupArchiveRoot(nowMs)}.tar.gz`),
       );
-      expect(capturedManifest).not.toBeNull();
-      expect(capturedOnWriteEntry).not.toBeNull();
+      expect(capturedManifest).toEqual(expect.objectContaining({ assets: expect.any(Array) }));
+      expect(typeof capturedOnWriteEntry).toBe("function");
+      if (capturedManifest === null || capturedOnWriteEntry === null) {
+        throw new Error("Expected backup manifest and archive entry callback");
+      }
       const manifest = capturedManifest as unknown as {
         assets: Array<{ kind: string; archivePath: string }>;
       };
@@ -226,8 +236,10 @@ describe("backup commands", () => {
 
       const stateAsset = result.assets.find((asset) => asset.kind === "state");
       const workspaceAsset = result.assets.find((asset) => asset.kind === "workspace");
+      expect(stateAsset).toBeDefined();
+      expect(workspaceAsset).toBeDefined();
       if (!stateAsset || !workspaceAsset) {
-        throw new Error("expected state and workspace backup assets");
+        throw new Error("Expected backup assets to include state and workspace entries.");
       }
       expect(capturedEntryPaths).toHaveLength(result.assets.length + 1);
 
@@ -391,8 +403,7 @@ describe("backup commands", () => {
         dryRun: true,
         onlyConfig: true,
       });
-      expect(configOnly.assets).toHaveLength(1);
-      expect(configOnly.assets[0]?.kind).toBe("config");
+      expectOnlyAssetKind(configOnly.assets, "config");
     });
   });
 
@@ -425,7 +436,6 @@ describe("backup commands", () => {
 
     expect(result.onlyConfig).toBe(true);
     expect(result.includeWorkspace).toBe(false);
-    expect(result.assets).toHaveLength(1);
-    expect(result.assets[0]?.kind).toBe("config");
+    expectOnlyAssetKind(result.assets, "config");
   });
 });

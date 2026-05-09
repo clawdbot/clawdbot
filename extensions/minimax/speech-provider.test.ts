@@ -21,6 +21,26 @@ function clearMinimaxAuthEnv() {
 describe("buildMinimaxSpeechProvider", () => {
   const provider = buildMinimaxSpeechProvider();
 
+  function resolveProviderConfig(
+    params: Parameters<NonNullable<typeof provider.resolveConfig>>[0],
+  ): ReturnType<NonNullable<typeof provider.resolveConfig>> {
+    const resolveConfig = provider.resolveConfig;
+    if (!resolveConfig) {
+      throw new Error("MiniMax speech provider did not expose config resolution");
+    }
+    return resolveConfig(params);
+  }
+
+  function parseDirectiveToken(
+    params: Parameters<NonNullable<typeof provider.parseDirectiveToken>>[0],
+  ): ReturnType<NonNullable<typeof provider.parseDirectiveToken>> {
+    const parseToken = provider.parseDirectiveToken;
+    if (!parseToken) {
+      throw new Error("MiniMax speech provider did not expose directive parsing");
+    }
+    return parseToken(params);
+  }
+
   describe("metadata", () => {
     it("has correct id and label", () => {
       expect(provider.id).toBe("minimax");
@@ -107,14 +127,14 @@ describe("buildMinimaxSpeechProvider", () => {
       delete process.env.MINIMAX_API_HOST;
       delete process.env.MINIMAX_TTS_MODEL;
       delete process.env.MINIMAX_TTS_VOICE_ID;
-      const config = provider.resolveConfig!({ rawConfig: {}, cfg: {} as never, timeoutMs: 30000 });
+      const config = resolveProviderConfig({ rawConfig: {}, cfg: {} as never, timeoutMs: 30000 });
       expect(config.baseUrl).toBe("https://api.minimax.io");
       expect(config.model).toBe("speech-2.8-hd");
       expect(config.voiceId).toBe("English_expressive_narrator");
     });
 
     it("reads from providers.minimax in rawConfig", () => {
-      const config = provider.resolveConfig!({
+      const config = resolveProviderConfig({
         rawConfig: {
           providers: {
             minimax: {
@@ -142,7 +162,7 @@ describe("buildMinimaxSpeechProvider", () => {
       process.env.MINIMAX_API_HOST = "https://api.minimax.io/anthropic";
       process.env.MINIMAX_TTS_MODEL = "speech-01-240228";
       process.env.MINIMAX_TTS_VOICE_ID = "Chinese (Mandarin)_Gentle_Boy";
-      const config = provider.resolveConfig!({ rawConfig: {}, cfg: {} as never, timeoutMs: 30000 });
+      const config = resolveProviderConfig({ rawConfig: {}, cfg: {} as never, timeoutMs: 30000 });
       expect(config.baseUrl).toBe("https://api.minimax.io");
       expect(config.model).toBe("speech-01-240228");
       expect(config.voiceId).toBe("Chinese (Mandarin)_Gentle_Boy");
@@ -150,7 +170,7 @@ describe("buildMinimaxSpeechProvider", () => {
 
     it("derives the TTS host from minimax-portal OAuth config", () => {
       delete process.env.MINIMAX_API_HOST;
-      const config = provider.resolveConfig!({
+      const config = resolveProviderConfig({
         rawConfig: {},
         cfg: {
           models: {
@@ -178,7 +198,7 @@ describe("buildMinimaxSpeechProvider", () => {
     };
 
     it("handles voice key", () => {
-      const result = provider.parseDirectiveToken!({
+      const result = parseDirectiveToken({
         key: "voice",
         value: "Chinese (Mandarin)_Warm_Girl",
         policy,
@@ -188,13 +208,13 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("handles voiceid key", () => {
-      const result = provider.parseDirectiveToken!({ key: "voiceid", value: "test_voice", policy });
+      const result = parseDirectiveToken({ key: "voiceid", value: "test_voice", policy });
       expect(result.handled).toBe(true);
       expect(result.overrides?.voiceId).toBe("test_voice");
     });
 
     it("handles model key", () => {
-      const result = provider.parseDirectiveToken!({
+      const result = parseDirectiveToken({
         key: "model",
         value: "speech-01-240228",
         policy,
@@ -204,50 +224,50 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("handles speed key with valid value", () => {
-      const result = provider.parseDirectiveToken!({ key: "speed", value: "1.5", policy });
+      const result = parseDirectiveToken({ key: "speed", value: "1.5", policy });
       expect(result.handled).toBe(true);
       expect(result.overrides?.speed).toBe(1.5);
     });
 
     it("warns on invalid speed", () => {
-      const result = provider.parseDirectiveToken!({ key: "speed", value: "5.0", policy });
+      const result = parseDirectiveToken({ key: "speed", value: "5.0", policy });
       expect(result.handled).toBe(true);
       expect(result.warnings).toHaveLength(1);
       expect(result.overrides).toBeUndefined();
     });
 
     it("handles vol key", () => {
-      const result = provider.parseDirectiveToken!({ key: "vol", value: "3", policy });
+      const result = parseDirectiveToken({ key: "vol", value: "3", policy });
       expect(result.handled).toBe(true);
       expect(result.overrides?.vol).toBe(3);
     });
 
     it("warns on vol=0 (exclusive minimum)", () => {
-      const result = provider.parseDirectiveToken!({ key: "vol", value: "0", policy });
+      const result = parseDirectiveToken({ key: "vol", value: "0", policy });
       expect(result.handled).toBe(true);
       expect(result.warnings).toHaveLength(1);
     });
 
     it("handles volume alias", () => {
-      const result = provider.parseDirectiveToken!({ key: "volume", value: "5", policy });
+      const result = parseDirectiveToken({ key: "volume", value: "5", policy });
       expect(result.handled).toBe(true);
       expect(result.overrides?.vol).toBe(5);
     });
 
     it("handles pitch key", () => {
-      const result = provider.parseDirectiveToken!({ key: "pitch", value: "-3", policy });
+      const result = parseDirectiveToken({ key: "pitch", value: "-3", policy });
       expect(result.handled).toBe(true);
       expect(result.overrides?.pitch).toBe(-3);
     });
 
     it("warns on out-of-range pitch", () => {
-      const result = provider.parseDirectiveToken!({ key: "pitch", value: "20", policy });
+      const result = parseDirectiveToken({ key: "pitch", value: "20", policy });
       expect(result.handled).toBe(true);
       expect(result.warnings).toHaveLength(1);
     });
 
     it("returns handled=false for unknown keys", () => {
-      const result = provider.parseDirectiveToken!({
+      const result = parseDirectiveToken({
         key: "unknown_key",
         value: "whatever",
         policy,
@@ -256,7 +276,7 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("suppresses voice when policy disallows it", () => {
-      const result = provider.parseDirectiveToken!({
+      const result = parseDirectiveToken({
         key: "voice",
         value: "test",
         policy: { ...policy, allowVoice: false },
@@ -266,7 +286,7 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("suppresses model when policy disallows it", () => {
-      const result = provider.parseDirectiveToken!({
+      const result = parseDirectiveToken({
         key: "model",
         value: "test",
         policy: { ...policy, allowModelId: false },
@@ -329,7 +349,10 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(mockFetch).toHaveBeenCalledOnce();
       const [url, init] = mockFetch.mock.calls[0];
       expect(url).toBe("https://api.minimaxi.com/v1/t2a_v2");
-      const body = JSON.parse(init!.body as string);
+      if (!init?.body) {
+        throw new Error("Expected MiniMax TTS fetch init body");
+      }
+      const body = JSON.parse(init.body as string);
       expect(body.model).toBe("speech-2.8-hd");
       expect(body.text).toBe("Hello world");
       expect(body.voice_setting.voice_id).toBe("English_expressive_narrator");
@@ -485,7 +508,11 @@ describe("buildMinimaxSpeechProvider", () => {
 
   describe("listVoices", () => {
     it("returns known voices", async () => {
-      const voices = await provider.listVoices!({} as never);
+      const listVoices = provider.listVoices;
+      if (!listVoices) {
+        throw new Error("Expected MiniMax provider listVoices");
+      }
+      const voices = await listVoices({} as never);
       expect(voices.length).toBeGreaterThan(0);
       expect(voices[0].id).toBe("English_expressive_narrator");
     });

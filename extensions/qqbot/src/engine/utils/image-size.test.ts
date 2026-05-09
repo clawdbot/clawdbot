@@ -56,7 +56,7 @@ describe("getImageSizeFromUrl", () => {
       expect(opts.maxBytes).toBe(65_536);
       expect(opts.maxRedirects).toBe(0);
       // Generic public-network-only policy: no hostname allowlist
-      expect(opts.ssrfPolicy).toEqual({});
+      expect(opts.ssrfPolicy).toStrictEqual({});
       expect(opts.requestInit.headers).toEqual({
         Range: "bytes=0-65535",
         "User-Agent": "QQBot-Image-Size-Detector/1.0",

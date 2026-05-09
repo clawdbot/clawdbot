@@ -53,6 +53,13 @@ type UnsafeRuntimeInvocationCase = {
   setup?: (tmp: string) => void;
 };
 
+function requirePathToken(pathToken: PathTokenSetup | null): PathTokenSetup {
+  if (!pathToken) {
+    throw new Error("Expected PATH token fixture");
+  }
+  return pathToken;
+}
+
 function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): ScriptOperandFixture {
   if (fixture) {
     return {
@@ -386,7 +393,7 @@ describe("hardenApprovedExecutionPaths", () => {
       argv: ["poccmd", "SAFE"],
       shellCommand: null,
       withPathToken: true,
-      expectedArgv: ({ pathToken }) => [pathToken!.expected, "SAFE"],
+      expectedArgv: ({ pathToken }) => [requirePathToken(pathToken).expected, "SAFE"],
       expectedArgvChanged: true,
     },
     {
@@ -403,7 +410,7 @@ describe("hardenApprovedExecutionPaths", () => {
       mode: "build-plan",
       argv: ["poccmd", "hello"],
       withPathToken: true,
-      expectedArgv: ({ pathToken }) => [pathToken!.expected, "hello"],
+      expectedArgv: ({ pathToken }) => [requirePathToken(pathToken).expected, "hello"],
       checkRawCommandMatchesArgv: true,
       expectedCommandPreview: null,
     },

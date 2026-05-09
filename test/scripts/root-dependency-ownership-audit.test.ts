@@ -266,7 +266,7 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
         sections: ["extensions"],
       },
     ]);
-    expect(collectRootDependencyOwnershipCheckErrors(records)).toEqual([]);
+    expect(collectRootDependencyOwnershipCheckErrors(records)).toStrictEqual([]);
   });
 
   it("allows runtime deps for bundled plugins that are still packaged in core", () => {
@@ -301,7 +301,7 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
         sections: ["extensions"],
       },
     ]);
-    expect(collectRootDependencyOwnershipCheckErrors(records)).toEqual([]);
+    expect(collectRootDependencyOwnershipCheckErrors(records)).toStrictEqual([]);
   });
 
   it("keeps excluded bundled plugin deps localizable", () => {

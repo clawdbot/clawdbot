@@ -120,7 +120,7 @@ describe("writeOAuthCredentials", () => {
 
     await expect(
       fs.readFile(path.join(env.agentDir, "auth-profiles.json"), "utf8"),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("writes OAuth credentials to all sibling agent dirs when syncSiblingAgents=true", async () => {
@@ -189,7 +189,9 @@ describe("writeOAuthCredentials", () => {
       type: "oauth",
     });
 
-    await expect(fs.readFile(authProfilePathFor(mainAgentDir), "utf8")).rejects.toThrow();
+    await expect(fs.readFile(authProfilePathFor(mainAgentDir), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("syncs siblings from explicit agentDir outside OPENCLAW_STATE_DIR", async () => {
@@ -230,7 +232,9 @@ describe("writeOAuthCredentials", () => {
 
     // Global state dir should NOT have credentials written
     const globalMain = path.join(tempStateDir, "agents", "main", "agent");
-    await expect(fs.readFile(authProfilePathFor(globalMain), "utf8")).rejects.toThrow();
+    await expect(fs.readFile(authProfilePathFor(globalMain), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
 
@@ -409,7 +413,7 @@ describe("upsertApiKeyProfile", () => {
 
     await expect(
       fs.readFile(path.join(env.agentDir, "auth-profiles.json"), "utf8"),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 

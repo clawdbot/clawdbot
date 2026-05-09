@@ -173,8 +173,10 @@ describe("command-registry", () => {
     }
 
     const names = namesOf(program);
-    expect(names.filter((name) => name === "commitments")).toHaveLength(1);
-    expect(names.filter((name) => name === "tasks")).toHaveLength(1);
+    const countName = (target: string) =>
+      names.reduce((count, name) => count + (name === target ? 1 : 0), 0);
+    expect(countName("commitments")).toBe(1);
+    expect(countName("tasks")).toBe(1);
   });
 
   it("replaces placeholders when loading a grouped entry by secondary command name", async () => {

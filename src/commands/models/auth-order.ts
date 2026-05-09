@@ -7,6 +7,7 @@ import {
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { shortenHomePath } from "../../utils.js";
@@ -37,7 +38,9 @@ async function resolveAuthOrderContext(
 ) {
   const rawProvider = opts.provider?.trim();
   if (!rawProvider) {
-    throw new Error("Missing --provider.");
+    throw new Error(
+      `Missing --provider. Run ${formatCliCommand("openclaw models auth list")} to see saved provider profiles.`,
+    );
   }
   const provider = normalizeProviderId(rawProvider);
   const cfg = await loadModelsConfig({ commandName: "models auth-order", runtime });
@@ -83,7 +86,9 @@ export async function modelsAuthOrderClearCommand(
     order: null,
   });
   if (!updated) {
-    throw new Error("Failed to update auth-state.json (lock busy?).");
+    throw new Error(
+      `Failed to update auth-state.json; the auth state lock may be busy. Wait a moment and rerun ${formatCliCommand("openclaw models auth order clear --provider " + provider)}.`,
+    );
   }
 
   runtime.log(`Agent: ${agentId}`);
@@ -103,13 +108,17 @@ export async function modelsAuthOrderSetCommand(
   const providerKey = provider;
   const requested = normalizeStringEntries(opts.order ?? []);
   if (requested.length === 0) {
-    throw new Error("Missing profile ids. Provide one or more profile ids.");
+    throw new Error(
+      `Missing profile ids. Run ${formatCliCommand("openclaw models auth list --provider " + provider)} to choose one or more profile ids.`,
+    );
   }
 
   for (const profileId of requested) {
     const cred = store.profiles[profileId];
     if (!cred) {
-      throw new Error(`Auth profile "${profileId}" not found in ${agentDir}.`);
+      throw new Error(
+        `Auth profile "${profileId}" not found in ${shortenHomePath(agentDir)}. Run ${formatCliCommand("openclaw models auth list --provider " + provider)} to see saved profiles.`,
+      );
     }
     if (normalizeProviderId(cred.provider) !== providerKey) {
       throw new Error(`Auth profile "${profileId}" is for ${cred.provider}, not ${provider}.`);
@@ -122,7 +131,9 @@ export async function modelsAuthOrderSetCommand(
     order: requested,
   });
   if (!updated) {
-    throw new Error("Failed to update auth-state.json (lock busy?).");
+    throw new Error(
+      `Failed to update auth-state.json; the auth state lock may be busy. Wait a moment and rerun ${formatCliCommand("openclaw models auth order set --provider " + provider + " <profileIds...>")}.`,
+    );
   }
 
   runtime.log(`Agent: ${agentId}`);

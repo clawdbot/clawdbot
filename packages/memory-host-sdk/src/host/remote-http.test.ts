@@ -44,10 +44,7 @@ describe("package withRemoteHttpResponse", () => {
       ...deps,
     });
 
-    expect(deps.calls).toEqual([
-      expect.not.objectContaining({
-        mode: expect.any(String),
-      }),
-    ]);
+    expect(deps.calls).toHaveLength(1);
+    expect(deps.calls[0]).not.toHaveProperty("mode");
   });
 });

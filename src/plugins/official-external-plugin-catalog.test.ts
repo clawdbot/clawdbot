@@ -1,47 +1,57 @@
 import { describe, expect, it } from "vitest";
 import {
+  type OfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogEntry,
   listOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
 
+function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
+  const entry = getOfficialExternalPluginCatalogEntry(id);
+  if (entry === undefined) {
+    throw new Error(`Expected external plugin catalog entry for ${id}`);
+  }
+  return entry;
+}
+
 describe("official external plugin catalog", () => {
   it("resolves third-party channel lookup aliases to published plugin ids", () => {
-    const wecomByChannel = getOfficialExternalPluginCatalogEntry("wecom");
-    const wecomByPlugin = getOfficialExternalPluginCatalogEntry("wecom-openclaw-plugin");
-    const yuanbaoByChannel = getOfficialExternalPluginCatalogEntry("yuanbao");
+    const wecomByChannel = expectCatalogEntry("wecom");
+    const wecomByPlugin = expectCatalogEntry("wecom-openclaw-plugin");
+    const yuanbaoByChannel = expectCatalogEntry("yuanbao");
 
-    expect(resolveOfficialExternalPluginId(wecomByChannel!)).toBe("wecom-openclaw-plugin");
-    expect(resolveOfficialExternalPluginId(wecomByPlugin!)).toBe("wecom-openclaw-plugin");
-    expect(resolveOfficialExternalPluginInstall(wecomByChannel!)?.npmSpec).toBe(
+    expect(resolveOfficialExternalPluginId(wecomByChannel)).toBe("wecom-openclaw-plugin");
+    expect(resolveOfficialExternalPluginId(wecomByPlugin)).toBe("wecom-openclaw-plugin");
+    expect(resolveOfficialExternalPluginInstall(wecomByChannel)?.npmSpec).toBe(
       "@wecom/wecom-openclaw-plugin@2026.4.23",
     );
-    expect(resolveOfficialExternalPluginId(yuanbaoByChannel!)).toBe("openclaw-plugin-yuanbao");
-    expect(resolveOfficialExternalPluginInstall(yuanbaoByChannel!)?.npmSpec).toBe(
-      "openclaw-plugin-yuanbao@2.11.0",
+    expect(resolveOfficialExternalPluginId(yuanbaoByChannel)).toBe("openclaw-plugin-yuanbao");
+    expect(resolveOfficialExternalPluginInstall(yuanbaoByChannel)?.npmSpec).toBe(
+      "openclaw-plugin-yuanbao@2.13.0",
     );
   });
 
   it("keeps official launch package specs on the production package names", () => {
-    expect(
-      resolveOfficialExternalPluginInstall(getOfficialExternalPluginCatalogEntry("acpx")!)?.npmSpec,
-    ).toBe("@openclaw/acpx");
-    expect(
-      resolveOfficialExternalPluginInstall(getOfficialExternalPluginCatalogEntry("googlechat")!)
-        ?.npmSpec,
-    ).toBe("@openclaw/googlechat");
-    expect(
-      resolveOfficialExternalPluginInstall(getOfficialExternalPluginCatalogEntry("line")!)?.npmSpec,
-    ).toBe("@openclaw/line");
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("acpx"))?.npmSpec).toBe(
+      "@openclaw/acpx",
+    );
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("googlechat"))?.npmSpec).toBe(
+      "@openclaw/googlechat",
+    );
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("line"))?.npmSpec).toBe(
+      "@openclaw/line",
+    );
   });
 
   it("keeps Matrix and Mattermost out of the external catalog until cutover", () => {
-    const ids = new Set(
-      listOfficialExternalPluginCatalogEntries()
-        .map((entry) => resolveOfficialExternalPluginId(entry))
-        .filter(Boolean),
-    );
+    const ids = new Set<string>();
+    for (const entry of listOfficialExternalPluginCatalogEntries()) {
+      const pluginId = resolveOfficialExternalPluginId(entry);
+      if (pluginId) {
+        ids.add(pluginId);
+      }
+    }
 
     expect(ids.has("matrix")).toBe(false);
     expect(ids.has("mattermost")).toBe(false);

@@ -11,9 +11,9 @@ describe("parseIdentityMarkdown", () => {
 - **Vibe:** *(how do you come across? sharp? warm? chaotic? calm?)*
 - **Emoji:** *(your signature - pick one that feels right)*
 - **Avatar:** *(workspace-relative path, http(s) URL, or data URI)*
-`;
+    `;
     const parsed = parseIdentityMarkdown(content);
-    expect(parsed).toEqual({});
+    expect(parsed).toStrictEqual({});
   });
 
   it("parses explicit identity values", () => {

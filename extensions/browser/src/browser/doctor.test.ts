@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { buildBrowserDoctorReport } from "./doctor.js";
 
+function collectWarningCheckIds(checks: readonly { id: string; status: string }[]): string[] {
+  const ids: string[] = [];
+  for (const check of checks) {
+    if (check.status === "warn") {
+      ids.push(check.id);
+    }
+  }
+  return ids;
+}
+
 describe("buildBrowserDoctorReport", () => {
   it("reports stopped managed browsers as launchable diagnostics", () => {
     const report = buildBrowserDoctorReport({
@@ -101,9 +111,11 @@ describe("buildBrowserDoctorReport", () => {
     });
 
     expect(report.ok).toBe(true);
-    expect(
-      report.checks.filter((check) => check.status === "warn").map((check) => check.id),
-    ).toEqual(["managed-executable", "display", "linux-sandbox"]);
+    expect(collectWarningCheckIds(report.checks)).toEqual([
+      "managed-executable",
+      "display",
+      "linux-sandbox",
+    ]);
     expect(report.checks.find((check) => check.id === "display")).toMatchObject({
       summary: "No DISPLAY or WAYLAND_DISPLAY is set while headed mode is selected (config)",
     });

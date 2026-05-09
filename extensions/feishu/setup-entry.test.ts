@@ -13,11 +13,7 @@ describe("feishu setup entry", () => {
   it("declares the setup entry without importing Feishu runtime dependencies", async () => {
     const { default: setupEntry } = await import("./setup-entry.js");
 
-    expect(setupEntry).toEqual(
-      expect.objectContaining({
-        kind: "bundled-channel-setup-entry",
-        loadSetupPlugin: expect.any(Function),
-      }),
-    );
+    expect(setupEntry.kind).toBe("bundled-channel-setup-entry");
+    expect(typeof setupEntry.loadSetupPlugin).toBe("function");
   });
 });

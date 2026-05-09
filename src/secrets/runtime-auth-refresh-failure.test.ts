@@ -20,6 +20,16 @@ import {
 
 vi.unmock("../version.js");
 
+function expectActiveSecretsRuntimeSnapshot(): NonNullable<
+  ReturnType<typeof getActiveSecretsRuntimeSnapshot>
+> {
+  const snapshot = getActiveSecretsRuntimeSnapshot();
+  if (snapshot === null) {
+    throw new Error("Expected active secrets runtime snapshot");
+  }
+  return snapshot;
+}
+
 describe("secrets runtime snapshot auth refresh failure", () => {
   let envSnapshot: SecretsRuntimeEnvSnapshot;
 
@@ -75,10 +85,9 @@ describe("secrets runtime snapshot auth refresh failure", () => {
         }),
       ).rejects.toThrow(/simulated secrets runtime refresh failure/i);
 
-      const activeAfterFailure = getActiveSecretsRuntimeSnapshot();
-      expect(activeAfterFailure).not.toBeNull();
+      const activeAfterFailure = expectActiveSecretsRuntimeSnapshot();
       expectResolvedOpenAIRuntime(agentDir);
-      expect(activeAfterFailure?.sourceConfig.models?.providers?.openai?.apiKey).toEqual(
+      expect(activeAfterFailure.sourceConfig.models?.providers?.openai?.apiKey).toEqual(
         OPENAI_FILE_KEY_REF,
       );
     });

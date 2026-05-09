@@ -154,6 +154,9 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
   resolveAgentDir: () => "/tmp/agent",
+  resolveAgentConfig: () => ({}),
+  resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveAgentModelFallbacksOverride: () => [],
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
@@ -374,6 +377,42 @@ describe("capability cli", () => {
     }) as never);
   });
 
+  async function runModelRunWithModel(model: string, transport: "local" | "gateway") {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        model,
+        "--prompt",
+        "hello",
+        ...(transport === "gateway" ? ["--gateway"] : []),
+        "--json",
+      ],
+    });
+  }
+
+  function expectModelRunDispatch(transport: "local" | "gateway", modelRef: string) {
+    if (transport === "gateway") {
+      const slash = modelRef.indexOf("/");
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "agent",
+          params: expect.objectContaining({
+            provider: modelRef.slice(0, slash),
+            model: modelRef.slice(slash + 1),
+          }),
+        }),
+      );
+      return;
+    }
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ modelRef }),
+    );
+  }
+
   it("lists canonical capabilities", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -381,8 +420,9 @@ describe("capability cli", () => {
     });
 
     const payload = mocks.runtime.writeJson.mock.calls[0]?.[0] as Array<{ id: string }>;
-    expect(payload.some((entry) => entry.id === "model.run")).toBe(true);
-    expect(payload.some((entry) => entry.id === "image.describe")).toBe(true);
+    expect(payload.map((entry) => entry.id)).toEqual(
+      expect.arrayContaining(["model.run", "image.describe"]),
+    );
   });
 
   it("defaults model run to local transport", async () => {
@@ -838,6 +878,50 @@ describe("capability cli", () => {
         }),
       }),
     );
+  });
+
+  it.each(["local", "gateway"] as const)(
+    "canonicalizes case-only catalog model refs before %s dispatch",
+    async (transport) => {
+      mocks.loadModelCatalog.mockResolvedValueOnce([
+        { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+      ] as never);
+
+      await runModelRunWithModel("Anthropic/CLAUDE-OPUS-4-7", transport);
+
+      expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ readOnly: true }),
+      );
+      expectModelRunDispatch(transport, "anthropic/claude-opus-4-7");
+    },
+  );
+
+  it("canonicalizes case-only catalog refs and preserves auth profiles before local dispatch", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+    ] as never);
+
+    await runModelRunWithModel("Anthropic/CLAUDE-OPUS-4-7@work", "local");
+
+    expectModelRunDispatch("local", "anthropic/claude-opus-4-7@work");
+  });
+
+  it("leaves auth profile refs unchanged before gateway dispatch", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+    ] as never);
+
+    await runModelRunWithModel("Anthropic/CLAUDE-OPUS-4-7@work", "gateway");
+
+    expectModelRunDispatch("gateway", "Anthropic/CLAUDE-OPUS-4-7@work");
+  });
+
+  it("preserves custom mixed-case profile refs before local dispatch when the catalog has no match", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([] as never);
+
+    await runModelRunWithModel("custom/MyModel@work", "local");
+
+    expectModelRunDispatch("local", "custom/MyModel@work");
   });
 
   it("rejects empty model run prompts before gateway dispatch", async () => {

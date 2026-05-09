@@ -8,6 +8,7 @@ const {
   runQaSuiteFromRuntime,
   runQaCharacterEval,
   runQaMultipass,
+  listTelegramQaScenarioCatalog,
   runTelegramQaLive,
   startQaLabServer,
   writeQaDockerHarnessFiles,
@@ -19,6 +20,7 @@ const {
   runQaSuiteFromRuntime: vi.fn(),
   runQaCharacterEval: vi.fn(),
   runQaMultipass: vi.fn(),
+  listTelegramQaScenarioCatalog: vi.fn(),
   runTelegramQaLive: vi.fn(),
   startQaLabServer: vi.fn(),
   writeQaDockerHarnessFiles: vi.fn(),
@@ -45,6 +47,7 @@ vi.mock("./multipass.runtime.js", () => ({
 }));
 
 vi.mock("./live-transports/telegram/telegram-live.runtime.js", () => ({
+  listTelegramQaScenarioCatalog,
   runTelegramQaLive,
 }));
 
@@ -111,6 +114,7 @@ describe("qa cli runtime", () => {
     runQaCharacterEval.mockReset();
     runQaManualLane.mockReset();
     runQaMultipass.mockReset();
+    listTelegramQaScenarioCatalog.mockReset();
     runTelegramQaLive.mockReset();
     startQaLabServer.mockReset();
     writeQaDockerHarnessFiles.mockReset();
@@ -153,6 +157,15 @@ describe("qa cli runtime", () => {
       observedMessagesPath: "/tmp/telegram/observed.json",
       scenarios: [],
     });
+    listTelegramQaScenarioCatalog.mockReturnValue([
+      {
+        id: "telegram-status-command",
+        title: "Telegram status command reply",
+        defaultEnabled: true,
+        rationale: "status rationale",
+        regressionRefs: ["openclaw/openclaw#74698"],
+      },
+    ]);
     startQaLabServer.mockResolvedValue({
       baseUrl: "http://127.0.0.1:58000",
       runSelfCheck: vi.fn().mockResolvedValue({
@@ -294,6 +307,22 @@ describe("qa cli runtime", () => {
         providerMode: "live-frontier",
         allowFailures: undefined,
       }),
+    );
+  });
+
+  it("prints telegram scenario catalog without starting the live lane", async () => {
+    await runQaTelegramCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      listScenarios: true,
+    });
+
+    expect(listTelegramQaScenarioCatalog).toHaveBeenCalledWith("mock-openai");
+    expect(runTelegramQaLive).not.toHaveBeenCalled();
+    expect(stdoutWrite).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "telegram-status-command\tdefault\tTelegram status command reply\tstatus rationale refs=openclaw/openclaw#74698",
+      ),
     );
   });
 

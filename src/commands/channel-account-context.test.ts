@@ -76,8 +76,8 @@ describe("resolveDefaultChannelAccountContext", () => {
     expect(result.enabled).toBe(false);
     expect(result.configured).toBe(false);
     expect(result.degraded).toBe(true);
-    expect(result.diagnostics.some((entry) => entry.includes("failed to resolve account"))).toBe(
-      true,
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([expect.stringContaining("failed to resolve account")]),
     );
   });
 

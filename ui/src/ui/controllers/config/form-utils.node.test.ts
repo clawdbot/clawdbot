@@ -152,7 +152,7 @@ describe("prototype pollution prevention", () => {
   it("setPathValue rejects prototype in path", () => {
     const obj: Record<string, unknown> = {};
     setPathValue(obj, ["prototype", "bad"], true);
-    expect(obj).toEqual({});
+    expect(obj).toStrictEqual({});
   });
 
   it("removePathValue rejects __proto__ in path", () => {

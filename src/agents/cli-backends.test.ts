@@ -93,6 +93,14 @@ function createRuntimeBackendEntry(params: Parameters<typeof createBackendEntry>
   } satisfies RuntimeBackendEntry;
 }
 
+function requireCliBackendConfig(...args: Parameters<typeof resolveCliBackendConfig>) {
+  const resolved = resolveCliBackendConfig(...args);
+  if (!resolved) {
+    throw new Error(`expected CLI backend config for ${args[0]}`);
+  }
+  return resolved;
+}
+
 function createClaudeCliOverrideConfig(config: CliBackendConfig): OpenClawConfig {
   return {
     agents: {
@@ -377,10 +385,9 @@ beforeEach(() => {
 
 describe("resolveCliBackendConfig reliability merge", () => {
   it("defaults codex-cli fresh sandboxing and config-pinned resume sandboxing", () => {
-    const resolved = resolveCliBackendConfig("codex-cli");
+    const resolved = requireCliBackendConfig("codex-cli");
 
-    expect(resolved).not.toBeNull();
-    expect(resolved?.config.args).toEqual([
+    expect(resolved.config.args).toEqual([
       "exec",
       "--json",
       "--color",
@@ -391,7 +398,7 @@ describe("resolveCliBackendConfig reliability merge", () => {
       'service_tier="priority"',
       "--skip-git-repo-check",
     ]);
-    expect(resolved?.config.resumeArgs).toEqual([
+    expect(resolved.config.resumeArgs).toEqual([
       "exec",
       "resume",
       "{sessionId}",
@@ -423,15 +430,14 @@ describe("resolveCliBackendConfig reliability merge", () => {
       },
     } satisfies OpenClawConfig;
 
-    const resolved = resolveCliBackendConfig("codex-cli", cfg);
+    const resolved = requireCliBackendConfig("codex-cli", cfg);
 
-    expect(resolved).not.toBeNull();
-    expect(resolved?.config.reliability?.watchdog?.resume?.noOutputTimeoutMs).toBe(42_000);
+    expect(resolved.config.reliability?.watchdog?.resume?.noOutputTimeoutMs).toBe(42_000);
     // Ensure defaults are retained when only one field is overridden.
-    expect(resolved?.config.reliability?.watchdog?.resume?.noOutputTimeoutRatio).toBe(0.3);
-    expect(resolved?.config.reliability?.watchdog?.resume?.minMs).toBe(60_000);
-    expect(resolved?.config.reliability?.watchdog?.resume?.maxMs).toBe(180_000);
-    expect(resolved?.config.reliability?.watchdog?.fresh?.noOutputTimeoutRatio).toBe(0.8);
+    expect(resolved.config.reliability?.watchdog?.resume?.noOutputTimeoutRatio).toBe(0.3);
+    expect(resolved.config.reliability?.watchdog?.resume?.minMs).toBe(60_000);
+    expect(resolved.config.reliability?.watchdog?.resume?.maxMs).toBe(180_000);
+    expect(resolved.config.reliability?.watchdog?.fresh?.noOutputTimeoutRatio).toBe(0.8);
   });
 
   it("deep-merges reliability output-limit overrides", () => {
@@ -467,9 +473,8 @@ describe("resolveCliBackendConfig reliability merge", () => {
       },
     } satisfies OpenClawConfig;
 
-    const resolved = resolveCliBackendConfig("test-cli", cfg);
+    const resolved = requireCliBackendConfig("test-cli", cfg);
 
-    expect(resolved).not.toBeNull();
     expect(resolved?.config.reliability?.outputLimits).toEqual({
       maxTurnRawChars: 16_384,
       maxTurnLines: 20_000,
@@ -511,9 +516,8 @@ describe("resolveCliBackendLiveTest", () => {
 
 describe("resolveCliBackendConfig claude-cli defaults", () => {
   it("derives bypassPermissions from OpenClaw's default YOLO exec policy", () => {
-    const resolved = resolveCliBackendConfig("claude-cli");
+    const resolved = requireCliBackendConfig("claude-cli");
 
-    expect(resolved).not.toBeNull();
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("claude-config-file");
     expect(resolved?.config.output).toBe("jsonl");
@@ -543,11 +547,10 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
   });
 
   it("keeps Claude permission mode unset when OpenClaw exec policy is not YOLO", () => {
-    const resolved = resolveCliBackendConfig("claude-cli", {
+    const resolved = requireCliBackendConfig("claude-cli", {
       tools: { exec: { security: "allowlist", ask: "on-miss" } },
     });
 
-    expect(resolved).not.toBeNull();
     expect(resolved?.config.args).not.toContain("--permission-mode");
     expect(resolved?.config.args).not.toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("--permission-mode");
@@ -631,9 +634,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       },
     } satisfies OpenClawConfig;
 
-    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+    const resolved = requireCliBackendConfig("claude-cli", cfg);
 
-    expect(resolved).not.toBeNull();
     expect(resolved?.config.command).toBe("/usr/local/bin/claude");
     expect(resolved?.config.args).toContain("--setting-sources");
     expect(resolved?.config.args).toContain("user");
@@ -679,9 +681,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       tools: { exec: { security: "allowlist", ask: "on-miss" } },
     } satisfies OpenClawConfig;
 
-    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+    const resolved = requireCliBackendConfig("claude-cli", cfg);
 
-    expect(resolved).not.toBeNull();
     expect(resolved?.config.args).not.toContain("--dangerously-skip-permissions");
     expect(resolved?.config.args).not.toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).not.toContain("--dangerously-skip-permissions");
@@ -709,9 +710,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       },
     } satisfies OpenClawConfig;
 
-    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+    const resolved = requireCliBackendConfig("claude-cli", cfg);
 
-    expect(resolved).not.toBeNull();
     expect(resolved?.config.args).not.toContain("--dangerously-skip-permissions");
     expect(resolved?.config.args).toEqual([
       "-p",
@@ -754,9 +754,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       },
     } satisfies OpenClawConfig;
 
-    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+    const resolved = requireCliBackendConfig("claude-cli", cfg);
 
-    expect(resolved).not.toBeNull();
     expect(resolved?.config.args).toEqual([
       "-p",
       "--setting-sources",
@@ -783,9 +782,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       tools: { exec: { security: "allowlist", ask: "on-miss" } },
     } satisfies OpenClawConfig;
 
-    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+    const resolved = requireCliBackendConfig("claude-cli", cfg);
 
-    expect(resolved).not.toBeNull();
     expect(resolved?.config.args).toEqual(NORMALIZED_CLAUDE_FALLBACK_ARGS);
     expect(resolved?.config.resumeArgs).toEqual(NORMALIZED_CLAUDE_FALLBACK_RESUME_ARGS);
   });
@@ -800,9 +798,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       tools: { exec: { security: "allowlist", ask: "on-miss" } },
     } satisfies OpenClawConfig;
 
-    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+    const resolved = requireCliBackendConfig("claude-cli", cfg);
 
-    expect(resolved).not.toBeNull();
     expect(resolved?.config.args).toEqual(NORMALIZED_CLAUDE_FALLBACK_ARGS);
     expect(resolved?.config.resumeArgs).toEqual(NORMALIZED_CLAUDE_FALLBACK_RESUME_ARGS);
   });
@@ -830,9 +827,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       tools: { exec: { security: "allowlist", ask: "on-miss" } },
     } satisfies OpenClawConfig;
 
-    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+    const resolved = requireCliBackendConfig("claude-cli", cfg);
 
-    expect(resolved).not.toBeNull();
     expect(resolved?.config.args).toContain("--setting-sources");
     expect(resolved?.config.args).toContain("user");
     expect(resolved?.config.args).not.toContain("--permission-mode");
@@ -859,9 +855,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       },
     } satisfies OpenClawConfig;
 
-    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+    const resolved = requireCliBackendConfig("claude-cli", cfg);
 
-    expect(resolved).not.toBeNull();
     expect(resolved?.config.env).toEqual({
       SAFE_CUSTOM: "ok",
       ANTHROPIC_BASE_URL: "https://evil.example.com/v1",
@@ -894,9 +889,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       },
     } satisfies OpenClawConfig;
 
-    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+    const resolved = requireCliBackendConfig("claude-cli", cfg);
 
-    expect(resolved).not.toBeNull();
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("claude-config-file");
     expect(resolved?.config.args).toEqual([
@@ -930,9 +924,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
 describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
   it("uses Gemini CLI json args and existing-session resume mode", () => {
-    const resolved = resolveCliBackendConfig("google-gemini-cli");
+    const resolved = requireCliBackendConfig("google-gemini-cli");
 
-    expect(resolved).not.toBeNull();
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("gemini-system-settings");
     expect(resolved?.config.args).toEqual([
@@ -958,9 +951,8 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
   });
 
   it("uses Codex CLI bundle MCP config overrides", () => {
-    const resolved = resolveCliBackendConfig("codex-cli");
+    const resolved = requireCliBackendConfig("codex-cli");
 
-    expect(resolved).not.toBeNull();
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("codex-config-overrides");
     expect(resolved?.defaultAuthProfileId).toBeUndefined();
@@ -990,7 +982,7 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
       }),
     ];
 
-    const resolved = resolveCliBackendConfig("claude-cli");
+    const resolved = requireCliBackendConfig("claude-cli");
 
     expect(resolved?.resolveExecutionArgs).toBe(resolveExecutionArgs);
   });
@@ -1026,9 +1018,8 @@ describe("resolveCliBackendConfig alias precedence", () => {
       },
     } satisfies OpenClawConfig;
 
-    const resolved = resolveCliBackendConfig("kimi", cfg);
+    const resolved = requireCliBackendConfig("kimi", cfg);
 
-    expect(resolved).not.toBeNull();
     expect(resolved?.config.command).toBe("kimi-canonical");
     expect(resolved?.config.args).toEqual(["--canonical"]);
   });

@@ -18,12 +18,12 @@ async function collectRuntimeExports(filePath: string, seen = new Set<string>())
   const exportNames = new Set<string>();
 
   for (const match of source.matchAll(/export\s+(?!type\b)\{([\s\S]*?)\}\s+from\s+"([^"]+)";/g)) {
-    const names = match[1]
-      .split(",")
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .map((part) => part.split(/\s+as\s+/).at(-1) ?? part);
-    for (const name of names) {
+    for (const part of match[1].split(",")) {
+      const trimmed = part.trim();
+      if (trimmed.length === 0) {
+        continue;
+      }
+      const name = trimmed.split(/\s+as\s+/).at(-1) ?? trimmed;
       exportNames.add(name);
     }
   }

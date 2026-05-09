@@ -80,9 +80,12 @@ describe.skipIf(!LIVE)("image tool Ollama live", () => {
         },
       };
       const tool = createImageTool({ config: cfg, agentDir, workspaceDir });
-      expect(tool).not.toBeNull();
+      expect(typeof tool?.execute).toBe("function");
+      if (!tool) {
+        throw new Error("expected image tool");
+      }
 
-      const result = await tool!.execute("live-ollama-image", {
+      const result = await tool.execute("live-ollama-image", {
         prompt: "Describe this image in one short sentence.",
         image: imagePath,
       });

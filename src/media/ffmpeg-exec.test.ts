@@ -111,7 +111,7 @@ describe("runFfprobe", () => {
     const promise = runFfprobe(["pipe:0"], { input: Buffer.alloc(1024) });
 
     const stdinError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
-    expect(() => child.stdin?.emit("error", stdinError)).not.toThrow();
+    child.stdin?.emit("error", stdinError);
     execCallback()(null, Buffer.from("ok"), Buffer.alloc(0));
 
     await expect(promise).resolves.toBe("ok");
@@ -124,7 +124,7 @@ describe("runFfprobe", () => {
     const promise = runFfprobe(["pipe:0"], { input: Buffer.alloc(1024) });
 
     const stdinError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
-    expect(() => child.stdin?.emit("error", stdinError)).not.toThrow();
+    child.stdin?.emit("error", stdinError);
     const childError = new Error("ffprobe failed");
     execCallback()(childError, "", "");
 

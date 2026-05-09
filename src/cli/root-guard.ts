@@ -26,13 +26,16 @@ export function assertNotRoot(env: NodeJS.ProcessEnv = process.env): void {
   process.stderr.write(
     "[openclaw] Refusing to run as root.\n" +
       "\n" +
-      "Running the CLI as root causes:\n" +
+      "Why this is blocked:\n" +
       "  - A separate state directory under /root/.openclaw/ instead of the service user's\n" +
       "  - Conflicting systemd user services that race on port 18789\n" +
       "  - Root-owned files in the service user's state dir (EACCES errors)\n" +
       "\n" +
-      "Run as a non-root user (e.g. su - <service-user>),\n" +
-      "or override this check:\n" +
+      "What to do:\n" +
+      "  - Re-run as the service user: sudo -u <service-user> -H openclaw ...\n" +
+      "  - Or switch shells first: su - <service-user>\n" +
+      "\n" +
+      "Intentional container/CI run only:\n" +
       "  OPENCLAW_ALLOW_ROOT=1 openclaw ...\n",
   );
   process.exit(1);

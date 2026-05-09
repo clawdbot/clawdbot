@@ -21,9 +21,7 @@ describe("runDoctorConfigPreflight", () => {
       });
 
       expect(preflight.snapshot.valid).toBe(false);
-      expect(preflight.snapshot.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(
-        true,
-      );
+      expect(preflight.snapshot.legacyIssues.map((issue) => issue.path)).toContain("memorySearch");
       expect((preflight.baseConfig as { memorySearch?: unknown }).memorySearch).toMatchObject({
         provider: "local",
         fallback: "none",

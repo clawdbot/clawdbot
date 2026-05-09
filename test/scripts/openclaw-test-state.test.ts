@@ -40,16 +40,21 @@ describe("scripts/lib/openclaw-test-state", () => {
       expect(payload).toMatchObject({
         label: "script-test",
         scenario: "update-stable",
-        home: expect.any(String),
-        stateDir: expect.any(String),
-        configPath: expect.any(String),
-        workspaceDir: expect.any(String),
-        env: {
-          HOME: expect.any(String),
-          OPENCLAW_HOME: expect.any(String),
-          OPENCLAW_STATE_DIR: expect.any(String),
-          OPENCLAW_CONFIG_PATH: expect.any(String),
-        },
+      });
+      for (const field of ["root", "home", "stateDir", "configPath", "workspaceDir"] as const) {
+        expect(typeof payload[field]).toBe("string");
+        expect(payload[field].length).toBeGreaterThan(0);
+      }
+      expect(payload.home).toBe(path.join(payload.root, "home"));
+      expect(payload.stateDir).toBe(path.join(payload.home, ".openclaw"));
+      expect(payload.configPath).toBe(path.join(payload.stateDir, "openclaw.json"));
+      expect(payload.workspaceDir).toBe(path.join(payload.home, "workspace"));
+      expect(payload.env).toEqual({
+        HOME: payload.home,
+        USERPROFILE: payload.home,
+        OPENCLAW_HOME: payload.home,
+        OPENCLAW_STATE_DIR: payload.stateDir,
+        OPENCLAW_CONFIG_PATH: payload.configPath,
       });
       expect(payload.config).toEqual({
         update: {
@@ -198,7 +203,7 @@ describe("scripts/lib/openclaw-test-state", () => {
       expect(payload.home).toContain("/openclaw-onboard-case-minimal-home.");
       expect(payload.agentDir).toBeNull();
       expect(payload.workspace).toBe(`${payload.home}/workspace`);
-      expect(payload.config).toEqual({});
+      expect(payload.config).toStrictEqual({});
 
       const existingHome = path.join(tempRoot, "existing-home");
       const existingProbe = await execFileAsync("bash", [

@@ -15,6 +15,15 @@ const taskRuntimeInternalMocks = vi.hoisted(() => ({
 
 vi.mock("../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 
+function expectActiveVideoGenerationTask(
+  task: ReturnType<typeof findActiveVideoGenerationTaskForSession>,
+): NonNullable<ReturnType<typeof findActiveVideoGenerationTaskForSession>> {
+  if (task == null) {
+    throw new Error("Expected active video generation task");
+  }
+  return task;
+}
+
 describe("video generation task status", () => {
   beforeEach(() => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
@@ -92,11 +101,12 @@ describe("video generation task status", () => {
     const task = findActiveVideoGenerationTaskForSession("agent:main");
 
     expect(task?.taskId).toBe("task-running");
-    expect(getVideoGenerationTaskProviderId(task!)).toBe("openai");
-    expect(buildVideoGenerationTaskStatusText(task!, { duplicateGuard: true })).toContain(
+    const activeTask = expectActiveVideoGenerationTask(task);
+    expect(getVideoGenerationTaskProviderId(activeTask)).toBe("openai");
+    expect(buildVideoGenerationTaskStatusText(activeTask, { duplicateGuard: true })).toContain(
       "Do not call video_generate again for this request.",
     );
-    expect(buildVideoGenerationTaskStatusDetails(task!)).toMatchObject({
+    expect(buildVideoGenerationTaskStatusDetails(activeTask)).toMatchObject({
       active: true,
       existingTask: true,
       status: "running",

@@ -132,6 +132,16 @@ function parseSseEvents(text: string): SseEvent[] {
   return events;
 }
 
+function collectSseEventTypes(events: readonly SseEvent[]): string[] {
+  const eventTypes: string[] = [];
+  for (const event of events) {
+    if (event.event) {
+      eventTypes.push(event.event);
+    }
+  }
+  return eventTypes;
+}
+
 function findSseEvent(events: SseEvent[], eventName: string): SseEvent {
   const event = events.find((candidate) => candidate.event === eventName);
   if (!event) {
@@ -141,7 +151,7 @@ function findSseEvent(events: SseEvent[], eventName: string): SseEvent {
 }
 
 function parseSseData(event: SseEvent): unknown {
-  return JSON.parse(event.data);
+  return JSON.parse(event.data) as unknown;
 }
 
 function requireSessionKey(value: string | undefined, label: string): string {
@@ -710,7 +720,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const deltaText = await resDelta.text();
       const deltaEvents = parseSseEvents(deltaText);
 
-      const eventTypes = deltaEvents.map((e) => e.event).filter(Boolean);
+      const eventTypes = collectSseEventTypes(deltaEvents);
       expect(eventTypes).toContain("response.created");
       expect(eventTypes).toContain("response.output_item.added");
       expect(eventTypes).toContain("response.in_progress");
@@ -719,7 +729,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(eventTypes).toContain("response.output_text.done");
       expect(eventTypes).toContain("response.content_part.done");
       expect(eventTypes).toContain("response.completed");
-      expect(deltaEvents.some((e) => e.data === "[DONE]")).toBe(true);
+      expect(deltaEvents.map((event) => event.data)).toContain("[DONE]");
 
       const deltas = deltaEvents
         .filter((e) => e.event === "response.output_text.delta")
@@ -831,7 +841,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       | undefined;
     expect(streamingOpts?.senderIsOwner).toBe(true);
     const streamingEvents = parseSseEvents(await streamingResponse.text());
-    expect(streamingEvents.some((event) => event.event === "response.completed")).toBe(true);
+    expect(streamingEvents.map((event) => event.event)).toContain("response.completed");
   });
 
   it("treats shared-secret bearer callers as owner operators", async () => {
@@ -950,7 +960,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ?.text as string | undefined) ?? "",
     ).toBe("Let me check that.");
     expect(response?.output?.[1]?.name).toBe("get_weather");
-    expect(events.some((event) => event.data === "[DONE]")).toBe(true);
+    expect(events.map((event) => event.data)).toContain("[DONE]");
   });
 
   it("returns every client tool call when an agent invokes multiple tools in one turn (#52288)", async () => {
@@ -1095,7 +1105,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       "activate_graph",
       "get_status",
     ]);
-    expect(events.some((event) => event.data === "[DONE]")).toBe(true);
+    expect(events.map((event) => event.data)).toContain("[DONE]");
   });
 
   it("reuses the prior session when previous_response_id is provided", async () => {
@@ -1204,11 +1214,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
       input: "delayed hello",
     });
 
-    for (let i = 0; i < 20 && agentCommand.mock.calls.length === 0; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-
-    expect(agentCommand.mock.calls).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(agentCommand.mock.calls).toHaveLength(1);
+    });
     expect(openResponsesTesting.getResponseSessionIds()).toEqual([]);
 
     release?.({ payloads: [{ text: "hello" }] });

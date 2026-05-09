@@ -364,7 +364,7 @@ async function verifyCodexImageProbe(params: {
   }
   const { extractPayloadText } = await import("./test-helpers.agent-results.js");
   expect(extractPayloadText(payload.result)).toContain(expectedToken);
-  expect(events.some((event) => event.stream === "codex_app_server.lifecycle")).toBe(true);
+  expect(events.map((event) => event.stream)).toContain("codex_app_server.lifecycle");
 }
 
 function findGuardianReviewStatus(events: CapturedAgentEvent[]): "approved" | "denied" | undefined {

@@ -104,16 +104,20 @@ async function getFreeGatewayPort(): Promise<number> {
 }
 
 function extractAssistantTexts(messages: unknown[]): string[] {
-  return messages
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return undefined;
-      }
-      return (entry as { role?: unknown }).role === "assistant"
-        ? extractFirstTextBlock(entry)
-        : undefined;
-    })
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const texts: string[] = [];
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    if ((entry as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    const text = extractFirstTextBlock(entry);
+    if (typeof text === "string" && text.trim().length > 0) {
+      texts.push(text);
+    }
+  }
+  return texts;
 }
 
 function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
@@ -134,9 +138,12 @@ async function waitForOutboundText(params: {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
-    const outboundTexts = params.replies
-      .map((reply) => reply.text)
-      .filter((value) => value.trim().length > 0);
+    const outboundTexts: string[] = [];
+    for (const reply of params.replies) {
+      if (reply.text.trim().length > 0) {
+        outboundTexts.push(reply.text);
+      }
+    }
     const minReplyCount = params.minReplyCount ?? 1;
     const matchedText = outboundTexts
       .slice(Math.max(0, minReplyCount - 1))

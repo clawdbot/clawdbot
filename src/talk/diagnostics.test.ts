@@ -57,7 +57,11 @@ describe("talk diagnostics", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]).toMatchObject({
+    const [diagnostic] = diagnostics;
+    if (!diagnostic) {
+      throw new Error("Expected talk diagnostic event");
+    }
+    expect(diagnostic).toMatchObject({
       trusted: true,
       event: {
         type: "talk.event",
@@ -67,6 +71,6 @@ describe("talk diagnostics", () => {
         byteLength: 320,
       },
     });
-    expect(JSON.stringify(diagnostics[0]?.event)).not.toContain("private transcript");
+    expect(JSON.stringify(diagnostic.event)).not.toContain("private transcript");
   });
 });

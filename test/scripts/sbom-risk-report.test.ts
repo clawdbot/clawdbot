@@ -173,7 +173,7 @@ snapshots:
 
     const report = collectSbomRiskReport({ repoRoot });
 
-    expect(report.ownershipGaps).toEqual([]);
+    expect(report.ownershipGaps).toStrictEqual([]);
     expect(report.staleOwnershipRecords).toEqual(["removed-lib"]);
   });
 });

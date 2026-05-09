@@ -27,6 +27,17 @@ type HandlerMap = {
 
 type MockWebSocketHandler = (ev?: { code?: number; data?: string; reason?: string }) => void;
 
+function createDeferred<T>() {
+  let resolve: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
+  return { promise, resolve };
+}
+
 class MockWebSocket {
   static OPEN = 1;
 
@@ -196,6 +207,8 @@ async function expectRetriedDeviceTokenConnect(params: {
 
 describe("GatewayBrowserClient", () => {
   beforeEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
     const storage = createStorageMock();
     wsInstances.length = 0;
     loadOrCreateDeviceIdentityMock.mockReset();
@@ -554,13 +567,8 @@ describe("GatewayBrowserClient", () => {
 
   it("does not send stale connect frames on a replacement socket", async () => {
     vi.useFakeTimers();
-    let resolveIdentity!: (identity: DeviceIdentity) => void;
-    loadOrCreateDeviceIdentityMock.mockImplementationOnce(
-      () =>
-        new Promise<DeviceIdentity>((resolve) => {
-          resolveIdentity = resolve;
-        }),
-    );
+    const identity = createDeferred<DeviceIdentity>();
+    loadOrCreateDeviceIdentityMock.mockImplementationOnce(() => identity.promise);
 
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
@@ -583,7 +591,7 @@ describe("GatewayBrowserClient", () => {
     const secondWs = getLatestWebSocket();
     expect(secondWs).not.toBe(firstWs);
 
-    resolveIdentity({
+    identity.resolve({
       deviceId: "device-1",
       privateKey: "private-key", // pragma: allowlist secret
       publicKey: "public-key", // pragma: allowlist secret

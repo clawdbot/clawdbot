@@ -50,16 +50,43 @@ async function writeTranscriptHeader(transcriptPath: string, sessionId: string) 
 
 async function readTranscriptLines(transcriptPath: string): Promise<TranscriptLine[]> {
   const raw = await fs.readFile(transcriptPath, "utf-8");
-  return raw
-    .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0)
-    .map((line) => {
-      try {
-        return JSON.parse(line) as TranscriptLine;
-      } catch {
-        return {};
-      }
-    });
+  const lines: TranscriptLine[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.trim().length === 0) {
+      continue;
+    }
+    try {
+      lines.push(JSON.parse(line) as TranscriptLine);
+    } catch {
+      lines.push({});
+    }
+  }
+  return lines;
+}
+
+function collectMessagesWithIdempotencyKey(
+  lines: TranscriptLine[],
+  idempotencyKey: string,
+): Record<string, unknown>[] {
+  const messages: Record<string, unknown>[] = [];
+  for (const line of lines) {
+    if (line.message?.idempotencyKey === idempotencyKey) {
+      messages.push(line.message);
+    }
+  }
+  return messages;
+}
+
+function findMessageWithIdempotencyKey(
+  lines: TranscriptLine[],
+  idempotencyKey: string,
+): Record<string, unknown> | undefined {
+  for (const line of lines) {
+    if (line.message?.idempotencyKey === idempotencyKey) {
+      return line.message;
+    }
+  }
+  return undefined;
 }
 
 function setMockSessionEntry(transcriptPath: string, sessionId: string) {
@@ -124,12 +151,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     const lines = await readTranscriptLines(transcriptPath);
-    const persisted = lines
-      .map((line) => line.message)
-      .filter(
-        (message): message is Record<string, unknown> =>
-          Boolean(message) && message?.idempotencyKey === `${runId}:assistant`,
-      );
+    const persisted = collectMessagesWithIdempotencyKey(lines, `${runId}:assistant`);
 
     expect(persisted).toHaveLength(1);
     expect(persisted[0]).toMatchObject({
@@ -176,12 +198,8 @@ describe("chat abort transcript persistence", () => {
     expect(payload.runIds).toEqual(expect.arrayContaining(["run-a", "run-b"]));
 
     const lines = await readTranscriptLines(transcriptPath);
-    const runAPersisted = lines
-      .map((line) => line.message)
-      .find((message) => message?.idempotencyKey === "run-a:assistant");
-    const runBPersisted = lines
-      .map((line) => line.message)
-      .find((message) => message?.idempotencyKey === "run-b:assistant");
+    const runAPersisted = findMessageWithIdempotencyKey(lines, "run-a:assistant");
+    const runBPersisted = findMessageWithIdempotencyKey(lines, "run-b:assistant");
 
     expect(runAPersisted).toMatchObject({
       idempotencyKey: "run-a:assistant",
@@ -226,9 +244,7 @@ describe("chat abort transcript persistence", () => {
     expect(payload).toMatchObject({ aborted: true, runIds: ["run-stop-1"] });
 
     const lines = await readTranscriptLines(transcriptPath);
-    const persisted = lines
-      .map((line) => line.message)
-      .find((message) => message?.idempotencyKey === "run-stop-1:assistant");
+    const persisted = findMessageWithIdempotencyKey(lines, "run-stop-1:assistant");
 
     expect(persisted).toMatchObject({
       idempotencyKey: "run-stop-1:assistant",
@@ -264,9 +280,7 @@ describe("chat abort transcript persistence", () => {
     expect(payload).toMatchObject({ aborted: true, runIds: [runId] });
 
     const lines = await readTranscriptLines(transcriptPath);
-    const persisted = lines
-      .map((line) => line.message)
-      .find((message) => message?.idempotencyKey === `${runId}:assistant`);
+    const persisted = findMessageWithIdempotencyKey(lines, `${runId}:assistant`);
     expect(persisted).toBeUndefined();
   });
 });

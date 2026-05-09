@@ -160,16 +160,16 @@ describe("startHeartbeatRunner", () => {
     expect(runSpy.mock.calls.slice(1).map((call) => call[0]?.agentId)).toEqual(
       expect.arrayContaining(["main", "ops"]),
     );
-    expect(
-      runSpy.mock.calls.some(
-        (call) => call[0]?.agentId === "main" && call[0]?.heartbeat?.every === "10m",
-      ),
-    ).toBe(true);
-    expect(
-      runSpy.mock.calls.some(
-        (call) => call[0]?.agentId === "ops" && call[0]?.heartbeat?.every === "15m",
-      ),
-    ).toBe(true);
+    const reloadedHeartbeatCalls = runSpy.mock.calls.map((call) => ({
+      agentId: call[0]?.agentId,
+      every: call[0]?.heartbeat?.every,
+    }));
+    expect(reloadedHeartbeatCalls).toEqual(
+      expect.arrayContaining([
+        { agentId: "main", every: "10m" },
+        { agentId: "ops", every: "15m" },
+      ]),
+    );
 
     runner.stop();
   });
@@ -353,12 +353,18 @@ describe("startHeartbeatRunner", () => {
       requestHeartbeat(wake("retry", { coalesceMs: 0 }));
       await vi.advanceTimersByTimeAsync(1_000);
     }
-    expect(callTimes.some((time) => time >= firstDueMs + intervalMs)).toBe(false);
+    const scheduledSlotCallsBeforeInterval = callTimes.filter(
+      (time) => time >= firstDueMs + intervalMs,
+    );
+    expect(scheduledSlotCallsBeforeInterval).toEqual([]);
 
     // The next interval tick at the next scheduled slot should still fire —
     // the retries must not push the phase out by multiple intervals.
     await vi.advanceTimersByTimeAsync(firstDueMs + intervalMs - Date.now() + 1);
-    expect(callTimes.some((time) => time >= firstDueMs + intervalMs)).toBe(true);
+    const scheduledSlotCallsAfterInterval = callTimes.filter(
+      (time) => time >= firstDueMs + intervalMs,
+    );
+    expect(scheduledSlotCallsAfterInterval.length).toBeGreaterThan(0);
 
     runner.stop();
   });
@@ -501,7 +507,8 @@ describe("startHeartbeatRunner", () => {
         sessionKey: "agent:main:main",
       },
     });
-    expect(runSpy.mock.calls.some((call) => call[0]?.agentId === "finance")).toBe(false);
+    const financeCalls = runSpy.mock.calls.filter((call) => call[0]?.agentId === "finance");
+    expect(financeCalls).toEqual([]);
 
     runner.stop();
   });

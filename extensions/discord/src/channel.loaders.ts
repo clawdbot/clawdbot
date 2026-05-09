@@ -20,6 +20,9 @@ export const loadDiscordResolveUsersModule = createLazyRuntimeModule(
 export const loadDiscordThreadBindingsManagerModule = createLazyRuntimeModule(
   () => import("./monitor/thread-bindings.manager.js"),
 );
+export const loadDiscordTargetResolverModule = createLazyRuntimeModule(
+  () => import("./target-resolver.js"),
+);
 
 export async function loadDiscordProviderRuntime() {
   discordProviderRuntimePromise ??= import("./monitor/provider.runtime.js");

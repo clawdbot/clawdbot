@@ -301,7 +301,7 @@ function expectFailedInstallResult<
   if (params.code) {
     expect(params.result.code).toBe(params.code);
   }
-  expect(params.result.error).toEqual(expect.any(String));
+  expect(params.result.error).toBeTypeOf("string");
   params.messageIncludes.forEach((fragment) => {
     expect(params.result.error).toContain(fragment);
   });
@@ -1142,7 +1142,9 @@ describe("installPluginFromArchive", () => {
       expect(result.error).toContain('Plugin "dangerous-plugin" installation blocked');
       expect(result.error).toContain("dangerous code patterns detected");
     }
-    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("dangerous code pattern")]),
+    );
   });
 
   it("allows package installs when dangerous scanner patterns are only in tests", async () => {
@@ -1166,7 +1168,9 @@ describe("installPluginFromArchive", () => {
     const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
     expect(result.ok).toBe(true);
-    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(false);
+    expect(warnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("dangerous code pattern")]),
+    );
   });
 
   it("still scans declared package entrypoints when they live under test-looking paths", async () => {
@@ -2068,7 +2072,9 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('Bundle "dangerous-bundle" installation blocked');
     }
-    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("dangerous code pattern")]),
+    );
   });
 
   it("allows bundle installs when dangerous scanner patterns are only in tests", async () => {
@@ -2086,7 +2092,9 @@ describe("installPluginFromArchive", () => {
     const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
     expect(result.ok).toBe(true);
-    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(false);
+    expect(warnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("dangerous code pattern")]),
+    );
   });
 
   it("blocks bundle installs when a vendored manifest declares a blocked dependency", async () => {
@@ -2452,7 +2460,9 @@ describe("installPluginFromArchive", () => {
         extensions: ["index.js"],
       },
     });
-    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("dangerous code pattern")]),
+    );
     expect(
       warnings.some((w) => w.includes("blocked by plugin hook: Blocked by enterprise policy")),
     ).toBe(true);
@@ -2594,8 +2604,12 @@ describe("installPluginFromArchive", () => {
     const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
     expect(result.ok).toBe(false);
-    expect(warnings.some((w) => w.includes("hidden/node_modules path"))).toBe(true);
-    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("hidden/node_modules path")]),
+    );
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("dangerous code pattern")]),
+    );
   });
 
   it("blocks install when scanner throws", async () => {
@@ -2809,7 +2823,9 @@ describe("installPluginFromDir", () => {
     });
 
     expectInstalledWithPluginId(res, extensionsDir, "matrix");
-    expect(infoMessages.some((msg) => msg.includes("differs from npm package name"))).toBe(false);
+    expect(infoMessages).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("differs from npm package name")]),
+    );
   });
 
   it.each([
@@ -3062,6 +3078,8 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
     expect(result.ok).toBe(true);
-    expect(warnings.some((w) => w.includes("Could not locate openclaw package root"))).toBe(true);
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("Could not locate openclaw package root")]),
+    );
   });
 });

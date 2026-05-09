@@ -21,6 +21,11 @@ export async function writeExternalFileWithinOutputRoot(params: {
     rootDir,
     path: outputPath,
     write: params.write,
+  }).catch((err: unknown) => {
+    if (err instanceof Error && /file not found/i.test(err.message)) {
+      throw new Error("output directory changed while writing file");
+    }
+    throw err;
   });
   return result.path;
 }

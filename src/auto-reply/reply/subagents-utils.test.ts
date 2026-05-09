@@ -40,6 +40,18 @@ function resolveTarget(runs: SubagentRunRecord[], token: string | undefined) {
   });
 }
 
+function expectResolvedRunId(
+  runs: SubagentRunRecord[],
+  token: string | undefined,
+  expectedRunId: string,
+): void {
+  const resolved = resolveTarget(runs, token);
+  if (!resolved.entry) {
+    throw new Error(`Expected ${String(token)} to resolve, got ${resolved.error ?? "no target"}`);
+  }
+  expect(resolved.entry.runId).toBe(expectedRunId);
+}
+
 describe("subagents utils", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -65,8 +77,7 @@ describe("subagents utils", () => {
       makeRun({ runId: "old", createdAt: NOW_MS - 2_000 }),
       makeRun({ runId: "new", createdAt: NOW_MS - 500 }),
     ];
-    const resolved = resolveTarget(runs, " last ");
-    expect(resolved.entry?.runId).toBe("new");
+    expectResolvedRunId(runs, " last ", "new");
   });
 
   it("resolves numeric index from running then recent finished order", () => {
@@ -91,14 +102,14 @@ describe("subagents utils", () => {
       }),
     ];
 
-    expect(resolveTarget(runs, "1").entry?.runId).toBe("running");
-    expect(resolveTarget(runs, "2").entry?.runId).toBe("recent-finished");
+    expectResolvedRunId(runs, "1", "running");
+    expectResolvedRunId(runs, "2", "recent-finished");
     expect(resolveTarget(runs, "3").error).toBe("invalid:3");
   });
 
   it("resolves session key target and unknown session errors", () => {
     const run = makeRun({ runId: "abc123", childSessionKey: "agent:beta:subagent:xyz" });
-    expect(resolveTarget([run], "agent:beta:subagent:xyz").entry?.runId).toBe("abc123");
+    expectResolvedRunId([run], "agent:beta:subagent:xyz", "abc123");
     expect(resolveTarget([run], "agent:beta:subagent:missing").error).toBe(
       "unknown-session:agent:beta:subagent:missing",
     );
@@ -111,11 +122,11 @@ describe("subagents utils", () => {
       makeRun({ runId: "run-beta-1", label: "Beta Worker" }),
     ];
 
-    expect(resolveTarget(runs, "beta worker").entry?.runId).toBe("run-beta-1");
-    expect(resolveTarget(runs, "beta").entry?.runId).toBe("run-beta-1");
-    expect(resolveTarget(runs, "run-beta").entry?.runId).toBe("run-beta-1");
+    expectResolvedRunId(runs, "beta worker", "run-beta-1");
+    expectResolvedRunId(runs, "beta", "run-beta-1");
+    expectResolvedRunId(runs, "run-beta", "run-beta-1");
 
-    expect(resolveTarget(runs, "alpha core").entry?.runId).toBe("run-alpha-1");
+    expectResolvedRunId(runs, "alpha core", "run-alpha-1");
     expect(resolveTarget(runs, "alpha").error).toBe("ambiguous-prefix:alpha");
     expect(resolveTarget(runs, "run-alpha").error).toBe("ambiguous-run:run-alpha");
     expect(resolveTarget(runs, "missing").error).toBe("unknown:missing");
@@ -149,6 +160,6 @@ describe("subagents utils", () => {
       }),
     ];
 
-    expect(resolveTarget(runs, "same worker").entry?.runId).toBe("run-new");
+    expectResolvedRunId(runs, "same worker", "run-new");
   });
 });

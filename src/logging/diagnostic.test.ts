@@ -52,6 +52,16 @@ function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 describe("diagnostic session state pruning", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -261,7 +271,7 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event.type === "session.long_running")).toHaveLength(0);
+    expect(events.some((event) => event.type === "session.long_running")).toBe(false);
     const stuckEvents = events.filter((event) => event.type === "session.stuck");
     expect(stuckEvents).toHaveLength(1);
     expect(stuckEvents[0]).toMatchObject({
@@ -298,9 +308,9 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
-    expect(events.filter((event) => event.type === "session.stalled")).toHaveLength(0);
-    expect(events.filter((event) => event.type === "session.long_running")).toHaveLength(0);
+    expect(events.some((event) => event.type === "session.stuck")).toBe(false);
+    expect(events.some((event) => event.type === "session.stalled")).toBe(false);
+    expect(events.some((event) => event.type === "session.long_running")).toBe(false);
   });
 
   it("backs off repeated stuck warnings while a session remains unchanged", () => {
@@ -359,7 +369,7 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
+    expect(events.some((event) => event.type === "session.stuck")).toBe(false);
     const stalledEvents = events.filter((event) => event.type === "session.stalled");
     expect(stalledEvents).toHaveLength(1);
     expect(stalledEvents[0]).toMatchObject({
@@ -657,8 +667,8 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
-    expect(events.filter((event) => event.type === "session.stalled")).toHaveLength(0);
+    expect(events.some((event) => event.type === "session.stuck")).toBe(false);
+    expect(events.some((event) => event.type === "session.stalled")).toBe(false);
     const longRunningEvents = events.filter((event) => event.type === "session.long_running");
     expect(longRunningEvents).toHaveLength(1);
     expect(longRunningEvents[0]).toMatchObject({
@@ -691,7 +701,7 @@ describe("stuck session diagnostics threshold", () => {
       markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
       vi.advanceTimersByTime(16_000);
 
-      expect(events.filter((event) => event.type === "session.long_running")).toHaveLength(1);
+      expect(countMatching(events, (event) => event.type === "session.long_running")).toBe(1);
 
       vi.advanceTimersByTime(28_000);
       emitDiagnosticEvent({
@@ -702,7 +712,7 @@ describe("stuck session diagnostics threshold", () => {
       });
       vi.advanceTimersByTime(2_000);
 
-      expect(events.filter((event) => event.type === "session.long_running")).toHaveLength(1);
+      expect(countMatching(events, (event) => event.type === "session.long_running")).toBe(1);
     } finally {
       unsubscribe();
     }
@@ -737,8 +747,8 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
-    expect(events.filter((event) => event.type === "session.stalled")).toHaveLength(0);
+    expect(events.some((event) => event.type === "session.stuck")).toBe(false);
+    expect(events.some((event) => event.type === "session.stalled")).toBe(false);
     const longRunningEvents = events.filter((event) => event.type === "session.long_running");
     expect(longRunningEvents).toHaveLength(1);
     expect(longRunningEvents[0]).toMatchObject({
@@ -903,7 +913,7 @@ describe("stuck session diagnostics threshold", () => {
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
     const events: DiagnosticEventPayload[] = [];
     const unsubscribe = onDiagnosticEvent((event) => events.push(event));
-    let finishPhase!: () => void;
+    let finishPhase: (() => void) | undefined;
     const phase = withDiagnosticPhase(
       "startup.plugins.load",
       () =>
@@ -911,6 +921,10 @@ describe("stuck session diagnostics threshold", () => {
           finishPhase = resolve;
         }),
     );
+    if (!finishPhase) {
+      throw new Error("Expected diagnostic phase finish callback to be initialized");
+    }
+    const completePhase = finishPhase;
 
     try {
       startDiagnosticHeartbeat(
@@ -933,7 +947,7 @@ describe("stuck session diagnostics threshold", () => {
       logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "telegram" });
       vi.advanceTimersByTime(30_000);
     } finally {
-      finishPhase();
+      completePhase();
       await phase;
       unsubscribe();
     }
@@ -1034,14 +1048,14 @@ describe("stuck session diagnostics threshold", () => {
 
       vi.advanceTimersByTime(30_000);
       vi.advanceTimersByTime(90_000);
-      expect(events.filter((event) => event === "diagnostic.liveness.warning")).toHaveLength(1);
+      expect(countMatching(events, (event) => event === "diagnostic.liveness.warning")).toBe(1);
 
       vi.advanceTimersByTime(30_000);
     } finally {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event === "diagnostic.liveness.warning")).toHaveLength(2);
+    expect(countMatching(events, (event) => event === "diagnostic.liveness.warning")).toBe(2);
   });
 
   it("does not start the heartbeat when diagnostics are disabled by config", () => {
@@ -1073,7 +1087,7 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
+    expect(events.some((event) => event.type === "session.stuck")).toBe(false);
   });
 
   it("uses default threshold for invalid values", () => {

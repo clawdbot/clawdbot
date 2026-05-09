@@ -7,6 +7,17 @@ async function flushPromises() {
   await Promise.resolve();
 }
 
+function expectButtonWithText(container: Element, text: string): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+    (candidate) => candidate.textContent?.trim() === text,
+  );
+  expect(button).toBeInstanceOf(HTMLButtonElement);
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected button with text "${text}"`);
+  }
+  return button;
+}
+
 describe("lazy view rendering", () => {
   it("renders a loading panel until the view module resolves", async () => {
     const onChange = vi.fn();
@@ -52,11 +63,8 @@ describe("lazy view rendering", () => {
     expect(container.textContent).toContain("Panel failed to load");
     expect(container.textContent).toContain("chunk 404");
 
-    const retry = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Retry",
-    );
-    expect(retry).not.toBeUndefined();
-    retry?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    const retry = expectButtonWithText(container, "Retry");
+    retry.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await flushPromises();
     render(
       renderLazyView(view, (mod) => mod.label),

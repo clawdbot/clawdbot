@@ -63,7 +63,7 @@ describe("assertWebChannel", () => {
   });
 
   it("throws for invalid channel", () => {
-    expect(() => assertWebChannel("bad" as string)).toThrow();
+    expect(() => assertWebChannel("bad" as string)).toThrow("Web channel must be 'web'");
   });
 });
 

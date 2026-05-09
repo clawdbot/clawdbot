@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -149,7 +148,7 @@ describe("json file helpers", () => {
       name: "serializes async lock callers even across rejections",
       firstTask: async (events: string[]) => {
         events.push("first:start");
-        await sleep(20);
+        await Promise.resolve();
         events.push("first:end");
         throw new Error("boom");
       },

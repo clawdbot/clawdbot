@@ -16,6 +16,45 @@ const cfg = {
   },
 } as OpenClawConfig;
 
+type SlackMessageAdapter = NonNullable<typeof slackPlugin.message>;
+type SlackMessageSender = NonNullable<SlackMessageAdapter["send"]>;
+
+function requireSlackMessageAdapter(): SlackMessageAdapter {
+  const adapter = slackPlugin.message;
+  if (!adapter) {
+    throw new Error("Expected slack channel message adapter");
+  }
+  return adapter;
+}
+
+function requireTextSender(adapter: SlackMessageAdapter): NonNullable<SlackMessageSender["text"]> {
+  const text = adapter.send?.text;
+  if (!text) {
+    throw new Error("Expected slack message adapter text sender");
+  }
+  return text;
+}
+
+function requireMediaSender(
+  adapter: SlackMessageAdapter,
+): NonNullable<SlackMessageSender["media"]> {
+  const media = adapter.send?.media;
+  if (!media) {
+    throw new Error("Expected slack message adapter media sender");
+  }
+  return media;
+}
+
+function requirePayloadSender(
+  adapter: SlackMessageAdapter,
+): NonNullable<SlackMessageSender["payload"]> {
+  const payload = adapter.send?.payload;
+  if (!payload) {
+    throw new Error("Expected slack message adapter payload sender");
+  }
+  return payload;
+}
+
 describe("slack channel message adapter", () => {
   const sendSlack = vi.fn();
 
@@ -25,13 +64,10 @@ describe("slack channel message adapter", () => {
   });
 
   it("backs declared durable-final capabilities with outbound send proofs", async () => {
-    const adapter = slackPlugin.message;
-    if (!adapter?.send?.text || !adapter.send.media || !adapter.send.payload) {
-      throw new Error("expected slack channel message adapter with text/media/payload senders");
-    }
-    const sendText = adapter.send.text;
-    const sendMedia = adapter.send.media;
-    const sendPayload = adapter.send.payload;
+    const adapter = requireSlackMessageAdapter();
+    const sendText = requireTextSender(adapter);
+    const sendMedia = requireMediaSender(adapter);
+    const sendPayload = requirePayloadSender(adapter);
 
     const proveText = async () => {
       sendSlack.mockClear();
@@ -152,39 +188,40 @@ describe("slack channel message adapter", () => {
   });
 
   it("backs declared live preview finalizer capabilities with adapter proofs", async () => {
-    const adapter = slackPlugin.message;
+    const adapter = requireSlackMessageAdapter();
+    const sendText = requireTextSender(adapter);
 
     await verifyChannelMessageLiveCapabilityAdapterProofs({
       adapterName: "slackMessageAdapter",
-      adapter: adapter!,
+      adapter,
       proofs: {
         draftPreview: () => {
-          expect(adapter!.live?.finalizer?.capabilities?.discardPending).toBe(true);
+          expect(adapter.live?.finalizer?.capabilities?.discardPending).toBe(true);
         },
         previewFinalization: () => {
-          expect(adapter!.live?.finalizer?.capabilities?.finalEdit).toBe(true);
+          expect(adapter.live?.finalizer?.capabilities?.finalEdit).toBe(true);
         },
         progressUpdates: () => {
-          expect(adapter!.live?.capabilities?.draftPreview).toBe(true);
+          expect(adapter.live?.capabilities?.draftPreview).toBe(true);
         },
         nativeStreaming: () => {
-          expect(adapter!.live?.capabilities?.previewFinalization).toBe(true);
+          expect(adapter.live?.capabilities?.previewFinalization).toBe(true);
         },
       },
     });
 
     await verifyChannelMessageLiveFinalizerProofs({
       adapterName: "slackMessageAdapter",
-      adapter: adapter!,
+      adapter,
       proofs: {
         finalEdit: () => {
-          expect(adapter!.live?.capabilities?.previewFinalization).toBe(true);
+          expect(adapter.live?.capabilities?.previewFinalization).toBe(true);
         },
         normalFallback: () => {
-          expect(adapter!.send!.text).toBeTypeOf("function");
+          expect(sendText).toBeTypeOf("function");
         },
         discardPending: () => {
-          expect(adapter!.live?.capabilities?.draftPreview).toBe(true);
+          expect(adapter.live?.capabilities?.draftPreview).toBe(true);
         },
       },
     });

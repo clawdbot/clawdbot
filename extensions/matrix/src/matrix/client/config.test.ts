@@ -228,7 +228,7 @@ describe("Matrix auth/config live surfaces", () => {
     ).toThrow(/not allowlisted in secrets\.providers\.matrix-env\.allowlist/i);
   });
 
-  it("does not throw when accessToken uses a non-env SecretRef", () => {
+  it("leaves non-env SecretRef access tokens unresolved", () => {
     const cfg = {
       channels: {
         matrix: {

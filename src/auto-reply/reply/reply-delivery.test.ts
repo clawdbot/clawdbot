@@ -309,7 +309,15 @@ describe("createBlockReplyDeliveryHandler", () => {
 
     await handler(payload);
 
-    const enqueuedPayload = enqueue.mock.calls[0]?.[0];
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    const [firstCall] = enqueue.mock.calls;
+    if (!firstCall) {
+      throw new Error("Expected block reply pipeline enqueue call");
+    }
+    const [enqueuedPayload] = firstCall;
+    if (enqueuedPayload === undefined) {
+      throw new Error("Expected block reply pipeline payload");
+    }
     expect(enqueuedPayload).toEqual({
       text: "Alpha",
       mediaUrl: undefined,

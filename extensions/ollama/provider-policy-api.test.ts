@@ -56,7 +56,7 @@ describe("ollama provider policy public artifact", () => {
         provider: "openai",
         providerConfig: {},
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 
   it("exposes max thinking for reasoning-capable models without full plugin activation", () => {

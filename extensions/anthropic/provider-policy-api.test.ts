@@ -23,6 +23,16 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
   };
 }
 
+function collectLegacyExtendedLevelIds(levels: readonly { id: string }[] | undefined): string[] {
+  const ids: string[] = [];
+  for (const level of levels ?? []) {
+    if (level.id === "xhigh" || level.id === "max") {
+      ids.push(level.id);
+    }
+  }
+  return ids;
+}
+
 describe("anthropic provider policy public artifact", () => {
   it("normalizes Anthropic provider config", () => {
     expect(
@@ -117,9 +127,7 @@ describe("anthropic provider policy public artifact", () => {
     if (!profile) {
       throw new Error("Expected Anthropic policy profile");
     }
-    expect(
-      profile.levels.map((level) => level.id).filter((id) => id === "xhigh" || id === "max"),
-    ).toEqual([]);
+    expect(collectLegacyExtendedLevelIds(profile.levels)).toEqual([]);
   });
 
   it("does not expose Anthropic thinking profiles for unrelated providers", () => {

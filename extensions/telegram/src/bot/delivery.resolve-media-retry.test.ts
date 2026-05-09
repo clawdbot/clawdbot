@@ -181,6 +181,16 @@ function resolveMediaWithDefaults(
   });
 }
 
+function requireResolvedMedia(
+  result: Awaited<ReturnType<typeof resolveMediaWithDefaults>>,
+  label: string,
+) {
+  if (!result) {
+    throw new Error(`expected ${label} media result`);
+  }
+  return result;
+}
+
 async function expectTransientGetFileRetrySuccess() {
   const getFile = setupTransientGetFileRetry();
   const promise = resolveMediaWithDefaults(makeCtx("voice", getFile));
@@ -294,7 +304,7 @@ describe("resolveMedia getFile retry", () => {
   it("still retries transient errors even after encountering file too big in different call", async () => {
     const result = await expectTransientGetFileRetrySuccess();
     // Should retry transient errors.
-    expect(result).not.toBeNull();
+    expect(result?.path).toBe("/tmp/file_0.oga");
   });
 
   it("retries getFile for stickers on transient failure", async () => {
@@ -368,7 +378,7 @@ describe("resolveMedia getFile retry", () => {
       transport: callerTransport,
     });
 
-    expect(result).not.toBeNull();
+    expect(result?.path).toBe("/tmp/file_42---uuid.pdf");
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         fetchImpl: callerFetch,
@@ -402,7 +412,7 @@ describe("resolveMedia getFile retry", () => {
       transport: callerTransport,
     });
 
-    expect(result).not.toBeNull();
+    expect(result?.path).toBe("/tmp/file_0.webp");
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         fetchImpl: callerFetch,
@@ -628,7 +638,7 @@ describe("resolveMedia original filename preservation", () => {
       MAX_MEDIA_BYTES,
       "my-song.mp3",
     );
-    expect(result).not.toBeNull();
+    requireResolvedMedia(result, "audio filename");
   });
 
   it("passes video.file_name to saveMediaBuffer", async () => {
@@ -653,7 +663,7 @@ describe("resolveMedia original filename preservation", () => {
       MAX_MEDIA_BYTES,
       "presentation.mp4",
     );
-    expect(result).not.toBeNull();
+    requireResolvedMedia(result, "video filename");
   });
 
   it("falls back to fetched.fileName when telegram file_name is absent", async () => {
@@ -670,7 +680,7 @@ describe("resolveMedia original filename preservation", () => {
       MAX_MEDIA_BYTES,
       "file_42.pdf",
     );
-    expect(result).not.toBeNull();
+    requireResolvedMedia(result, "fetched filename fallback");
   });
 
   it("falls back to filePath when neither telegram nor fetched fileName is available", async () => {
@@ -687,7 +697,7 @@ describe("resolveMedia original filename preservation", () => {
       MAX_MEDIA_BYTES,
       "documents/file_42.pdf",
     );
-    expect(result).not.toBeNull();
+    requireResolvedMedia(result, "file path fallback");
   });
 
   it("allows a configured custom apiRoot host while keeping the hostname allowlist", async () => {
@@ -708,7 +718,7 @@ describe("resolveMedia original filename preservation", () => {
         },
       }),
     );
-    expect(result).not.toBeNull();
+    requireResolvedMedia(result, "custom apiRoot allowlist");
   });
 
   it("opts into private-network Telegram media downloads only when explicitly configured", async () => {
@@ -727,7 +737,7 @@ describe("resolveMedia original filename preservation", () => {
         },
       }),
     );
-    expect(result).not.toBeNull();
+    requireResolvedMedia(result, "private network opt-in");
   });
 
   it("constructs correct download URL with custom apiRoot for documents", async () => {
@@ -744,7 +754,7 @@ describe("resolveMedia original filename preservation", () => {
         url: `${customApiRoot}/file/bot${BOT_TOKEN}/documents/file_42.pdf`,
       }),
     );
-    expect(result).not.toBeNull();
+    requireResolvedMedia(result, "custom apiRoot document URL");
   });
 
   it("constructs correct download URL with custom apiRoot for stickers", async () => {
@@ -769,6 +779,6 @@ describe("resolveMedia original filename preservation", () => {
         url: `${customApiRoot}/file/bot${BOT_TOKEN}/stickers/file_0.webp`,
       }),
     );
-    expect(result).not.toBeNull();
+    requireResolvedMedia(result, "custom apiRoot sticker URL");
   });
 });

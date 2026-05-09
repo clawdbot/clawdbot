@@ -50,12 +50,18 @@ function restoreDescriptor(name: "showModal" | "close", descriptor?: PropertyDes
 
 async function getRenderedDialog() {
   const modal = container.querySelector<OpenClawModalDialog>("openclaw-modal-dialog");
-  expect(modal).not.toBeNull();
-  await modal!.updateComplete;
+  expect(modal).toBeInstanceOf(HTMLElement);
+  if (!modal) {
+    throw new Error("Expected openclaw-modal-dialog");
+  }
+  await modal.updateComplete;
   await nextFrame();
-  const dialog = modal!.shadowRoot?.querySelector("dialog");
-  expect(dialog).not.toBeNull();
-  return { modal: modal!, dialog: dialog! };
+  const dialog = modal.shadowRoot?.querySelector("dialog");
+  expect(dialog).toBeInstanceOf(HTMLDialogElement);
+  if (!(dialog instanceof HTMLDialogElement)) {
+    throw new Error("Expected rendered dialog");
+  }
+  return { modal, dialog };
 }
 
 function dispatchEscape(target: EventTarget) {
@@ -242,7 +248,6 @@ describe("approval and confirmation modals", () => {
     );
 
     const { dialog } = await getRenderedDialog();
-    expect(container.querySelector("openclaw-modal-dialog")).not.toBeNull();
 
     dispatchEscape(dialog);
 
@@ -263,7 +268,6 @@ describe("approval and confirmation modals", () => {
     );
 
     const { dialog } = await getRenderedDialog();
-    expect(container.querySelector("openclaw-modal-dialog")).not.toBeNull();
 
     dispatchEscape(dialog);
 

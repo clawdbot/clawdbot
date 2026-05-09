@@ -59,7 +59,7 @@ describe("infra store", () => {
 
         const result = readSessionStoreJson5(storePath);
         expect(result.ok).toBe(false);
-        expect(result.store).toEqual({});
+        expect(result.store).toStrictEqual({});
       });
     });
 

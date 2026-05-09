@@ -212,7 +212,7 @@ describe("probeGateway", () => {
 
     expect(eventLoopReadyState.calls).toHaveLength(1);
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(1_000);
-    expect(gatewayClientState.options).not.toBeNull();
+    expect(gatewayClientState.options?.url).toBe("ws://127.0.0.1:18789");
     expect(gatewayClientState.startCalls).toBe(1);
   });
 
@@ -243,7 +243,7 @@ describe("probeGateway", () => {
     });
     expect(eventLoopReadyState.calls).toHaveLength(1);
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(250);
-    expect(gatewayClientState.options).not.toBeNull();
+    expect(gatewayClientState.options?.url).toBe("ws://127.0.0.1:18789");
     expect(gatewayClientState.startCalls).toBe(0);
   });
 

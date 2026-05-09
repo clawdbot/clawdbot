@@ -3,8 +3,8 @@ import { TtsConfigSchema } from "./zod-schema.core.js";
 
 describe("TtsConfigSchema openai speed and instructions", () => {
   it("accepts speed and instructions in openai section", () => {
-    expect(() =>
-      TtsConfigSchema.parse({
+    expect(
+      TtsConfigSchema.safeParse({
         providers: {
           openai: {
             voice: "alloy",
@@ -13,12 +13,12 @@ describe("TtsConfigSchema openai speed and instructions", () => {
           },
         },
       }),
-    ).not.toThrow();
+    ).toMatchObject({ success: true });
   });
 
   it("accepts openai extraBody objects for compatible TTS endpoints", () => {
-    expect(() =>
-      TtsConfigSchema.parse({
+    expect(
+      TtsConfigSchema.safeParse({
         providers: {
           openai: {
             baseUrl: "http://localhost:8880/v1",
@@ -31,36 +31,36 @@ describe("TtsConfigSchema openai speed and instructions", () => {
           },
         },
       }),
-    ).not.toThrow();
+    ).toMatchObject({ success: true });
   });
 
-  it("rejects out-of-range openai speed", () => {
-    expect(() =>
-      TtsConfigSchema.parse({
+  it("accepts out-of-range openai speed for provider passthrough", () => {
+    expect(
+      TtsConfigSchema.safeParse({
         providers: {
           openai: {
             speed: 5.0,
           },
         },
       }),
-    ).not.toThrow();
+    ).toMatchObject({ success: true });
   });
 
-  it("rejects openai speed below minimum", () => {
-    expect(() =>
-      TtsConfigSchema.parse({
+  it("accepts openai speed below minimum for provider passthrough", () => {
+    expect(
+      TtsConfigSchema.safeParse({
         providers: {
           openai: {
             speed: 0.1,
           },
         },
       }),
-    ).not.toThrow();
+    ).toMatchObject({ success: true });
   });
 
   it("accepts provider-specific persona bindings and structured prompt fields", () => {
-    expect(() =>
-      TtsConfigSchema.parse({
+    expect(
+      TtsConfigSchema.safeParse({
         persona: "alfred",
         personas: {
           alfred: {
@@ -92,20 +92,28 @@ describe("TtsConfigSchema openai speed and instructions", () => {
           },
         },
       }),
-    ).not.toThrow();
+    ).toMatchObject({ success: true });
   });
 
   it("rejects persona rewrite config until runtime behavior exists", () => {
-    expect(() =>
-      TtsConfigSchema.parse({
-        personas: {
-          alfred: {
-            rewrite: {
-              enabled: true,
-            },
+    const result = TtsConfigSchema.safeParse({
+      personas: {
+        alfred: {
+          rewrite: {
+            enabled: true,
           },
         },
-      }),
-    ).toThrow();
+      },
+    });
+
+    expect(result).toMatchObject({ success: false });
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          keys: ["rewrite"],
+          path: ["personas", "alfred"],
+        }),
+      );
+    }
   });
 });

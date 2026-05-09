@@ -254,8 +254,10 @@ describe("renderApp assistant avatar routing", () => {
     expect(quickSettingsProps.current?.security.execPolicy).toBe("full");
   });
 
-  it("does not throw when stale cron state contains a job without a payload", () => {
-    expect(() =>
+  it("renders stale cron state containing a job without a payload", () => {
+    const container = document.createElement("div");
+
+    render(
       renderApp(
         createState({
           cronJobs: [
@@ -273,6 +275,9 @@ describe("renderApp assistant avatar routing", () => {
           ],
         }),
       ),
-    ).not.toThrow();
+      container,
+    );
+
+    expect(container.querySelector(".shell")).toBeInstanceOf(HTMLElement);
   });
 });

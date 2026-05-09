@@ -58,7 +58,7 @@ describe("profile unicode attacks", () => {
 
       // UI should escape or handle this
       const sanitized = sanitizeProfileForDisplay(result.profile);
-      expect(sanitized.name).toEqual(expect.any(String));
+      expect(sanitized.name).toBe("\u202Eevil\u202C");
     });
 
     it("handles bidi embedding in about", () => {

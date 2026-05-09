@@ -1,4 +1,7 @@
-import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
+import {
+  normalizeAgentModelMapForConfig,
+  normalizeAgentModelRefForConfig,
+} from "../config/model-input.js";
 import type { AgentModelListConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -50,7 +53,7 @@ export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawC
   const normalizedModel = normalizeAgentModelRefForConfig(model);
   const defaults = cfg.agents?.defaults;
   const existingModel = defaults?.model;
-  const existingModels = defaults?.models;
+  const existingModels = normalizeAgentModelMapForConfig(defaults?.models ?? {});
   const fallbacks =
     typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
       ? (existingModel as { fallbacks?: string[] }).fallbacks?.map((fallback) =>

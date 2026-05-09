@@ -116,7 +116,10 @@ describe("detectLinuxSdBackedStateDir", () => {
     });
 
     expect(result).not.toBeNull();
-    const warning = formatLinuxSdBackedStateDirWarning(stateDir, result!);
+    if (result === null) {
+      throw new Error("Expected Linux state storage warning details");
+    }
+    const warning = formatLinuxSdBackedStateDirWarning(stateDir, result);
     expect(warning).toContain("device /dev/disk/by-uuid/mmc\\nsource");
     expect(warning).toContain("mount /home/pi/mnt\\nspoofed");
     expect(warning).not.toContain("device /dev/disk/by-uuid/mmc\nsource");

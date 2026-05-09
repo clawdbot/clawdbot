@@ -300,26 +300,36 @@ describe("check-extension-package-tsc-boundary", () => {
   });
 
   it("keeps full failure output on the thrown error for canary detection", async () => {
-    await expect(
-      runNodeStepAsync(
-        "demo-plugin",
+    const failure = await runNodeStepAsync(
+      "demo-plugin",
+      [
+        "--eval",
         [
-          "--eval",
-          [
-            "console.log('src/plugins/contracts/rootdir-boundary-canary.ts');",
-            "for (let index = 1; index <= 45; index += 1) console.log(`stdout ${index}`);",
-            "console.error('TS6059');",
-            "process.exit(2);",
-          ].join(" "),
-        ],
-        20_000,
-      ),
-    ).rejects.toMatchObject({
+          "console.log('src/plugins/contracts/rootdir-boundary-canary.ts');",
+          "for (let index = 1; index <= 45; index += 1) console.log(`stdout ${index}`);",
+          "console.error('TS6059');",
+          "process.exit(2);",
+        ].join(" "),
+      ],
+      20_000,
+    ).then(
+      () => {
+        throw new Error("expected demo-plugin step to fail");
+      },
+      (error: unknown) => error,
+    );
+
+    expect(failure).toMatchObject({
       message: expect.stringContaining("[... 6 earlier lines omitted ...]"),
       fullOutput: expect.stringContaining("src/plugins/contracts/rootdir-boundary-canary.ts"),
       kind: "nonzero-exit",
-      elapsedMs: expect.any(Number),
     });
+    const elapsedMs = (failure as { elapsedMs?: unknown }).elapsedMs;
+    expect(typeof elapsedMs).toBe("number");
+    if (typeof elapsedMs !== "number") {
+      throw new Error("expected failure elapsedMs to be a number");
+    }
+    expect(elapsedMs).toBeGreaterThanOrEqual(0);
   }, 30_000);
 
   it("aborts concurrent sibling steps after the first failure", async () => {

@@ -388,9 +388,8 @@ describe("fs-safe", () => {
 
       await (await openRoot(root)).mkdir(path.join("alias", "nested", "deeper"));
 
-      await expect(fs.stat(path.join(realDir, "nested", "deeper"))).resolves.toMatchObject({
-        isDirectory: expect.any(Function),
-      });
+      const stat = await fs.stat(path.join(realDir, "nested", "deeper"));
+      expect(stat.isDirectory()).toBe(true);
     },
   );
 

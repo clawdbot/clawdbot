@@ -13,6 +13,7 @@ import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
+  type QaProviderMode,
   type QaProviderModeInput,
 } from "../../run-config.js";
 import {
@@ -46,11 +47,14 @@ type TelegramQaScenarioId =
   | "telegram-commands-command"
   | "telegram-tools-compact-command"
   | "telegram-whoami-command"
+  | "telegram-status-command"
+  | "telegram-other-bot-command-gating"
   | "telegram-context-command"
   | "telegram-current-session-status-tool"
   | "telegram-stream-final-single-message"
   | "telegram-long-final-three-chunks"
   | "telegram-long-final-reuses-preview"
+  | "telegram-reply-chain-exact-marker"
   | "telegram-mentioned-message-reply"
   | "telegram-mention-gating";
 
@@ -69,6 +73,9 @@ type TelegramQaScenarioRun = {
 type TelegramQaScenarioDefinition = LiveTransportScenarioDefinition<TelegramQaScenarioId> & {
   buildRun: (sutUsername: string) => TelegramQaScenarioRun;
   defaultEnabled?: boolean;
+  defaultProviderModes?: readonly QaProviderMode[];
+  regressionRefs?: readonly string[];
+  rationale: string;
 };
 
 type TelegramObservedMessage = {
@@ -231,6 +238,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     id: "telegram-help-command",
     standardId: "help-command",
     title: "Telegram help command reply",
+    rationale: "Canary-grade native command reply path.",
     timeoutMs: 45_000,
     buildRun: (sutUsername) => ({
       expectReply: true,
@@ -241,6 +249,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   {
     id: "telegram-commands-command",
     title: "Telegram commands list reply",
+    rationale: "Native command catalog must render in Telegram group replies.",
     timeoutMs: 45_000,
     buildRun: (sutUsername) => ({
       expectReply: true,
@@ -251,6 +260,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   {
     id: "telegram-tools-compact-command",
     title: "Telegram tools compact reply",
+    rationale: "Tool catalog rendering catches command dispatch plus model-tool inventory drift.",
     timeoutMs: 45_000,
     buildRun: (sutUsername) => ({
       expectReply: true,
@@ -261,6 +271,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   {
     id: "telegram-whoami-command",
     title: "Telegram whoami reply",
+    rationale: "Identity command proves Telegram channel context is attached to native commands.",
     timeoutMs: 45_000,
     buildRun: (sutUsername) => ({
       expectReply: true,
@@ -269,8 +280,31 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     }),
   },
   {
+    id: "telegram-status-command",
+    title: "Telegram status command reply",
+    rationale: "Recent Telegram group regressions broke /status while normal chat still worked.",
+    regressionRefs: ["openclaw/openclaw#74698"],
+    timeoutMs: 45_000,
+    buildRun: (sutUsername) => ({
+      expectReply: true,
+      input: `/status@${sutUsername}`,
+      expectedTextIncludes: ["OpenClaw", "Model:", "Session:", "Activation:"],
+    }),
+  },
+  {
+    id: "telegram-other-bot-command-gating",
+    title: "Telegram command addressed to another bot is ignored",
+    rationale: "Bot-to-bot groups must not let commands addressed to another bot wake the SUT.",
+    timeoutMs: 8_000,
+    buildRun: () => ({
+      expectReply: false,
+      input: "/status@OpenClawQaOtherBot",
+    }),
+  },
+  {
     id: "telegram-context-command",
     title: "Telegram context reply",
+    rationale: "Context command exercises native command routing into Telegram-specific help text.",
     timeoutMs: 45_000,
     buildRun: (sutUsername) => ({
       expectReply: true,
@@ -282,29 +316,49 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     id: "telegram-current-session-status-tool",
     title: "Telegram current session_status tool call",
     defaultEnabled: false,
+    rationale:
+      "Opt-in threaded probe for current Telegram group session resolution through model tools.",
     timeoutMs: 60_000,
     buildRun: (sutUsername) => ({
       expectReply: true,
       input: `@${sutUsername} Telegram current session_status QA check. Call session_status with sessionKey set to current, then reply with the exact QA marker and resolved session key.`,
       expectedTextIncludes: ["QA-TELEGRAM-CURRENT-SESSION-OK", ":telegram:group:"],
+      replyToLatestSutMessage: true,
     }),
   },
   {
     id: "telegram-mentioned-message-reply",
     title: "Telegram mentioned message gets a reply",
-    defaultEnabled: false,
+    rationale: "Bot-to-bot group mention routing must produce a threaded SUT reply.",
     timeoutMs: 45_000,
     buildRun: (sutUsername) => ({
-      allowAnySutReply: true,
       expectReply: true,
       input: `@${sutUsername} Telegram QA mention routing check. Reply with a short acknowledgement.`,
       replyToLatestSutMessage: true,
     }),
   },
   {
+    id: "telegram-reply-chain-exact-marker",
+    title: "Telegram reply-chain exact marker",
+    defaultProviderModes: ["mock-openai"],
+    rationale: "Mock-backed reply-chain check proves quoted bot-to-bot follow-ups keep threading.",
+    timeoutMs: 45_000,
+    buildRun: (sutUsername) => ({
+      expectReply: true,
+      input: `@${sutUsername} Telegram reply-chain marker QA. Reply exactly: QA-TELEGRAM-REPLY-CHAIN-OK`,
+      expectedTextIncludes: ["QA-TELEGRAM-REPLY-CHAIN-OK"],
+      expectedJoinedSutTextIncludes: ["QA-TELEGRAM-REPLY-CHAIN-OK"],
+      expectedSutMessageCount: 1,
+      replyToLatestSutMessage: true,
+      settleMs: 4_000,
+    }),
+  },
+  {
     id: "telegram-stream-final-single-message",
     title: "Telegram streamed final stays one message",
-    defaultEnabled: false,
+    defaultProviderModes: ["mock-openai"],
+    rationale: "Regression guard for duplicate final replies from Telegram streaming paths.",
+    regressionRefs: ["openclaw/openclaw#39905"],
     timeoutMs: 45_000,
     buildRun: (sutUsername) => ({
       allowAnySutReply: true,
@@ -320,7 +374,9 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   {
     id: "telegram-long-final-reuses-preview",
     title: "Telegram long final reuses the preview message",
-    defaultEnabled: false,
+    defaultProviderModes: ["mock-openai"],
+    rationale: "Regression guard for long streamed finals leaving stale preview messages behind.",
+    regressionRefs: ["openclaw/openclaw#39905"],
     timeoutMs: 60_000,
     buildRun: (sutUsername) => ({
       allowAnySutReply: true,
@@ -337,6 +393,8 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     id: "telegram-long-final-three-chunks",
     title: "Telegram three-chunk final keeps only final chunks",
     defaultEnabled: false,
+    rationale: "Opt-in stress probe for Telegram long final chunk accounting.",
+    regressionRefs: ["openclaw/openclaw#39905"],
     timeoutMs: 60_000,
     buildRun: (sutUsername) => ({
       allowAnySutReply: true,
@@ -356,6 +414,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     id: "telegram-mention-gating",
     standardId: "mention-gating",
     title: "Telegram group message without mention does not trigger",
+    rationale: "Required group mention gate should suppress ordinary group chatter.",
     timeoutMs: 8_000,
     buildRun: () => {
       const token = `TELEGRAM_QA_NOMENTION_${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -1020,16 +1079,43 @@ function buildObservedMessagesArtifact(params: {
   });
 }
 
-function findScenario(ids?: string[]) {
+function shouldRunTelegramScenarioByDefault(
+  scenario: TelegramQaScenarioDefinition,
+  providerMode: QaProviderMode,
+) {
+  if (scenario.defaultEnabled === false) {
+    return false;
+  }
+  return !scenario.defaultProviderModes || scenario.defaultProviderModes.includes(providerMode);
+}
+
+function findScenario(
+  ids?: string[],
+  providerMode: QaProviderMode = DEFAULT_QA_LIVE_PROVIDER_MODE,
+) {
   const scenarios =
     ids && ids.length > 0
       ? TELEGRAM_QA_SCENARIOS
-      : TELEGRAM_QA_SCENARIOS.filter((scenario) => scenario.defaultEnabled !== false);
+      : TELEGRAM_QA_SCENARIOS.filter((scenario) =>
+          shouldRunTelegramScenarioByDefault(scenario, providerMode),
+        );
   return selectLiveTransportScenarios({
     ids,
     laneLabel: "Telegram",
     scenarios,
   });
+}
+
+export function listTelegramQaScenarioCatalog(
+  providerMode: QaProviderMode = DEFAULT_QA_LIVE_PROVIDER_MODE,
+) {
+  return TELEGRAM_QA_SCENARIOS.map((scenario) => ({
+    id: scenario.id,
+    title: scenario.title,
+    defaultEnabled: shouldRunTelegramScenarioByDefault(scenario, providerMode),
+    rationale: scenario.rationale,
+    regressionRefs: [...(scenario.regressionRefs ?? [])],
+  }));
 }
 
 function matchesTelegramScenarioReply(params: {
@@ -1340,7 +1426,7 @@ export async function runTelegramQaLive(params: {
   const primaryModel = params.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   const alternateModel = params.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
   const sutAccountId = params.sutAccountId?.trim() || "sut";
-  const scenarios = findScenario(params.scenarioIds);
+  const scenarios = findScenario(params.scenarioIds, providerMode);
   const progressEnabled = shouldLogTelegramQaLiveProgress();
   writeTelegramQaProgress(
     progressEnabled,
@@ -1754,6 +1840,7 @@ export const __testing = {
   assertTelegramScenarioReply,
   classifyCanaryReply,
   findScenario,
+  listTelegramQaScenarioCatalog,
   matchesTelegramScenarioReply,
   normalizeTelegramObservedMessage,
   parseTelegramQaProgressBooleanEnv,

@@ -205,6 +205,47 @@ describe("SessionHistorySseState", () => {
     ]);
   });
 
+  test("drops subagent announce inter-session user messages from projected history", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: [
+                "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=webchat sourceTool=subagent_announce isUser=false",
+                "This content was routed by OpenClaw from another session or internal tool.",
+                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+                "subagent completion payload",
+                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+              ].join("\n"),
+            },
+          ],
+          provenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:subagent:child",
+            sourceTool: "subagent_announce",
+          },
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "clean child result" }],
+          __openclaw: { seq: 2 },
+        },
+      ],
+    });
+
+    expect(snapshot.history.messages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "clean child result" }],
+        __openclaw: { seq: 2 },
+      },
+    ]);
+  });
+
   test("hides heartbeat prompt and ok acknowledgements from visible history", () => {
     const snapshot = buildSessionHistorySnapshot({
       rawMessages: [

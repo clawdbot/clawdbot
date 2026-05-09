@@ -89,7 +89,7 @@ function requireWarning(warnings: string[], text: string): string {
 }
 
 describe("graceful plugin initialization failure", () => {
-  it("does not crash when register throws", async () => {
+  it("marks plugin entry errored when register throws", async () => {
     const plugin = writePlugin({
       id: "throws-on-register",
       body: `module.exports = { id: "throws-on-register", register() { throw new Error("config schema mismatch"); } };`,

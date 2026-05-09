@@ -127,6 +127,16 @@ vi.mock("../../auto-reply/reply/queue.js", async () => {
   };
 });
 
+vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
+  const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue/cleanup.js")>(
+    "../../auto-reply/reply/queue/cleanup.js",
+  );
+  return {
+    ...actual,
+    clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
+  };
+});
+
 vi.mock("../../auto-reply/reply/abort.js", async () => {
   const actual = await vi.importActual<typeof import("../../auto-reply/reply/abort.js")>(
     "../../auto-reply/reply/abort.js",

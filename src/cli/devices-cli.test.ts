@@ -538,7 +538,9 @@ describe("devices cli tokens", () => {
     await runDevicesCommand(["rotate", "--device", " ", "--role", "main"]);
 
     expect(callGateway).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith("--device and --role required");
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--device and --role are required. Run openclaw devices list to choose a paired device.",
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

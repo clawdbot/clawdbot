@@ -1749,16 +1749,20 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    let harness!: ReturnType<typeof createStartedThreadHarness>;
-    harness = createStartedThreadHarness(async (method) => {
+    const harnessRef: { current?: ReturnType<typeof createStartedThreadHarness> } = {};
+    const harness = createStartedThreadHarness(async (method) => {
       if (method === "turn/start") {
-        await harness.notify(rateLimitsUpdated(resetsAt));
+        if (!harnessRef.current) {
+          throw new Error("Expected Codex app-server harness to be initialized");
+        }
+        await harnessRef.current.notify(rateLimitsUpdated(resetsAt));
         throw Object.assign(new Error("You've reached your usage limit."), {
           data: { codexErrorInfo: "usageLimitExceeded" },
         });
       }
       return undefined;
     });
+    harnessRef.current = harness;
 
     const runError = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir)).catch(
       (error: unknown) => error,
@@ -1982,13 +1986,12 @@ describe("runCodexAppServerAttempt", () => {
     await waitForMethod("turn/start");
 
     expect(queueAgentHarnessMessage("session-1", "more context", { debounceMs: 1 })).toBe(true);
-    await vi.waitFor(
-      () => expect(requests.some((entry) => entry.method === "turn/steer")).toBe(true),
-      { interval: 1 },
-    );
+    await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain("turn/steer"), {
+      interval: 1,
+    });
     expect(abortAgentHarnessRun("session-1")).toBe(true);
     await vi.waitFor(
-      () => expect(requests.some((entry) => entry.method === "turn/interrupt")).toBe(true),
+      () => expect(requests.map((entry) => entry.method)).toContain("turn/interrupt"),
       { interval: 1 },
     );
 
@@ -2164,7 +2167,7 @@ describe("runCodexAppServerAttempt", () => {
     params.onBlockReply = vi.fn();
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(
-      () => expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
+      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
       { interval: 1 },
     );
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
@@ -2238,7 +2241,7 @@ describe("runCodexAppServerAttempt", () => {
 
       await expect(run).resolves.toMatchObject({ aborted: true });
       await new Promise((resolve) => setImmediate(resolve));
-      expect(unhandledRejections).toEqual([]);
+      expect(unhandledRejections).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
@@ -2409,7 +2412,7 @@ describe("runCodexAppServerAttempt", () => {
     };
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(() =>
-      expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
+      expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
     );
     await notify({
       method: "turn/completed",

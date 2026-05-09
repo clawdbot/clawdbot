@@ -52,6 +52,7 @@ export {
 } from "../talk/talk-session-controller.js";
 export {
   buildRealtimeVoiceAgentConsultChatMessage,
+  buildRealtimeVoiceAgentConsultPolicyInstructions,
   buildRealtimeVoiceAgentConsultPrompt,
   buildRealtimeVoiceAgentConsultWorkingResponse,
   collectRealtimeVoiceAgentConsultVisibleText,

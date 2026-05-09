@@ -1063,7 +1063,7 @@ describe("registerPluginCommand", () => {
       config: {} as never,
     });
 
-    expect(result).toEqual({});
+    expect(result).toStrictEqual({});
   });
 
   it("passes the effective default account to plugin command handlers when accountId is omitted", async () => {

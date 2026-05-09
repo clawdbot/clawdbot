@@ -130,7 +130,7 @@ function createFeedbackInvokeContext(params: {
 }
 
 async function expectFileMissing(filePath: string) {
-  await expect(access(filePath)).rejects.toThrow();
+  await expect(access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 async function withFeedbackHandler(params: {

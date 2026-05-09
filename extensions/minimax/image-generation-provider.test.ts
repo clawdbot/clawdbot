@@ -47,7 +47,10 @@ describe("minimax image-generation provider", () => {
   }
 
   function expectImageGenerationUrl(fetchMock: ReturnType<typeof vi.fn>, url: string) {
-    expect(fetchMock).toHaveBeenCalledWith(url, expect.any(Object));
+    expect(fetchMock).toHaveBeenCalled();
+    const [actualUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
+    expect(actualUrl).toBe(url);
+    expect(init?.method).toBe("POST");
   }
 
   it("generates PNG buffers through the shared provider HTTP path", async () => {

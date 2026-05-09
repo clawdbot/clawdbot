@@ -21,6 +21,13 @@ function createEveryJob(state: CronJob["state"]): CronJob {
   };
 }
 
+function expectTimestamp(value: number | undefined | null, label: string): number {
+  if (typeof value !== "number") {
+    throw new Error(`Expected ${label} timestamp`);
+  }
+  return value;
+}
+
 describe("Cron issue #22895 interval scheduling", () => {
   it("uses lastRunAtMs cadence when the next interval is still in the future", () => {
     const nowMs = Date.parse("2026-02-22T10:10:00.000Z");
@@ -34,9 +41,9 @@ describe("Cron issue #22895 interval scheduling", () => {
       nowMs,
     );
 
-    expect(nextFromLast).toBe(job.state.lastRunAtMs! + EVERY_30_MIN_MS);
+    expect(nextFromLast).toBe(expectTimestamp(job.state.lastRunAtMs, "last run") + EVERY_30_MIN_MS);
     expect(nextFromAnchor).toBe(Date.parse("2026-02-22T10:14:00.000Z"));
-    expect(nextFromLast).toBeGreaterThan(nextFromAnchor!);
+    expect(nextFromLast).toBeGreaterThan(expectTimestamp(nextFromAnchor, "next anchor run"));
   });
 
   it("falls back to anchor scheduling when lastRunAtMs cadence is already in the past", () => {

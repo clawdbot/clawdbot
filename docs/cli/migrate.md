@@ -57,7 +57,7 @@ openclaw onboard --import-from hermes --import-source ~/.hermes
   Select one skill copy item by skill name or item id. Repeat the flag to migrate multiple skills. When omitted, interactive Codex migrations show a checkbox selector and non-interactive migrations keep all planned skills.
 </ParamField>
 <ParamField path="--plugin <name>" type="string">
-  Select one Codex plugin install item by plugin name or item id. Repeat the flag to migrate multiple Codex plugins. This only applies to source-installed `openai-curated` Codex plugins discovered by the Codex app-server inventory.
+  Select one Codex plugin install item by plugin name or item id. Repeat the flag to migrate multiple Codex plugins. When omitted, interactive Codex migrations show a native Codex plugin checkbox selector and non-interactive migrations keep all planned plugins. This only applies to source-installed `openai-curated` Codex plugins discovered by the Codex app-server inventory.
 </ParamField>
 <ParamField path="--no-backup" type="boolean">
   Skip the pre-apply backup. Requires `--force` when local OpenClaw state exists.
@@ -123,19 +123,26 @@ launches use per-agent `CODEX_HOME` and `HOME` directories, so they do not read
 your personal Codex CLI state by default.
 
 Running `openclaw migrate codex` in an interactive terminal previews the full
-plan, then opens a checkbox selector for skill copy items before the final
-apply confirmation. Use `Toggle all on` or `Toggle all off` for bulk selection;
-planned skills start checked, conflict skills start unchecked, and `Skip for now`
-leaves skills unchanged without applying. For scripted or exact runs, pass
-`--skill <name>` once per skill, for example:
+plan, then opens checkbox selectors before the final apply confirmation. Skill
+copy items are prompted first. Use `Toggle all on` or `Toggle all off` for bulk
+selection; planned skills start checked, conflict skills start unchecked, and
+`Skip for now` skips skill copies for this run while still continuing to plugin
+selection. When source-installed curated Codex plugins are migratable and
+`--plugin` was not supplied, migration then prompts for native Codex plugin
+activation by plugin name. Plugin items
+start checked unless the target OpenClaw Codex plugin config already has that
+plugin. Existing target plugins start unchecked and show a conflict hint such as
+`conflict: plugin exists`; choose `Toggle all off` to migrate no native Codex
+plugins in that run, or `Skip for now` to stop before applying. For scripted or
+exact runs, pass `--skill <name>` once per skill, for example:
 
 ```bash
 openclaw migrate codex --dry-run --skill gog-vault77-google-workspace
 openclaw migrate apply codex --yes --skill gog-vault77-google-workspace
 ```
 
-Use `--plugin <name>` to limit native Codex plugin migration to one or more
-source-installed curated plugins:
+Use `--plugin <name>` to limit native Codex plugin migration non-interactively
+to one or more source-installed curated plugins:
 
 ```bash
 openclaw migrate codex --dry-run --plugin google-calendar

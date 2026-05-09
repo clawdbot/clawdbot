@@ -416,7 +416,7 @@ describe("createLineNodeWebhookHandler", () => {
 
   it("releases authenticated requests before event processing completes", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
-    let releaseAuthenticated!: () => void;
+    let releaseAuthenticated: (() => void) | undefined;
     const bot = {
       handleWebhook: vi.fn(
         async () =>
@@ -444,6 +444,9 @@ describe("createLineNodeWebhookHandler", () => {
     });
 
     expect(res.headersSent).toBe(false);
+    if (!releaseAuthenticated) {
+      throw new Error("Expected LINE authenticated request release callback to be initialized");
+    }
     releaseAuthenticated();
     await request;
 

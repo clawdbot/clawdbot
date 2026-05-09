@@ -30,6 +30,7 @@ import {
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "./command-format.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { withProgress } from "./progress.js";
 
@@ -509,7 +510,9 @@ function resolveRequiredDeviceRole(
   if (deviceId && role) {
     return { deviceId, role };
   }
-  defaultRuntime.error("--device and --role required");
+  defaultRuntime.error(
+    `--device and --role are required. Run ${formatCliCommand("openclaw devices list")} to choose a paired device.`,
+  );
   defaultRuntime.exit(1);
   return null;
 }
@@ -608,7 +611,9 @@ export function registerDevicesCli(program: Command) {
       .action(async (deviceId: string, opts: DevicesRpcOpts) => {
         const trimmed = deviceId.trim();
         if (!trimmed) {
-          defaultRuntime.error("deviceId is required");
+          defaultRuntime.error(
+            `deviceId is required. Run ${formatCliCommand("openclaw devices list")} to choose a paired device.`,
+          );
           defaultRuntime.exit(1);
           return;
         }

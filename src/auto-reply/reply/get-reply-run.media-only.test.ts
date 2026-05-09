@@ -931,7 +931,7 @@ describe("runPreparedReply media-only handling", () => {
       await import("../../agents/auth-profiles/session-override.js");
     const queueSettings = await import("./queue/settings-runtime.js");
 
-    let resolveAuth!: () => void;
+    let resolveAuth: (() => void) | undefined;
     const authPromise = new Promise<void>((resolve) => {
       resolveAuth = resolve;
     });
@@ -957,6 +957,9 @@ describe("runPreparedReply media-only handling", () => {
       resetTriggered: false,
     });
     intruderRun.setPhase("running");
+    if (!resolveAuth) {
+      throw new Error("Expected auth profile resolver to be initialized");
+    }
     resolveAuth();
 
     await Promise.resolve();
@@ -1019,7 +1022,7 @@ describe("runPreparedReply media-only handling", () => {
       await import("../../agents/auth-profiles/session-override.js");
     const queueSettings = await import("./queue/settings-runtime.js");
 
-    let resolveAuth!: () => void;
+    let resolveAuth: (() => void) | undefined;
     const authPromise = new Promise<void>((resolve) => {
       resolveAuth = resolve;
     });
@@ -1060,6 +1063,9 @@ describe("runPreparedReply media-only handling", () => {
     };
     rotatedRun.updateSessionId("session-after-rotation");
 
+    if (!resolveAuth) {
+      throw new Error("Expected auth profile resolver to be initialized");
+    }
     resolveAuth();
 
     await Promise.resolve();

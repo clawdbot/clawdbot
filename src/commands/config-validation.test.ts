@@ -45,6 +45,14 @@ describe("requireValidConfigSnapshot", () => {
     };
   }
 
+  function requireFirstLog(runtime: ReturnType<typeof createRuntime>): string {
+    const [message] = runtime.log.mock.calls[0] ?? [];
+    if (message === undefined) {
+      throw new Error("expected runtime log message");
+    }
+    return String(message);
+  }
+
   it("returns config without emitting compatibility advice by default", async () => {
     createValidSnapshot();
     const runtime = createRuntime();
@@ -69,10 +77,9 @@ describe("requireValidConfigSnapshot", () => {
     expect(config).toEqual({ plugins: {} });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(String(runtime.log.mock.calls[0]?.[0])).toContain("Plugin compatibility: 1 notice.");
-    expect(String(runtime.log.mock.calls[0]?.[0])).toContain(
-      "legacy-plugin still uses legacy before_agent_start",
-    );
+    const logMessage = requireFirstLog(runtime);
+    expect(logMessage).toContain("Plugin compatibility: 1 notice.");
+    expect(logMessage).toContain("legacy-plugin still uses legacy before_agent_start");
   });
 
   it("blocks invalid config before emitting compatibility advice", async () => {

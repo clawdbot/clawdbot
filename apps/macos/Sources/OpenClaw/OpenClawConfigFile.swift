@@ -52,14 +52,16 @@ enum OpenClawConfigFile {
         }
     }
 
+    @discardableResult
     static func saveDict(
         _ dict: [String: Any],
         preserveExistingKeys: Bool = false,
         allowGatewayAuthMutation: Bool = false)
+        -> Bool
     {
         self.withFileLock {
             // Nix mode disables config writes in production, but tests rely on saving temp configs.
-            if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests { return }
+            if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests { return false }
             let url = self.url()
             let previousData = try? Data(contentsOf: url)
             let previousRoot = previousData.flatMap { self.parseConfigData($0) }
@@ -81,12 +83,7 @@ enum OpenClawConfigFile {
 
             do {
                 let data = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
-                try FileManager().createDirectory(
-                    at: url.deletingLastPathComponent(),
-                    withIntermediateDirectories: true)
-                try data.write(to: url, options: [.atomic])
                 let nextBytes = data.count
-                let nextAttributes = try? FileManager().attributesOfItem(atPath: url.path)
                 let gatewayModeAfter = self.gatewayMode(output)
                 var suspicious = self.configWriteSuspiciousReasons(
                     existsBefore: previousData != nil,
@@ -98,6 +95,44 @@ enum OpenClawConfigFile {
                 if preservedGatewayAuth {
                     suspicious.append("gateway-auth-preserved")
                 }
+                let blocking = self.configWriteBlockingReasons(suspicious)
+                if !blocking.isEmpty {
+                    let rejectedPath = self.persistRejectedConfigWrite(data: data, configURL: url)
+                    self.logger.warning("config write rejected (\(blocking.joined(separator: ", "))) at \(url.path)")
+                    self.appendConfigWriteAudit([
+                        "result": "rejected",
+                        "configPath": url.path,
+                        "existsBefore": previousData != nil,
+                        "previousBytes": previousBytes ?? NSNull(),
+                        "nextBytes": nextBytes,
+                        "previousDev": self.fileSystemNumber(previousAttributes?[.systemNumber]) ?? NSNull(),
+                        "nextDev": NSNull(),
+                        "previousIno": self.fileSystemNumber(previousAttributes?[.systemFileNumber]) ?? NSNull(),
+                        "nextIno": NSNull(),
+                        "previousMode": self.posixMode(previousAttributes?[.posixPermissions]) ?? NSNull(),
+                        "nextMode": NSNull(),
+                        "previousNlink": self.fileAttributeInt(previousAttributes?[.referenceCount]) ?? NSNull(),
+                        "nextNlink": NSNull(),
+                        "previousUid": self.fileAttributeInt(previousAttributes?[.ownerAccountID]) ?? NSNull(),
+                        "nextUid": NSNull(),
+                        "previousGid": self.fileAttributeInt(previousAttributes?[.groupOwnerAccountID]) ?? NSNull(),
+                        "nextGid": NSNull(),
+                        "hasMetaBefore": hadMetaBefore,
+                        "hasMetaAfter": self.hasMeta(output),
+                        "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
+                        "gatewayModeAfter": gatewayModeAfter ?? NSNull(),
+                        "preservedGatewayAuth": preservedGatewayAuth,
+                        "suspicious": suspicious,
+                        "blocking": blocking,
+                        "rejectedPath": rejectedPath ?? NSNull(),
+                    ])
+                    return false
+                }
+                try FileManager().createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true)
+                try data.write(to: url, options: [.atomic])
+                let nextAttributes = try? FileManager().attributesOfItem(atPath: url.path)
                 if !suspicious.isEmpty {
                     self.logger.warning("config write anomaly (\(suspicious.joined(separator: ", "))) at \(url.path)")
                 }
@@ -123,9 +158,11 @@ enum OpenClawConfigFile {
                     "hasMetaAfter": self.hasMeta(output),
                     "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
                     "gatewayModeAfter": gatewayModeAfter ?? NSNull(),
+                    "preservedGatewayAuth": preservedGatewayAuth,
                     "suspicious": suspicious,
                 ])
                 self.observeConfigRead(data: data, root: output, configURL: url, valid: true)
+                return true
             } catch {
                 self.logger.error("config save failed: \(error.localizedDescription)")
                 self.appendConfigWriteAudit([
@@ -138,9 +175,11 @@ enum OpenClawConfigFile {
                     "hasMetaAfter": self.hasMeta(output),
                     "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
                     "gatewayModeAfter": self.gatewayMode(output) ?? NSNull(),
+                    "preservedGatewayAuth": preservedGatewayAuth,
                     "suspicious": preservedGatewayAuth ? ["gateway-auth-preserved"] : [],
                     "error": error.localizedDescription,
                 ])
+                return false
             }
         }
     }
@@ -416,6 +455,12 @@ enum OpenClawConfigFile {
         return reasons
     }
 
+    private static func configWriteBlockingReasons(_ suspicious: [String]) -> [String] {
+        suspicious.filter { reason in
+            reason.hasPrefix("size-drop:") || reason == "gateway-mode-removed"
+        }
+    }
+
     private static func configAuditLogURL() -> URL {
         self.stateDirURL()
             .appendingPathComponent("logs", isDirectory: true)
@@ -592,6 +637,26 @@ enum OpenClawConfigFile {
         } catch {
             return nil
         }
+    }
+
+    private static func persistRejectedConfigWrite(data: Data, configURL: URL) -> String? {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let url = configURL.deletingLastPathComponent()
+            .appendingPathComponent("\(configURL.lastPathComponent).rejected.\(self.configTimestampToken(timestamp))")
+        let fileManager = FileManager()
+        let privatePermissions: NSNumber = 0o600
+        if fileManager.fileExists(atPath: url.path) {
+            try? fileManager.setAttributes([.posixPermissions: privatePermissions], ofItemAtPath: url.path)
+            return url.path
+        }
+        guard fileManager.createFile(
+            atPath: url.path,
+            contents: data,
+            attributes: [.posixPermissions: privatePermissions])
+        else {
+            return nil
+        }
+        return url.path
     }
 
     private static func observeConfigRead(data: Data, root: [String: Any]?, configURL: URL, valid: Bool) {

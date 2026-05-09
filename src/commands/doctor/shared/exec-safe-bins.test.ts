@@ -97,7 +97,7 @@ describe("doctor exec safe bin helpers", () => {
       "- tools.exec.safeBins includes interpreter/runtime 'awk' without profile; remove it from safeBins or use explicit allowlist entries.",
       "- tools.exec.safeBins includes interpreter/runtime 'sed' without profile; remove it from safeBins or use explicit allowlist entries.",
     ]);
-    expect(result.config.tools?.exec?.safeBinProfiles).toEqual({});
+    expect(result.config.tools?.exec?.safeBinProfiles).toStrictEqual({});
   });
 
   it("warns on busybox/toybox safeBins instead of scaffolding them", () => {
@@ -114,7 +114,7 @@ describe("doctor exec safe bin helpers", () => {
       "- tools.exec.safeBins includes interpreter/runtime 'busybox' without profile; remove it from safeBins or use explicit allowlist entries.",
       "- tools.exec.safeBins includes interpreter/runtime 'toybox' without profile; remove it from safeBins or use explicit allowlist entries.",
     ]);
-    expect(result.config.tools?.exec?.safeBinProfiles).toEqual({});
+    expect(result.config.tools?.exec?.safeBinProfiles).toStrictEqual({});
   });
 
   it("flags safeBins that resolve outside trusted directories", () => {

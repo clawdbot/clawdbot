@@ -135,7 +135,7 @@ describe("handleMatrixSubagentSpawning", () => {
       fakeApi,
       makeSpawnEvent({ channel: " Matrix " }),
     );
-    expect(result).not.toBeUndefined();
+    expect(result).toMatchObject({ status: "ok", threadBindingReady: true });
   });
 
   it("returns error when thread bindings are disabled", async () => {

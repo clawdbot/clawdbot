@@ -87,10 +87,13 @@ async function flushMicrotasks(rounds = 3): Promise<void> {
 }
 
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
+  let resolve: (() => void) | undefined;
   const promise = new Promise<void>((next) => {
     resolve = next;
   });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
@@ -2433,9 +2436,10 @@ describe("AcpSessionManager", () => {
       }),
     );
     expect(options.runtimeMode).toBe("plan");
-    expect(extractRuntimeOptionsFromUpserts().some((entry) => entry?.runtimeMode === "plan")).toBe(
-      true,
+    const persistedRuntimeModes = extractRuntimeOptionsFromUpserts().map(
+      (entry) => entry?.runtimeMode,
     );
+    expect(persistedRuntimeModes).toContain("plan");
   });
 
   it("reapplies persisted controls on next turn after runtime option updates", async () => {

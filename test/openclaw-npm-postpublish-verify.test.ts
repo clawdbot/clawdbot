@@ -139,7 +139,7 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
         "utf8",
       );
 
-      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([]);
+      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -220,7 +220,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         "utf8",
       );
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -246,7 +246,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         "utf8",
       );
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -301,7 +301,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         "utf8",
       );
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -326,7 +326,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         "utf8",
       );
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

@@ -155,9 +155,14 @@ async function requestSafeGatewayRestart(opts: DaemonLifecycleOptions): Promise<
   if (opts.wait !== undefined) {
     throw new Error("--safe cannot be combined with --wait; safe restart uses gateway deferral");
   }
+  const skipDeferral = opts.skipDeferral === true;
+  const params: { reason: string; skipDeferral?: true } = { reason: "gateway.restart.safe" };
+  if (skipDeferral) {
+    params.skipDeferral = true;
+  }
   const result = await callGatewayCli<SafeGatewayRestartRequestResult>({
     method: "gateway.restart.request",
-    params: { reason: "gateway.restart.safe" },
+    params,
     timeoutMs: 10_000,
   });
   const message =
@@ -165,7 +170,9 @@ async function requestSafeGatewayRestart(opts: DaemonLifecycleOptions): Promise<
       ? "safe restart request joined an existing pending gateway restart"
       : result.status === "deferred"
         ? "safe restart requested; gateway will restart after active work drains"
-        : "safe restart requested; gateway will restart momentarily";
+        : skipDeferral
+          ? "safe restart requested; gateway bypassing active-work deferral"
+          : "safe restart requested; gateway will restart momentarily";
   const payload = {
     ok: true,
     result: result.status,
@@ -265,6 +272,9 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
  * Throws/exits on check or restart failures.
  */
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
+  if (opts.skipDeferral && !opts.safe) {
+    throw new Error("--skip-deferral requires --safe");
+  }
   if (opts.safe) {
     return await requestSafeGatewayRestart(opts);
   }

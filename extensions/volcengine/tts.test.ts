@@ -108,7 +108,11 @@ describe("Volcengine speech provider", () => {
   });
 
   it("lists voices with locale and gender", async () => {
-    const voices = await provider.listVoices!({});
+    const listVoices = provider.listVoices;
+    if (!listVoices) {
+      throw new Error("Expected Volcengine provider listVoices");
+    }
+    const voices = await listVoices({});
     expect(voices.length).toBeGreaterThan(0);
     expect(voices[0]).toMatchObject({ locale: "en-US" });
     expect(voices[0].gender).toMatch(/^(female|male)$/u);

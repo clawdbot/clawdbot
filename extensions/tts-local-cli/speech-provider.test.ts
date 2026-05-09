@@ -80,7 +80,18 @@ describe("buildCliSpeechProvider", () => {
       if (typeof outputPath !== "string") {
         throw new Error("missing ffmpeg output path");
       }
-      writeFileSync(outputPath, Buffer.from(`converted:${path.extname(outputPath)}`));
+      const forcedFormatIndex = args.lastIndexOf("-f");
+      const forcedFormat =
+        forcedFormatIndex >= 0 && typeof args[forcedFormatIndex + 1] === "string"
+          ? args[forcedFormatIndex + 1]
+          : undefined;
+      const extension =
+        forcedFormat === "s16le"
+          ? ".pcm"
+          : forcedFormat
+            ? `.${forcedFormat}`
+            : path.extname(outputPath.replace(/\.part$/, ""));
+      writeFileSync(outputPath, Buffer.from(`converted:${extension}`));
     });
   });
 

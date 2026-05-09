@@ -157,8 +157,18 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(report.agentId).toBe("specialist");
     expect(report.agentSkillFilter).toEqual(["alpha"]);
     expect(report.skills.find((skill) => skill.name === "alpha")?.blockedByAgentFilter).toBe(false);
-    expect(report.skills.find((skill) => skill.name === "alpha")?.modelVisible).toBe(true);
-    expect(report.skills.find((skill) => skill.name === "beta")?.blockedByAgentFilter).toBe(true);
+    expect(report.skills).toContainEqual(
+      expect.objectContaining({
+        name: "alpha",
+        modelVisible: true,
+      }),
+    );
+    expect(report.skills).toContainEqual(
+      expect.objectContaining({
+        name: "beta",
+        blockedByAgentFilter: true,
+      }),
+    );
     expect(report.skills.find((skill) => skill.name === "beta")?.modelVisible).toBe(false);
   });
 

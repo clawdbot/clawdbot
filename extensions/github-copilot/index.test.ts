@@ -325,7 +325,7 @@ describe("github-copilot plugin", () => {
     expect(result?.agents?.defaults?.model).toEqual({
       primary: "github-copilot/claude-opus-4.7",
     });
-    expect(result?.agents?.defaults?.models?.["github-copilot/claude-opus-4.7"]).toEqual({});
+    expect(result?.agents?.defaults?.models?.["github-copilot/claude-opus-4.7"]).toStrictEqual({});
 
     const profile = ensureAuthProfileStore(agentDir).profiles["github-copilot:github"];
     expect(profile).toEqual({

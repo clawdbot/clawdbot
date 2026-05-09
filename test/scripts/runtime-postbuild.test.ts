@@ -14,6 +14,10 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("runtime postbuild static assets", () => {
   it("tracks plugin-owned static assets that release packaging must ship", () => {
     expect(listStaticExtensionAssetOutputs()).toEqual(
@@ -117,7 +121,7 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(path.join(distDir, "runtime-tts.runtime.js"), "utf8")).toBe(
       'export * from "./runtime-tts.runtime-AbCd1234.js";\n',
     );
-    await expect(fs.stat(path.join(distDir, "library.js"))).rejects.toThrow();
+    await expectPathMissing(path.join(distDir, "library.js"));
   });
 
   it("does not write ambiguous stable aliases for colliding root runtime chunks", async () => {
@@ -142,7 +146,7 @@ describe("runtime postbuild static assets", () => {
 
     writeStableRootRuntimeAliases({ rootDir });
 
-    await expect(fs.stat(path.join(distDir, "install.runtime.js"))).rejects.toThrow();
+    await expectPathMissing(path.join(distDir, "install.runtime.js"));
   });
 
   it("writes a stable plugin install runtime alias when install runtimes collide", async () => {

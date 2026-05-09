@@ -90,6 +90,16 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+function expectVideoGenerateTool(
+  tool: ReturnType<typeof createVideoGenerateTool>,
+): NonNullable<ReturnType<typeof createVideoGenerateTool>> {
+  if (tool === null) {
+    throw new Error("expected video_generate tool");
+  }
+  expect(typeof tool.execute).toBe("function");
+  return tool;
+}
+
 function mockVideoPluginProvider(capabilities: Record<string, unknown> = {}) {
   vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
     {
@@ -170,7 +180,7 @@ describe("createVideoGenerateTool", () => {
   });
 
   it("registers when video-generation config is present", () => {
-    expect(
+    expectVideoGenerateTool(
       createVideoGenerateTool({
         config: asConfig({
           agents: {
@@ -180,7 +190,7 @@ describe("createVideoGenerateTool", () => {
           },
         }),
       }),
-    ).not.toBeNull();
+    );
   });
 
   it("does not load runtime providers while registering an explicitly configured tool", () => {
@@ -190,7 +200,7 @@ describe("createVideoGenerateTool", () => {
         throw new Error("runtime provider list should not run during tool registration");
       });
 
-    expect(
+    expectVideoGenerateTool(
       createVideoGenerateTool({
         config: asConfig({
           agents: {
@@ -200,7 +210,7 @@ describe("createVideoGenerateTool", () => {
           },
         }),
       }),
-    ).not.toBeNull();
+    );
     expect(listProviders).not.toHaveBeenCalled();
   });
 
@@ -309,7 +319,7 @@ describe("createVideoGenerateTool", () => {
         },
       }),
     });
-    expect(tool).not.toBeNull();
+    expect(typeof tool?.execute).toBe("function");
     if (!tool) {
       throw new Error("expected video_generate tool");
     }
@@ -589,7 +599,7 @@ describe("createVideoGenerateTool", () => {
         },
       }),
     });
-    expect(tool).not.toBeNull();
+    expect(typeof tool?.execute).toBe("function");
     if (!tool) {
       throw new Error("expected video_generate tool");
     }

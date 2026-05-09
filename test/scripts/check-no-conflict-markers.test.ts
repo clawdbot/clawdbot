@@ -39,7 +39,7 @@ describe("check-no-conflict-markers", () => {
       findConflictMarkerLines(
         ["Example:", "  <<<<<<< HEAD", "const text = '======= not a conflict';"].join("\n"),
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("scans text files and skips binary files", () => {

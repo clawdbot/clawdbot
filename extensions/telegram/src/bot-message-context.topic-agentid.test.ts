@@ -63,7 +63,6 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
   it("uses group-level agent when no topic agentId is set", async () => {
     const ctx = await buildForumContext({ topicConfig: { systemPrompt: "Be nice" } });
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:3");
   });
 
@@ -72,7 +71,6 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
       topicConfig: { agentId: "zu", systemPrompt: "I am Zu" },
     });
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:zu:");
     expect(ctx?.ctxPayload?.SessionKey).toContain("telegram:group:-1001234567890:topic:3");
   });
@@ -98,7 +96,6 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
       topicConfig: { agentId: "   ", systemPrompt: "Be nice" },
     });
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:main:");
   });
 
@@ -113,7 +110,6 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
 
     const ctx = await buildForumContext({ topicConfig: { agentId: "ghost" } });
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:ghost:");
   });
 
@@ -138,7 +134,6 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
       }),
     });
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:support:");
   });
 });

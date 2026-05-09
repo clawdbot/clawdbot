@@ -101,7 +101,7 @@ describe("abortChatRunById", () => {
         content: [{ type: "text", text: "  Partial reply  " }],
       }),
     );
-    expect((payload.message as { timestamp?: unknown }).timestamp).toEqual(expect.any(Number));
+    expect((payload.message as { timestamp?: unknown }).timestamp).toBeGreaterThan(0);
     expect(ops.nodeSendToSession).toHaveBeenCalledWith(sessionKey, "chat", payload);
   });
 

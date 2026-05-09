@@ -619,6 +619,41 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("fails closed when a runtime toolsAllow is requested for CLI backends", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "owner-token",
+        nonOwnerToken: "non-owner-token",
+      }));
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+      });
+
+      await expect(
+        prepareCliRunContext({
+          sessionId: "session-test",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "latest ask",
+          provider: "test-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-tools-allow",
+          config: createCliBackendConfig({ bundleMcp: true }),
+          toolsAllow: ["read", "web_search"],
+        }),
+      ).rejects.toThrow(
+        "CLI backend test-cli cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy",
+      );
+
+      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed for native tool-capable CLI backends when tools are disabled", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {

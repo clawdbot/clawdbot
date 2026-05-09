@@ -386,13 +386,11 @@ describe("Metrics", () => {
   });
 
   describe("createNoopMetrics", () => {
-    it("does not throw on emit", () => {
+    it("ignores emitted metrics", () => {
       const metrics = createNoopMetrics();
 
-      expect(() => {
-        metrics.emit("event.received");
-        metrics.emit("relay.connect", 1, { relay: TEST_RELAY_URL_PRIMARY });
-      }).not.toThrow();
+      expect(metrics.emit("event.received")).toBeUndefined();
+      expect(metrics.emit("relay.connect", 1, { relay: TEST_RELAY_URL_PRIMARY })).toBeUndefined();
     });
 
     it("returns empty snapshot", () => {

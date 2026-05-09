@@ -133,11 +133,16 @@ function extractText(response: unknown): string {
   if (!Array.isArray(content)) {
     return "";
   }
-  return content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text?.trim() ?? "")
-    .filter(Boolean)
-    .join(" ");
+  const text: string[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      const trimmed = block.text?.trim() ?? "";
+      if (trimmed.length > 0) {
+        text.push(trimmed);
+      }
+    }
+  }
+  return text.join(" ");
 }
 
 describeLive("github-copilot connection-bound Responses IDs live", () => {

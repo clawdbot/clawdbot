@@ -170,10 +170,13 @@ const makeAbortRunner = (abort: AbortController, beforeAbort?: () => void): Runn
   makeRunnerStub({ task: createAbortTask(abort, beforeAbort) });
 
 function createSignal() {
-  let resolve!: () => void;
+  let resolve: (() => void) | undefined;
   const promise = new Promise<void>((res) => {
     resolve = res;
   });
+  if (!resolve) {
+    throw new Error("Expected Telegram monitor signal resolver to be initialized");
+  }
   return { promise, resolve };
 }
 

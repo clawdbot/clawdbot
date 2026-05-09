@@ -102,7 +102,7 @@ describe("runtime-guard", () => {
       version: "22.16.0",
       execPath: "/usr/bin/node",
     };
-    expect(() => assertSupportedRuntime(runtime, details)).not.toThrow();
+    expect(assertSupportedRuntime(runtime, details)).toBeUndefined();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 

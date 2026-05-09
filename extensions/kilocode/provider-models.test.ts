@@ -175,8 +175,8 @@ describe("discoverKilocodeModels (fetch path)", () => {
       expect(sonnet.cost.cacheWrite).toBeCloseTo(3.75);
       expect(sonnet.input).toEqual(["text", "image"]);
       expect(sonnet.reasoning).toBe(true);
-      expect(sonnet?.contextWindow).toBe(200000);
-      expect(sonnet?.maxTokens).toBe(8192);
+      expect(sonnet.contextWindow).toBe(200000);
+      expect(sonnet.maxTokens).toBe(8192);
     });
   });
 
@@ -234,9 +234,9 @@ describe("discoverKilocodeModels (fetch path)", () => {
     });
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
-      const textModel = models.find((m) => m.id === "some/text-model");
-      expect(textModel?.input).toEqual(["text"]);
-      expect(textModel?.reasoning).toBe(false);
+      const textModel = requireModelById(models, "some/text-model");
+      expect(textModel.input).toEqual(["text"]);
+      expect(textModel.reasoning).toBe(false);
     });
   });
 

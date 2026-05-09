@@ -192,7 +192,6 @@ describe("renderLoginGate", () => {
     await Promise.resolve();
 
     const alert = container.querySelector<HTMLElement>('[role="alert"]');
-    expect(alert).not.toBeNull();
     expect(alert?.dataset.kind).toBe("protocol-mismatch");
     expect(alert?.textContent).toContain("Protocol mismatch");
     expect(alert?.textContent).toContain("openclaw dashboard");

@@ -1,14 +1,9 @@
 import path from "node:path";
 import { Readable } from "node:stream";
-import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { formatMention } from "../mentions.js";
-import { normalizeDiscordSlug } from "../monitor/allow-list.js";
-import { buildDiscordGroupSystemPrompt } from "../monitor/inbound-context.js";
-import { authorizeDiscordVoiceIngress } from "./access.js";
+import { resolveDiscordVoiceIngressContext, runDiscordVoiceAgentTurn } from "./ingress.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import {
@@ -20,7 +15,6 @@ import {
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 import { synthesizeVoiceReplyAudio, transcribeVoiceAudio } from "./tts.js";
 
-const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
 const VOICE_TRANSCRIPT_LOG_PREVIEW_CHARS = 500;
 const logger = createSubsystemLogger("discord/voice");
 
@@ -49,31 +43,18 @@ export async function processDiscordVoiceSegment(params: {
   logVoiceVerbose(
     `segment processing (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId}`,
   );
-  if (!entry.guildName) {
-    entry.guildName = await params.fetchGuildName(entry.guildId);
-  }
-  const speaker = await params.speakerContext.resolveContext(entry.guildId, userId);
-  const speakerIdentity = await params.speakerContext.resolveIdentity(entry.guildId, userId);
-  const access = await authorizeDiscordVoiceIngress({
+  const ingress = await resolveDiscordVoiceIngressContext({
+    entry,
+    userId,
     cfg: params.cfg,
     discordConfig: params.discordConfig,
-    guildName: entry.guildName,
-    guildId: entry.guildId,
-    channelId: entry.channelId,
-    channelName: entry.channelName,
-    channelSlug: entry.channelName ? normalizeDiscordSlug(entry.channelName) : "",
-    channelLabel: formatMention({ channelId: entry.channelId }),
-    memberRoleIds: speakerIdentity.memberRoleIds,
     ownerAllowFrom: params.ownerAllowFrom,
-    sender: {
-      id: speakerIdentity.id,
-      name: speakerIdentity.name,
-      tag: speakerIdentity.tag,
-    },
+    fetchGuildName: params.fetchGuildName,
+    speakerContext: params.speakerContext,
   });
-  if (!access.ok) {
+  if (!ingress) {
     logVoiceVerbose(
-      `segment unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId} reason=${access.message}`,
+      `segment unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
     );
     return;
   }
@@ -92,34 +73,29 @@ export async function processDiscordVoiceSegment(params: {
     `transcription ok (${transcript.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
   );
   logVoiceVerbose(
-    `transcript from ${speaker.label} (${userId}) in guild ${entry.guildId} channel ${entry.channelId}: ${formatVoiceTranscriptLogPreview(transcript)}`,
+    `transcript from ${ingress.speakerLabel} (${userId}) in guild ${entry.guildId} channel ${entry.channelId}: ${formatVoiceTranscriptLogPreview(transcript)}`,
   );
 
-  const prompt = formatVoiceIngressPrompt(transcript, speaker.label);
-  const extraSystemPrompt = buildDiscordGroupSystemPrompt(access.channelConfig);
-  const modelOverride = normalizeOptionalString(params.discordConfig.voice?.model);
-
-  const result = await agentCommandFromIngress(
-    {
-      message: prompt,
-      sessionKey: entry.route.sessionKey,
-      agentId: entry.route.agentId,
-      messageChannel: "discord",
-      messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
-      extraSystemPrompt,
-      senderIsOwner: speaker.senderIsOwner,
-      allowModelOverride: Boolean(modelOverride),
-      model: modelOverride,
-      deliver: false,
-    },
-    params.runtime,
-  );
-
-  const replyText = (result.payloads ?? [])
-    .map((payload) => payload.text)
-    .filter((text) => typeof text === "string" && text.trim())
-    .join("\n")
-    .trim();
+  const prompt = formatVoiceIngressPrompt(transcript, ingress.speakerLabel);
+  const turn = await runDiscordVoiceAgentTurn({
+    entry,
+    userId,
+    message: prompt,
+    cfg: params.cfg,
+    discordConfig: params.discordConfig,
+    runtime: params.runtime,
+    context: ingress,
+    ownerAllowFrom: params.ownerAllowFrom,
+    fetchGuildName: params.fetchGuildName,
+    speakerContext: params.speakerContext,
+  });
+  if (!turn) {
+    logVoiceVerbose(
+      `segment unauthorized before agent turn: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+    );
+    return;
+  }
+  const replyText = turn.text;
 
   if (!replyText) {
     logVoiceVerbose(
@@ -135,7 +111,7 @@ export async function processDiscordVoiceSegment(params: {
     cfg: params.cfg,
     override: params.discordConfig.voice?.tts,
     replyText,
-    speakerLabel: speaker.label,
+    speakerLabel: ingress.speakerLabel,
   });
   if (voiceReplyAudio.status === "empty") {
     logVoiceVerbose(

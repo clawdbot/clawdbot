@@ -96,7 +96,7 @@ describe("parseByteSize", () => {
   });
 
   it.each(["", "nope", "-5kb"] as const)("rejects invalid value %j", (input) => {
-    expect(() => parseByteSize(input)).toThrow();
+    expect(() => parseByteSize(input)).toThrow(/Invalid byte size/);
   });
 });
 
@@ -115,7 +115,7 @@ describe("parseDurationMs", () => {
   });
 
   it("rejects invalid composite strings", () => {
-    expect(() => parseDurationMs("1h30")).toThrow();
-    expect(() => parseDurationMs("1h-30m")).toThrow();
+    expect(() => parseDurationMs("1h30")).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs("1h-30m")).toThrow(/Invalid duration/);
   });
 });

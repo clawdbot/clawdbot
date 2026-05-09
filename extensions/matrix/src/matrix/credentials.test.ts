@@ -23,6 +23,18 @@ const DEFAULT_LEGACY_CREDENTIALS = {
 
 const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
 
+type MatrixCredentials = NonNullable<ReturnType<typeof loadMatrixCredentials>>;
+
+function expectMatrixCredentials(
+  credentials: ReturnType<typeof loadMatrixCredentials>,
+): MatrixCredentials {
+  expect(credentials).toEqual(expect.objectContaining({ createdAt: expect.any(String) }));
+  if (credentials === null) {
+    throw new Error("Expected Matrix credentials");
+  }
+  return credentials;
+}
+
 describe("matrix credentials storage", () => {
   const tempDirs: string[] = [];
 
@@ -96,15 +108,15 @@ describe("matrix credentials storage", () => {
         "default",
       );
       const initial = loadMatrixCredentials({}, "default");
-      expect(initial).not.toBeNull();
+      const initialCredentials = expectMatrixCredentials(initial);
 
       vi.setSystemTime(new Date("2026-03-01T10:05:00.000Z"));
       await touchMatrixCredentials({}, "default");
       const touched = loadMatrixCredentials({}, "default");
-      expect(touched).not.toBeNull();
+      const touchedCredentials = expectMatrixCredentials(touched);
 
-      expect(touched?.createdAt).toBe(initial?.createdAt);
-      expect(touched?.lastUsedAt).toBe("2026-03-01T10:05:00.000Z");
+      expect(touchedCredentials.createdAt).toBe(initialCredentials.createdAt);
+      expect(touchedCredentials.lastUsedAt).toBe("2026-03-01T10:05:00.000Z");
     } finally {
       vi.useRealTimers();
     }

@@ -205,8 +205,12 @@ description: test skill
       const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
 
       expect(scanSpy.mock.calls.map(([dirPath]) => path.basename(dirPath))).toEqual(["demo"]);
-      const codeSafetyFinding = findings.find((f) => f.checkId === "plugins.code_safety");
-      expect(codeSafetyFinding?.title).toContain('Plugin "demo"');
+      const codeSafetyFinding = requireFinding(
+        findings,
+        (finding) => finding.checkId === "plugins.code_safety",
+        "plugin code-safety",
+      );
+      expect(codeSafetyFinding.title).toContain('Plugin "demo"');
       expect(findings.map((f) => f.title).join("\n")).not.toContain(".openclaw-install-backups");
     } finally {
       scanSpy.mockRestore();

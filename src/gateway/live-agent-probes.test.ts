@@ -19,12 +19,12 @@ describe("live-agent-probes", () => {
   });
 
   it("accepts only cat for the shared image probe reply", () => {
-    expect(() => assertLiveImageProbeReply("cat")).not.toThrow();
-    expect(() =>
+    expect(assertLiveImageProbeReply("cat")).toBeUndefined();
+    expect(
       assertLiveImageProbeReply(
         "model metadata for `gpt-5.5` not found. defaulting to fallback metadata; this can degrade performance and cause issues.cat",
       ),
-    ).not.toThrow();
+    ).toBeUndefined();
     expect(() => assertLiveImageProbeReply("horse")).toThrow("image probe expected 'cat'");
     expect(() => assertLiveImageProbeReply("caterpillar")).toThrow("image probe expected 'cat'");
   });
@@ -77,7 +77,7 @@ describe("live-agent-probes", () => {
   });
 
   it("validates cron cli job shape for the shared live probe", () => {
-    expect(() =>
+    expect(
       assertCronJobMatches({
         job: {
           name: "live-mcp-abc",
@@ -90,6 +90,6 @@ describe("live-agent-probes", () => {
         expectedMessage: "probe-abc",
         expectedSessionKey: "agent:dev:test",
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 });

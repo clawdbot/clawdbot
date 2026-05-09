@@ -102,10 +102,12 @@ describe("createVllmQwenThinkingWrapper", () => {
   });
 
   it("skips non-reasoning and non-completions models", () => {
-    expect(capturePayload({ format: "chat-template", model: { reasoning: false } })).toEqual({});
+    expect(capturePayload({ format: "chat-template", model: { reasoning: false } })).toStrictEqual(
+      {},
+    );
     expect(
       capturePayload({ format: "chat-template", model: { api: "openai-responses" as never } }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 });
 
@@ -152,7 +154,7 @@ describe("createVllmProviderThinkingWrapper", () => {
   });
 
   it("does not inject Nemotron 3 chat-template kwargs when thinking is enabled", () => {
-    expect(captureProviderPayload({ thinkingLevel: "low" })).toEqual({});
+    expect(captureProviderPayload({ thinkingLevel: "low" })).toStrictEqual({});
   });
 
   it("preserves existing Nemotron 3 chat-template kwargs over defaults", () => {
@@ -179,7 +181,7 @@ describe("createVllmProviderThinkingWrapper", () => {
         thinkingLevel: "off",
         model: { id: "Qwen/Qwen3-8B" },
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 });
 

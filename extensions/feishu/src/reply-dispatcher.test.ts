@@ -888,10 +888,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.onReplyStart?.();
-    // Core agent sends pre-formatted text from formatReasoningMessage
-    result.replyOptions.onReasoningStream?.({ text: "Reasoning:\n_thinking step 1_" });
+    result.replyOptions.onReasoningStream?.({ text: "thinking step 1" });
     result.replyOptions.onReasoningStream?.({
-      text: "Reasoning:\n_thinking step 1_\n_step 2_",
+      text: "thinking step 1\nstep 2",
     });
     result.replyOptions.onPartialReply?.({ text: "answer part" });
     result.replyOptions.onReasoningEnd?.();
@@ -967,7 +966,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.onReplyStart?.();
-    result.replyOptions.onReasoningStream?.({ text: "Reasoning:\n_deep thought_" });
+    result.replyOptions.onReasoningStream?.({ text: "deep thought" });
     result.replyOptions.onReasoningEnd?.();
     await options.onIdle?.();
 
@@ -1005,7 +1004,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.onReplyStart?.();
-    result.replyOptions.onReasoningStream?.({ text: "Reasoning:\n_thought_" });
+    result.replyOptions.onReasoningStream?.({ text: "thought" });
     result.replyOptions.onReasoningEnd?.();
     await options.deliver({ text: "```ts\nfinal answer\n```" }, { kind: "final" });
     await options.onIdle?.();

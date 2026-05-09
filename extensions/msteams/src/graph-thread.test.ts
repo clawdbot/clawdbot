@@ -155,7 +155,7 @@ describe("fetchThreadReplies", () => {
     vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
 
     const result = await fetchThreadReplies("tok", "g", "c", "m");
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 });
 

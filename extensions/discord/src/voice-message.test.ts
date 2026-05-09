@@ -50,6 +50,18 @@ describe("ensureOggOpus", () => {
     runFfprobeMock.mockReset();
     runFfmpegMock.mockReset();
   });
+
+  function expectStagedFfmpegOutput(ffmpegOutputPath: string | undefined, finalPath: string) {
+    expect(ffmpegOutputPath).toBeTypeOf("string");
+    if (typeof ffmpegOutputPath !== "string") {
+      throw new Error("missing ffmpeg output path");
+    }
+    expect(ffmpegOutputPath).not.toBe(finalPath);
+    const stagedBase = path.basename(ffmpegOutputPath);
+    expect(stagedBase.startsWith(".fs-safe-output-")).toBe(true);
+    expect(stagedBase.endsWith(`-${path.basename(finalPath)}.part`)).toBe(true);
+  }
+
   it("rejects URL/protocol input paths", async () => {
     await expect(ensureOggOpus("https://example.com/audio.ogg")).rejects.toThrow(
       /local file path/i,
@@ -90,8 +102,7 @@ describe("ensureOggOpus", () => {
       expect.arrayContaining(["-t", "1200", "-ar", "48000", "/tmp/input.ogg"]),
     );
     const ffmpegOutputPath = (runFfmpegMock.mock.calls[0]?.[0] as string[] | undefined)?.at(-1);
-    expect(ffmpegOutputPath).not.toBe(result.path);
-    expect(path.basename(ffmpegOutputPath ?? "")).toBe(path.basename(result.path));
+    expectStagedFfmpegOutput(ffmpegOutputPath, result.path);
     await expect(fs.readFile(result.path, "utf8")).resolves.toBe("ogg");
   });
 
@@ -113,8 +124,7 @@ describe("ensureOggOpus", () => {
       expect.arrayContaining(["-vn", "-sn", "-dn", "/tmp/input.mp3"]),
     );
     const ffmpegOutputPath = (runFfmpegMock.mock.calls[0]?.[0] as string[] | undefined)?.at(-1);
-    expect(ffmpegOutputPath).not.toBe(result.path);
-    expect(path.basename(ffmpegOutputPath ?? "")).toBe(path.basename(result.path));
+    expectStagedFfmpegOutput(ffmpegOutputPath, result.path);
     await expect(fs.readFile(result.path, "utf8")).resolves.toBe("ogg");
   });
 });

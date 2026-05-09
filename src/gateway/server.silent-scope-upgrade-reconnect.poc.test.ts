@@ -443,7 +443,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
 
       expect(res.ok).toBe(false);
       expect(res.error?.message).toBe("pairing required: device is not approved yet");
-      expect(replacementRequestId).toEqual(expect.any(String));
+      expect(replacementRequestId).toBeTypeOf("string");
       expect(replacementRequestId.length).toBeGreaterThan(0);
       expect(
         (res.error?.details as { requestId?: unknown; code?: string } | undefined)?.requestId,

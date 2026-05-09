@@ -2,22 +2,34 @@ import { describe, expect, it } from "vitest";
 import uiConfig from "../ui/vitest.config.ts";
 import uiNodeConfig from "../ui/vitest.node.config.ts";
 
+function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
+  if (!config.test) {
+    throw new Error("expected ui package vitest test config");
+  }
+  return config.test as NonNullable<T["test"]>;
+}
+
 describe("ui package vitest config", () => {
   it("keeps the standalone ui package on thread workers without isolation", () => {
-    expect(uiConfig.test?.pool).toBe("threads");
-    expect(uiConfig.test?.isolate).toBe(false);
-    expect(uiConfig.test?.projects).toHaveLength(3);
+    const testConfig = requireTestConfig(uiConfig);
 
-    for (const project of uiConfig.test?.projects ?? []) {
-      expect(project.test?.pool).toBe("threads");
-      expect(project.test?.isolate).toBe(false);
-      expect(project.test?.runner).toBeUndefined();
+    expect(testConfig.pool).toBe("threads");
+    expect(testConfig.isolate).toBe(false);
+    expect(testConfig.projects).toHaveLength(3);
+
+    for (const project of testConfig.projects) {
+      const projectTestConfig = requireTestConfig(project);
+      expect(projectTestConfig.pool).toBe("threads");
+      expect(projectTestConfig.isolate).toBe(false);
+      expect(projectTestConfig.runner).toBeUndefined();
     }
   });
 
   it("keeps the standalone ui node config on thread workers without isolation", () => {
-    expect(uiNodeConfig.test?.pool).toBe("threads");
-    expect(uiNodeConfig.test?.isolate).toBe(false);
-    expect(uiNodeConfig.test?.runner).toBeUndefined();
+    const testConfig = requireTestConfig(uiNodeConfig);
+
+    expect(testConfig.pool).toBe("threads");
+    expect(testConfig.isolate).toBe(false);
+    expect(testConfig.runner).toBeUndefined();
   });
 });

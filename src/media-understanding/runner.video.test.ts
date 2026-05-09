@@ -22,6 +22,16 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
   return createEmptyCapabilityProviderMockModule();
 });
 
+type CapabilityResult = Awaited<ReturnType<typeof runCapability>>;
+
+function requireCapabilityOutput(result: CapabilityResult, index: number) {
+  const output = result.outputs[index];
+  if (!output) {
+    throw new Error(`expected media-understanding output at index ${index}`);
+  }
+  return output;
+}
+
 describe("runCapability video provider wiring", () => {
   it("merges video baseUrl and headers with entry precedence", async () => {
     let seenBaseUrl: string | undefined;
@@ -83,8 +93,9 @@ describe("runCapability video provider wiring", () => {
           ]),
         });
 
-        expect(result.outputs[0]?.text).toBe("video ok");
-        expect(result.outputs[0]?.provider).toBe("moonshot");
+        const output = requireCapabilityOutput(result, 0);
+        expect(output.text).toBe("video ok");
+        expect(output.provider).toBe("moonshot");
         expect(seenBaseUrl).toBe("https://entry.example/v1");
         expect(seenHeaders).toMatchObject({
           "X-Provider": "1",
@@ -154,8 +165,9 @@ describe("runCapability video provider wiring", () => {
             });
 
             expect(result.decision.outcome).toBe("success");
-            expect(result.outputs[0]?.provider).toBe("moonshot");
-            expect(result.outputs[0]?.text).toBe("moonshot");
+            const output = requireCapabilityOutput(result, 0);
+            expect(output.provider).toBe("moonshot");
+            expect(output.text).toBe("moonshot");
           });
         },
       );

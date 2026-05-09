@@ -47,7 +47,7 @@ describe("lintMemoryWikiVault", () => {
 
     const result = await lintMemoryWikiVault(config);
 
-    expect(result.issues.filter((issue) => issue.code === "broken-wikilink")).toEqual([]);
+    expect(result.issues.some((issue) => issue.code === "broken-wikilink")).toBe(false);
   });
 
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {

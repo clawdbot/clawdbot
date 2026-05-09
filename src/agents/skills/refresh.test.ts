@@ -75,7 +75,8 @@ describe("ensureSkillsWatcher", () => {
         posix(path.join(os.homedir(), ".agents", "skills")),
       ]),
     );
-    expect(targets.every((target) => !target.includes("*"))).toBe(true);
+    const wildcardTargets = targets.filter((target) => target.includes("*"));
+    expect(wildcardTargets).toEqual([]);
     const ignored = refreshModule.shouldIgnoreSkillsWatchPath;
 
     // Node/JS paths

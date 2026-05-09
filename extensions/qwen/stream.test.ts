@@ -57,8 +57,8 @@ describe("createQwenThinkingWrapper", () => {
   });
 
   it("skips non-reasoning and non-completions models", () => {
-    expect(capturePayload({ model: { reasoning: false } })).toEqual({});
-    expect(capturePayload({ model: { api: "openai-responses" as never } })).toEqual({});
+    expect(capturePayload({ model: { reasoning: false } })).toStrictEqual({});
+    expect(capturePayload({ model: { api: "openai-responses" as never } })).toStrictEqual({});
   });
 });
 

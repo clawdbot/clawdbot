@@ -328,8 +328,6 @@ async function rollbackManagedNpmPluginInstall(params: {
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
-        "--prefix",
-        ".",
         params.packageName,
       ],
       {
@@ -499,8 +497,6 @@ async function installPluginFromManagedNpmRoot(
         noAudit: true,
         noFund: true,
       }),
-      "--prefix",
-      ".",
     ],
     {
       cwd: npmRoot,

@@ -334,7 +334,7 @@ describe("resolveForwardedMediaList", () => {
   it("returns empty when no snapshots are present", async () => {
     const result = await resolveForwardedMediaList(asMessage({}), 512);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
   });
 
@@ -380,7 +380,7 @@ describe("resolveForwardedMediaList", () => {
       512,
     );
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
   });
 
@@ -547,7 +547,7 @@ describe("resolveMediaList", () => {
 
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
     expect(saveMediaBuffer).not.toHaveBeenCalled();
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("classifies audio attachments by filename when content type is missing", async () => {

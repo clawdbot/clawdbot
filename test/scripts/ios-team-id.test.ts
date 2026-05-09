@@ -24,18 +24,27 @@ type TeamCandidate = {
 };
 
 function parseTeamCandidateRows(raw: string): TeamCandidate[] {
-  return raw
-    .split("\n")
-    .map((line) => line.replace(/\r/g, "").trim())
-    .filter(Boolean)
-    .map((line) => line.split("\t"))
-    .filter((parts) => parts.length >= 3)
-    .map((parts) => ({
-      teamId: parts[0] ?? "",
+  const candidates: TeamCandidate[] = [];
+  for (const rawLine of raw.split("\n")) {
+    const line = rawLine.replace(/\r/g, "").trim();
+    if (!line) {
+      continue;
+    }
+    const parts = line.split("\t");
+    if (parts.length < 3) {
+      continue;
+    }
+    const teamId = parts[0] ?? "";
+    if (!teamId) {
+      continue;
+    }
+    candidates.push({
+      teamId,
       isFree: (parts[1] ?? "0") === "1",
       teamName: parts[2] ?? "",
-    }))
-    .filter((candidate) => candidate.teamId.length > 0);
+    });
+  }
+  return candidates;
 }
 
 function pickTeamIdFromCandidates(params: {

@@ -490,7 +490,9 @@ describeNonWin("exec script preflight", () => {
         }),
       ).resolves.toBeUndefined();
       expect(scriptOpenFlags.length).toBeGreaterThan(0);
-      expect(scriptOpenFlags.some((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
+      expect(scriptOpenFlags.filter((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).not.toEqual(
+        [],
+      );
     });
   });
 

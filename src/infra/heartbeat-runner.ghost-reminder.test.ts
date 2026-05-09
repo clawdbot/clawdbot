@@ -103,12 +103,18 @@ describe("Ghost reminder bug (issue #13317)", () => {
     } | null,
     reminderText: string,
   ) => {
-    expect(calledCtx).not.toBeNull();
-    expect(calledCtx?.Provider).toBe("cron-event");
-    expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
-    expect(calledCtx?.Body).toContain(reminderText);
-    expect(calledCtx?.Body).not.toContain("HEARTBEAT_OK");
-    expect(calledCtx?.Body).not.toContain("heartbeat poll");
+    expect(calledCtx).toEqual(
+      expect.objectContaining({
+        Provider: "cron-event",
+        Body: expect.stringContaining("scheduled reminder has been triggered"),
+      }),
+    );
+    if (calledCtx === null || typeof calledCtx.Body !== "string") {
+      throw new Error("Expected cron event prompt body");
+    }
+    expect(calledCtx.Body).toContain(reminderText);
+    expect(calledCtx.Body).not.toContain("HEARTBEAT_OK");
+    expect(calledCtx.Body).not.toContain("heartbeat poll");
   };
 
   const runCronReminderCase = async (

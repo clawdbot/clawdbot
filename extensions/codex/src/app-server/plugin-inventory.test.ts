@@ -228,7 +228,7 @@ describe("Codex plugin inventory", () => {
     });
 
     expect(inventory.records[0]?.appOwnership).toBe("ambiguous");
-    expect(inventory.records[0]?.ownedAppIds).toEqual([]);
+    expect(inventory.records[0]?.ownedAppIds).toStrictEqual([]);
     expect(inventory.diagnostics).toContainEqual(
       expect.objectContaining({ code: "app_ownership_ambiguous" }),
     );
@@ -266,7 +266,7 @@ describe("Codex plugin inventory", () => {
 
     expect(inventory.appInventory?.state).toBe("missing");
     expect(inventory.records[0]?.ownedAppIds).toEqual(["google-calendar-app"]);
-    expect(inventory.records[0]?.apps).toEqual([]);
+    expect(inventory.records[0]?.apps).toStrictEqual([]);
     expect(inventory.diagnostics).toContainEqual(
       expect.objectContaining({ code: "app_inventory_missing" }),
     );

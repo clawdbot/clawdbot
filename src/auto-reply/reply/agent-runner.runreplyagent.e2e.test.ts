@@ -30,6 +30,16 @@ const state = vi.hoisted(() => ({
   runEmbeddedPiAgentMock: vi.fn(),
 }));
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 let modelFallbackModule: typeof import("../../agents/model-fallback.js");
 let onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
 
@@ -1000,8 +1010,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(firstText).toContain("Model Fallback:");
       expect(secondText).toContain("Model Fallback cleared:");
       expect(thirdText).not.toContain("Model Fallback cleared:");
-      expect(phases.filter((phase) => phase === "fallback")).toHaveLength(1);
-      expect(phases.filter((phase) => phase === "fallback_cleared")).toHaveLength(1);
+      expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
+      expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -1077,8 +1087,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
       expect(firstText).not.toContain("Model Fallback:");
       expect(secondText).not.toContain("Model Fallback cleared:");
-      expect(phases.filter((phase) => phase === "fallback")).toHaveLength(1);
-      expect(phases.filter((phase) => phase === "fallback_cleared")).toHaveLength(1);
+      expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
+      expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
     } finally {
       fallbackSpy.mockRestore();
     }

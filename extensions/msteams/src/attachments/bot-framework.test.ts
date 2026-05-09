@@ -420,7 +420,7 @@ describe("downloadMSTeamsBotFrameworkAttachments", () => {
       maxBytes: 10_000,
       fetchFn: vi.fn() as unknown as typeof fetch,
     });
-    expect(result.media).toEqual([]);
+    expect(result.media).toStrictEqual([]);
   });
 
   it("continues past a per-attachment failure", async () => {

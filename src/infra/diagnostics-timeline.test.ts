@@ -134,8 +134,8 @@ describe("diagnostics timeline", () => {
         count: 2,
       },
     });
-    expect(event?.timestamp).toEqual(expect.any(String));
-    expect(event?.pid).toEqual(expect.any(Number));
+    expect(event?.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u);
+    expect(event?.pid).toBe(process.pid);
     expect((event?.attributes as Record<string, unknown>).ignored).toBeUndefined();
   });
 
@@ -168,7 +168,7 @@ describe("diagnostics timeline", () => {
       attributes: { pluginCount: 3 },
     });
     expect(events[1]?.spanId).toBe(events[0]?.spanId);
-    expect(events[1]?.durationMs).toEqual(expect.any(Number));
+    expect(events[1]?.durationMs).toBeGreaterThanOrEqual(0);
   });
 
   it("records span error events and rethrows failures", async () => {

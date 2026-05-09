@@ -12,6 +12,7 @@ export type ResolvedRealtimeVoiceProvider = {
 export type ResolveConfiguredRealtimeVoiceProviderParams = {
   configuredProviderId?: string;
   providerConfigs?: Record<string, Record<string, unknown> | undefined>;
+  providerConfigOverrides?: Record<string, unknown>;
   cfg?: OpenClawConfig;
   cfgForResolve?: OpenClawConfig;
   providers?: RealtimeVoiceProviderPlugin[];
@@ -38,7 +39,14 @@ export function resolveConfiguredRealtimeVoiceProvider(
         params.defaultModel && rawConfig.model === undefined
           ? { ...rawConfig, model: params.defaultModel }
           : rawConfig;
-      return provider.resolveConfig?.({ cfg, rawConfig: rawConfigWithModel }) ?? rawConfigWithModel;
+      const rawConfigWithOverrides = {
+        ...rawConfigWithModel,
+        ...params.providerConfigOverrides,
+      };
+      return (
+        provider.resolveConfig?.({ cfg, rawConfig: rawConfigWithOverrides }) ??
+        rawConfigWithOverrides
+      );
     },
     isProviderConfigured: ({ provider, cfg, providerConfig }) =>
       provider.isConfigured({ cfg, providerConfig }),

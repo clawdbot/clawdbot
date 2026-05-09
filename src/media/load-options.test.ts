@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { buildOutboundMediaLoadOptions, resolveOutboundMediaLocalRoots } from "./load-options.js";
 
+const readMediaAccessFile = async () => Buffer.from("media-access");
+const readLegacyMediaFile = async () => Buffer.from("legacy-media");
+
 describe("media load options", () => {
   function expectResolvedOutboundMediaRoots(
     mediaLocalRoots: readonly string[] | "any" | undefined,
@@ -39,13 +42,13 @@ describe("media load options", () => {
         maxBytes: 4096,
         mediaAccess: {
           localRoots: ["/tmp/workspace"],
-          readFile: async () => Buffer.from("x"),
+          readFile: readMediaAccessFile,
         },
       },
       expected: {
         maxBytes: 4096,
         localRoots: ["/tmp/workspace"],
-        readFile: expect.any(Function),
+        readFile: readMediaAccessFile,
         hostReadCapability: true,
       },
     },
@@ -53,12 +56,12 @@ describe("media load options", () => {
       params: {
         maxBytes: 4096,
         mediaLocalRoots: "any",
-        mediaReadFile: async () => Buffer.from("x"),
+        mediaReadFile: readLegacyMediaFile,
       },
       expected: {
         maxBytes: 4096,
         localRoots: "any",
-        readFile: expect.any(Function),
+        readFile: readLegacyMediaFile,
         hostReadCapability: true,
       },
     },

@@ -178,7 +178,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
 
   it("serializes concurrent sends to the same Slack target", async () => {
     const client = createUploadTestClient();
-    let resolveFirst!: () => void;
+    let resolveFirst: (() => void) | undefined;
     client.chat.postMessage.mockImplementation(async (payload: { text?: string }) => {
       if (payload.text === "first") {
         await new Promise<void>((resolve) => {
@@ -204,6 +204,9 @@ describe("sendMessageSlack file upload with user IDs", () => {
     await Promise.resolve();
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+    if (!resolveFirst) {
+      throw new Error("Expected first Slack send release callback to be initialized");
+    }
     resolveFirst();
 
     await expect(first).resolves.toMatchObject({

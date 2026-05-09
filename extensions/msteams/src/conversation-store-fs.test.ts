@@ -56,7 +56,14 @@ describe("msteams conversation store (fs-only)", () => {
     expect(ids).toEqual(["19:active@thread.tacv2", "19:legacy@thread.tacv2"]);
 
     expect(await store.get("19:old@thread.tacv2")).toBeNull();
-    expect(await store.get("19:legacy@thread.tacv2")).not.toBeNull();
+    const legacyConversation = await store.get("19:legacy@thread.tacv2");
+    if (!legacyConversation) {
+      throw new Error("expected migrated legacy Teams conversation");
+    }
+    if (!legacyConversation.conversation) {
+      throw new Error("expected migrated legacy Teams conversation payload");
+    }
+    expect(legacyConversation.conversation.id).toBe("19:legacy@thread.tacv2");
 
     await store.upsert("19:new@thread.tacv2", {
       ...ref,

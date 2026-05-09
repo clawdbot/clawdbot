@@ -9,6 +9,10 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 const hoisted = vi.hoisted(() => {
   const sessionStore: Record<string, Record<string, unknown>> = {
     "agent:main:main": {
@@ -67,6 +71,19 @@ describe("active-memory plugin", () => {
       },
     };
   };
+  const setMemorySlot = (memory: string) => {
+    const plugins = configFile.plugins as Record<string, unknown> | undefined;
+    configFile = {
+      ...configFile,
+      plugins: {
+        ...plugins,
+        slots: {
+          ...(plugins?.slots as Record<string, unknown> | undefined),
+          memory,
+        },
+      },
+    };
+  };
   const api: any = {
     get pluginConfig() {
       return pluginConfig;
@@ -117,6 +134,12 @@ describe("active-memory plugin", () => {
       | undefined;
     return entries?.find((entry) => entry.pluginId === "active-memory")?.lines ?? [];
   };
+  const expectLinesToContain = (lines: string[], text: string) => {
+    expect(lines).toEqual(expect.arrayContaining([expect.stringContaining(text)]));
+  };
+  const expectLinesNotToContain = (lines: string[], text: string) => {
+    expect(lines).not.toEqual(expect.arrayContaining([expect.stringContaining(text)]));
+  };
   const writeTranscriptJsonl = async (sessionFile: string, records: unknown[], suffix = "\n") => {
     await fs.mkdir(path.dirname(sessionFile), { recursive: true });
     await fs.writeFile(
@@ -141,7 +164,7 @@ describe("active-memory plugin", () => {
   };
   const makeMemoryToolAllowlistError = (
     reason: string,
-    sources = "runtime toolsAllow: memory_recall, memory_search, memory_get",
+    sources = "runtime toolsAllow: memory_search, memory_get",
   ) =>
     new Error(
       `No callable tools remain after resolving explicit tool allowlist ` +
@@ -1279,16 +1302,17 @@ describe("active-memory plugin", () => {
     );
     expect(runParams?.prompt).toContain("Use only the available memory tools.");
     expect(runParams?.prompt).toContain(
-      "Use the bounded search query as the memory_search or memory_recall query.",
+      "Use the bounded search query with the configured memory tools.",
     );
-    expect(runParams?.prompt).toContain("Prefer memory_recall when available.");
+    expect(runParams?.prompt).toContain("Configured memory tools: memory_search, memory_get.");
     expect(runParams?.prompt).toContain(
-      "If memory_recall is unavailable, use memory_search and memory_get.",
+      "If the available memory tools find nothing useful, reply with NONE.",
     );
-    expect(runParams?.toolsAllow).toEqual(["memory_recall", "memory_search", "memory_get"]);
+    expect(runParams?.prompt).not.toContain("memory_recall");
+    expect(runParams?.toolsAllow).toEqual(["memory_search", "memory_get"]);
     expect(runParams?.allowGatewaySubagentBinding).toBe(true);
     expect(runParams?.prompt).toContain(
-      "When searching for preference or habit recall, use a permissive recall limit or memory_search threshold before deciding that no useful memory exists.",
+      "When searching for preference or habit recall, use permissive search limits or thresholds before deciding that no useful memory exists.",
     );
     expect(runParams?.prompt).toContain(
       "If the user is directly asking about favorites, preferences, habits, routines, or personal facts, treat that as a strong recall signal.",
@@ -1310,6 +1334,187 @@ describe("active-memory plugin", () => {
     expect(runParams?.prompt).toContain(
       "Return: User's favorite food is ramen; tacos also come up often.",
     );
+  });
+
+  it("passes custom configured memory tools and reflects them in the default prompt", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      toolsAllow: [" lcm_grep ", "lcm_describe", "", "lcm_expand_query", "lcm_grep"],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What did we decide about active memory?",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
+    expect(runParams?.toolsAllow).toEqual(["lcm_grep", "lcm_describe", "lcm_expand_query"]);
+    expect(runParams?.prompt).toContain(
+      "Configured memory tools: lcm_grep, lcm_describe, lcm_expand_query.",
+    );
+    expect(runParams?.prompt).not.toContain("Prefer memory_recall");
+    expect(runParams?.prompt).not.toContain("If memory_recall is unavailable");
+  });
+
+  it("uses memory_recall by default when the memory slot selects LanceDB", async () => {
+    setMemorySlot("memory-lancedb");
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What did we decide about active memory?",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
+    expect(runParams?.toolsAllow).toEqual(["memory_recall"]);
+    expect(runParams?.prompt).toContain("Configured memory tools: memory_recall.");
+  });
+
+  it("keeps explicit custom memory tools authoritative when the memory slot selects LanceDB", async () => {
+    setMemorySlot("memory-lancedb");
+    api.pluginConfig = {
+      agents: ["main"],
+      toolsAllow: ["lcm_grep"],
+    };
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What did we decide about active memory?",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
+    expect(runParams?.toolsAllow).toEqual(["lcm_grep"]);
+    expect(runParams?.prompt).toContain("Configured memory tools: lcm_grep.");
+  });
+
+  it("drops wildcard group and core tools from custom memory tools", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      toolsAllow: [
+        "*",
+        "agents_list",
+        "apply_patch",
+        "canvas",
+        "cron",
+        "edit",
+        "gateway",
+        "heartbeat_respond",
+        "heartbeat_response",
+        "image",
+        "image_generate",
+        "music_generate",
+        "nodes",
+        "pdf",
+        "process",
+        "session_status",
+        "sessions_history",
+        "sessions_list",
+        "sessions_send",
+        "sessions_spawn",
+        "sessions_yield",
+        "tts",
+        "video_generate",
+        "group:plugins",
+        "read",
+        "exec",
+        "message",
+        "lcm_grep",
+        "web_search",
+        "lcm_describe",
+      ],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What did we decide about active memory?",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
+    expect(runParams?.toolsAllow).toEqual(["lcm_grep", "lcm_describe"]);
+    expect(runParams?.prompt).toContain("Configured memory tools: lcm_grep, lcm_describe.");
+  });
+
+  it("falls back to default memory tools when custom memory tools only contain reserved entries", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      toolsAllow: ["*", "group:plugins", "read", "exec", "message", "web_search"],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What did we decide about active memory?",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
+    expect(runParams?.toolsAllow).toEqual(["memory_search", "memory_get"]);
+    expect(runParams?.prompt).toContain("Configured memory tools: memory_search, memory_get.");
+  });
+
+  it("falls back to LanceDB compat tools when custom memory tools only contain reserved entries", async () => {
+    setMemorySlot("memory-lancedb");
+    api.pluginConfig = {
+      agents: ["main"],
+      toolsAllow: ["*", "group:plugins", "read", "exec", "message", "web_search"],
+    };
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What did we decide about active memory?",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
+    expect(runParams?.toolsAllow).toEqual(["memory_recall"]);
+    expect(runParams?.prompt).toContain("Configured memory tools: memory_recall.");
   });
 
   it("defaults prompt style by query mode when no promptStyle is configured", async () => {
@@ -1865,7 +2070,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(result).toBeUndefined();
-    expect(hasDebugLine("no memory tools registered")).toBe(true);
+    expect(hasDebugLine("no configured memory tools available")).toBe(true);
     expect(hasWarnLine("No callable tools remain")).toBe(false);
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=empty")]);
@@ -1880,7 +2085,7 @@ describe("active-memory plugin", () => {
     };
     const error = makeMemoryToolAllowlistError(
       "no registered tools matched",
-      "tools.allow: *, lobster; runtime toolsAllow: memory_recall, memory_search, memory_get",
+      "tools.allow: *, lobster; runtime toolsAllow: memory_search, memory_get",
     );
     expect(__testing.isMissingRegisteredMemoryToolsError(error)).toBe(true);
     runEmbeddedPiAgent.mockRejectedValueOnce(error);
@@ -1891,14 +2096,46 @@ describe("active-memory plugin", () => {
     );
 
     expect(result).toBeUndefined();
-    expect(hasDebugLine("no memory tools registered")).toBe(true);
+    expect(hasDebugLine("no configured memory tools available")).toBe(true);
     expect(hasWarnLine("No callable tools remain")).toBe(false);
     expect(getActiveMemoryLines(sessionKey)).toEqual([
       expect.stringContaining("🧩 Active Memory: status=empty"),
     ]);
   });
 
-  it("keeps memory-tool allowlist errors visible when upstream policy can filter memory tools", async () => {
+  it("skips missing custom memory tools using the resolved custom allowlist", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      toolsAllow: ["lcm_grep", "lcm_describe", "lcm_expand_query"],
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:missing-custom-memory-tools";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-missing-custom-memory-tools",
+      updatedAt: 0,
+    };
+    const toolsAllow = ["lcm_grep", "lcm_describe", "lcm_expand_query"];
+    const error = makeMemoryToolAllowlistError(
+      "no registered tools matched",
+      `runtime toolsAllow: ${toolsAllow.join(", ")}`,
+    );
+    expect(__testing.isMissingRegisteredMemoryToolsError(error, toolsAllow)).toBe(true);
+    runEmbeddedPiAgent.mockRejectedValueOnce(error);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what did we decide? missing custom memory tools", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hasDebugLine("no configured memory tools available")).toBe(true);
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=empty"),
+    ]);
+  });
+
+  it("skips memory-tool allowlist errors when upstream policy filters memory tools", async () => {
     const sessionKey = "agent:main:memory-tools-filtered-by-policy";
     hoisted.sessionStore[sessionKey] = {
       sessionId: "s-memory-tools-filtered-by-policy",
@@ -1906,9 +2143,9 @@ describe("active-memory plugin", () => {
     };
     const error = makeMemoryToolAllowlistError(
       "no registered tools matched",
-      "tools.allow: read, exec; runtime toolsAllow: memory_recall, memory_search, memory_get",
+      "tools.allow: read, exec; runtime toolsAllow: memory_search, memory_get",
     );
-    expect(__testing.isMissingRegisteredMemoryToolsError(error)).toBe(false);
+    expect(__testing.isMissingRegisteredMemoryToolsError(error)).toBe(true);
     runEmbeddedPiAgent.mockRejectedValueOnce(error);
 
     const result = await hooks.before_prompt_build(
@@ -1917,38 +2154,41 @@ describe("active-memory plugin", () => {
     );
 
     expect(result).toBeUndefined();
-    expect(hasDebugLine("no memory tools registered")).toBe(false);
-    expect(hasWarnLine("No callable tools remain")).toBe(true);
+    expect(hasDebugLine("no configured memory tools available")).toBe(true);
+    expect(hasWarnLine("No callable tools remain")).toBe(false);
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=unavailable"),
+      expect.stringContaining("🧩 Active Memory: status=empty"),
     ]);
   });
 
   it.each([
     ["disabled tools", "tools are disabled for this run"],
     ["models without tool support", "the selected model does not support tools"],
-  ])("keeps allowlist errors for %s visible", async (_label, reason) => {
-    const sessionKey = `agent:main:${reason.replace(/\W+/g, "-")}`;
-    hoisted.sessionStore[sessionKey] = {
-      sessionId: `s-${reason.replace(/\W+/g, "-")}`,
-      updatedAt: 0,
-    };
-    const error = makeMemoryToolAllowlistError(reason);
-    expect(__testing.isMissingRegisteredMemoryToolsError(error)).toBe(false);
-    runEmbeddedPiAgent.mockRejectedValueOnce(error);
+  ])(
+    "skips allowlist errors for %s without surfacing to the main thread",
+    async (_label, reason) => {
+      const sessionKey = `agent:main:${reason.replace(/\W+/g, "-")}`;
+      hoisted.sessionStore[sessionKey] = {
+        sessionId: `s-${reason.replace(/\W+/g, "-")}`,
+        updatedAt: 0,
+      };
+      const error = makeMemoryToolAllowlistError(reason);
+      expect(__testing.isMissingRegisteredMemoryToolsError(error)).toBe(false);
+      runEmbeddedPiAgent.mockRejectedValueOnce(error);
 
-    const result = await hooks.before_prompt_build(
-      { prompt: `what wings should i order? ${reason}`, messages: [] },
-      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
-    );
+      const result = await hooks.before_prompt_build(
+        { prompt: `what wings should i order? ${reason}`, messages: [] },
+        { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+      );
 
-    expect(result).toBeUndefined();
-    expect(hasDebugLine("no memory tools registered")).toBe(false);
-    expect(hasWarnLine(reason)).toBe(true);
-    expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=unavailable"),
-    ]);
-  });
+      expect(result).toBeUndefined();
+      expect(hasDebugLine("no configured memory tools available")).toBe(false);
+      expect(hasWarnLine(reason)).toBe(true);
+      expect(getActiveMemoryLines(sessionKey)).toEqual([
+        expect.stringContaining("🧩 Active Memory: status=empty"),
+      ]);
+    },
+  );
 
   it("does not skip missing memory-tool allowlist errors after abort", async () => {
     const sessionKey = "agent:main:missing-memory-tools-after-abort";
@@ -1970,7 +2210,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(result).toBeUndefined();
-    expect(hasDebugLine("no memory tools registered")).toBe(false);
+    expect(hasDebugLine("no configured memory tools available")).toBe(false);
     expect(getActiveMemoryLines(sessionKey)).toEqual([
       expect.stringContaining("🧩 Active Memory: status=timeout"),
     ]);
@@ -2080,7 +2320,7 @@ describe("active-memory plugin", () => {
       prependContext: expect.stringContaining("temporary partial recall summary"),
     });
     await vi.waitFor(async () => {
-      await expect(fs.access(tempSessionFile)).rejects.toThrow();
+      await expectPathMissing(tempSessionFile);
     });
     expect(getActiveMemoryLines(sessionKey)).toEqual(
       expect.arrayContaining([
@@ -2122,7 +2362,7 @@ describe("active-memory plugin", () => {
     expect(result).toBeUndefined();
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=timeout")]);
-    expect(lines.some((line) => line.includes("timeout_partial"))).toBe(false);
+    expectLinesNotToContain(lines, "timeout_partial");
   });
 
   it("keeps timeout status when the timeout transcript path does not exist", async () => {
@@ -2152,7 +2392,7 @@ describe("active-memory plugin", () => {
     expect(result).toBeUndefined();
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=timeout")]);
-    expect(lines.some((line) => line.includes("timeout_partial"))).toBe(false);
+    expectLinesNotToContain(lines, "timeout_partial");
   });
 
   it("does not inject embedded timeout boilerplate from partial transcripts", async () => {
@@ -2197,8 +2437,8 @@ describe("active-memory plugin", () => {
     expect(result).toBeUndefined();
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=timeout")]);
-    expect(lines.some((line) => line.includes("timeout_partial"))).toBe(false);
-    expect(lines.some((line) => line.includes("LLM request timed out"))).toBe(false);
+    expectLinesNotToContain(lines, "timeout_partial");
+    expectLinesNotToContain(lines, "LLM request timed out");
   });
 
   it("returns partial transcript text when an aborted subagent rejects before the race timeout wins", async () => {
@@ -2252,7 +2492,7 @@ describe("active-memory plugin", () => {
     expect(getActiveMemoryLines(sessionKey).join("\n")).not.toContain("partial abort summary");
   });
 
-  it("keeps generic subagent errors unavailable without using partial transcript output", async () => {
+  it("skips generic subagent errors without using partial transcript output", async () => {
     api.pluginConfig = {
       agents: ["main"],
       persistTranscripts: true,
@@ -2281,7 +2521,7 @@ describe("active-memory plugin", () => {
 
     expect(result).toBeUndefined();
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=unavailable"),
+      expect.stringContaining("🧩 Active Memory: status=empty"),
     ]);
     expect(getActiveMemoryLines(sessionKey).join("\n")).not.toContain(
       "must not be surfaced from generic errors",
@@ -2521,7 +2761,7 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes(" cached "))).toBe(false);
+    expectLinesNotToContain(infoLines, " cached ");
   });
 
   it("does not share cached recall results across session-id-only contexts", async () => {
@@ -2554,7 +2794,7 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes(" cached "))).toBe(false);
+    expectLinesNotToContain(infoLines, " cached ");
   });
 
   it("ignores late subagent payloads once the active-memory timeout signal has fired", async () => {
@@ -2589,7 +2829,7 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(true);
+    expectLinesToContain(infoLines, "status=timeout");
     expect(
       infoLines.some(
         (line: string) =>
@@ -2632,7 +2872,7 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(false);
+    expectLinesNotToContain(infoLines, "status=timeout");
   });
 
   it("returns timeout within a hard deadline even when the subagent never checks the abort signal", async () => {
@@ -2646,11 +2886,8 @@ describe("active-memory plugin", () => {
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
-    // Simulate a subagent that never cooperatively checks the abort signal --
-    // it just blocks for a long time.
-    runEmbeddedPiAgent.mockImplementationOnce(
-      () => new Promise((resolve) => setTimeout(() => resolve({ payloads: [] }), 30_000)),
-    );
+    // Simulate a subagent that never cooperatively checks the abort signal.
+    runEmbeddedPiAgent.mockImplementationOnce(() => new Promise<never>(() => {}));
 
     const startedAt = Date.now();
     const result = await hooks.before_prompt_build(
@@ -2669,7 +2906,7 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(true);
+    expectLinesToContain(infoLines, "status=timeout");
     // Hard deadline: wall-clock time must be near timeoutMs, not 30s.
     expect(wallClockMs).toBeLessThan(CONFIGURED_TIMEOUT_MS + HARD_DEADLINE_MARGIN_MS);
   });
@@ -2710,8 +2947,8 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes("done status=empty"))).toBe(true);
-    expect(infoLines.some((line: string) => line.includes("done status=timeout"))).toBe(false);
+    expectLinesToContain(infoLines, "done status=empty");
+    expectLinesNotToContain(infoLines, "done status=timeout");
     expect(getActiveMemoryLines(sessionKey)).toEqual([
       expect.stringContaining("🧩 Active Memory: status=empty"),
       expect.stringContaining("🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0"),
@@ -2802,8 +3039,8 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes("done status=empty"))).toBe(true);
-    expect(infoLines.some((line: string) => line.includes("done status=timeout"))).toBe(false);
+    expectLinesToContain(infoLines, "done status=empty");
+    expectLinesNotToContain(infoLines, "done status=timeout");
     expect(getActiveMemoryLines(sessionKey)).toEqual([
       expect.stringContaining("🧩 Active Memory: status=empty"),
       expect.stringContaining(
@@ -2862,7 +3099,7 @@ describe("active-memory plugin", () => {
     const warnLines = vi
       .mocked(api.logger.warn)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(warnLines.some((line: string) => line.includes("before_prompt_build"))).toBe(true);
+    expectLinesToContain(warnLines, "before_prompt_build");
   });
 
   it("honors configured timeoutMs values above the former 60 000 ms ceiling", async () => {
@@ -3622,13 +3859,11 @@ describe("active-memory plugin", () => {
       ),
     );
     expect(
-      vi
-        .mocked(api.logger.info)
-        .mock.calls.some((call: unknown[]) =>
-          String(call[0]).includes(`transcript=${expectedDir}${path.sep}`),
-        ),
-    ).toBe(true);
-    expect(rmSpy.mock.calls.some(([target]) => String(target).startsWith(expectedDir))).toBe(false);
+      vi.mocked(api.logger.info).mock.calls.map((call: unknown[]) => String(call[0])),
+    ).toContainEqual(expect.stringContaining(`transcript=${expectedDir}${path.sep}`));
+    expect(rmSpy.mock.calls.filter(([target]) => String(target).startsWith(expectedDir))).toEqual(
+      [],
+    );
   });
 
   it("falls back to the default transcript directory when transcriptDir is unsafe", async () => {
@@ -3733,8 +3968,8 @@ describe("active-memory plugin", () => {
     const lines =
       (store[sessionKey]?.pluginDebugEntries as Array<{ lines?: string[] }> | undefined)?.[0]
         ?.lines ?? [];
-    expect(lines.some((line) => line.includes("\u001b"))).toBe(false);
-    expect(lines.some((line) => line.includes("\r"))).toBe(false);
+    expectLinesNotToContain(lines, "\u001b");
+    expectLinesNotToContain(lines, "\r");
   });
 
   it("caps the active-memory cache size and evicts the oldest entries", () => {
@@ -3829,7 +4064,7 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes("circuit breaker open"))).toBe(true);
+    expectLinesToContain(infoLines, "circuit breaker open");
   });
 
   it("resets circuit breaker after a successful recall", async () => {

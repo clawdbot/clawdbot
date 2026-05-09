@@ -254,9 +254,9 @@ describe("applyPluginAutoEnable core", () => {
       env,
     });
 
-    expect(result.config).toEqual({});
+    expect(result.config).toStrictEqual({});
     expect(result.changes).toEqual([]);
-    expect(result.autoEnabledReasons).toEqual({});
+    expect(result.autoEnabledReasons).toStrictEqual({});
   });
 
   it("auto-enables built-in channels and preserves them in restrictive plugins.allow", () => {
@@ -865,7 +865,7 @@ describe("applyPluginAutoEnable core", () => {
     });
 
     expect(candidates).toEqual([]);
-    expect(result.config).toEqual({});
+    expect(result.config).toStrictEqual({});
     expect(result.changes).toEqual([]);
   });
 

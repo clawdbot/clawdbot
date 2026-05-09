@@ -69,8 +69,8 @@ describe("bot-native-command-menu", () => {
       0,
     );
     expect(totalText).toBeLessThanOrEqual(TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET);
-    expect(result.commandsToRegister.every((command) => command.description.length <= 56)).toBe(
-      true,
+    expect(result.commandsToRegister.filter((command) => command.description.length > 56)).toEqual(
+      [],
     );
   });
 

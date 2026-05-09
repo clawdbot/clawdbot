@@ -507,6 +507,6 @@ describe("persistAllowAlways", () => {
       };
     };
     const list = root.plugins.entries["file-transfer"].config.nodes.n1.allowReadPaths;
-    expect(list.filter((p) => p === "/tmp/x").length).toBe(1);
+    expect(list.reduce((count, p) => count + (p === "/tmp/x" ? 1 : 0), 0)).toBe(1);
   });
 });

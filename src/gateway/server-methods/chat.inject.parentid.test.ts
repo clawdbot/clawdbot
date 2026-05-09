@@ -3,6 +3,16 @@ import { describe, expect, it } from "vitest";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import { createTranscriptFixtureSync } from "./chat.test-helpers.js";
 
+function readTranscriptLines(transcriptPath: string): string[] {
+  const lines: string[] = [];
+  for (const line of fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/)) {
+    if (line.length > 0) {
+      lines.push(line);
+    }
+  }
+  return lines;
+}
+
 // Guardrail: Gateway-injected assistant transcript messages must attach to the
 // current leaf with a `parentId` and must not sever compaction history.
 describe("gateway chat.inject transcript writes", () => {
@@ -18,14 +28,14 @@ describe("gateway chat.inject transcript writes", () => {
         message: "hello",
       });
       expect(appended.ok).toBe(true);
-      expect(appended.messageId).toEqual(expect.any(String));
+      expect(appended.messageId).toBeTypeOf("string");
       const messageId = appended.messageId;
       if (!messageId) {
         throw new Error("expected appended message id");
       }
       expect(messageId.length).toBeGreaterThan(0);
 
-      const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/).filter(Boolean);
+      const lines = readTranscriptLines(transcriptPath);
       expect(lines.length).toBeGreaterThanOrEqual(2);
 
       const last = JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
@@ -65,14 +75,14 @@ describe("gateway chat.inject transcript writes", () => {
         message: "hello",
       });
       expect(appended.ok).toBe(true);
-      expect(appended.messageId).toEqual(expect.any(String));
+      expect(appended.messageId).toBeTypeOf("string");
       const messageId = appended.messageId;
       if (!messageId) {
         throw new Error("expected appended message id");
       }
       expect(messageId.length).toBeGreaterThan(0);
 
-      const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/).filter(Boolean);
+      const lines = readTranscriptLines(transcriptPath);
       const last = JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
 
       expect(last.type).toBe("message");

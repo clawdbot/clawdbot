@@ -206,7 +206,7 @@ describe("cdp.helpers", () => {
   });
 
   it("does not add custom headers when none are required", () => {
-    expect(getHeadersWithAuth("http://127.0.0.1:19444/json/version")).toEqual({});
+    expect(getHeadersWithAuth("http://127.0.0.1:19444/json/version")).toStrictEqual({});
   });
 });
 

@@ -115,6 +115,53 @@ function requireNativeCommand(name: string, provider?: string): ChatCommandDefin
   return command;
 }
 
+function requireCommandArg(
+  command: ChatCommandDefinition,
+  name: string,
+): NonNullable<ChatCommandDefinition["args"]>[number] {
+  const arg = command.args?.find((candidate) => candidate.name === name);
+  if (!arg) {
+    throw new Error(`Expected ${command.key} command arg "${name}"`);
+  }
+  return arg;
+}
+
+function requireCommandArgAt(
+  command: ChatCommandDefinition,
+  index: number,
+): NonNullable<ChatCommandDefinition["args"]>[number] {
+  const arg = command.args?.[index];
+  if (!arg) {
+    throw new Error(`Expected ${command.key} command arg ${index}`);
+  }
+  return arg;
+}
+
+function requireCommandArgMenu(
+  params: Parameters<typeof resolveCommandArgMenu>[0],
+): NonNullable<ReturnType<typeof resolveCommandArgMenu>> {
+  const menu = resolveCommandArgMenu(params);
+  if (!menu) {
+    throw new Error(`Expected arg menu for ${params.command.key}`);
+  }
+  return menu;
+}
+
+function requireSeenChoice(
+  seen: {
+    provider?: string;
+    model?: string;
+    catalogLength?: number;
+    commandKey: string;
+    argName: string;
+  } | null,
+) {
+  if (!seen) {
+    throw new Error("Expected command choice context");
+  }
+  return seen;
+}
+
 describe("commands registry", () => {
   it("builds command text with args", () => {
     expect(buildCommandText("status")).toBe("/status");
@@ -138,7 +185,7 @@ describe("commands registry", () => {
       textAliases: ["/btw", "/side"],
     });
     expect(normalizeCommandBody("/side what changed?")).toBe("/btw what changed?");
-    expect(findCommandByNativeName("side")?.key).toBe("btw");
+    expect(requireNativeCommand("side").key).toBe("btw");
     expect(listNativeCommandSpecs().find((spec) => spec.name === "side")).toMatchObject({
       acceptsArgs: true,
     });
@@ -217,7 +264,7 @@ describe("commands registry", () => {
       { provider: "discord" },
     );
     expect([...nativeNameSet(native)]).toContain("voice");
-    expect(findCommandByNativeName("voice", "discord")?.key).toBe("tts");
+    expect(requireNativeCommand("voice", "discord").key).toBe("tts");
     expect(findCommandByNativeName("tts", "discord")).toBeUndefined();
   });
 
@@ -228,7 +275,7 @@ describe("commands registry", () => {
       { provider: "slack" },
     );
     expect([...nativeNameSet(native)]).toContain("agentstatus");
-    expect(findCommandByNativeName("agentstatus", "slack")?.key).toBe("status");
+    expect(requireNativeCommand("agentstatus", "slack").key).toBe("status");
     expect(findCommandByNativeName("status", "slack")).toBeUndefined();
     expect(
       findCommandByNativeName("agentstatus", "slack", {
@@ -243,11 +290,10 @@ describe("commands registry", () => {
   });
 
   it("can resolve default native command names without loading bundled channel fallbacks", () => {
-    expect(
-      findCommandByNativeName("status", "discord", {
-        includeBundledChannelFallback: false,
-      })?.key,
-    ).toBe("status");
+    const command = findCommandByNativeName("status", "discord", {
+      includeBundledChannelFallback: false,
+    });
+    expect(command).toMatchObject({ key: "status" });
   });
 
   it("keeps discord native command specs within slash-command limits", () => {
@@ -262,7 +308,7 @@ describe("commands registry", () => {
 
       const command = requireNativeCommand(spec.name, "discord");
 
-      const args = command?.args ?? spec.args ?? [];
+      const args = command.args ?? spec.args ?? [];
       const argNames = new Set<string>();
       let sawOptional = false;
       for (const arg of args) {
@@ -302,8 +348,8 @@ describe("commands registry", () => {
 
   it("keeps ACP native action choices aligned with implemented handlers", () => {
     const acp = requireChatCommand("acp");
-    const actionArg = acp.args?.find((arg) => arg.name === "action");
-    expect(actionArg?.choices).toEqual([
+    const actionArg = requireCommandArg(acp, "action");
+    expect(actionArg.choices).toEqual([
       "spawn",
       "cancel",
       "steer",
@@ -324,14 +370,14 @@ describe("commands registry", () => {
   });
 
   it("registers fast mode as a first-class options command", () => {
-    const fast = listChatCommands().find((command) => command.key === "fast");
+    const fast = requireChatCommand("fast");
     expect(fast).toMatchObject({
       nativeName: "fast",
       textAliases: ["/fast"],
       category: "options",
     });
-    const modeArg = fast?.args?.find((arg) => arg.name === "mode");
-    expect(modeArg?.choices).toEqual(["status", "on", "off"]);
+    const modeArg = requireCommandArg(fast, "mode");
+    expect(modeArg.choices).toEqual(["status", "on", "off"]);
   });
 
   it("detects known text commands", () => {
@@ -459,7 +505,7 @@ describe("commands registry args", () => {
     };
 
     const args = parseCommandArgs(command, "set foo bar baz");
-    expect(args?.values).toEqual({ action: "set", path: "foo", value: "bar baz" });
+    expect(args).toMatchObject({ values: { action: "set", path: "foo", value: "bar baz" } });
   });
 
   it("serializes args via raw first, then values", () => {
@@ -482,9 +528,9 @@ describe("commands registry args", () => {
   it("resolves auto arg menus when missing a choice arg", () => {
     const command = createUsageModeCommand();
 
-    const menu = resolveCommandArgMenu({ command, args: undefined, cfg: {} as never });
-    expect(menu?.arg.name).toBe("mode");
-    expect(menu?.choices).toEqual([
+    const menu = requireCommandArgMenu({ command, args: undefined, cfg: {} as never });
+    expect(menu.arg.name).toBe("mode");
+    expect(menu.choices).toEqual([
       { label: "off", value: "off" },
       { label: "tokens", value: "tokens" },
       { label: "full", value: "full" },
@@ -493,11 +539,12 @@ describe("commands registry args", () => {
   });
 
   it("keeps verbose full available while preserving no-arg status dispatch", () => {
-    const verbose = listChatCommands().find((command) => command.key === "verbose");
+    const verbose = requireChatCommand("verbose");
 
-    expect(verbose?.args?.[0]?.choices).toEqual(["on", "off", "full"]);
+    const modeArg = requireCommandArgAt(verbose, 0);
+    expect(modeArg.choices).toEqual(["on", "off", "full"]);
     expect(
-      resolveCommandArgMenu({ command: verbose!, args: undefined, cfg: {} as never }),
+      resolveCommandArgMenu({ command: verbose, args: undefined, cfg: {} as never }),
     ).toBeNull();
   });
 
@@ -547,34 +594,28 @@ describe("commands registry args", () => {
       ],
     };
 
-    const menu = resolveCommandArgMenu({ command, args: undefined, cfg: {} as never });
-    expect(menu?.arg.name).toBe("level");
-    expect(menu?.choices).toEqual([
+    const menu = requireCommandArgMenu({ command, args: undefined, cfg: {} as never });
+    expect(menu.arg.name).toBe("level");
+    expect(menu.choices).toEqual([
       { label: "low", value: "low" },
       { label: "high", value: "high" },
     ]);
-    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toBe(
+    expect(formatCommandArgMenuTitle({ command, menu })).toBe(
       "Choose level for /think.\nOptions: low, high.",
     );
-    const seenChoice = seen as {
-      provider?: string;
-      model?: string;
-      catalogLength?: number;
-      commandKey: string;
-      argName: string;
-    } | null;
-    expect(seenChoice?.commandKey).toBe("think");
-    expect(seenChoice?.argName).toBe("level");
-    expect(seenChoice?.provider).toEqual(expect.stringMatching(/\S/));
-    expect(seenChoice?.model).toEqual(expect.stringMatching(/\S/));
-    expect(seenChoice?.catalogLength).toBe(0);
+    const seenChoice = requireSeenChoice(seen);
+    expect(seenChoice.commandKey).toBe("think");
+    expect(seenChoice.argName).toBe("level");
+    expect(seenChoice.provider).toEqual(expect.stringMatching(/\S/));
+    expect(seenChoice.model).toEqual(expect.stringMatching(/\S/));
+    expect(seenChoice.catalogLength).toBe(0);
   });
 
   it("uses configured model catalog reasoning for /think arg menus", () => {
     installOllamaThinkingProvider();
     const command = requireNativeCommand("think");
 
-    const menu = resolveCommandArgMenu({
+    const menu = requireCommandArgMenu({
       command,
       args: undefined,
       cfg: {
@@ -590,15 +631,15 @@ describe("commands registry args", () => {
       model: "glm-5.1:cloud",
     });
 
-    expect(menu?.arg.name).toBe("level");
-    expect(menu?.choices.map((choice) => choice.value)).toEqual([
+    expect(menu.arg.name).toBe("level");
+    expect(menu.choices.map((choice) => choice.value)).toEqual([
       "off",
       "low",
       "medium",
       "high",
       "max",
     ]);
-    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toBe(
+    expect(formatCommandArgMenuTitle({ command, menu })).toBe(
       "Choose level for /think.\nOptions: off, low, medium, high, max.",
     );
   });
@@ -606,7 +647,7 @@ describe("commands registry args", () => {
   it("uses configured model compat for /think arg menus", () => {
     const command = requireNativeCommand("think");
 
-    const menu = resolveCommandArgMenu({
+    const menu = requireCommandArgMenu({
       command,
       args: undefined,
       cfg: {
@@ -629,8 +670,8 @@ describe("commands registry args", () => {
       model: "gpt-5.4",
     });
 
-    expect(menu?.choices.map((choice) => choice.value)).toContain("xhigh");
-    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toContain("xhigh");
+    expect(menu.choices.map((choice) => choice.value)).toContain("xhigh");
+    expect(formatCommandArgMenuTitle({ command, menu })).toContain("xhigh");
   });
 
   it("does not show menus when args were provided as raw text only", () => {

@@ -97,7 +97,7 @@ describe("cron service timer regressions", () => {
     await onTimer(state);
 
     expect(timeoutSpy).toHaveBeenCalled();
-    expect(state.timer).not.toBeNull();
+    expect(state.timer).toEqual(expect.anything());
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)
       .filter((d): d is number => typeof d === "number");

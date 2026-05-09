@@ -19,20 +19,61 @@ beforeAll(async () => {
   ({ discordPlugin } = await import("./channel.js"));
 });
 
+type DiscordMessageAdapter = NonNullable<typeof discordPlugin.message>;
+type DiscordMessageSender = NonNullable<DiscordMessageAdapter["send"]>;
+
+function requireDiscordMessageAdapter(): DiscordMessageAdapter {
+  const adapter = discordPlugin.message;
+  if (!adapter) {
+    throw new Error("Expected discord plugin to expose a channel message adapter");
+  }
+  return adapter;
+}
+
+function requireTextSender(
+  adapter: DiscordMessageAdapter,
+): NonNullable<DiscordMessageSender["text"]> {
+  const text = adapter.send?.text;
+  if (!text) {
+    throw new Error("Expected discord message adapter text sender");
+  }
+  return text;
+}
+
+function requireMediaSender(
+  adapter: DiscordMessageAdapter,
+): NonNullable<DiscordMessageSender["media"]> {
+  const media = adapter.send?.media;
+  if (!media) {
+    throw new Error("Expected discord message adapter media sender");
+  }
+  return media;
+}
+
+function requirePayloadSender(
+  adapter: DiscordMessageAdapter,
+): NonNullable<DiscordMessageSender["payload"]> {
+  const payload = adapter.send?.payload;
+  if (!payload) {
+    throw new Error("Expected discord message adapter payload sender");
+  }
+  return payload;
+}
+
 describe("discord channel message adapter", () => {
   beforeEach(() => {
     resetDiscordOutboundMocks(hoisted);
   });
 
   it("backs declared durable-final capabilities with outbound send proofs", async () => {
-    const adapter = discordPlugin.message;
-    if (!adapter) {
-      throw new Error("Expected discord plugin to expose a channel message adapter");
-    }
+    const adapter = requireDiscordMessageAdapter();
+    const sendText = requireTextSender(adapter);
+    const sendMedia = requireMediaSender(adapter);
+    const sendPayload = requirePayloadSender(adapter);
 
     const proveText = async () => {
       resetDiscordOutboundMocks(hoisted);
-      const result = await adapter.send!.text!({
+      const result = await sendText({
         cfg: {},
         to: "channel:123456",
         text: "hello",
@@ -49,7 +90,7 @@ describe("discord channel message adapter", () => {
 
     const proveMedia = async () => {
       resetDiscordOutboundMocks(hoisted);
-      const result = await adapter.send!.media!({
+      const result = await sendMedia({
         cfg: {},
         to: "channel:123456",
         text: "caption",
@@ -69,7 +110,7 @@ describe("discord channel message adapter", () => {
 
     const provePayload = async () => {
       resetDiscordOutboundMocks(hoisted);
-      const result = await adapter.send!.payload!({
+      const result = await sendPayload({
         cfg: {},
         to: "channel:123456",
         text: "payload",
@@ -86,7 +127,7 @@ describe("discord channel message adapter", () => {
 
     const proveReplyThreadSilent = async () => {
       resetDiscordOutboundMocks(hoisted);
-      const result = await adapter.send!.text!({
+      const result = await sendText({
         cfg: {},
         to: "channel:parent-1",
         text: "threaded",
@@ -110,7 +151,7 @@ describe("discord channel message adapter", () => {
 
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "discordMessageAdapter",
-      adapter: adapter,
+      adapter,
       proofs: {
         text: proveText,
         media: proveMedia,
@@ -119,43 +160,44 @@ describe("discord channel message adapter", () => {
         replyTo: proveReplyThreadSilent,
         thread: proveReplyThreadSilent,
         messageSendingHooks: () => {
-          expect(adapter.send!.text).toBeTypeOf("function");
+          expect(sendText).toBeTypeOf("function");
         },
       },
     });
   });
 
   it("backs declared live preview finalizer capabilities with adapter proofs", async () => {
-    const adapter = discordPlugin.message;
+    const adapter = requireDiscordMessageAdapter();
+    const sendText = requireTextSender(adapter);
 
     await verifyChannelMessageLiveCapabilityAdapterProofs({
       adapterName: "discordMessageAdapter",
-      adapter: adapter!,
+      adapter,
       proofs: {
         draftPreview: () => {
-          expect(adapter!.live?.finalizer?.capabilities?.discardPending).toBe(true);
+          expect(adapter.live?.finalizer?.capabilities?.discardPending).toBe(true);
         },
         previewFinalization: () => {
-          expect(adapter!.live?.finalizer?.capabilities?.finalEdit).toBe(true);
+          expect(adapter.live?.finalizer?.capabilities?.finalEdit).toBe(true);
         },
         progressUpdates: () => {
-          expect(adapter!.live?.capabilities?.draftPreview).toBe(true);
+          expect(adapter.live?.capabilities?.draftPreview).toBe(true);
         },
       },
     });
 
     await verifyChannelMessageLiveFinalizerProofs({
       adapterName: "discordMessageAdapter",
-      adapter: adapter!,
+      adapter,
       proofs: {
         finalEdit: () => {
-          expect(adapter!.live?.capabilities?.previewFinalization).toBe(true);
+          expect(adapter.live?.capabilities?.previewFinalization).toBe(true);
         },
         normalFallback: () => {
-          expect(adapter!.send!.text).toBeTypeOf("function");
+          expect(sendText).toBeTypeOf("function");
         },
         discardPending: () => {
-          expect(adapter!.live?.capabilities?.draftPreview).toBe(true);
+          expect(adapter.live?.capabilities?.draftPreview).toBe(true);
         },
       },
     });

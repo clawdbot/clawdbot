@@ -179,6 +179,16 @@ function createProviderUsageModuleMock() {
   };
 }
 
+function formatPrimaryModelLabel(provider: string | undefined, model: string): string {
+  return provider ? `${provider}/${model}` : model;
+}
+
+function formatStatusLines(primary: string, taskLineOverride: string | undefined): string {
+  return taskLineOverride
+    ? `OpenClaw\n🧠 Model: ${primary}\n${taskLineOverride}`
+    : `OpenClaw\n🧠 Model: ${primary}`;
+}
+
 function createCommandsStatusRuntimeModuleMock() {
   return {
     buildStatusText: async (params: {
@@ -207,9 +217,7 @@ function createCommandsStatusRuntimeModuleMock() {
           )
         : undefined;
       const primary =
-        params.primaryModelLabelOverride ??
-        [params.provider, params.model].filter(Boolean).join("/") ??
-        params.model;
+        params.primaryModelLabelOverride ?? formatPrimaryModelLabel(params.provider, params.model);
       const customAuth = params.provider
         ? resolveUsableCustomProviderApiKeyMock({ provider: params.provider })
         : null;
@@ -232,9 +240,7 @@ function createCommandsStatusRuntimeModuleMock() {
         includeTranscriptUsage: params.includeTranscriptUsage,
         workspaceDir: params.workspaceDir,
       });
-      return ["OpenClaw", `🧠 Model: ${primary}`, params.taskLineOverride]
-        .filter(Boolean)
-        .join("\n");
+      return formatStatusLines(primary, params.taskLineOverride);
     },
   };
 }
@@ -900,7 +906,7 @@ describe("session_status tool", () => {
         liveModelSwitchPending: true,
       }),
     );
-    expect(saved.sessionId).toEqual(expect.any(String));
+    expect(saved.sessionId).toBeTypeOf("string");
     expect(saved.sessionId.trim().length).toBeGreaterThan(0);
   });
 
@@ -928,7 +934,7 @@ describe("session_status tool", () => {
         liveModelSwitchPending: true,
       }),
     );
-    expect(saved.sessionId).toEqual(expect.any(String));
+    expect(saved.sessionId).toBeTypeOf("string");
     expect(saved.sessionId.trim().length).toBeGreaterThan(0);
   });
 

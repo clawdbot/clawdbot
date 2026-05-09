@@ -268,7 +268,7 @@ describe("openrouter provider hooks", () => {
       } as never,
     );
 
-    expect(capturedPayload).toEqual({});
+    expect(capturedPayload).toStrictEqual({});
     expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 

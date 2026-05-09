@@ -24,7 +24,7 @@ describe("check-dynamic-import-warts", () => {
         return (await import("./runtime.js")).createRuntime();
       }
     `;
-    expect(findDynamicImportAdvisories(source)).toEqual([]);
+    expect(findDynamicImportAdvisories(source)).toStrictEqual([]);
   });
 
   it("flags repeated direct dynamic imports", () => {
@@ -52,7 +52,7 @@ describe("check-dynamic-import-warts", () => {
         return runtimePromise;
       }
     `;
-    expect(findDynamicImportAdvisories(source)).toEqual([]);
+    expect(findDynamicImportAdvisories(source)).toStrictEqual([]);
   });
 
   it("flags direct dynamic imports inside execute paths", () => {
@@ -87,6 +87,6 @@ describe("check-dynamic-import-warts", () => {
         };
       }
     `;
-    expect(findDynamicImportAdvisories(source)).toEqual([]);
+    expect(findDynamicImportAdvisories(source)).toStrictEqual([]);
   });
 });

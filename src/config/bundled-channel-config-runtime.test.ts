@@ -57,7 +57,7 @@ describe("bundled channel config runtime", () => {
       schema: { type: "object" },
       runtime: {},
     });
-    expect(runtimeModule.getBundledChannelRuntimeMap().get("msteams")).toEqual({});
+    expect(runtimeModule.getBundledChannelRuntimeMap().get("msteams")).toStrictEqual({});
   });
 
   it("falls back to static channel schemas when bundled plugin access hits a TDZ-style ReferenceError", async () => {

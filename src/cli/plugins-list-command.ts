@@ -3,6 +3,7 @@ import { formatPluginSourceForTable, resolvePluginSourceRoots } from "../plugins
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "./command-format.js";
 import { quietPluginJsonLogger } from "./plugins-command-helpers.js";
 import { formatPluginLine } from "./plugins-list-format.js";
 
@@ -39,7 +40,11 @@ export async function runPluginsListCommand(
   }
 
   if (list.length === 0) {
-    runtime.log(theme.muted("No plugins found."));
+    runtime.log(
+      theme.muted(
+        `No plugins found. Run ${formatCliCommand("openclaw plugins install <plugin>")} to add one, or ${formatCliCommand("openclaw plugins list --json")} to inspect raw discovery state.`,
+      ),
+    );
     return;
   }
 

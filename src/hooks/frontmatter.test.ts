@@ -39,15 +39,15 @@ homepage: https://example.com
   it("handles missing frontmatter", () => {
     const content = "# Just a markdown file";
     const result = parseFrontmatter(content);
-    expect(result).toEqual({});
+    expect(result).toStrictEqual({});
   });
 
   it("handles unclosed frontmatter", () => {
     const content = `---
 name: broken
-`;
+    `;
     const result = parseFrontmatter(content);
-    expect(result).toEqual({});
+    expect(result).toStrictEqual({});
   });
 
   it("parses multi-line metadata block with indented JSON", () => {

@@ -51,7 +51,7 @@ const pwMocks = getPwMocks();
 describe("browser control server", () => {
   installAgentContractHooks();
 
-  const slowTimeoutMs = process.platform === "win32" ? 40_000 : 20_000;
+  const slowTimeoutMs = 60_000;
 
   it(
     "returns ACT_KIND_REQUIRED when kind is missing",

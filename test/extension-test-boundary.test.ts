@@ -176,7 +176,7 @@ describe("non-extension test boundaries", () => {
       })
       .filter((value): value is { file: string; imports: string[] } => value !== null);
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps extension-owned onboard helper coverage out of the core onboard auth suite", () => {
@@ -197,7 +197,7 @@ describe("non-extension test boundaries", () => {
       bannedPluginSdkModules.has(entry),
     );
 
-    expect(imports).toEqual([]);
+    expect(imports).toStrictEqual([]);
   });
 
   it("keeps bundled plugin public-surface imports out of core source", () => {
@@ -210,7 +210,7 @@ describe("non-extension test boundaries", () => {
       return findBundledPluginPublicSurfaceImports(source).length > 0;
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps bundled plugin sync test-api loaders out of core tests", () => {
@@ -228,7 +228,7 @@ describe("non-extension test boundaries", () => {
       return source.includes("loadBundledPluginTestApiSync(");
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps resolver tests on generated fixtures for broad bundled plugin source APIs", () => {
@@ -240,7 +240,7 @@ describe("non-extension test boundaries", () => {
       );
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps bundled channel security collector coverage under extension tests", () => {
@@ -257,7 +257,7 @@ describe("non-extension test boundaries", () => {
       );
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps extension channel contract helpers on the public testing surface", () => {
@@ -268,7 +268,7 @@ describe("non-extension test boundaries", () => {
       return source.includes("src/channels/plugins/contracts/test-helpers/");
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps extension tests off legacy broad testing barrels and repo helper bridges", () => {
@@ -287,7 +287,7 @@ describe("non-extension test boundaries", () => {
       return bannedPatterns.some((pattern) => pattern.test(source));
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps extension root test-support helpers from reaching into private src trees", () => {
@@ -302,7 +302,7 @@ describe("non-extension test boundaries", () => {
       })
       .filter((entry): entry is { file: string; imports: string[] } => entry !== null);
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps bundled extension sources off deprecated channel config schema aliases", () => {
@@ -313,6 +313,6 @@ describe("non-extension test boundaries", () => {
       return source.includes("openclaw/plugin-sdk/channel-config-schema-legacy");
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 });

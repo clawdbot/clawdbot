@@ -79,17 +79,19 @@ describe("cron service timer seam coverage", () => {
     expect(job.state.lastStatus).toBe("ok");
     expect(job.state.runningAtMs).toBeUndefined();
     expect(job.state.nextRunAtMs).toBe(now + 60_000);
-    expect(findTaskByRunId(`cron:main-heartbeat-job:${now}`)).toMatchObject({
+    const task = findTaskByRunId(`cron:main-heartbeat-job:${now}`);
+    expect(task).toMatchObject({
       runtime: "cron",
       status: "succeeded",
       endedAt: now,
-      cleanupAfter: expect.any(Number),
     });
+    expect(task?.cleanupAfter).toBe(now + 7 * 24 * 60 * 60_000);
 
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)
       .filter((delay): delay is number => typeof delay === "number");
-    expect(delays.some((delay) => delay > 0)).toBe(true);
+    const positiveDelays = delays.filter((delay) => delay > 0);
+    expect(positiveDelays.length).toBeGreaterThan(0);
 
     timeoutSpy.mockRestore();
   });

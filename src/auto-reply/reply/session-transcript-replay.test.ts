@@ -9,6 +9,31 @@ import {
 
 const j = (obj: unknown): string => `${JSON.stringify(obj)}\n`;
 
+type ReplayRecord = {
+  type?: string;
+  id?: string;
+  message?: {
+    role?: string;
+    content?: string;
+  };
+};
+
+async function readJsonlRecords(filePath: string): Promise<ReplayRecord[]> {
+  const records: ReplayRecord[] = [];
+  const raw = await fs.readFile(filePath, "utf8");
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.trim().length === 0) {
+      continue;
+    }
+    records.push(JSON.parse(line) as ReplayRecord);
+  }
+  return records;
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("replayRecentUserAssistantMessages", () => {
   let root = "";
   beforeEach(async () => {
@@ -37,14 +62,11 @@ describe("replayRecentUserAssistantMessages", () => {
     await fs.writeFile(source, lines.join(""), "utf8");
 
     expect(await call(source, target)).toBe(DEFAULT_REPLAY_MAX_MESSAGES);
-    const records = (await fs.readFile(target, "utf8"))
-      .split(/\r?\n/)
-      .filter((line) => line.trim().length > 0)
-      .map((line) => JSON.parse(line));
+    const records = await readJsonlRecords(target);
     expect(records[0]).toMatchObject({ type: "session", id: "new-session" });
     expect(records).toHaveLength(1 + DEFAULT_REPLAY_MAX_MESSAGES);
     for (const r of records.slice(1)) {
-      expect(["user", "assistant"]).toContain(r.message.role);
+      expect(["user", "assistant"]).toContain(r.message?.role);
     }
     expect(await call(path.join(root, "missing.jsonl"), path.join(root, "out.jsonl"))).toBe(0);
 
@@ -55,7 +77,7 @@ describe("replayRecentUserAssistantMessages", () => {
     ).join("");
     await fs.writeFile(assistantSource, onlyAssistants, "utf8");
     expect(await call(assistantSource, assistantTarget)).toBe(0);
-    await expect(fs.stat(assistantTarget)).rejects.toThrow();
+    await expectPathMissing(assistantTarget);
   });
 
   it("skips header for pre-existing targets and aligns the tail to a user turn", async () => {
@@ -69,13 +91,10 @@ describe("replayRecentUserAssistantMessages", () => {
     await fs.writeFile(source, lines.join(""), "utf8");
 
     expect(await call(source, target)).toBe(DEFAULT_REPLAY_MAX_MESSAGES - 1);
-    const records = (await fs.readFile(target, "utf8"))
-      .split(/\r?\n/)
-      .filter((line) => line.trim().length > 0)
-      .map((line) => JSON.parse(line));
-    expect(records.filter((r) => r.type === "session")).toHaveLength(1);
+    const records = await readJsonlRecords(target);
+    expect(records.reduce((count, r) => count + (r.type === "session" ? 1 : 0), 0)).toBe(1);
     expect(records[0]).toMatchObject({ id: "existing" });
-    expect(records[1].message.role).toBe("user");
+    expect(records[1].message?.role).toBe("user");
   });
 
   it("coalesces same-role runs so replayed records strictly alternate", async () => {
@@ -95,17 +114,14 @@ describe("replayRecentUserAssistantMessages", () => {
     );
 
     expect(await call(source, target)).toBe(4);
-    const records = (await fs.readFile(target, "utf8"))
-      .split(/\r?\n/)
-      .filter((line) => line.trim().length > 0)
-      .map((line) => JSON.parse(line));
-    expect(records.slice(1).map((r) => r.message.role)).toEqual([
+    const records = await readJsonlRecords(target);
+    expect(records.slice(1).map((r) => r.message?.role)).toEqual([
       "user",
       "assistant",
       "user",
       "assistant",
     ]);
-    expect(records.slice(1).map((r) => r.message.content)).toEqual([
+    expect(records.slice(1).map((r) => r.message?.content)).toEqual([
       "latest user",
       "latest assistant",
       "follow-up",
