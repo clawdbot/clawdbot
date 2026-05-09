@@ -143,7 +143,7 @@ describe("doctor stale plugin config helpers", () => {
           },
         },
       } as OpenClawConfig),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("formats stale plugin warnings with a doctor hint", () => {
@@ -277,7 +277,7 @@ describe("doctor stale plugin config helpers", () => {
       },
     } as OpenClawConfig;
 
-    expect(scanStalePluginConfig(cfg)).toEqual([]);
+    expect(scanStalePluginConfig(cfg)).toStrictEqual([]);
     expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
   });
 
@@ -297,7 +297,7 @@ describe("doctor stale plugin config helpers", () => {
       },
     } as OpenClawConfig;
 
-    expect(scanStalePluginConfig(cfg)).toEqual([]);
+    expect(scanStalePluginConfig(cfg)).toStrictEqual([]);
     expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
     expect(manifestRegistry.loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
@@ -357,7 +357,7 @@ describe("doctor stale plugin config helpers", () => {
     ]);
 
     const result = maybeRepairStalePluginConfig(cfg);
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
     expect(result.config).toEqual(cfg);
 
     const warnings = collectStalePluginConfigWarnings({

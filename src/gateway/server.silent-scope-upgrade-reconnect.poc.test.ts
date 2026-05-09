@@ -402,7 +402,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
       expect((requested.error as Error).message).toContain("timeout");
 
       const pending = await devicePairingModule.listDevicePairing();
-      expect(pending.pending).toEqual([]);
+      expect(pending.pending).toStrictEqual([]);
     } finally {
       approveSpy.mockRestore();
       ws?.close();

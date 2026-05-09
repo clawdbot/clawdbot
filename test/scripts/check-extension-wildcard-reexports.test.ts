@@ -26,6 +26,6 @@ describe("check-extension-wildcard-reexports", () => {
           'export * from "external-package";',
         ].join("\n"),
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

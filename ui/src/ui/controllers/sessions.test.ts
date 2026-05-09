@@ -163,7 +163,7 @@ describe("deleteSessionsAndRefresh", () => {
 
     const deleted = await deleteSessionsAndRefresh(state, ["key-a"]);
 
-    expect(deleted).toEqual([]);
+    expect(deleted).toStrictEqual([]);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -197,7 +197,7 @@ describe("deleteSessionsAndRefresh", () => {
 
     const deleted = await deleteSessionsAndRefresh(state, ["key-a"]);
 
-    expect(deleted).toEqual([]);
+    expect(deleted).toStrictEqual([]);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -599,7 +599,7 @@ describe("applySessionsChangedEvent", () => {
     });
 
     expect(applied).toEqual({ applied: false });
-    expect(state.sessionsResult?.sessions).toEqual([]);
+    expect(state.sessionsResult?.sessions).toStrictEqual([]);
   });
 
   it("applies partial events only to existing source-of-truth rows", () => {
@@ -645,7 +645,7 @@ describe("applySessionsChangedEvent", () => {
     });
 
     expect(applied).toEqual({ applied: true, change: "deleted" });
-    expect(state.sessionsResult?.sessions).toEqual([]);
+    expect(state.sessionsResult?.sessions).toStrictEqual([]);
   });
 
   it("keeps terminal status updates visible while archived sessions are hidden", () => {

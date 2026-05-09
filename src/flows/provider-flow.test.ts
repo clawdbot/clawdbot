@@ -265,7 +265,7 @@ describe("provider flow install catalog contributions", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("hides install-catalog choices outside a configured plugin allowlist", () => {
@@ -293,7 +293,7 @@ describe("provider flow install catalog contributions", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps setup contributions on cold metadata instead of runtime wizard options", () => {

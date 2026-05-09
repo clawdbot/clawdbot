@@ -545,7 +545,7 @@ describe("telegram thread bindings", () => {
 
       await __testing.resetTelegramThreadBindingsForTests();
       await flushMicrotasks();
-      expect(unhandled).toEqual([]);
+      expect(unhandled).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }

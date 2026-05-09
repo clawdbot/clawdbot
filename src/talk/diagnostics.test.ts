@@ -61,13 +61,31 @@ describe("talk diagnostics", () => {
     if (!diagnostic) {
       throw new Error("Expected talk diagnostic event");
     }
-    expect(diagnostic).toMatchObject({
+    expect({
+      ...diagnostic,
+      event: {
+        ...diagnostic.event,
+        tsType: typeof diagnostic.event.ts,
+        ts: undefined,
+      },
+    }).toEqual({
       trusted: true,
       event: {
         type: "talk.event",
-        talkEventType: "input.audio.delta",
         sessionId: "talk-session",
         turnId: "turn-1",
+        captureId: undefined,
+        seq: 1,
+        ts: undefined,
+        tsType: "number",
+        trace: undefined,
+        talkEventType: "input.audio.delta",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "openai",
+        final: undefined,
+        durationMs: undefined,
         byteLength: 320,
       },
     });

@@ -258,7 +258,7 @@ describe("system run command helpers", () => {
 
   test("resolveSystemRunCommand returns an empty success payload when no command is provided", () => {
     const res = expectValidResult(resolveSystemRunCommand({}));
-    expect(res.argv).toEqual([]);
+    expect(res.argv).toStrictEqual([]);
     expect(res.commandText).toBe("");
     expect(res.shellPayload).toBeNull();
     expect(res.previewText).toBeNull();

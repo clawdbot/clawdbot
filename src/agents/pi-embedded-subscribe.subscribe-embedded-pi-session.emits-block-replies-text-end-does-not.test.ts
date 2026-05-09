@@ -220,7 +220,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await emitSuppressedCommentary({ emit, text: "Working..." });
 
     expect(onBlockReply).not.toHaveBeenCalled();
-    expect(subscription.assistantTexts).toEqual([]);
+    expect(subscription.assistantTexts).toStrictEqual([]);
 
     emitOpenAiResponsesTextDeltaAndEnd({
       emit,

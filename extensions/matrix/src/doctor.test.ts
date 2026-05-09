@@ -383,7 +383,7 @@ describe("matrix doctor", () => {
       } as never,
     });
 
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
     expect(result.config).toEqual({
       channels: {
         matrix: {

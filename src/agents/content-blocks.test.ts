@@ -13,7 +13,7 @@ describe("collectTextContentBlocks", () => {
   });
 
   it("ignores invalid entries and non-arrays", () => {
-    expect(collectTextContentBlocks(null)).toEqual([]);
-    expect(collectTextContentBlocks([{ type: "text", text: 1 }, undefined, "x"])).toEqual([]);
+    expect(collectTextContentBlocks(null)).toStrictEqual([]);
+    expect(collectTextContentBlocks([{ type: "text", text: 1 }, undefined, "x"])).toStrictEqual([]);
   });
 });

@@ -48,7 +48,7 @@ describe("core extension facade boundary", () => {
   it("does not expose Ollama plugin facades from core plugin-sdk", () => {
     expect(
       forbiddenOllamaFacadeFiles.filter((file) => fs.existsSync(path.join(repoRoot, file))),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not import Ollama plugin facades from core code", () => {
@@ -63,7 +63,7 @@ describe("core extension facade boundary", () => {
       }
     }
 
-    expect(violations).toEqual([]);
+    expect(violations).toStrictEqual([]);
   });
 
   it("keeps generic core fixtures free of bundled provider names", () => {
@@ -77,6 +77,6 @@ describe("core extension facade boundary", () => {
       }
     }
 
-    expect(violations).toEqual([]);
+    expect(violations).toStrictEqual([]);
   });
 });

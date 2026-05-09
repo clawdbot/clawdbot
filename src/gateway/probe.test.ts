@@ -352,7 +352,7 @@ describe("probeGateway", () => {
 
     expect(result.ok).toBe(true);
     expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
-    expect(gatewayClientState.requests).toEqual([]);
+    expect(gatewayClientState.requests).toStrictEqual([]);
   });
 
   it("keeps device identity enabled for authenticated lightweight probes", async () => {
@@ -365,7 +365,7 @@ describe("probeGateway", () => {
 
     expect(result.ok).toBe(true);
     expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
-    expect(gatewayClientState.requests).toEqual([]);
+    expect(gatewayClientState.requests).toStrictEqual([]);
   });
 
   it("falls back to token/password auth when device identity cannot be persisted", async () => {
@@ -429,7 +429,7 @@ describe("probeGateway", () => {
       close: { code: 1008, reason: "pairing required" },
       auth: { capability: "pairing_pending" },
     });
-    expect(gatewayClientState.requests).toEqual([]);
+    expect(gatewayClientState.requests).toStrictEqual([]);
   });
 
   it("reports write-capable auth when hello-ok scopes include operator.write", async () => {

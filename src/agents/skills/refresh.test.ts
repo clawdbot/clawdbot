@@ -76,7 +76,7 @@ describe("ensureSkillsWatcher", () => {
       ]),
     );
     const wildcardTargets = targets.filter((target) => target.includes("*"));
-    expect(wildcardTargets).toEqual([]);
+    expect(wildcardTargets).toStrictEqual([]);
     const ignored = refreshModule.shouldIgnoreSkillsWatchPath;
 
     // Node/JS paths

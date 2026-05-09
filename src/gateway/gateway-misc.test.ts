@@ -736,7 +736,7 @@ describe("node subscription manager", () => {
     manager.sendToSession("main", "tick", {}, sendEvent);
     manager.sendToSession("secondary", "tick", {}, sendEvent);
 
-    expect(sent).toEqual([]);
+    expect(sent).toStrictEqual([]);
   });
 });
 

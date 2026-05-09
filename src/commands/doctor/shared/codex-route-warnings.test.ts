@@ -116,7 +116,7 @@ describe("collectCodexRouteWarnings", () => {
       } as OpenClawConfig,
     });
 
-    expect(warnings).toEqual([]);
+    expect(warnings).toStrictEqual([]);
   });
 
   it("repairs configured Codex model refs to canonical OpenAI refs without pinning runtime", () => {
@@ -190,7 +190,7 @@ describe("collectCodexRouteWarnings", () => {
       codexRuntimeReady: true,
     });
 
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toEqual([expect.stringContaining("Repaired Codex model routes")]);
     expect(result.cfg.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.5",

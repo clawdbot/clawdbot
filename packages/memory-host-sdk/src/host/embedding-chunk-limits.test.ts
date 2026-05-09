@@ -35,7 +35,7 @@ function expectChunksWithinUtf8Bytes(chunks: EmbeddingChunks, maxBytes: number) 
       oversized.push({ index, bytes });
     }
   }
-  expect(oversized).toEqual([]);
+  expect(oversized).toStrictEqual([]);
 }
 
 function expectChunksLineRange(chunks: EmbeddingChunks, startLine: number, endLine: number) {
@@ -45,7 +45,7 @@ function expectChunksLineRange(chunks: EmbeddingChunks, startLine: number, endLi
       unexpectedRanges.push({ index, startLine: chunk.startLine, endLine: chunk.endLine });
     }
   }
-  expect(unexpectedRanges).toEqual([]);
+  expect(unexpectedRanges).toStrictEqual([]);
 }
 
 function expectChunksHaveHashes(chunks: EmbeddingChunks) {
@@ -55,7 +55,7 @@ function expectChunksHaveHashes(chunks: EmbeddingChunks) {
       invalidHashes.push({ index, hash: chunk.hash });
     }
   }
-  expect(invalidHashes).toEqual([]);
+  expect(invalidHashes).toStrictEqual([]);
 }
 
 function joinedChunkText(chunks: EmbeddingChunks): string {

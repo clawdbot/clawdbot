@@ -14,7 +14,7 @@ describe("skills/filter", () => {
   });
 
   it("preserves explicit empty list as []", () => {
-    expect(normalizeSkillFilter([])).toEqual([]);
+    expect(normalizeSkillFilter([])).toStrictEqual([]);
     expect(normalizeSkillFilter(undefined)).toBeUndefined();
   });
 

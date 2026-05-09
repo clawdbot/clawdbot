@@ -217,7 +217,7 @@ describe("resolveInstalledPluginProviderContributionIds", () => {
       preferPersisted: false,
     };
 
-    expect(resolveInstalledPluginProviderContributionIds(params)).toEqual([]);
+    expect(resolveInstalledPluginProviderContributionIds(params)).toStrictEqual([]);
     expect(
       resolveInstalledPluginProviderContributionIds({
         ...params,

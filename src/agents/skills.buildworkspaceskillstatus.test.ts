@@ -160,7 +160,7 @@ describe("buildWorkspaceSkillStatus", () => {
 
     if (process.platform === "darwin") {
       expect(skill.eligible).toBe(true);
-      expect(skill.missing.os).toEqual([]);
+      expect(skill.missing.os).toStrictEqual([]);
     } else {
       expect(skill.eligible).toBe(false);
       expect(skill.missing.os).toEqual(["darwin"]);
@@ -239,7 +239,7 @@ describe("buildWorkspaceSkillStatus", () => {
     );
     const enabledStatus = enabledReport.skills[0];
     expect(enabledStatus?.eligible).toBe(true);
-    expect(enabledStatus?.missing.config).toEqual([]);
+    expect(enabledStatus?.missing.config).toStrictEqual([]);
   });
 
   it("does not mark an overridden workspace skill as bundled by bundled name alone", async () => {
@@ -312,7 +312,7 @@ describe("buildWorkspaceSkillStatus", () => {
     } else if (process.platform === "win32") {
       expect(skill.install.map((opt) => opt.id)).toEqual(["win"]);
     } else {
-      expect(skill.install).toEqual([]);
+      expect(skill.install).toStrictEqual([]);
     }
   });
 });

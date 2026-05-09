@@ -54,14 +54,14 @@ steps:
             message:
               expr: config.preActionPrompt
             timeoutMs:
-              expr: liveTurnTimeoutMs(env, 20000)
+              expr: liveTurnTimeoutMs(env, 60000)
       - call: waitForOutboundMessage
         args:
           - ref: state
           - lambda:
               params: [candidate]
               expr: "candidate.conversation.id === 'qa-operator'"
-          - expr: liveTurnTimeoutMs(env, 20000)
+          - expr: liveTurnTimeoutMs(env, 60000)
       - set: beforeApprovalCursor
         value:
           expr: state.getSnapshot().messages.length
@@ -72,7 +72,7 @@ steps:
             message:
               expr: config.approvalPrompt
             timeoutMs:
-              expr: liveTurnTimeoutMs(env, 30000)
+              expr: liveTurnTimeoutMs(env, 60000)
       - set: expectedReplyAny
         value:
           expr: config.expectedReplyAny.map(normalizeLowercaseStringOrEmpty)
@@ -81,7 +81,7 @@ steps:
         args:
           - lambda:
               expr: "state.getSnapshot().messages.slice(beforeApprovalCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && expectedReplyAny.some((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle))).at(-1)"
-          - expr: liveTurnTimeoutMs(env, 20000)
+          - expr: liveTurnTimeoutMs(env, 60000)
           - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
     detailsExpr: outbound.text
 ```

@@ -771,7 +771,7 @@ describe("installPluginFromArchive", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(warnings).toEqual([]);
+    expect(warnings).toStrictEqual([]);
   });
 
   it("installs flat-root plugin archives from ClawHub-style downloads", async () => {
@@ -1992,7 +1992,7 @@ describe("installPluginFromArchive", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(warnings).toEqual([]);
+    expect(warnings).toStrictEqual([]);
   });
 
   it("does not flag the real qa-matrix plugin as dangerous install code", async () => {
@@ -2636,7 +2636,7 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
       expect(result.error).toContain("code safety scan failed (Error: scanner exploded)");
     }
-    expect(warnings).toEqual([]);
+    expect(warnings).toStrictEqual([]);
     scanSpy.mockRestore();
   });
 });

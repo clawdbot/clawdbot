@@ -78,7 +78,7 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
   it("treats an explicit empty toolsAllow as no tools", () => {
     const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
 
-    expect(applyEmbeddedAttemptToolsAllow(tools, []).map((tool) => tool.name)).toEqual([]);
+    expect(applyEmbeddedAttemptToolsAllow(tools, []).map((tool) => tool.name)).toStrictEqual([]);
     expect(shouldBuildCoreCodingToolsForAllowlist([])).toBe(false);
   });
 });

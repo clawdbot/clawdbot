@@ -112,7 +112,7 @@ describe("resolveEffectivePluginIds", () => {
           slots: { contextEngine: "legacy" },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it.each([
@@ -142,7 +142,7 @@ describe("resolveEffectivePluginIds", () => {
   ] satisfies Array<{ name: string; plugins: NonNullable<OpenClawConfig["plugins"]> }>)(
     "does not preload a selected context-engine slot when $name",
     ({ plugins }) => {
-      expect(resolve({ plugins })).toEqual([]);
+      expect(resolve({ plugins })).toStrictEqual([]);
     },
   );
 });

@@ -135,7 +135,7 @@ describe("resolveAllowAlwaysPatterns", () => {
       env,
       safeBins,
     });
-    expect(persisted).toEqual([]);
+    expect(persisted).toStrictEqual([]);
 
     const second = evaluateShellAllowlist({
       command,
@@ -168,7 +168,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     if (params.expectPersisted) {
       expect(persisted).toEqual([touch]);
     } else {
-      expect(persisted).toEqual([]);
+      expect(persisted).toStrictEqual([]);
     }
 
     const second = evaluateShellAllowlist({
@@ -219,7 +219,7 @@ describe("resolveAllowAlwaysPatterns", () => {
         },
       ],
     });
-    expect(patterns).toEqual([]);
+    expect(patterns).toStrictEqual([]);
   });
 
   it("persists benign awk interpreters when strict inline-eval is enabled", () => {
@@ -312,7 +312,7 @@ describe("resolveAllowAlwaysPatterns", () => {
       safeBins,
       strictInlineEval: true,
     });
-    expect(persisted).toEqual([]);
+    expect(persisted).toStrictEqual([]);
   });
 
   it("unwraps shell wrappers and persists the inner executable instead", () => {
@@ -460,7 +460,7 @@ describe("resolveAllowAlwaysPatterns", () => {
         env,
         safeBins,
       });
-      expect(persisted).toEqual([]);
+      expect(persisted).toStrictEqual([]);
 
       const second = evaluateShellAllowlist({
         command,
@@ -589,7 +589,7 @@ $0 \\"$1\\"" touch {marker}`,
       ],
       platform: process.platform,
     });
-    expect(patterns).toEqual([]);
+    expect(patterns).toStrictEqual([]);
   });
 
   it("detects shell wrappers even when unresolved executableName is a full path", () => {
@@ -730,7 +730,7 @@ $0 \\"$1\\"" touch {marker}`,
       env: makePathEnv(dir),
       platform: process.platform,
     });
-    expect(patterns).toEqual([]);
+    expect(patterns).toStrictEqual([]);
   });
 
   it("fails closed for unresolved dispatch wrappers", () => {
@@ -750,7 +750,7 @@ $0 \\"$1\\"" touch {marker}`,
       ],
       platform: process.platform,
     });
-    expect(patterns).toEqual([]);
+    expect(patterns).toStrictEqual([]);
   });
 
   it("prevents allow-always bypass for busybox shell applets", () => {
@@ -879,7 +879,7 @@ $0 \\"$1\\"" touch {marker}`,
       env,
       safeBins,
     });
-    expect(persisted).toEqual([]);
+    expect(persisted).toStrictEqual([]);
 
     const second = evaluateShellAllowlist({
       command: `awk 'BEGIN{system("id > ${path.join(dir, "marker")}")}'`,
@@ -915,7 +915,7 @@ $0 \\"$1\\"" touch {marker}`,
       env,
       safeBins,
     });
-    expect(persisted).toEqual([]);
+    expect(persisted).toStrictEqual([]);
 
     const second = evaluateShellAllowlist({
       command: `sh -c '$0 "$@"' awk 'BEGIN{system("id > /tmp/pwned")}'`,
@@ -977,7 +977,7 @@ $0 \\"$1\\"" touch {marker}`,
       env,
       safeBins,
     });
-    expect(persisted).toEqual([]);
+    expect(persisted).toStrictEqual([]);
 
     const second = evaluateShellAllowlist({
       command: `sh -c '$0 "$@"' env BASH_ENV=/tmp/payload.sh bash -c 'id > /tmp/pwned'`,
@@ -1005,7 +1005,7 @@ $0 \\"$1\\"" touch {marker}`,
       env,
       safeBins,
     });
-    expect(persisted).toEqual([]);
+    expect(persisted).toStrictEqual([]);
 
     const second = evaluateShellAllowlist({
       command: `sh -c '$0 "$@"' bash -c 'id > /tmp/pwned'`,
@@ -1033,7 +1033,7 @@ $0 \\"$1\\"" touch {marker}`,
       env,
       safeBins,
     });
-    expect(persisted).toEqual([]);
+    expect(persisted).toStrictEqual([]);
 
     const second = evaluateShellAllowlist({
       command: `sh -c '$0 "$@"' xargs sh -c 'id > /tmp/pwned'`,

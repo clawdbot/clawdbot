@@ -29,10 +29,13 @@ afterEach(() => {
 describe("method scope resolution", () => {
   it.each([
     ["sessions.resolve", ["operator.read"]],
+    ["tasks.list", ["operator.read"]],
+    ["tasks.get", ["operator.read"]],
     ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
+    ["tasks.cancel", ["operator.write"]],
     ["tools.invoke", ["operator.write"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
@@ -62,11 +65,13 @@ describe("method scope resolution", () => {
   });
 
   it("leaves node-only pending drain outside operator scopes", () => {
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("node.pending.drain")).toEqual([]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("node.pending.drain")).toStrictEqual([]);
   });
 
   it("returns empty scopes for unknown methods", () => {
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("totally.unknown.method")).toEqual([]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("totally.unknown.method")).toStrictEqual(
+      [],
+    );
   });
 
   it("reads plugin-registered gateway method scopes from the active plugin registry", () => {
@@ -228,14 +233,14 @@ describe("core gateway method classification", () => {
     const unclassified = Object.keys(coreGatewayHandlers).filter(
       (method) => !isGatewayMethodClassified(method),
     );
-    expect(unclassified).toEqual([]);
+    expect(unclassified).toStrictEqual([]);
   });
 
   it("classifies every listed gateway method name", () => {
     const unclassified = listGatewayMethods().filter(
       (method) => !isGatewayMethodClassified(method),
     );
-    expect(unclassified).toEqual([]);
+    expect(unclassified).toStrictEqual([]);
   });
 });
 

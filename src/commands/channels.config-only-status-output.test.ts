@@ -195,15 +195,15 @@ describe("config-only channels status output", () => {
   it("uses setup fallback plugins so configured external channels can be shown", async () => {
     registerSingleTestPlugin("token-only", makeUnavailableTokenPlugin());
     listReadOnlyChannelPluginsForConfig.mockClear();
+    const cfg = { channels: { "token-only": { enabled: true } } };
 
-    await formatLocalStatusSummary({ channels: { "token-only": { enabled: true } } });
+    await formatLocalStatusSummary(cfg);
 
-    expect(listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({
-        includeSetupFallbackPlugins: true,
-      }),
-    );
+    expect(listReadOnlyChannelPluginsForConfig).toHaveBeenCalledOnce();
+    expect(listReadOnlyChannelPluginsForConfig.mock.calls[0]).toStrictEqual([
+      cfg,
+      { activationSourceConfig: cfg, includeSetupFallbackPlugins: true },
+    ]);
   });
 
   it("shows configured-but-unavailable credentials distinctly from not configured", async () => {

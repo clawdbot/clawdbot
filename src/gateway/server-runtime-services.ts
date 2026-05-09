@@ -159,10 +159,10 @@ function recoverPendingOutboundDeliveries(params: {
 }): void {
   void (async () => {
     const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
-    const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
+    const { deliverOutboundPayloadsInternal } = await import("../infra/outbound/deliver.js");
     const logRecovery = params.log.child("delivery-recovery");
     await recoverPendingDeliveries({
-      deliver: deliverOutboundPayloads,
+      deliver: deliverOutboundPayloadsInternal,
       log: logRecovery,
       cfg: params.cfg,
     });

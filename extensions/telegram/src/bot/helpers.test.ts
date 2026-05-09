@@ -616,7 +616,7 @@ describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
       message_id: 1,
     } as any);
     expect(result.text).toBe("");
-    expect(result.entities).toEqual([]);
+    expect(result.entities).toStrictEqual([]);
   });
 
   it("preserves normal caption text", () => {
@@ -639,7 +639,7 @@ describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
       message_id: 1,
     } as any);
     expect(result.text).toBe("");
-    expect(result.entities).toEqual([]);
+    expect(result.entities).toStrictEqual([]);
   });
 });
 

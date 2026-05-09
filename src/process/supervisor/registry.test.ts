@@ -91,7 +91,7 @@ describe("process supervisor run registry", () => {
       startedAtMs: 2,
     });
 
-    expect(registry.listByScope("   ")).toEqual([]);
+    expect(registry.listByScope("   ")).toStrictEqual([]);
     const scoped = registry.listByScope("scope:a");
     expect(scoped).toHaveLength(1);
     const [firstScoped] = scoped;

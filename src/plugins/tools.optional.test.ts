@@ -485,7 +485,7 @@ describe("resolvePluginTools optional tools", () => {
       env: {},
     });
 
-    expect(tools).toEqual([]);
+    expect(tools).toStrictEqual([]);
     expect(factory).not.toHaveBeenCalled();
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
@@ -675,7 +675,7 @@ describe("resolvePluginTools optional tools", () => {
       }),
     );
 
-    expect(tools).toEqual([]);
+    expect(tools).toStrictEqual([]);
     expectSingleDiagnosticMessage(
       registry.diagnostics,
       "plugin tool registry did not include selected plugin tools after cold load (optional-demo)",
@@ -745,7 +745,7 @@ describe("resolvePluginTools optional tools", () => {
       freshRegistry.diagnostics,
       "plugin tool registry did not include selected plugin tools after cold load (multi)",
     );
-    expect(staleRegistry.diagnostics).toEqual([]);
+    expect(staleRegistry.diagnostics).toStrictEqual([]);
   });
 
   it("does not reuse a pinned gateway registry for manifest-unavailable tools", () => {
@@ -780,7 +780,7 @@ describe("resolvePluginTools optional tools", () => {
       allowGatewaySubagentBinding: true,
     });
 
-    expect(tools).toEqual([]);
+    expect(tools).toStrictEqual([]);
     expect(factory).not.toHaveBeenCalled();
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
@@ -1419,7 +1419,7 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(first, ["Message"]);
-    expect(second).toEqual([]);
+    expect(second).toStrictEqual([]);
     expect(factory).toHaveBeenCalled();
   });
 
@@ -1689,7 +1689,7 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(hostTools, ["sandbox_sensitive_tool"]);
-    expect(sandboxedTools).toEqual([]);
+    expect(sandboxedTools).toStrictEqual([]);
     expect(factory).toHaveBeenCalledTimes(2);
   });
 

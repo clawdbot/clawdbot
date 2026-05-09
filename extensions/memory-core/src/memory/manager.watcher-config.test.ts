@@ -268,7 +268,9 @@ describe("memory watcher config", () => {
     await expectWatcherManager(cfg);
 
     const watcher = createdWatchers[0];
-    expect(watcher?.on).toHaveBeenCalledWith("error", expect.any(Function));
+    const errorRegistration = watcher?.on.mock.calls.find(([event]) => event === "error");
+    expect(errorRegistration?.[0]).toBe("error");
+    expect(errorRegistration?.[1]).toBeTypeOf("function");
     expect(watcher?.emit("error", new Error("watcher error: ENOSPC"))).toBeUndefined();
     expect(memoryLoggerWarn).toHaveBeenCalledWith("memory watcher error: watcher error: ENOSPC");
   });

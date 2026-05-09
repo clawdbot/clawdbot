@@ -890,6 +890,6 @@ describe("zalouser monitor group mention gating", () => {
     });
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
     const secondDispatch = dispatchReplyWithBufferedBlockDispatcher.mock.calls[1]?.[0];
-    expect(secondDispatch?.ctx?.InboundHistory).toEqual([]);
+    expect(secondDispatch?.ctx?.InboundHistory).toStrictEqual([]);
   });
 });

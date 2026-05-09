@@ -263,7 +263,7 @@ describe("bedrock mantle discovery", () => {
       fetchFn: mockFetch as unknown as typeof fetch,
     });
 
-    expect(models).toEqual([]);
+    expect(models).toStrictEqual([]);
   });
 
   it("returns empty array on network error", async () => {
@@ -275,7 +275,7 @@ describe("bedrock mantle discovery", () => {
       fetchFn: mockFetch as unknown as typeof fetch,
     });
 
-    expect(models).toEqual([]);
+    expect(models).toStrictEqual([]);
   });
 
   it("filters out models with empty IDs", async () => {

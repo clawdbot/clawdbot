@@ -118,15 +118,16 @@ describe("irc setup", () => {
   it("updates top-level dm policy and allowlist", () => {
     const cfg: CoreConfig = { channels: { irc: {} } };
 
-    expect(setIrcDmPolicy(cfg, "open")).toMatchObject({
+    expect(setIrcDmPolicy(cfg, "open")).toStrictEqual({
       channels: {
         irc: {
           dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     });
 
-    expect(setIrcAllowFrom(cfg, ["alice", "bob"])).toMatchObject({
+    expect(setIrcAllowFrom(cfg, ["alice", "bob"])).toStrictEqual({
       channels: {
         irc: {
           allowFrom: ["alice", "bob"],
@@ -195,7 +196,7 @@ describe("irc setup", () => {
         enabled: true,
         service: "NickServ",
       }),
-    ).toMatchObject({
+    ).toStrictEqual({
       channels: {
         irc: {
           accounts: {
@@ -215,7 +216,7 @@ describe("irc setup", () => {
         host: "irc.libera.chat",
         nick: "openclaw-work",
       }),
-    ).toMatchObject({
+    ).toStrictEqual({
       channels: {
         irc: {
           accounts: {
@@ -249,7 +250,7 @@ describe("irc setup", () => {
           return trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
         },
       ),
-    ).toMatchObject({
+    ).toStrictEqual({
       channels: {
         irc: {
           enabled: true,
@@ -263,7 +264,7 @@ describe("irc setup", () => {
       },
     });
 
-    expect(setIrcGroupAccess(cfg, "default", "disabled", [], () => null)).toMatchObject({
+    expect(setIrcGroupAccess(cfg, "default", "disabled", [], () => null)).toStrictEqual({
       channels: {
         irc: {
           enabled: true,

@@ -31,6 +31,13 @@ describe("image-ops temp dir", () => {
     expect(prefix).toEqual(expect.stringMatching(/^.+openclaw-img-[0-9a-f-]+-$/u));
     expect(path.dirname(prefix ?? "")).toBe(secureRoot);
     expect(createdTempDir.startsWith(prefix ?? "")).toBe(true);
-    await expect(fs.access(createdTempDir)).rejects.toMatchObject({ code: "ENOENT" });
+    let accessError: unknown;
+    try {
+      await fs.access(createdTempDir);
+    } catch (error) {
+      accessError = error;
+    }
+    expect(accessError).toBeInstanceOf(Error);
+    expect((accessError as NodeJS.ErrnoException).code).toBe("ENOENT");
   });
 });

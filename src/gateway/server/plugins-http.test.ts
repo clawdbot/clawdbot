@@ -164,7 +164,7 @@ describe("createGatewayPluginRequestHandler", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(observedScopes).toEqual([]);
+    expect(observedScopes).toStrictEqual([]);
   });
 
   it("preserves gateway-authenticated plugin route runtime scopes from request auth", async () => {
@@ -478,7 +478,7 @@ describe("createGatewayPluginUpgradeHandler", () => {
     expect(handled).toBe(true);
     expect(routeUpgradeHandler).toHaveBeenCalledTimes(1);
     expect(socket.destroyed).toBe(false);
-    expect(socket.chunks).toEqual([]);
+    expect(socket.chunks).toStrictEqual([]);
   });
 });
 

@@ -22,7 +22,7 @@ type OllamaProviderPlugin = {
         mode: "api-key";
       }
     | undefined;
-  discovery: {
+  catalog: {
     order: "late";
     run: (ctx: ProviderCatalogContext) => ReturnType<typeof runOllamaDiscovery>;
   };
@@ -60,7 +60,7 @@ export const ollamaProviderDiscovery: OllamaProviderPlugin = {
       mode: "api-key",
     };
   },
-  discovery: {
+  catalog: {
     order: "late",
     run: runOllamaDiscovery,
   },

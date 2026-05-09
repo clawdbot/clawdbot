@@ -126,7 +126,7 @@ describe("phone-control plugin", () => {
 
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
       expect(nodes.allowCommands).toEqual([...WRITE_COMMANDS]);
-      expect(nodes.denyCommands).toEqual([]);
+      expect(nodes.denyCommands).toStrictEqual([]);
       expect(text).toContain("sms.send");
     });
   });

@@ -99,7 +99,9 @@ API key auth, and dynamic model resolution.
   </Step>
 
   <Step title="Register the provider">
-    A minimal provider needs an `id`, `label`, `auth`, and `catalog`:
+    A minimal text provider needs an `id`, `label`, `auth`, and `catalog`.
+    `catalog` is the provider-owned runtime/config hook; it can call live
+    vendor APIs and returns `models.providers` entries.
 
     ```typescript index.ts
     import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -166,9 +168,33 @@ API key auth, and dynamic model resolution.
             },
           },
         });
+
+        api.registerModelCatalogProvider({
+          provider: "acme-ai",
+          kinds: ["text"],
+          liveCatalog: async (ctx) => {
+            const apiKey = ctx.resolveProviderApiKey("acme-ai").apiKey;
+            if (!apiKey) return null;
+            return [
+              {
+                kind: "text",
+                provider: "acme-ai",
+                model: "acme-large",
+                label: "Acme Large",
+                source: "live",
+              },
+            ];
+          },
+        });
       },
     });
     ```
+
+    `registerModelCatalogProvider` is the newer control-plane catalog surface
+    for list/help/picker UI. Use it for text, image-generation,
+    video-generation, and music-generation rows. Keep vendor endpoint calls and
+    response mapping in the plugin; OpenClaw owns the shared row shape, source
+    labels, and help rendering.
 
     That is a working provider. Users can now
     `openclaw onboard --acme-ai-api-key <key>` and select

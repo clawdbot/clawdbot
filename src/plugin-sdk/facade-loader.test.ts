@@ -320,7 +320,7 @@ describe("plugin-sdk facade loader", () => {
       }),
     ).toThrow("plugin load failure");
 
-    expect(listImportedBundledPluginFacadeIds()).toEqual([]);
+    expect(listImportedBundledPluginFacadeIds()).toStrictEqual([]);
 
     expect(() =>
       loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({

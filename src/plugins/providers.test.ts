@@ -674,14 +674,14 @@ describe("resolvePluginProviders", () => {
         env: {} as NodeJS.ProcessEnv,
         onlyPluginIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       resolveDiscoveredProviderPluginIds({
         config: {},
         env: {} as NodeJS.ProcessEnv,
         onlyPluginIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it.each([
@@ -1169,7 +1169,7 @@ describe("resolvePluginProviders", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not activate explicit runtime owners disabled in config", () => {
@@ -1194,7 +1194,7 @@ describe("resolvePluginProviders", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not activate explicit runtime owners outside the allowlist", () => {
@@ -1217,7 +1217,7 @@ describe("resolvePluginProviders", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("uses setup.providers to keep explicit provider owners on the setup path", () => {
@@ -1326,7 +1326,7 @@ describe("resolvePluginProviders", () => {
       includeUntrustedWorkspacePlugins: false,
     });
 
-    expect(providers).toEqual([]);
+    expect(providers).toStrictEqual([]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -1350,7 +1350,7 @@ describe("resolvePluginProviders", () => {
       includeUntrustedWorkspacePlugins: false,
     });
 
-    expect(providers).toEqual([]);
+    expect(providers).toStrictEqual([]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
     expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
@@ -1374,7 +1374,7 @@ describe("resolvePluginProviders", () => {
       activate: true,
     });
 
-    expect(providers).toEqual([]);
+    expect(providers).toStrictEqual([]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
     expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
@@ -1401,7 +1401,7 @@ describe("resolvePluginProviders", () => {
       activate: true,
     });
 
-    expect(providers).toEqual([]);
+    expect(providers).toStrictEqual([]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
     expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
@@ -1432,7 +1432,7 @@ describe("resolvePluginProviders", () => {
         },
         includeUntrustedWorkspacePlugins: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not auto-activate explicitly disabled trusted workspace runtime owners", () => {
@@ -1460,7 +1460,7 @@ describe("resolvePluginProviders", () => {
         },
         includeUntrustedWorkspacePlugins: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps legacy CLI backend ownership as the explicit provider fallback", () => {

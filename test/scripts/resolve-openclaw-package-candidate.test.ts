@@ -63,9 +63,12 @@ describe("resolve-openclaw-package-candidate", () => {
         "--output-dir",
         ".artifacts/docker-e2e-package",
       ]),
-    ).toMatchObject({
+    ).toEqual({
       artifactDir: ".",
+      githubOutput: "",
+      metadata: "",
       outputDir: ".artifacts/docker-e2e-package",
+      outputName: "openclaw-current.tgz",
       packageSha256: "",
       packageRef: "release/2026.4.27",
       packageSpec: "openclaw@beta",
@@ -91,7 +94,7 @@ describe("resolve-openclaw-package-candidate", () => {
       ),
     );
 
-    await expect(readArtifactPackageCandidateMetadata(dir)).resolves.toMatchObject({
+    await expect(readArtifactPackageCandidateMetadata(dir)).resolves.toEqual({
       packageRef: "release/2026.4.30",
       packageSourceSha: "66ce632b9b7c5c7fdd3e66c739687d51638ad6e2",
       packageTrustedReason: "repository-branch-history",

@@ -46,6 +46,14 @@ describe("blockquote spacing", () => {
 
       expect(result.text).not.toContain("\n\n\n");
     });
+
+    it("excludes the trailing paragraph separator from the blockquote span", () => {
+      const result = markdownToIR("> `gpt`\n\nbody");
+
+      expect(result.text).toBe("gpt\n\nbody");
+      expect(result.styles).toContainEqual({ start: 0, end: 3, style: "blockquote" });
+      expect(result.styles).toContainEqual({ start: 0, end: 3, style: "code" });
+    });
   });
 
   describe("consecutive blockquotes", () => {

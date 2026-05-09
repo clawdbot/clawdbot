@@ -133,7 +133,7 @@ describe("matrix migration snapshots", () => {
       });
       expect(detection.inspectorAvailable).toBe(true);
       expect(detection.plans).toHaveLength(1);
-      expect(detection.warnings).toEqual([]);
+      expect(detection.warnings).toStrictEqual([]);
       expect(
         hasActionableMatrixMigration({
           cfg,

@@ -43,7 +43,7 @@ describe("zalo directory", () => {
         limit: undefined,
         runtime: runtimeEnv,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   }
 
   it("lists peers from allowFrom", async () => {

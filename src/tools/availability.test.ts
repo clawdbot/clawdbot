@@ -16,7 +16,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 describe("evaluateToolAvailability", () => {
   it("treats descriptors without signals as available", () => {
-    expect(evaluateToolAvailability({ descriptor: baseDescriptor })).toEqual([]);
+    expect(evaluateToolAvailability({ descriptor: baseDescriptor })).toStrictEqual([]);
   });
 
   it("evaluates auth, env, config, plugin, and context signals from data only", () => {
@@ -44,7 +44,7 @@ describe("evaluateToolAvailability", () => {
           values: { channel: "telegram" },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("returns deterministic diagnostics for missing signals", () => {
@@ -141,7 +141,7 @@ describe("evaluateToolAvailability", () => {
             value.id === "OPENAI_API_KEY",
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not infer env-template strings as configured credentials", () => {
@@ -192,7 +192,7 @@ describe("evaluateToolAvailability", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("supports anyOf availability expressions", () => {
@@ -221,7 +221,7 @@ describe("evaluateToolAvailability", () => {
           enabledPluginIds: new Set(),
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       evaluateToolAvailability({

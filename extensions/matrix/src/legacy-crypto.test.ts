@@ -93,7 +93,7 @@ describe("matrix legacy encrypted-state migration", () => {
 
       const detection = detectLegacyMatrixCrypto({ cfg, env: process.env });
       expect(detection.inspectorAvailable).toBe(true);
-      expect(detection.warnings).toEqual([]);
+      expect(detection.warnings).toStrictEqual([]);
       expect(detection.plans).toHaveLength(1);
 
       const result = await autoPrepareLegacyMatrixCrypto({
@@ -110,7 +110,7 @@ describe("matrix legacy encrypted-state migration", () => {
       });
 
       expect(result.migrated).toBe(true);
-      expect(result.warnings).toEqual([]);
+      expect(result.warnings).toStrictEqual([]);
 
       const recovery = JSON.parse(
         fs.readFileSync(path.join(rootDir, "recovery-key.json"), "utf8"),

@@ -8,9 +8,16 @@ function makeLogger() {
   };
 }
 
-function expectConsultRequest(call: unknown, expected: Record<string, unknown>) {
-  expect(call).toMatchObject(expected);
-  expect((call as { signal?: unknown } | undefined)?.signal).toBeInstanceOf(AbortSignal);
+function expectConsultRequest(
+  call: unknown,
+  expected: { metadata: unknown; question: string; responseStyle: string },
+) {
+  if (!call || typeof call !== "object") {
+    throw new Error("Expected talkback consult request object");
+  }
+  const { signal, ...request } = call as { signal?: unknown };
+  expect(signal).toBeInstanceOf(AbortSignal);
+  expect(request).toStrictEqual(expected);
 }
 
 describe("realtime voice agent talkback queue", () => {
@@ -35,6 +42,7 @@ describe("realtime voice agent talkback queue", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expectConsultRequest(consult.mock.calls[0]?.[0], {
+      metadata: undefined,
       question: "first\nsecond",
       responseStyle: "brief",
     });
@@ -76,10 +84,12 @@ describe("realtime voice agent talkback queue", () => {
     await vi.runAllTimersAsync();
 
     expectConsultRequest(consult.mock.calls[0]?.[0], {
+      metadata: undefined,
       question: "first",
       responseStyle: "brief",
     });
     expectConsultRequest(consult.mock.calls[1]?.[0], {
+      metadata: undefined,
       question: "ignored\nsecond",
       responseStyle: "brief",
     });
@@ -125,13 +135,13 @@ describe("realtime voice agent talkback queue", () => {
     await vi.runAllTimersAsync();
 
     expectConsultRequest(consult.mock.calls[1]?.[0], {
-      question: "owner",
       metadata: ownerMetadata,
+      question: "owner",
       responseStyle: "brief",
     });
     expectConsultRequest(consult.mock.calls[2]?.[0], {
-      question: "guest",
       metadata: guestMetadata,
+      question: "guest",
       responseStyle: "brief",
     });
     expect(deliver).toHaveBeenCalledWith("owner-answer");

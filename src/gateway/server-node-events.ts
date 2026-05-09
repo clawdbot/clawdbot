@@ -19,7 +19,6 @@ import {
   createOutboundSendDeps,
   defaultRuntime,
   deleteMediaBuffer,
-  deliverOutboundPayloads,
   enqueueSystemEvent,
   formatForLog,
   getRuntimeConfig,
@@ -39,6 +38,7 @@ import {
   resolveSessionModelRef,
   sanitizeInboundSystemTags,
   scopedHeartbeatWakeOptions,
+  sendDurableMessageBatch,
   updateSessionStore,
 } from "./server-node-events.runtime.js";
 
@@ -345,15 +345,19 @@ async function sendReceiptAck(params: {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
   });
-  await deliverOutboundPayloads({
+  const send = await sendDurableMessageBatch({
     cfg: params.cfg,
     channel: params.channel,
     to: resolved.to,
     payloads: [{ text: params.text }],
     session,
     bestEffort: true,
+    durability: "best_effort",
     deps: createOutboundSendDeps(params.deps),
   });
+  if (send.status === "failed") {
+    throw send.error;
+  }
 }
 
 export const handleNodeEvent = async (

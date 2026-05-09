@@ -36,7 +36,7 @@ describe("channel docs config examples", () => {
         }
       }
     }
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
   it("keeps OpenClaw channel config snippets parseable and schema-valid", () => {
@@ -70,6 +70,6 @@ describe("channel docs config examples", () => {
         }
       }
     }
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 });

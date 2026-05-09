@@ -111,7 +111,7 @@ describe("runAgentStep", () => {
       timeoutMs: 10_000,
     });
 
-    expect(gatewayCalls).toEqual([]);
+    expect(gatewayCalls).toStrictEqual([]);
     expect(agentCommandFromIngress).toHaveBeenCalledWith(
       expect.objectContaining({
         message: expect.stringContaining("internal announce step"),

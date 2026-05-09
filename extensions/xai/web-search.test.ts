@@ -385,7 +385,7 @@ describe("xai web search response parsing", () => {
       ],
     });
     expect(result.text).toBe("hello from output");
-    expect(result.annotationCitations).toEqual([]);
+    expect(result.annotationCitations).toStrictEqual([]);
   });
 
   it("extracts url_citation annotations from content blocks", () => {
@@ -414,13 +414,13 @@ describe("xai web search response parsing", () => {
   it("falls back to deprecated output_text", () => {
     const result = extractXaiWebSearchContent({ output_text: "hello from output_text" });
     expect(result.text).toBe("hello from output_text");
-    expect(result.annotationCitations).toEqual([]);
+    expect(result.annotationCitations).toStrictEqual([]);
   });
 
   it("returns undefined text when no content found", () => {
     const result = extractXaiWebSearchContent({});
     expect(result.text).toBeUndefined();
-    expect(result.annotationCitations).toEqual([]);
+    expect(result.annotationCitations).toStrictEqual([]);
   });
 
   it("extracts output_text blocks directly in output array", () => {

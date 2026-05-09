@@ -103,7 +103,7 @@ describe("Matrix IndexedDB persistence", () => {
     expect(restored).toBe(false);
 
     const dbs = await indexedDB.databases();
-    expect(dbs).toEqual([]);
+    expect(dbs).toStrictEqual([]);
   });
 
   it("returns false without warning when the snapshot does not exist yet", async () => {

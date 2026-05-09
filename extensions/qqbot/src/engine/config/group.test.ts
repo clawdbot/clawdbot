@@ -162,7 +162,7 @@ describe("engine/config/group", () => {
 
   describe("resolveMentionPatterns", () => {
     it("returns [] when nothing configured", () => {
-      expect(resolveMentionPatterns({})).toEqual([]);
+      expect(resolveMentionPatterns({})).toStrictEqual([]);
     });
 
     it("reads global patterns", () => {

@@ -47,6 +47,7 @@ export type OutboundPayloadJson = {
 };
 
 export type OutboundPayloadPlan = {
+  sourceIndex: number;
   payload: ReplyPayload;
   parts: ReturnType<typeof resolveSendableOutboundReplyParts>;
   hasPresentation: boolean;
@@ -130,6 +131,10 @@ type PreparedOutboundPayloadPlanEntry = {
   isSilent: boolean;
 };
 
+type IndexedPreparedOutboundPayloadPlanEntry = PreparedOutboundPayloadPlanEntry & {
+  sourceIndex: number;
+};
+
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
   context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
@@ -195,15 +200,15 @@ export function createOutboundPayloadPlan(
   });
   const hasPendingSpawnedChildren =
     context.hasPendingSpawnedChildren ?? resolvePendingSpawnedChildren(context.sessionKey);
-  const prepared: PreparedOutboundPayloadPlanEntry[] = [];
-  for (const payload of payloads) {
+  const prepared: IndexedPreparedOutboundPayloadPlanEntry[] = [];
+  for (const [sourceIndex, payload] of payloads.entries()) {
     const entry = createOutboundPayloadPlanEntry(payload, {
       extractMarkdownImages: context.extractMarkdownImages,
     });
     if (!entry) {
       continue;
     }
-    prepared.push(entry);
+    prepared.push({ ...entry, sourceIndex });
   }
   const hasVisibleNonSilentContent = prepared.some((entry) => {
     if (entry.isSilent) {
@@ -219,6 +224,7 @@ export function createOutboundPayloadPlan(
   for (const entry of prepared) {
     if (!entry.isSilent) {
       plan.push({
+        sourceIndex: entry.sourceIndex,
         payload: entry.payload,
         parts: resolveSendableOutboundReplyParts(entry.payload),
         hasPresentation: entry.hasPresentation,
@@ -243,6 +249,7 @@ export function createOutboundPayloadPlan(
         continue;
       }
       plan.push({
+        sourceIndex: entry.sourceIndex,
         payload: visibleSilentPayload,
         parts: resolveSendableOutboundReplyParts(visibleSilentPayload),
         hasPresentation: entry.hasPresentation,
@@ -261,6 +268,7 @@ export function createOutboundPayloadPlan(
       continue;
     }
     plan.push({
+      sourceIndex: entry.sourceIndex,
       payload: visibleSilentPayload,
       parts: resolveSendableOutboundReplyParts(visibleSilentPayload),
       hasPresentation: entry.hasPresentation,

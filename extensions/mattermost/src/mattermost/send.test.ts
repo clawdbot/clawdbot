@@ -323,11 +323,11 @@ describe("sendMessageMattermost", () => {
     });
 
     expect(mockState.fetchMattermostUser).toHaveBeenCalledWith({}, userId);
-    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledWith(
-      {},
-      ["bot-user", userId],
-      expect.any(Object),
-    );
+    const dmRetryCall = mockState.createMattermostDirectChannelWithRetry.mock.calls[0];
+    expect(dmRetryCall?.[0]).toEqual({});
+    expect(dmRetryCall?.[1]).toEqual(["bot-user", userId]);
+    expect(Object.keys(dmRetryCall?.[2] ?? {})).toEqual(["onRetry"]);
+    expect(dmRetryCall?.[2]?.onRetry).toBeTypeOf("function");
     expect(mockState.uploadMattermostFile).toHaveBeenCalledWith(
       {},
       expect.objectContaining({

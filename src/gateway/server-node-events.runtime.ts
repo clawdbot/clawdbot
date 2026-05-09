@@ -1,13 +1,13 @@
 export { resolveSessionAgentId } from "../agents/agent-scope.js";
 export { sanitizeInboundSystemTags } from "../auto-reply/reply/inbound-text.js";
 export { normalizeChannelId } from "../channels/plugins/index.js";
+export { sendDurableMessageBatch } from "../channels/message/runtime.js";
 export { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 export { agentCommandFromIngress } from "../commands/agent.js";
 export { getRuntimeConfig } from "../config/io.js";
 export { updateSessionStore } from "../config/sessions.js";
 export { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 export { requestHeartbeat } from "../infra/heartbeat-wake.js";
-export { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 export { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 export { resolveOutboundTarget } from "../infra/outbound/targets.js";
 export { registerApnsRegistration } from "../infra/push-apns.js";

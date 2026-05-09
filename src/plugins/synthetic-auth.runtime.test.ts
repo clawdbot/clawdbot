@@ -74,7 +74,7 @@ describe("synthetic auth runtime refs", () => {
       diagnostics: [],
     });
 
-    expect(resolveRuntimeSyntheticAuthProviderRefs()).toEqual([]);
+    expect(resolveRuntimeSyntheticAuthProviderRefs()).toStrictEqual([]);
   });
 
   it("prefers the active runtime registry when plugins are already loaded", () => {

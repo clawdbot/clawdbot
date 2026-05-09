@@ -42,6 +42,7 @@ export type RealtimeVoiceBridgeSessionParams = {
   instructions?: string;
   initialGreetingInstructions?: string;
   autoRespondToAudio?: boolean;
+  interruptResponseOnInputAudio?: boolean;
   markStrategy?: RealtimeVoiceMarkStrategy;
   triggerGreetingOnReady?: boolean;
   tools?: RealtimeVoiceTool[];
@@ -84,6 +85,7 @@ export function createRealtimeVoiceBridgeSession(
     audioFormat: params.audioFormat,
     instructions: params.instructions,
     autoRespondToAudio: params.autoRespondToAudio,
+    interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
     tools: params.tools,
     onAudio: (audio) => {
       if (canSendAudio()) {

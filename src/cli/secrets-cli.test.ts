@@ -331,7 +331,7 @@ describe("secrets CLI", () => {
       const skippedExecNotes = runtimeLogs.filter((line) =>
         line.includes("Secrets apply dry-run note: skipped"),
       );
-      expect(skippedExecNotes).toEqual([]);
+      expect(skippedExecNotes).toStrictEqual([]);
     });
   });
 
@@ -345,7 +345,7 @@ describe("secrets CLI", () => {
     const preflightSkippedExecNotes = runtimeLogs.filter((line) =>
       line.includes("Preflight note: skipped"),
     );
-    expect(preflightSkippedExecNotes).toEqual([]);
+    expect(preflightSkippedExecNotes).toStrictEqual([]);
   });
 
   it("forwards --allow-exec to configure preflight and apply", async () => {

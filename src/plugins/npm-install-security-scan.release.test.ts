@@ -28,6 +28,7 @@ const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS = new Set([
   "@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts",
   "@openclaw/google-meet:dangerous-exec:src/node-host.ts",
   "@openclaw/google-meet:dangerous-exec:src/realtime.ts",
+  "@openclaw/matrix:dangerous-exec:src/matrix/deps.ts",
   "@openclaw/voice-call:dangerous-exec:src/tunnel.ts",
   "@openclaw/voice-call:dangerous-exec:src/webhook/tailscale.ts",
 ]);
@@ -238,7 +239,7 @@ describe("publishable plugin npm package install security scan", () => {
       unexpectedCriticalFindings.push(...result.unexpectedCriticalFindings);
     }
 
-    expect(unexpectedCriticalFindings.toSorted()).toEqual([]);
+    expect(unexpectedCriticalFindings.toSorted()).toStrictEqual([]);
     expect([...reviewedCriticalFindings].toSorted()).toEqual(
       [...expectedReviewedCriticalFindings].toSorted(),
     );

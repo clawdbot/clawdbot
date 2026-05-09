@@ -26,6 +26,6 @@ describe("check-plugin-sdk-wildcard-reexports", () => {
           'export * from "./src/runtime-api.js";',
         ].join("\n"),
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

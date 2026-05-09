@@ -51,6 +51,7 @@ describe("status-all report tables", () => {
   });
 
   it("builds colored detail table sections", () => {
+    const renderTable = ({ rows }: { rows: unknown[] }) => `rows:${rows.length}`;
     const [section] = buildStatusChannelDetailSections({
       details: [
         {
@@ -60,7 +61,7 @@ describe("status-all report tables", () => {
         },
       ],
       width: 120,
-      renderTable: ({ rows }) => `rows:${rows.length}`,
+      renderTable,
       ok: (value) => `ok(${value})`,
       warn: (value) => `warn(${value})`,
     });
@@ -69,7 +70,7 @@ describe("status-all report tables", () => {
       kind: "table",
       title: "Channel detail",
       width: 120,
-      renderTable: expect.any(Function),
+      renderTable,
       columns: [
         { key: "Channel", header: "Channel", flex: false, minWidth: 10 },
         { key: "Status", header: "Status", flex: false, minWidth: 10 },

@@ -37,6 +37,7 @@ resources.
 | `Run.cancel()`            | Ready   | Calls `sessions.abort` by run id, with session key when available.                |
 | `oc.sessions`             | Ready   | Creates, resolves, sends to, patches, compacts, and gets session handles.         |
 | `Session.send()`          | Ready   | Calls `sessions.send` and returns a `Run`.                                        |
+| `oc.tasks`                | Ready   | Lists, reads, and cancels Gateway task ledger entries.                            |
 | `oc.models`               | Ready   | Calls `models.list` and the current `models.authStatus` status RPC.               |
 | `oc.tools`                | Ready   | Lists, scopes, and invokes Gateway tools through the policy pipeline.             |
 | `oc.artifacts`            | Ready   | Lists, gets, and downloads Gateway transcript artifacts.                          |
@@ -50,7 +51,9 @@ The SDK also exports the core types used by those surfaces:
 `OpenClawEventType`, `GatewayEvent`, `OpenClawTransport`,
 `GatewayRequestOptions`, `SessionCreateParams`, `SessionSendParams`,
 `ArtifactSummary`, `ArtifactQuery`, `ArtifactsListResult`,
-`ArtifactsGetResult`, `ArtifactsDownloadResult`, `RuntimeSelection`,
+`ArtifactsGetResult`, `ArtifactsDownloadResult`,
+`TaskSummary`, `TaskStatus`, `TasksListParams`, `TasksListResult`,
+`TasksGetResult`, `TasksCancelResult`, `RuntimeSelection`,
 `EnvironmentSelection`, `WorkspaceSelection`, `ApprovalMode`, and related
 result types.
 
@@ -254,6 +257,14 @@ const approvals = await oc.approvals.list();
 await oc.approvals.respond("approval-id", { decision: "approve" });
 ```
 
+Task helpers use the durable task ledger that also backs `openclaw tasks`:
+
+```typescript
+const tasks = await oc.tasks.list({ status: "running", sessionKey: "agent:main:main" });
+const task = await oc.tasks.get(tasks.tasks[0].id);
+await oc.tasks.cancel(task.task.id, { reason: "user stopped task" });
+```
+
 Environment helpers expose read-only Gateway-local and node discovery:
 
 ```typescript
@@ -268,10 +279,6 @@ pretend Gateway RPCs exist. These calls currently throw explicit unsupported
 errors:
 
 ```typescript
-await oc.tasks.list();
-await oc.tasks.get("task-id");
-await oc.tasks.cancel("task-id");
-
 await oc.environments.create({});
 await oc.environments.delete("environment-id");
 ```

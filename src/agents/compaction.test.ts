@@ -264,7 +264,7 @@ describe("pruneHistoryForContextShare", () => {
     expect(pruned.droppedChunks).toBe(0);
     expect(pruned.messages.length).toBe(messages.length);
     expect(pruned.keptTokens).toBe(estimateMessagesTokens(messages));
-    expect(pruned.droppedMessagesList).toEqual([]);
+    expect(pruned.droppedMessagesList).toStrictEqual([]);
   });
 
   it("returns droppedMessagesList containing dropped messages", () => {
@@ -291,7 +291,7 @@ describe("pruneHistoryForContextShare", () => {
     });
 
     expect(pruned.droppedChunks).toBe(0);
-    expect(pruned.droppedMessagesList).toEqual([]);
+    expect(pruned.droppedMessagesList).toStrictEqual([]);
     expect(pruned.messages.length).toBe(1);
   });
 

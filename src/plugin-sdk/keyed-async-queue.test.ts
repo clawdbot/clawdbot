@@ -101,7 +101,7 @@ describe("enqueueKeyedTask", () => {
       ).rejects.toThrow("boom");
 
       await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(unhandled).toEqual([]);
+      expect(unhandled).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }

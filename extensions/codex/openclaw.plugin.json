@@ -15,7 +15,7 @@
       }
     }
   },
-  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "providerCatalogEntry": "./provider-discovery.ts",
   "syntheticAuthRefs": ["codex"],
   "nonSecretAuthMarkers": ["codex-app-server"],
   "activation": {

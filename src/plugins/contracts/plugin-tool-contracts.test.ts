@@ -246,6 +246,6 @@ describe("bundled plugin tool manifest contracts", () => {
       }
     }
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 });

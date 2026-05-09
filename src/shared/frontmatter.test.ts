@@ -24,7 +24,7 @@ describe("shared/frontmatter", () => {
   test("normalizeStringList handles strings, arrays, and non-list values", () => {
     expect(normalizeStringList("a, b,,c")).toEqual(["a", "b", "c"]);
     expect(normalizeStringList([" a ", "", "b", 42])).toEqual(["a", "b", "42"]);
-    expect(normalizeStringList(null)).toEqual([]);
+    expect(normalizeStringList(null)).toStrictEqual([]);
   });
 
   test("getFrontmatterString extracts strings only", () => {

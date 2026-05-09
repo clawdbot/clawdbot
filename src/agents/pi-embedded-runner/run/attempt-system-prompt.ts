@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderTransformSystemPromptContext } from "../../../plugins/types.js";
-import { appendAgentBootstrapSystemPromptSupplement } from "../../system-prompt.js";
+import {
+  appendAgentBootstrapSystemPromptSupplement,
+  appendModelIdentitySystemPrompt,
+} from "../../system-prompt.js";
 import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "../system-prompt.js";
 
 type EmbeddedSystemPromptParams = Parameters<typeof buildEmbeddedSystemPrompt>[0];
@@ -48,15 +51,18 @@ export function buildAttemptSystemPrompt(
   params: BuildAttemptSystemPromptParams,
 ): AttemptSystemPrompt {
   const baseSystemPrompt = params.systemPromptOverrideText
-    ? appendRuntimeExtraSystemPrompt({
-        systemPrompt: appendAgentBootstrapSystemPromptSupplement({
-          systemPrompt: params.systemPromptOverrideText,
-          bootstrapMode: params.embeddedSystemPrompt.bootstrapMode,
-          bootstrapTruncationNotice: params.embeddedSystemPrompt.bootstrapTruncationNotice,
-          contextFiles: params.embeddedSystemPrompt.contextFiles,
+    ? appendModelIdentitySystemPrompt({
+        systemPrompt: appendRuntimeExtraSystemPrompt({
+          systemPrompt: appendAgentBootstrapSystemPromptSupplement({
+            systemPrompt: params.systemPromptOverrideText,
+            bootstrapMode: params.embeddedSystemPrompt.bootstrapMode,
+            bootstrapTruncationNotice: params.embeddedSystemPrompt.bootstrapTruncationNotice,
+            contextFiles: params.embeddedSystemPrompt.contextFiles,
+          }),
+          extraSystemPrompt: params.embeddedSystemPrompt.extraSystemPrompt,
+          promptMode: params.embeddedSystemPrompt.promptMode,
         }),
-        extraSystemPrompt: params.embeddedSystemPrompt.extraSystemPrompt,
-        promptMode: params.embeddedSystemPrompt.promptMode,
+        model: params.embeddedSystemPrompt.runtimeInfo.model,
       })
     : buildEmbeddedSystemPrompt(params.embeddedSystemPrompt);
 

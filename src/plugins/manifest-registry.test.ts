@@ -1365,6 +1365,29 @@ describe("loadPluginManifestRegistry", () => {
     );
   });
 
+  it("prefers providerCatalogEntry over legacy providerDiscoveryEntry", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "catalog-provider",
+      providers: ["catalog-provider"],
+      providerCatalogEntry: "./provider-catalog.ts",
+      providerDiscoveryEntry: "./provider-discovery.ts",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(dir, "provider-catalog.js"), "export default {};\n", "utf8");
+    fs.writeFileSync(path.join(dir, "provider-discovery.js"), "export default {};\n", "utf8");
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "catalog-provider",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBe(
+      path.join(dir, "provider-catalog.js"),
+    );
+  });
+
   it("preserves activation and setup descriptors from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
@@ -1877,7 +1900,7 @@ describe("loadPluginManifestRegistry", () => {
       ...(env ? { env } : {}),
     });
 
-    expect(registry.plugins).toEqual([]);
+    expect(registry.plugins).toStrictEqual([]);
     expectRegistryDiagnosticContains(registry, expectedMessage);
     if (expectWarn) {
       expect(registry.diagnostics.map((diag) => diag.level)).toContain("warn");
@@ -2352,7 +2375,7 @@ describe("loadPluginManifestRegistry", () => {
       }),
     });
 
-    expect(olderHost.plugins).toEqual([]);
+    expect(olderHost.plugins).toStrictEqual([]);
     expect(olderHost.diagnostics.map((diag) => diag.message)).toEqual(
       expect.arrayContaining([expect.stringContaining("this host is 2026.3.21")]),
     );

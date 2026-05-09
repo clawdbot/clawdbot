@@ -50,7 +50,7 @@ describe("resolveTelegramGroupAllowFromContext", () => {
     });
 
     expect(context.effectiveGroupAllow.entries).toEqual(["12345"]);
-    expect(context.effectiveGroupAllow.invalidEntries).toEqual([]);
+    expect(context.effectiveGroupAllow.invalidEntries).toStrictEqual([]);
   });
 });
 

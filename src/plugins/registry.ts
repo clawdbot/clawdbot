@@ -97,6 +97,7 @@ import {
   registerMemoryPromptSectionForPlugin,
   registerMemoryRuntimeForPlugin,
 } from "./memory-state.js";
+import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
@@ -351,6 +352,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
   };
+  const {
+    registerModelCatalogProvider,
+    registerSynthesizedTextModelCatalogProvider,
+    registerSynthesizedMediaModelCatalogProvider,
+  } = createModelCatalogRegistrationHandlers({
+    registry,
+    pushDiagnostic,
+  });
 
   const throwRegistrationError = (message: string): never => {
     throw new Error(message);
@@ -954,6 +963,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
       rootDir: record.rootDir,
     });
+    registerSynthesizedTextModelCatalogProvider({
+      record,
+      provider: normalizedProvider,
+    });
   };
 
   const registerAgentHarness = (record: PluginRecord, harness: AgentHarness) => {
@@ -1079,7 +1092,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     kindLabel: string;
     registrations: Array<PluginOwnedProviderRegistration<T>>;
     ownedIds: string[];
-  }) => {
+  }): boolean => {
     const id = params.provider.id.trim();
     const { record, kindLabel } = params;
     const missingLabel = `${kindLabel} registration missing id`;
@@ -1091,7 +1104,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: missingLabel,
       });
-      return;
+      return false;
     }
     const existing = params.registrations.find((entry) => entry.provider.id === id);
     if (existing) {
@@ -1101,7 +1114,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: `${duplicateLabel} (${existing.pluginId})`,
       });
-      return;
+      return false;
     }
     if (!params.ownedIds.includes(id)) {
       params.ownedIds.push(id);
@@ -1113,6 +1126,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
       rootDir: record.rootDir,
     });
+    return true;
   };
 
   const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
@@ -1168,39 +1182,60 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     provider: ImageGenerationProviderPlugin,
   ) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "image-generation provider",
       registrations: registry.imageGenerationProviders,
       ownedIds: record.imageGenerationProviderIds,
     });
+    if (registered) {
+      registerSynthesizedMediaModelCatalogProvider({
+        record,
+        kind: "image_generation",
+        provider,
+      });
+    }
   };
 
   const registerVideoGenerationProvider = (
     record: PluginRecord,
     provider: VideoGenerationProviderPlugin,
   ) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "video-generation provider",
       registrations: registry.videoGenerationProviders,
       ownedIds: record.videoGenerationProviderIds,
     });
+    if (registered) {
+      registerSynthesizedMediaModelCatalogProvider({
+        record,
+        kind: "video_generation",
+        provider,
+      });
+    }
   };
 
   const registerMusicGenerationProvider = (
     record: PluginRecord,
     provider: MusicGenerationProviderPlugin,
   ) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "music-generation provider",
       registrations: registry.musicGenerationProviders,
       ownedIds: record.musicGenerationProviderIds,
     });
+    if (registered) {
+      registerSynthesizedMediaModelCatalogProvider({
+        record,
+        kind: "music_generation",
+        provider,
+      });
+    }
   };
 
   const registerWebFetchProvider = (record: PluginRecord, provider: WebFetchProviderPlugin) => {
@@ -2319,6 +2354,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerHostedMediaResolver: (resolver) =>
                 registerHostedMediaResolver(record, resolver),
               registerProvider: (provider) => registerProvider(record, provider),
+              registerModelCatalogProvider: (provider) =>
+                registerModelCatalogProvider(record, provider),
               registerAgentHarness: (harness) => registerAgentHarness(record, harness),
               registerDetachedTaskRuntime: (runtime) => {
                 const existing = getDetachedTaskLifecycleRuntimeRegistration();
@@ -2726,6 +2763,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerChannel,
     registerHostedMediaResolver,
     registerProvider,
+    registerModelCatalogProvider,
     registerAgentHarness,
     registerCliBackend,
     registerTextTransforms,

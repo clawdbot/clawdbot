@@ -249,7 +249,7 @@ describe("collectMissingPluginInstallPayloads", () => {
             },
           },
         }),
-      ).resolves.toEqual([]);
+      ).resolves.toStrictEqual([]);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

@@ -342,7 +342,7 @@ describe("doctor repair sequencing", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(result.changeNotes).toEqual([]);
+    expect(result.changeNotes).toStrictEqual([]);
     expect(result.warningNotes).toHaveLength(1);
     expect(result.warningNotes[0]).toContain("cannot be auto-repaired");
     expect(result.warningNotes[0]).toContain("channels.discord.allowFrom[0]");

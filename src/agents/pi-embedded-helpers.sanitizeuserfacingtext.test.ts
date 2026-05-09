@@ -506,7 +506,7 @@ describe("stripThoughtSignatures", () => {
     ]);
   });
   it("handles empty array", () => {
-    expect(stripThoughtSignatures([])).toEqual([]);
+    expect(stripThoughtSignatures([])).toStrictEqual([]);
   });
   it("handles null/undefined blocks in array", () => {
     const input = [null, undefined, { type: "text", text: "hello" }];
@@ -638,7 +638,7 @@ describe("downgradeOpenAIReasoningBlocks", () => {
       },
     ];
 
-    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual([]);
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toStrictEqual([]);
   });
 
   it("keeps non-reasoning thinking signatures", () => {

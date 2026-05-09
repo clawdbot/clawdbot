@@ -100,7 +100,7 @@ describe("resolveAuthProfileOrder", () => {
       provider: "anthropic",
     });
 
-    expect(order).toEqual([]);
+    expect(order).toStrictEqual([]);
   });
 
   function resolveWithAnthropicOrderAndUsage(params: {
@@ -366,7 +366,7 @@ describe("resolveAuthProfileOrder", () => {
       },
       provider: "openai-codex",
     });
-    expect(order).toEqual([]);
+    expect(order).toStrictEqual([]);
   });
   it("drops explicit order entries that belong to another provider", () => {
     const order = resolveAuthProfileOrder({
@@ -661,7 +661,7 @@ describe("resolveAuthProfileOrder", () => {
     },
   ])("$caseName", ({ profile }) => {
     const order = resolveMinimaxOrderWithProfile(profile);
-    expect(order).toEqual([]);
+    expect(order).toStrictEqual([]);
   });
   it("keeps api_key profiles backed by keyRef when plaintext key is absent", () => {
     const order = resolveAuthProfileOrder({
@@ -713,7 +713,7 @@ describe("resolveAuthProfileOrder", () => {
       },
       expires: 0,
     });
-    expect(order).toEqual([]);
+    expect(order).toStrictEqual([]);
   });
   it("keeps token profiles with inline token when no expires is set", () => {
     const order = resolveMinimaxOrderWithProfile({

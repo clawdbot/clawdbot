@@ -60,17 +60,23 @@ describe("plugin gateway gauntlet helpers", () => {
     const matrix = discoverBundledPluginManifests(repoRoot);
 
     expect(matrix.map((entry) => entry.id)).toEqual(["alpha", "beta"]);
-    expect(matrix[0]).toMatchObject({
-      id: "alpha",
-      dir: path.join("extensions", "alpha"),
-      manifestPath: path.join("extensions", "alpha", "openclaw.plugin.json"),
-      enabledByDefault: true,
-      providers: ["openai"],
+    expect(matrix[0]).toEqual({
+      activation: {},
       authMethods: ["oauth"],
-      onboardingScopes: ["models"],
+      channels: [],
+      cliCommandAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
+      commandAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
+      dir: path.join("extensions", "alpha"),
+      enabledByDefault: true,
       hasConfigSchema: true,
       hasRequiredConfigFields: true,
-      cliCommandAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
+      id: "alpha",
+      manifestPath: path.join("extensions", "alpha", "openclaw.plugin.json"),
+      name: "alpha",
+      onboardingScopes: ["models"],
+      providers: ["openai"],
+      runtimeSlashAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
+      skills: [],
     });
     expect(matrix[1].runtimeSlashAliases).toEqual([
       { name: "dreaming", kind: "runtime-slash", cliCommand: null },

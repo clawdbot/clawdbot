@@ -378,7 +378,7 @@ describe("consumePendingToolMediaIntoReply", () => {
       mediaUrls: ["/tmp/a.png", "/tmp/b.png"],
       audioAsVoice: undefined,
     });
-    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("does not append queued image tool media when the reply already names media", () => {
@@ -397,7 +397,7 @@ describe("consumePendingToolMediaIntoReply", () => {
       text: "done",
       mediaUrls: ["./selected.png"],
     });
-    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
     expect(state.pendingToolTrustedLocalMedia).toBe(false);
   });
@@ -418,7 +418,7 @@ describe("consumePendingToolMediaIntoReply", () => {
       text: "done",
       mediaUrls: ["/tmp/assistant-provided.opus"],
     });
-    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
     expect(state.pendingToolTrustedLocalMedia).toBe(false);
   });
@@ -471,7 +471,7 @@ describe("consumePendingToolMediaReply", () => {
       mediaUrls: ["/tmp/reply.opus"],
       audioAsVoice: true,
     });
-    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
   });
 });

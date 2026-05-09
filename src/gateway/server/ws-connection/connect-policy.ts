@@ -96,12 +96,12 @@ export function shouldClearUnboundScopesForMissingDeviceIdentity(params: {
     params.decision.kind !== "allow" ||
     (!params.controlUiAuthPolicy.allowBypass &&
       !params.preserveInsecureLocalControlUiScopes &&
+      params.trustedProxyAuthOk !== true &&
       // trusted-proxy auth can bypass pairing for some clients, but those
       // self-declared scopes are still unbound without device identity.
       (params.authMethod === "token" ||
         params.authMethod === "password" ||
-        params.authMethod === "trusted-proxy" ||
-        params.trustedProxyAuthOk === true))
+        params.authMethod === "trusted-proxy"))
   );
 }
 

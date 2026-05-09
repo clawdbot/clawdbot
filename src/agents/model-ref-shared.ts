@@ -56,6 +56,17 @@ function normalizeBuiltInProviderModelId(provider: string, model: string): strin
   return model;
 }
 
+export function normalizeConfiguredProviderCatalogModelId(provider: string, model: string): string {
+  const providerModel = normalizeStaticProviderModelId(provider, model);
+  const googlePrefix = "google/";
+  if (!providerModel.startsWith(googlePrefix)) {
+    return providerModel;
+  }
+  const modelId = providerModel.slice(googlePrefix.length);
+  const normalizedModelId = normalizeGooglePreviewModelId(modelId);
+  return normalizedModelId === modelId ? providerModel : `${googlePrefix}${normalizedModelId}`;
+}
+
 function parseStaticModelRef(raw: string, defaultProvider: string): StaticModelRef | null {
   const trimmed = raw.trim();
   if (!trimmed) {

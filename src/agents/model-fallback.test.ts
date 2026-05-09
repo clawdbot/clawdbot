@@ -681,7 +681,7 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toEqual({ payloads: [{ text: "ok" }] });
     expect(run).toHaveBeenCalledTimes(1);
-    expect(result.attempts).toEqual([]);
+    expect(result.attempts).toStrictEqual([]);
   });
 
   it("keeps tool-executing empty GPT-5 runs out of fallback", () => {
@@ -933,7 +933,7 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(result.provider).toBe("anthropic");
     expect(result.model).toBe("claude-sonnet-4-6");
-    expect(result.attempts).toEqual([]);
+    expect(result.attempts).toStrictEqual([]);
     expect(onError).not.toHaveBeenCalled();
     expect(run.mock.calls).toEqual([
       ["openai", "gpt-4.1-mini"],
@@ -1230,7 +1230,7 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
     expect(run.mock.calls[0]?.[0]).toBe("openrouter");
-    expect(result.attempts).toEqual([]);
+    expect(result.attempts).toStrictEqual([]);
   });
 
   it("propagates disabled reason when all profiles are unavailable", async () => {
@@ -1289,7 +1289,7 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([[provider, "m1"]]);
-    expect(result.attempts).toEqual([]);
+    expect(result.attempts).toStrictEqual([]);
   });
 
   it("does not append configured primary when fallbacksOverride is set", () => {

@@ -67,7 +67,7 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
 
     expect(result.detected).toEqual([authPath]);
     expect(result.changes).toHaveLength(1);
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
     expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
       version: 1,
       profiles: {
@@ -96,8 +96,8 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     });
 
     expect(result.detected).toEqual([authPath]);
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toStrictEqual([]);
     expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(legacy);
   });
 
@@ -128,7 +128,7 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
 
     expect(result.detected).toEqual([authPath]);
     expect(result.changes).toHaveLength(1);
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
     expect(cfg).toEqual({
       auth: {
         profiles: {

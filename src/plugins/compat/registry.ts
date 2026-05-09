@@ -758,7 +758,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     surfaces: ["api.runtime.config.loadConfig", "api.runtime.config.writeConfigFile"],
     diagnostics: [
       "plugin runtime compatibility warning",
-      "deprecated internal config API guard",
+      "deprecated API usage guard",
       "runtime channel config boundary guard",
     ],
     tests: [

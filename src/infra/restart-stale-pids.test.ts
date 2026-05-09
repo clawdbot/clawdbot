@@ -216,12 +216,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
   describe("findGatewayPidsOnPortSync", () => {
     it("returns [] when lsof exits with non-zero status", () => {
       mockSpawnSync.mockReturnValue({ error: null, status: 1, stdout: "", stderr: "" });
-      expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
+      expect(findGatewayPidsOnPortSync(18789)).toStrictEqual([]);
     });
 
     it("logs warning when initial lsof scan exits with status > 1", () => {
       mockSpawnSync.mockReturnValue({ error: null, status: 2, stdout: "", stderr: "lsof error" });
-      expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
+      expect(findGatewayPidsOnPortSync(18789)).toStrictEqual([]);
       expect(mockRestartWarn).toHaveBeenCalledWith(
         expect.stringContaining("lsof exited with status 2"),
       );
@@ -234,7 +234,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         stdout: "",
         stderr: "",
       });
-      expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
+      expect(findGatewayPidsOnPortSync(18789)).toStrictEqual([]);
       expect(mockRestartWarn).toHaveBeenCalledWith(
         expect.stringContaining("lsof failed during initial stale-pid scan"),
       );
@@ -427,7 +427,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         stdout: lsofOutput([{ pid: otherPid, cmd: "nginx" }]),
         stderr: "",
       });
-      expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
+      expect(findGatewayPidsOnPortSync(18789)).toStrictEqual([]);
     });
 
     it("forwards the spawnTimeoutMs argument to spawnSync", () => {
@@ -456,7 +456,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       try {
         mockReadWindowsListeningPids.mockReturnValue([]);
-        expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
+        expect(findGatewayPidsOnPortSync(18789)).toStrictEqual([]);
         expect(mockReadWindowsListeningPids).toHaveBeenCalledWith(18789, undefined);
         // lsof must NOT be invoked — Windows uses PowerShell/netstat
         expect(mockSpawnSync).not.toHaveBeenCalled();
@@ -519,7 +519,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
   describe("parsePidsFromLsofOutput (via findGatewayPidsOnPortSync stdout path)", () => {
     it("returns [] for empty lsof stdout (status 0, nothing listening)", () => {
       mockSpawnSync.mockReturnValue({ error: null, status: 0, stdout: "", stderr: "" });
-      expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
+      expect(findGatewayPidsOnPortSync(18789)).toStrictEqual([]);
     });
 
     it("parses multiple openclaw pids from a single lsof output block", () => {
@@ -549,7 +549,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         stdout: lsofOutput([{ pid: otherPid, cmd: "caddy" }]),
         stderr: "",
       });
-      expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
+      expect(findGatewayPidsOnPortSync(18789)).toStrictEqual([]);
     });
   });
 
@@ -684,7 +684,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
     it("returns [] and does not call process.kill when port has no listeners", () => {
       mockSpawnSync.mockReturnValue({ error: null, status: 0, stdout: "", stderr: "" });
       const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
-      expect(cleanStaleGatewayProcessesSync()).toEqual([]);
+      expect(cleanStaleGatewayProcessesSync()).toStrictEqual([]);
       expect(killSpy).not.toHaveBeenCalled();
     });
 
@@ -889,7 +889,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       mockResolveGatewayPort.mockImplementationOnce(() => {
         throw new Error("config read error");
       });
-      expect(cleanStaleGatewayProcessesSync()).toEqual([]);
+      expect(cleanStaleGatewayProcessesSync()).toStrictEqual([]);
     });
 
     it("returns gracefully when lsof is unavailable from the start", () => {
@@ -900,7 +900,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         stderr: "",
       });
       const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
-      expect(cleanStaleGatewayProcessesSync()).toEqual([]);
+      expect(cleanStaleGatewayProcessesSync()).toStrictEqual([]);
       expect(killSpy).not.toHaveBeenCalled();
     });
 
@@ -970,7 +970,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         });
         const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
 
-        expect(cleanStaleGatewayProcessesSync()).toEqual([]);
+        expect(cleanStaleGatewayProcessesSync()).toStrictEqual([]);
         expect(mockReadWindowsListeningPidsResult).toHaveBeenCalledWith(18789, 400);
         expect(mockRestartWarn).toHaveBeenCalledWith(
           expect.stringContaining("port 18789 still in use after 2000ms"),
@@ -1000,7 +1000,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         mockReadWindowsProcessArgsResult.mockReturnValue({ ok: false, permanent: false });
         const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
 
-        expect(cleanStaleGatewayProcessesSync()).toEqual([]);
+        expect(cleanStaleGatewayProcessesSync()).toStrictEqual([]);
         expect(mockReadWindowsProcessArgsResult).toHaveBeenCalledWith(stalePid, undefined);
         expect(mockRestartWarn).toHaveBeenCalledWith(
           expect.stringContaining("port 18789 still in use after 2000ms"),
@@ -1048,7 +1048,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           return true;
         });
 
-        expect(cleanStaleGatewayProcessesSync()).toEqual([]);
+        expect(cleanStaleGatewayProcessesSync()).toStrictEqual([]);
         expect(mockSpawnSync).toHaveBeenCalledWith(
           "C:\\Windows\\System32\\taskkill.exe",
           ["/T", "/PID", String(stalePid)],
@@ -1103,7 +1103,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           fakeNow += ms;
         });
 
-        expect(cleanStaleGatewayProcessesSync()).toEqual([]);
+        expect(cleanStaleGatewayProcessesSync()).toStrictEqual([]);
         expect(mockSpawnSync).toHaveBeenNthCalledWith(
           1,
           "C:\\Windows\\System32\\taskkill.exe",

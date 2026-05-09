@@ -91,6 +91,6 @@ describe("command-descriptor-utils", () => {
     expect(() =>
       addCommandDescriptorsToProgram(program, [{ name: "bad\nname", description: "Bad" }]),
     ).toThrow('Invalid CLI command name: "bad\\nname"');
-    expect(program.commands).toEqual([]);
+    expect(program.commands).toStrictEqual([]);
   });
 });

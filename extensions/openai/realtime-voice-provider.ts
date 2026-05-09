@@ -58,6 +58,7 @@ type OpenAIRealtimeVoiceProviderConfig = {
   vadThreshold?: number;
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
+  interruptResponseOnInputAudio?: boolean;
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
@@ -71,12 +72,18 @@ type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   vadThreshold?: number;
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
+  interruptResponseOnInputAudio?: boolean;
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
 };
 
 const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2";
+const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+const OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX =
+  "Conversation already has an active response in progress:";
+const OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
+  "Cancellation failed: no active response found";
 
 type RealtimeEvent = {
   type: string;
@@ -111,6 +118,7 @@ type RealtimeSessionUpdateGaPayload = {
     input: {
       format: RealtimeAudioFormatConfig;
       transcription: { model: string };
+      noise_reduction?: { type: "near_field" };
       turn_detection: {
         type: "server_vad";
         threshold: number;
@@ -165,6 +173,10 @@ function normalizeProviderConfig(
     vadThreshold: asFiniteNumber(raw?.vadThreshold),
     silenceDurationMs: asFiniteNumber(raw?.silenceDurationMs),
     prefixPaddingMs: asFiniteNumber(raw?.prefixPaddingMs),
+    interruptResponseOnInputAudio:
+      typeof raw?.interruptResponseOnInputAudio === "boolean"
+        ? raw.interruptResponseOnInputAudio
+        : undefined,
     azureEndpoint: trimToUndefined(raw?.azureEndpoint),
     azureDeployment: trimToUndefined(raw?.azureDeployment),
     azureApiVersion: trimToUndefined(raw?.azureApiVersion),
@@ -261,6 +273,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private markQueue: string[] = [];
   private responseStartTimestamp: number | null = null;
   private responseActive = false;
+  private responseCreateInFlight = false;
+  private responseCancelInFlight = false;
+  private responseCreatePending = false;
   private latestMediaTimestamp = 0;
   private lastAssistantItemId: string | null = null;
   private toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
@@ -304,7 +319,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         content: [{ type: "input_text", text }],
       },
     });
-    this.sendEvent({ type: "response.create" });
+    this.requestResponseCreate();
   }
 
   triggerGreeting(instructions?: string): void {
@@ -323,7 +338,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         output: JSON.stringify(result),
       },
     });
-    this.sendEvent({ type: "response.create" });
+    this.requestResponseCreate();
   }
 
   acknowledgeMark(): void {
@@ -383,6 +398,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       }, OpenAIRealtimeVoiceBridge.CONNECT_TIMEOUT_MS);
 
       this.ws.on("open", () => {
+        this.resetRealtimeSessionState();
         this.connected = true;
         this.sessionConfigured = false;
         this.reconnectAttempts = 0;
@@ -571,6 +587,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private resolveGaSessionUpdatePayload(): RealtimeSessionUpdateGaPayload {
     const cfg = this.config;
     const autoRespondToAudio = cfg.autoRespondToAudio ?? true;
+    const interruptResponseOnInputAudio = cfg.interruptResponseOnInputAudio ?? autoRespondToAudio;
     return {
       type: "realtime",
       model: cfg.model ?? OpenAIRealtimeVoiceBridge.DEFAULT_MODEL,
@@ -579,8 +596,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       audio: {
         input: {
           format: this.resolveRealtimeAudioFormatConfig(),
+          noise_reduction: {
+            type: "near_field",
+          },
           transcription: {
-            model: "whisper-1",
+            model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
           },
           turn_detection: {
             type: "server_vad",
@@ -588,7 +608,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             prefix_padding_ms: cfg.prefixPaddingMs ?? 300,
             silence_duration_ms: cfg.silenceDurationMs ?? 500,
             create_response: autoRespondToAudio,
-            interrupt_response: autoRespondToAudio,
+            interrupt_response: interruptResponseOnInputAudio,
           },
         },
         output: {
@@ -614,7 +634,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       input_audio_format: this.resolveRealtimeAudioFormat(),
       output_audio_format: this.resolveRealtimeAudioFormat(),
       input_audio_transcription: {
-        model: "whisper-1",
+        model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
       },
       turn_detection: {
         type: "server_vad",
@@ -666,6 +686,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
       case "response.created":
         this.responseActive = true;
+        this.responseCreateInFlight = false;
         return;
 
       case "response.audio.delta":
@@ -718,8 +739,12 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         }
         return;
 
+      case "response.cancelled":
       case "response.done":
         this.responseActive = false;
+        this.responseCreateInFlight = false;
+        this.responseCancelInFlight = false;
+        this.flushPendingResponseCreate();
         return;
 
       case "response.function_call_arguments.delta": {
@@ -762,6 +787,18 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
+        if (detail.startsWith(OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX)) {
+          this.responseActive = true;
+          this.responseCreateInFlight = false;
+          this.responseCreatePending = true;
+          return;
+        }
+        if (detail === OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR) {
+          this.responseActive = false;
+          this.responseCancelInFlight = false;
+          this.flushPendingResponseCreate();
+          return;
+        }
         this.config.onError?.(new Error(detail));
         return;
       }
@@ -778,25 +815,61 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       responseStartTimestamp !== null &&
       assistantItemId !== null &&
       (this.markQueue.length > 0 || options?.audioPlaybackActive === true);
-    if (options?.audioPlaybackActive === true && this.responseActive) {
-      this.sendEvent({ type: "response.cancel" });
+    if (
+      options?.audioPlaybackActive === true &&
+      this.responseActive &&
+      !this.responseCancelInFlight
+    ) {
+      this.sendEvent({ type: "response.cancel" }, "reason=barge-in");
+      this.responseCancelInFlight = true;
     }
     if (shouldInterruptProvider) {
       const elapsedMs = this.latestMediaTimestamp - responseStartTimestamp;
-      this.sendEvent({
-        type: "conversation.item.truncate",
-        item_id: assistantItemId,
-        content_index: 0,
-        audio_end_ms: Math.max(0, elapsedMs),
-      });
+      const audioEndMs = Math.max(0, elapsedMs);
+      this.sendEvent(
+        {
+          type: "conversation.item.truncate",
+          item_id: assistantItemId,
+          content_index: 0,
+          audio_end_ms: audioEndMs,
+        },
+        `reason=barge-in audioEndMs=${audioEndMs}`,
+      );
       this.config.onClearAudio();
       this.markQueue = [];
       this.lastAssistantItemId = null;
       this.responseStartTimestamp = null;
-      this.responseActive = false;
       return;
     }
     this.config.onClearAudio();
+  }
+
+  private requestResponseCreate(): void {
+    if (this.responseActive || this.responseCreateInFlight || this.responseCancelInFlight) {
+      this.responseCreatePending = true;
+      return;
+    }
+    this.responseCreateInFlight = true;
+    this.sendEvent({ type: "response.create" });
+  }
+
+  private flushPendingResponseCreate(): void {
+    if (!this.responseCreatePending) {
+      return;
+    }
+    this.responseCreatePending = false;
+    this.requestResponseCreate();
+  }
+
+  private resetRealtimeSessionState(): void {
+    this.markQueue = [];
+    this.responseStartTimestamp = null;
+    this.responseActive = false;
+    this.responseCreateInFlight = false;
+    this.responseCancelInFlight = false;
+    this.responseCreatePending = false;
+    this.lastAssistantItemId = null;
+    this.toolCallBuffers.clear();
   }
 
   private sendMark(): void {
@@ -805,13 +878,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.config.onMark?.(markName);
   }
 
-  private sendEvent(event: unknown): void {
+  private sendEvent(event: unknown, detail?: string): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       const type =
         event && typeof event === "object" && typeof (event as { type?: unknown }).type === "string"
           ? (event as { type: string }).type
           : "unknown";
-      this.config.onEvent?.({ direction: "client", type });
+      this.config.onEvent?.({ direction: "client", type, ...(detail ? { detail } : {}) });
       const payload = JSON.stringify(event);
       captureWsEvent({
         url: this.resolveConnectionParams().url,
@@ -841,6 +914,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       return (
         [status ? `status=${status}` : undefined, details].filter(Boolean).join(" ") || undefined
       );
+    }
+    if (event.type === "response.cancelled") {
+      return "cancelled";
     }
     return undefined;
   }
@@ -889,12 +965,13 @@ async function createOpenAIRealtimeBrowserSession(
     instructions: req.instructions,
     audio: {
       input: {
+        noise_reduction: { type: "near_field" },
         turn_detection: {
           type: "server_vad",
           create_response: true,
           interrupt_response: true,
         },
-        transcription: { model: "whisper-1" },
+        transcription: { model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL },
       },
       output: { voice },
     },
@@ -995,6 +1072,8 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
         vadThreshold: config.vadThreshold,
         silenceDurationMs: config.silenceDurationMs,
         prefixPaddingMs: config.prefixPaddingMs,
+        interruptResponseOnInputAudio:
+          req.interruptResponseOnInputAudio ?? config.interruptResponseOnInputAudio,
         azureEndpoint: config.azureEndpoint,
         azureDeployment: config.azureDeployment,
         azureApiVersion: config.azureApiVersion,

@@ -185,6 +185,14 @@ export const discordChannelConfigUiHints = {
     label: "Discord Voice Mode",
     help: "Conversation mode: stt-tts uses batch speech-to-text plus TTS, talk-buffer uses a realtime voice shell with the OpenClaw agent as the brain, and bidi lets the realtime provider converse directly with the OpenClaw consult tool.",
   },
+  "voice.agentSession": {
+    label: "Discord Voice Agent Session",
+    help: 'Controls which OpenClaw conversation receives voice turns. Leave unset for the voice channel session, or set mode="target" with a Discord target such as channel:123 to make voice an extension of an existing text channel session.',
+  },
+  "voice.agentSession.target": {
+    label: "Discord Voice Agent Session Target",
+    help: 'Discord target used when voice.agentSession.mode="target", for example channel:123.',
+  },
   "voice.realtime.provider": {
     label: "Discord Realtime Provider",
     help: "Realtime voice provider for talk-buffer or bidi Discord voice modes, such as openai.",
@@ -204,6 +212,10 @@ export const discordChannelConfigUiHints = {
   "voice.realtime.consultPolicy": {
     label: "Discord Realtime Consult Policy",
     help: "Use always to strongly prefer the OpenClaw agent brain for substantive bidi turns.",
+  },
+  "voice.realtime.bargeIn": {
+    label: "Discord Realtime Barge-In",
+    help: "Allow Discord speaker-start events to interrupt active realtime playback. Set true to keep manual interruption when provider input-audio interruption is disabled for echo control.",
   },
   "voice.realtime.providers": {
     label: "Discord Realtime Provider Settings",

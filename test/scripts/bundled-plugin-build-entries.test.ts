@@ -119,7 +119,7 @@ describe("bundled plugin build entries", () => {
       expect(entry).toContain('specifier: "./secret-contract-api.js"');
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
 
     for (const pluginId of [...secretBackedPluginIds].toSorted()) {
       if (excludedPackageDirs.has(pluginId)) {
@@ -146,6 +146,6 @@ describe("bundled plugin build entries", () => {
       }
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 });

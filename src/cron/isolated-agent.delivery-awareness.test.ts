@@ -132,7 +132,7 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
 
       expect(result.status).toBe("ok");
       expect(result.delivered).toBe(true);
-      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
     });
   });
 });

@@ -196,7 +196,7 @@ describe("provider family plugin-boundary inventory", () => {
         return `${pluginId} declares shared ${hookKinds} hooks but has no plugin-boundary provider test. Sources: ${sourceFiles}`;
       });
 
-    expect(missing).toEqual([]);
+    expect(missing).toStrictEqual([]);
   });
 
   it("keeps sentinel shared-family assignments wired through bundled provider sources", () => {

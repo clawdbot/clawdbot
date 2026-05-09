@@ -11,6 +11,7 @@ vi.mock("../infra/outbound/delivery-queue.js", () => ({
 
 vi.mock("../infra/outbound/deliver-runtime.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
 }));
 
 type DeliveryQueueRuntimeModule = typeof import("./delivery-queue-runtime.js");

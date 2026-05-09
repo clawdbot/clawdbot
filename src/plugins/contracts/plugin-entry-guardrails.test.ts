@@ -255,7 +255,7 @@ describe("plugin entry guardrails", () => {
       }
     }
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
   it("does not advertise runtime helper sidecars as bundled plugin entry extensions", () => {
@@ -280,7 +280,7 @@ describe("plugin entry guardrails", () => {
       }
     }
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
   it("keeps bundled production contract barrels off test-only imports and re-exports", () => {
@@ -292,7 +292,7 @@ describe("plugin entry guardrails", () => {
         }).map((failure) => `${pluginId}: ${failure}`),
     );
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
   it("follows relative import edges while scanning guarded contract graphs", () => {

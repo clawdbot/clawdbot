@@ -86,7 +86,7 @@ describe("sandbox/tool-policy", () => {
     };
 
     const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
-    expect(resolved.allow).toEqual([]);
+    expect(resolved.allow).toStrictEqual([]);
     expect(resolved.deny).not.toContain("browser");
     expect(
       isToolAllowed(

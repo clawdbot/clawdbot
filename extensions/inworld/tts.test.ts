@@ -180,7 +180,7 @@ describe("listInworldVoices", () => {
     queueGuardedResponse(new Response(JSON.stringify({}), { status: 200 }));
 
     const voices = await listInworldVoices({ apiKey: "test-key" });
-    expect(voices).toEqual([]);
+    expect(voices).toStrictEqual([]);
   });
 
   it("passes language filter as query parameter", async () => {

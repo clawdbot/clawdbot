@@ -49,7 +49,7 @@ describe("bundled channel gateway auth bypass fast path", () => {
         channelId: "discord",
         cfg: { channels: { discord: {} } },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("surfaces errors from present gateway auth artifacts", () => {

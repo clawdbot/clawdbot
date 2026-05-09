@@ -272,7 +272,7 @@ describe("diagnostic-events", () => {
     });
 
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(publicEvents).toEqual([]);
+    expect(publicEvents).toStrictEqual([]);
     expect(internalEvents).toEqual([{ trusted: true, type: "model.call.started" }]);
   });
 
@@ -395,7 +395,7 @@ describe("diagnostic-events", () => {
       model: "gpt-5.4",
     });
 
-    expect(events).toEqual([]);
+    expect(events).toStrictEqual([]);
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(events).toEqual(["tool.execution.started", "model.call.started"]);
   });
@@ -417,7 +417,7 @@ describe("diagnostic-events", () => {
     });
 
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(publicEvents).toEqual([]);
+    expect(publicEvents).toStrictEqual([]);
     expect(internalEvents).toEqual(["log.record"]);
   });
 
@@ -434,7 +434,7 @@ describe("diagnostic-events", () => {
       channel: "telegram",
     });
 
-    expect(seen).toEqual([]);
+    expect(seen).toStrictEqual([]);
     expect(nowSpy).not.toHaveBeenCalled();
   });
 

@@ -829,7 +829,7 @@ describe("matrix live qa scenarios", () => {
         coveredStandardScenarioIds: scenarioTesting.MATRIX_QA_STANDARD_SCENARIO_IDS,
         expectedStandardScenarioIds: LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("merges default and scenario-requested Matrix topology once per run", () => {

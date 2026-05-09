@@ -16,10 +16,12 @@ describe("realtime voice session log runtime", () => {
     recordRealtimeVoiceTranscript(transcript, "user", "hello", 1);
     recordRealtimeVoiceTranscript(transcript, "assistant", "hi", 1);
 
-    expect(getRealtimeVoiceTranscriptHealth(transcript)).toMatchObject({
+    expect(getRealtimeVoiceTranscriptHealth(transcript)).toEqual({
       realtimeTranscriptLines: 1,
+      lastRealtimeTranscriptAt: transcript[0]?.at,
       lastRealtimeTranscriptRole: "assistant",
       lastRealtimeTranscriptText: "hi",
+      recentRealtimeTranscript: transcript,
     });
   });
 
@@ -35,9 +37,11 @@ describe("realtime voice session log runtime", () => {
       detail: "ok",
     });
 
-    expect(getRealtimeVoiceBridgeEventHealth(events)).toMatchObject({
+    expect(getRealtimeVoiceBridgeEventHealth(events)).toEqual({
+      lastRealtimeEventAt: events[0]?.at,
       lastRealtimeEventType: "server:response.done",
       lastRealtimeEventDetail: "ok",
+      recentRealtimeEvents: events,
     });
   });
 

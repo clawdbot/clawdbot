@@ -508,7 +508,7 @@ describe("monitorMatrixProvider", () => {
 
     await monitorMatrixProvider({ abortSignal: abortController.signal });
 
-    expect(hoisted.callOrder).toEqual([]);
+    expect(hoisted.callOrder).toStrictEqual([]);
     expect(hoisted.resolveTextChunkLimit).not.toHaveBeenCalled();
     expect(hoisted.createMatrixRoomMessageHandler).not.toHaveBeenCalled();
     expect(hoisted.setActiveMatrixClient).not.toHaveBeenCalled();

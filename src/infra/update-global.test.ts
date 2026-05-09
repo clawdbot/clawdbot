@@ -33,7 +33,7 @@ import {
   type CommandRunner,
 } from "./update-global.js";
 
-const MATRIX_HELPER_API = bundledDistPluginFile("matrix", "helper-api.js");
+const TELEGRAM_RUNTIME_API = bundledDistPluginFile("telegram", "runtime-api.js");
 async function writeGlobalPackageJson(packageRoot: string, version = "1.0.0") {
   await fs.writeFile(
     path.join(packageRoot, "package.json"),
@@ -685,11 +685,11 @@ describe("update global helpers", () => {
       }
       await writePackageDistInventory(packageRoot);
 
-      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toStrictEqual([]);
 
-      await fs.rm(path.join(packageRoot, MATRIX_HELPER_API));
+      await fs.rm(path.join(packageRoot, TELEGRAM_RUNTIME_API));
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
-        `missing packaged dist file ${MATRIX_HELPER_API}`,
+        `missing packaged dist file ${TELEGRAM_RUNTIME_API}`,
       );
 
       await fs.writeFile(
@@ -757,7 +757,7 @@ describe("update global helpers", () => {
     await withTempDir({ prefix: "openclaw-update-global-legacy-" }, async (packageRoot) => {
       await writeGlobalPackageJson(packageRoot);
 
-      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toStrictEqual([]);
     });
   });
 
@@ -796,10 +796,10 @@ describe("update global helpers", () => {
   it("verifies legacy sidecars for installed bundled plugins without inventory", async () => {
     await withTempDir({ prefix: "openclaw-update-global-legacy-plugin-" }, async (packageRoot) => {
       await writeGlobalPackageJson(packageRoot);
-      await writeBundledPluginPackageJson(packageRoot, "matrix", "@openclaw/matrix");
+      await writeBundledPluginPackageJson(packageRoot, "telegram", "@openclaw/telegram");
 
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
-        `missing bundled runtime sidecar ${MATRIX_HELPER_API}`,
+        `missing bundled runtime sidecar ${TELEGRAM_RUNTIME_API}`,
       );
     });
   });
@@ -809,11 +809,11 @@ describe("update global helpers", () => {
       { prefix: "openclaw-update-global-critical-sidecars-" },
       async (packageRoot) => {
         await writeGlobalPackageJson(packageRoot, "2026.4.15");
-        await writeBundledPluginPackageJson(packageRoot, "matrix", "@openclaw/matrix");
+        await writeBundledPluginPackageJson(packageRoot, "telegram", "@openclaw/telegram");
         await writePackageDistInventory(packageRoot);
 
         await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
-          `missing bundled runtime sidecar ${MATRIX_HELPER_API}`,
+          `missing bundled runtime sidecar ${TELEGRAM_RUNTIME_API}`,
         );
       },
     );
@@ -827,7 +827,9 @@ describe("update global helpers", () => {
         await writeBundledPluginPackageJson(packageRoot, "qa-lab", "@openclaw/qa-lab");
         await writePackageDistInventory(packageRoot);
 
-        await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+        await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toStrictEqual(
+          [],
+        );
       },
     );
   });

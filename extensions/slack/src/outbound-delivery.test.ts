@@ -133,6 +133,6 @@ describe("slack outbound shared hook wiring", () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(sendMessageSlackMock).not.toHaveBeenCalled();
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 });

@@ -246,7 +246,7 @@ describe("ensureSandboxBrowser create args", () => {
     const envEntries = collectDockerFlagValues(createArgs ?? [], "-e");
     expect(
       envEntries.filter((entry) => entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD=")),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(result?.noVncUrl).toBeUndefined();
   });
 

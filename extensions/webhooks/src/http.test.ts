@@ -137,7 +137,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
 
     expect(res.statusCode).toBe(401);
     expect(res.body).toBe("unauthorized");
-    expect(target.taskFlow.list()).toEqual([]);
+    expect(target.taskFlow.list()).toStrictEqual([]);
     expect(hoisted.resolveConfiguredSecretInputStringMock).not.toHaveBeenCalled();
   });
 

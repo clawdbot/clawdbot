@@ -576,7 +576,7 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
 
     await callGatewayScoped({ method: "health", scopes: [] });
-    expect(lastClientOptions?.scopes).toEqual([]);
+    expect(lastClientOptions?.scopes).toStrictEqual([]);
   });
 
   it("uses backend client metadata for explicit scoped default calls", async () => {

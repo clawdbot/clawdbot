@@ -135,7 +135,7 @@ describe("plugin-sdk/command-auth", () => {
         useAccessGroups && authorizers.some((entry) => entry.configured && entry.allowed),
     });
 
-    expect(result.effectiveAllowFrom).toEqual([]);
+    expect(result.effectiveAllowFrom).toStrictEqual([]);
     expect(result.senderAllowedForCommands).toBe(false);
     expect(result.commandAuthorized).toBeUndefined();
   });

@@ -97,7 +97,7 @@ describe("runCapability video provider wiring", () => {
         expect(output.text).toBe("video ok");
         expect(output.provider).toBe("moonshot");
         expect(seenBaseUrl).toBe("https://entry.example/v1");
-        expect(seenHeaders).toMatchObject({
+        expect(seenHeaders).toEqual({
           "X-Provider": "1",
           "X-Config": "2",
           "X-Entry": "3",

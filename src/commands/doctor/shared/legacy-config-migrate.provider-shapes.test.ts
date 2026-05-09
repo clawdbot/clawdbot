@@ -88,7 +88,7 @@ describe("legacy migrate provider-shaped config", () => {
       changes,
     );
 
-    expect(changes).toEqual([]);
+    expect(changes).toStrictEqual([]);
     expect(migrated.talk).toEqual({
       provider: "elevenlabs",
       providers: {
@@ -340,7 +340,7 @@ describe("legacy migrate provider-shaped config", () => {
       },
     });
 
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
     expect(res.config).toBeNull();
   });
 
@@ -355,6 +355,6 @@ describe("legacy migrate provider-shaped config", () => {
     });
 
     expect(res.config).toBeNull();
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 });

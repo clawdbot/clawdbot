@@ -87,8 +87,9 @@ describe("run-oxlint", () => {
       isTrackedPath: () => false,
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       args: ["src", "typo"],
+      hadExplicitTargets: true,
       remainingExplicitTargets: 2,
       skippedTargets: [],
       skippedConfigs: [],

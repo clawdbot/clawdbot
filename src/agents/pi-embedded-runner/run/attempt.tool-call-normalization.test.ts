@@ -21,7 +21,7 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
         mode: "strict",
         repairToolUseResultPairing: true,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps matched assistant and tool-result ids aligned", () => {

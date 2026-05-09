@@ -147,6 +147,34 @@ function createHost() {
   };
 }
 
+type BufferedPerformanceEvent = {
+  event?: string;
+  payload?: Record<string, unknown>;
+};
+
+function expectBufferedPerformanceEvent(
+  host: { eventLogBuffer: unknown[] },
+  event: string,
+  expectedPayload: Record<string, unknown>,
+) {
+  const entry = host.eventLogBuffer.find((value): value is BufferedPerformanceEvent => {
+    if (!value || typeof value !== "object") {
+      return false;
+    }
+    const candidate = value as BufferedPerformanceEvent;
+    if (candidate.event !== event || !candidate.payload || typeof candidate.payload !== "object") {
+      return false;
+    }
+    return Object.entries(expectedPayload).every(([key, expected]) => {
+      return candidate.payload?.[key] === expected;
+    });
+  });
+  expect(entry).toBeDefined();
+  expect(entry?.payload).toMatchObject(expectedPayload);
+  expect(entry?.payload?.durationMs).toBeTypeOf("number");
+  return entry?.payload;
+}
+
 describe("refreshActiveTab", () => {
   beforeEach(() => {
     for (const fn of Object.values(mocks)) {
@@ -230,18 +258,10 @@ describe("refreshActiveTab", () => {
 
     expect(host.requestUpdate).toHaveBeenCalled();
     await vi.waitFor(() => {
-      expect(host.eventLogBuffer).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            event: "control-ui.tab.visible",
-            payload: expect.objectContaining({
-              previousTab: "chat",
-              tab: "sessions",
-              durationMs: expect.any(Number),
-            }),
-          }),
-        ]),
-      );
+      expectBufferedPerformanceEvent(host, "control-ui.tab.visible", {
+        previousTab: "chat",
+        tab: "sessions",
+      });
     });
 
     sessions.resolve();
@@ -321,18 +341,10 @@ describe("refreshActiveTab", () => {
     usage.resolve();
 
     await vi.waitFor(() => {
-      expect(host.eventLogBuffer).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            event: "control-ui.overview.secondary",
-            payload: expect.objectContaining({
-              phase: "end",
-              status: "error",
-              durationMs: expect.any(Number),
-            }),
-          }),
-        ]),
-      );
+      expectBufferedPerformanceEvent(host, "control-ui.overview.secondary", {
+        phase: "end",
+        status: "error",
+      });
     });
   });
 
@@ -359,18 +371,10 @@ describe("refreshActiveTab", () => {
     await expect(refreshActiveTab(host as never)).resolves.toBeUndefined();
     await Promise.resolve();
 
-    expect(host.eventLogBuffer).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event: "control-ui.cron.runs",
-          payload: expect.objectContaining({
-            phase: "end",
-            status: "error",
-            durationMs: expect.any(Number),
-          }),
-        }),
-      ]),
-    );
+    expectBufferedPerformanceEvent(host, "control-ui.cron.runs", {
+      phase: "end",
+      status: "error",
+    });
   });
 
   it("contains rejected cron runs refreshes without failing the primary cron tab refresh", async () => {
@@ -381,18 +385,10 @@ describe("refreshActiveTab", () => {
     await expect(refreshActiveTab(host as never)).resolves.toBeUndefined();
     await Promise.resolve();
 
-    expect(host.eventLogBuffer).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event: "control-ui.cron.runs",
-          payload: expect.objectContaining({
-            phase: "end",
-            status: "error",
-            durationMs: expect.any(Number),
-          }),
-        }),
-      ]),
-    );
+    expectBufferedPerformanceEvent(host, "control-ui.cron.runs", {
+      phase: "end",
+      status: "error",
+    });
   });
 
   it("does not record stale cron run timing after leaving the cron tab", async () => {

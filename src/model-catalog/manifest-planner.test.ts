@@ -55,7 +55,7 @@ describe("manifest model catalog planner", () => {
       },
     ]);
     expect(plan.rows.map((row) => row.ref)).toEqual(["moonshot/kimi-k2.6"]);
-    expect(plan.conflicts).toEqual([]);
+    expect(plan.conflicts).toStrictEqual([]);
   });
 
   it("filters providers before row planning", () => {
@@ -89,7 +89,7 @@ describe("manifest model catalog planner", () => {
 
     expect(plan.entries.map((entry) => entry.pluginId)).toEqual(["openrouter"]);
     expect(plan.rows.map((row) => row.ref)).toEqual(["openrouter/anthropic/claude-sonnet-4.6"]);
-    expect(plan.conflicts).toEqual([]);
+    expect(plan.conflicts).toStrictEqual([]);
   });
 
   it("plans alias-filtered rows from owned provider catalogs", () => {

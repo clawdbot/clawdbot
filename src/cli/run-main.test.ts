@@ -31,6 +31,15 @@ const memoryCoreCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
   ],
 };
 
+const losslessClawToolRegistry: PluginManifestCommandAliasRegistry = {
+  plugins: [
+    {
+      id: "lossless-claw",
+      contracts: { tools: ["lcm_recent", "lcm_search"] },
+    },
+  ],
+};
+
 describe("isGatewayRunFastPathArgv", () => {
   it("matches only plain gateway foreground starts without root options or help", () => {
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway"])).toBe(true);
@@ -365,5 +374,102 @@ describe("resolveMissingPluginCommandMessage", () => {
     );
     expect(message).toContain('"memory-wiki"');
     expect(message).toContain("plugins.allow");
+  });
+
+  it("identifies an agent tool name and points the user at model tool-use", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "lcm_recent",
+      {
+        plugins: {
+          allow: ["lossless-claw"],
+        },
+      },
+      { registry: losslessClawToolRegistry },
+    );
+    expect(message).not.toBeNull();
+    expect(message).toContain('"lcm_recent"');
+    expect(message).toContain('"lossless-claw"');
+    expect(message).toContain("agent tool");
+    expect(message).not.toContain("plugins.allow");
+  });
+
+  it("matches agent tool names case-insensitively", () => {
+    const message = resolveMissingPluginCommandMessage("LCM_Recent", undefined, {
+      registry: losslessClawToolRegistry,
+    });
+    expect(message).not.toBeNull();
+    expect(message).toContain("agent tool");
+    expect(message).toContain('"lossless-claw"');
+  });
+
+  it("preserves the plugins.allow suggestion when the unknown name is not a plugin tool", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "totally-unknown",
+      {
+        plugins: {
+          allow: ["quietchat"],
+        },
+      },
+      { registry: losslessClawToolRegistry },
+    );
+    expect(message).not.toBeNull();
+    expect(message).toContain('`plugins.allow` excludes "totally-unknown"');
+  });
+
+  it("does not attribute a tool to an owning plugin excluded by plugins.allow", () => {
+    // The owning plugin is denied via plugins.allow, so the manifest-declared
+    // tool is not available through the owning plugin. Fall through to the
+    // standard plugins.allow message instead of falsely attributing it.
+    const message = resolveMissingPluginCommandMessage(
+      "lcm_recent",
+      {
+        plugins: {
+          allow: ["quietchat"],
+        },
+      },
+      { registry: losslessClawToolRegistry },
+    );
+    expect(message).not.toBeNull();
+    expect(message).not.toContain("agent tool available");
+    expect(message).toContain('`plugins.allow` excludes "lcm_recent"');
+  });
+
+  it("does not attribute a tool to an owning plugin disabled via plugins.entries", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "lcm_recent",
+      {
+        plugins: {
+          entries: {
+            "lossless-claw": { enabled: false },
+          },
+        },
+      },
+      { registry: losslessClawToolRegistry },
+    );
+    // entries.<id>.enabled = false on the OWNING plugin invalidates the
+    // plugin-tool attribution. With no allow filter on the bare name the
+    // diagnostic returns null (no actionable message); callers handle that
+    // as "not a recognised plugin command".
+    expect(message).toBeNull();
+  });
+
+  it("uses softer 'may be provided by' wording for manifest-only availability", () => {
+    // Some runtime gates (per-account enabled, per-tool toggles in the Feishu
+    // family etc.) cannot be expressed as manifest configSignals, so the
+    // runtime resolver reports availability: "manifest-only" when ownership is
+    // only manifest-provable. The diagnostic must avoid asserting "registered
+    // by" in that case.
+    const manifestOnlyOwner = {
+      toolName: "feishu_chat",
+      pluginId: "feishu",
+      availability: "manifest-only" as const,
+    };
+    const message = resolveMissingPluginCommandMessage("feishu_chat", undefined, {
+      resolveToolOwner: () => manifestOnlyOwner,
+    });
+    expect(message).not.toBeNull();
+    expect(message).toContain("may be provided by");
+    expect(message).toContain('"feishu"');
+    expect(message).not.toContain("registered by");
   });
 });

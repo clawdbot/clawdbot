@@ -20,6 +20,7 @@ vi.mock("../channels/plugins/index.js", () => ({
 
 vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
 }));
 
 vi.mock("../infra/outbound/targets.js", async () => {

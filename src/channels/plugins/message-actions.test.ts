@@ -261,7 +261,7 @@ describe("message action capability checks", () => {
         cfg: {} as OpenClawConfig,
         channel: "demo-unscoped-schema",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("treats empty current-channel schema action lists as blocking no cross-channel actions", () => {
@@ -347,7 +347,7 @@ describe("message action capability checks", () => {
         action: "send",
         channel: "demo-media",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps flat media-source param discovery for backward compatibility", () => {
@@ -401,11 +401,11 @@ describe("message action capability checks", () => {
     );
 
     expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);
-    expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual([]);
+    expect(listChannelMessageCapabilities({} as OpenClawConfig)).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
 
     expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);
-    expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual([]);
+    expect(listChannelMessageCapabilities({} as OpenClawConfig)).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 });

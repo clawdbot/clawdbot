@@ -13,6 +13,7 @@ function createStubPluginRegistry(): PluginRegistry {
     channels: createDefaultGatewayTestChannels(),
     channelSetups: [],
     providers: [],
+    modelCatalogProviders: [],
     speechProviders: createDefaultGatewayTestSpeechProviders(),
     realtimeTranscriptionProviders: [],
     realtimeVoiceProviders: [],

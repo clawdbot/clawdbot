@@ -16,6 +16,12 @@ import { nextcloudTalkSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
 describe("nextcloud talk setup", () => {
+  it("shows a bot install command with webhook, response, and reaction features", () => {
+    expect(nextcloudTalkSetupWizard.introNote?.lines.join("\n")).toContain(
+      "--feature webhook --feature response --feature reaction",
+    );
+  });
+
   it("normalizes and validates base urls", () => {
     expect(normalizeNextcloudTalkBaseUrl(" https://cloud.example.com/// ")).toBe(
       "https://cloud.example.com",

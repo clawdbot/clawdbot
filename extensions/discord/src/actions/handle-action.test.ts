@@ -7,12 +7,27 @@ const handleDiscordActionMock = vi
   .mockResolvedValue({ content: [], details: { ok: true } });
 const { handleDiscordMessageAction } = await import("./handle-action.js");
 
+function discordConfig(actions?: Record<string, boolean>): OpenClawConfig {
+  return {
+    channels: { discord: { token: "tok", ...(actions ? { actions } : {}) } },
+  } as OpenClawConfig;
+}
+
+function defaultActionOptions() {
+  return {
+    mediaAccess: undefined,
+    mediaLocalRoots: undefined,
+    mediaReadFile: undefined,
+  };
+}
+
 describe("handleDiscordMessageAction", () => {
   beforeEach(() => {
     handleDiscordActionMock.mockClear();
   });
 
   it("uses trusted requesterSenderId for moderation and ignores params senderUserId", async () => {
+    const cfg = discordConfig({ moderation: true });
     await handleDiscordMessageAction({
       action: "timeout",
       params: {
@@ -21,9 +36,7 @@ describe("handleDiscordMessageAction", () => {
         durationMin: 5,
         senderUserId: "spoofed-admin-id",
       },
-      cfg: {
-        channels: { discord: { token: "tok", actions: { moderation: true } } },
-      } as OpenClawConfig,
+      cfg,
       requesterSenderId: "trusted-sender-id",
       toolContext: { currentChannelProvider: "discord" },
     });
@@ -36,26 +49,19 @@ describe("handleDiscordMessageAction", () => {
         durationMinutes: 5,
         senderUserId: "trusted-sender-id",
       }),
-      expect.objectContaining({
-        channels: {
-          discord: expect.objectContaining({
-            token: "tok",
-          }),
-        },
-      }),
+      cfg,
     );
   });
 
   it("falls back to toolContext.currentMessageId for reactions", async () => {
+    const cfg = discordConfig();
     await handleDiscordMessageAction({
       action: "react",
       params: {
         channelId: "123",
         emoji: "ok",
       },
-      cfg: {
-        channels: { discord: { token: "tok" } },
-      } as OpenClawConfig,
+      cfg,
       toolContext: { currentMessageId: "9001" },
     });
 
@@ -66,20 +72,19 @@ describe("handleDiscordMessageAction", () => {
         messageId: "9001",
         emoji: "ok",
       }),
-      expect.any(Object),
-      expect.any(Object),
+      cfg,
+      defaultActionOptions(),
     );
   });
 
   it("falls back to Discord toolContext.currentChannelId for reaction targets", async () => {
+    const cfg = discordConfig();
     await handleDiscordMessageAction({
       action: "react",
       params: {
         emoji: "ok",
       },
-      cfg: {
-        channels: { discord: { token: "tok" } },
-      } as OpenClawConfig,
+      cfg,
       toolContext: {
         currentChannelProvider: "discord",
         currentChannelId: "user:U1",
@@ -94,20 +99,19 @@ describe("handleDiscordMessageAction", () => {
         messageId: "9001",
         emoji: "ok",
       }),
-      expect.any(Object),
-      expect.any(Object),
+      cfg,
+      defaultActionOptions(),
     );
   });
 
   it("falls back to Discord toolContext.currentChannelId for sends", async () => {
+    const cfg = discordConfig();
     await handleDiscordMessageAction({
       action: "send",
       params: {
         message: "hello",
       },
-      cfg: {
-        channels: { discord: { token: "tok" } },
-      } as OpenClawConfig,
+      cfg,
       toolContext: {
         currentChannelProvider: "discord",
         currentChannelId: "channel:123",
@@ -120,8 +124,8 @@ describe("handleDiscordMessageAction", () => {
         to: "channel:123",
         content: "hello",
       }),
-      expect.any(Object),
-      expect.any(Object),
+      cfg,
+      defaultActionOptions(),
     );
   });
 
@@ -131,6 +135,7 @@ describe("handleDiscordMessageAction", () => {
       localRoots: ["/tmp/agent-root"],
       readFile: mediaReadFile,
     };
+    const cfg = discordConfig();
 
     await handleDiscordMessageAction({
       action: "upload-file",
@@ -144,9 +149,7 @@ describe("handleDiscordMessageAction", () => {
         __sessionKey: "session-1",
         __agentId: "agent-1",
       },
-      cfg: {
-        channels: { discord: { token: "tok" } },
-      } as OpenClawConfig,
+      cfg,
       mediaAccess,
       mediaLocalRoots: ["/tmp/agent-root"],
       mediaReadFile,
@@ -164,7 +167,7 @@ describe("handleDiscordMessageAction", () => {
         __sessionKey: "session-1",
         __agentId: "agent-1",
       }),
-      expect.any(Object),
+      cfg,
       {
         mediaAccess,
         mediaLocalRoots: ["/tmp/agent-root"],
@@ -174,14 +177,13 @@ describe("handleDiscordMessageAction", () => {
   });
 
   it("falls back to Discord toolContext.currentChannelId for upload-file", async () => {
+    const cfg = discordConfig();
     await handleDiscordMessageAction({
       action: "upload-file",
       params: {
         path: "/tmp/agent-root/image.png",
       },
-      cfg: {
-        channels: { discord: { token: "tok" } },
-      } as OpenClawConfig,
+      cfg,
       toolContext: {
         currentChannelProvider: "discord",
         currentChannelId: "channel:123",
@@ -195,8 +197,8 @@ describe("handleDiscordMessageAction", () => {
         content: "",
         mediaUrl: "/tmp/agent-root/image.png",
       }),
-      expect.any(Object),
-      expect.any(Object),
+      cfg,
+      defaultActionOptions(),
     );
   });
 
@@ -207,9 +209,7 @@ describe("handleDiscordMessageAction", () => {
         params: {
           to: "channel:123",
         },
-        cfg: {
-          channels: { discord: { token: "tok" } },
-        } as OpenClawConfig,
+        cfg: discordConfig(),
       }),
     ).rejects.toThrow(/upload-file requires filePath, path, or media/i);
 
@@ -218,6 +218,7 @@ describe("handleDiscordMessageAction", () => {
 
   it("maps thread-reply filePath to Discord threadReply with media read context", async () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("report"));
+    const cfg = discordConfig({ threads: true });
 
     await handleDiscordMessageAction({
       action: "thread-reply",
@@ -226,9 +227,7 @@ describe("handleDiscordMessageAction", () => {
         message: "thread update",
         filePath: "/tmp/agent-root/report.md",
       },
-      cfg: {
-        channels: { discord: { token: "tok", actions: { threads: true } } },
-      } as OpenClawConfig,
+      cfg,
       mediaLocalRoots: ["/tmp/agent-root"],
       mediaReadFile,
     });
@@ -240,9 +239,10 @@ describe("handleDiscordMessageAction", () => {
         content: "thread update",
         mediaUrl: "/tmp/agent-root/report.md",
       }),
-      expect.any(Object),
+      cfg,
       {
         mediaLocalRoots: ["/tmp/agent-root"],
+        mediaAccess: undefined,
         mediaReadFile,
       },
     );
@@ -250,6 +250,7 @@ describe("handleDiscordMessageAction", () => {
 
   it("forwards top-level components on sends", async () => {
     const components = { blocks: [{ type: "text", text: "Pick one" }] };
+    const cfg = discordConfig();
 
     await handleDiscordMessageAction({
       action: "send",
@@ -257,9 +258,7 @@ describe("handleDiscordMessageAction", () => {
         message: "hello",
         components,
       },
-      cfg: {
-        channels: { discord: { token: "tok" } },
-      } as OpenClawConfig,
+      cfg,
       toolContext: {
         currentChannelProvider: "discord",
         currentChannelId: "channel:123",
@@ -273,8 +272,8 @@ describe("handleDiscordMessageAction", () => {
         content: "hello",
         components,
       }),
-      expect.any(Object),
-      expect.any(Object),
+      cfg,
+      defaultActionOptions(),
     );
   });
 
@@ -285,9 +284,7 @@ describe("handleDiscordMessageAction", () => {
         params: {
           message: "hello",
         },
-        cfg: {
-          channels: { discord: { token: "tok" } },
-        } as OpenClawConfig,
+        cfg: discordConfig(),
         toolContext: {
           currentChannelProvider: "telegram",
           currentChannelId: "channel:123",
@@ -305,9 +302,7 @@ describe("handleDiscordMessageAction", () => {
         params: {
           emoji: "ok",
         },
-        cfg: {
-          channels: { discord: { token: "tok" } },
-        } as OpenClawConfig,
+        cfg: discordConfig(),
         toolContext: {
           currentChannelProvider: "telegram",
           currentChannelId: "user:U1",
@@ -327,9 +322,7 @@ describe("handleDiscordMessageAction", () => {
           channelId: "123",
           emoji: "ok",
         },
-        cfg: {
-          channels: { discord: { token: "tok" } },
-        } as OpenClawConfig,
+        cfg: discordConfig(),
       }),
     ).rejects.toThrow(/messageId required/i);
 

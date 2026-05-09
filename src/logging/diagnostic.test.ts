@@ -781,7 +781,7 @@ describe("stuck session diagnostics threshold", () => {
     resetDiagnosticStateForTest();
     emitDiagnosticEvent({ type: "webhook.received", channel: "telegram" });
 
-    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toEqual([]);
+    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toStrictEqual([]);
   });
 
   it("does not track session state when diagnostics are disabled", () => {
@@ -794,7 +794,7 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(events).toEqual([]);
+    expect(events).toStrictEqual([]);
     expect(getDiagnosticSessionStateCountForTest()).toBe(0);
   });
 

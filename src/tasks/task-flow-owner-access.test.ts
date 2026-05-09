@@ -94,6 +94,6 @@ describe("task flow owner access", () => {
       listTaskFlowsForOwner({
         callerOwnerKey: "agent:main:other",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

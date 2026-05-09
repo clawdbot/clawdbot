@@ -31,7 +31,8 @@ describe("plugin-boundary-report", () => {
       };
     };
 
-    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
     const pluginSdk = requirePluginSdkSummary(summary);
     expect(pluginSdk.crossOwnerReservedImportCount).toBe(0);
     expect(pluginSdk.unusedReservedCount).toBe(0);

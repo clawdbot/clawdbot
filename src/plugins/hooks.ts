@@ -1045,6 +1045,8 @@ export function createHookRunner(
           return {
             content: lastDefined(acc?.content, next.content),
             cancel: stickyTrue(acc?.cancel, next.cancel),
+            cancelReason: lastDefined(acc?.cancelReason, next.cancelReason),
+            metadata: next.metadata ?? acc?.metadata,
           };
         },
         shouldStop: (result) => result.cancel === true,

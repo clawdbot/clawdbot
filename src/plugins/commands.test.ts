@@ -427,7 +427,7 @@ describe("registerPluginCommand", () => {
       { provider: "telegram", expectedNames: ["voice"] },
       { provider: "discord", expectedNames: [] },
     ]);
-    expect(listProviderPluginCommandSpecs("discord")).toEqual([]);
+    expect(listProviderPluginCommandSpecs("discord")).toStrictEqual([]);
   });
 
   it("allows Slack to resolve provider-native plugin specs without changing shared native gating", () => {
@@ -463,7 +463,7 @@ describe("registerPluginCommand", () => {
       OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
     };
 
-    expect(getPluginCommandSpecs("discord", { env })).toEqual([]);
+    expect(getPluginCommandSpecs("discord", { env })).toStrictEqual([]);
     expect(
       getPluginCommandSpecs("discord", {
         env,

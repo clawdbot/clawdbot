@@ -88,7 +88,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         } as never,
         tools,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("preserves explicit empty properties maps when normalizing strict openai schemas", () => {
@@ -217,7 +217,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         } as never,
         tools: [permissiveTool],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("skips openai strict-tool normalization on non-native routes", () => {
@@ -251,7 +251,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         } as never,
         tools,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("suppresses openai strict-schema diagnostics because transport falls back to strict false", () => {
@@ -286,7 +286,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       ],
     });
 
-    expect(diagnostics).toEqual([]);
+    expect(diagnostics).toStrictEqual([]);
   });
 
   it("covers the shared xAI tool compat patch", () => {

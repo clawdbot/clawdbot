@@ -735,7 +735,7 @@ describe("lmstudio setup", () => {
       provider: "lmstudio",
       agentDir: undefined,
     });
-    expect(result.profiles).toEqual([]);
+    expect(result.profiles).toStrictEqual([]);
     expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
       baseUrl: "http://localhost:1234/v1",
       api: "openai-completions",
@@ -819,7 +819,7 @@ describe("lmstudio setup", () => {
       provider: "lmstudio",
       agentDir: undefined,
     });
-    expect(result.profiles).toEqual([]);
+    expect(result.profiles).toStrictEqual([]);
     expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
       baseUrl: "http://localhost:1234/v1",
       api: "openai-completions",
@@ -856,7 +856,7 @@ describe("lmstudio setup", () => {
       provider: "lmstudio",
       agentDir: undefined,
     });
-    expect(result.profiles).toEqual([]);
+    expect(result.profiles).toStrictEqual([]);
     expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
       apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
     });

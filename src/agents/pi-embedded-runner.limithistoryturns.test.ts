@@ -82,7 +82,7 @@ describe("limitHistoryTurns", () => {
   });
 
   it("returns empty array when messages is empty", () => {
-    expect(limitHistoryTurns([], 5)).toEqual([]);
+    expect(limitHistoryTurns([], 5)).toStrictEqual([]);
   });
 
   it("keeps all messages when fewer user turns than limit", () => {

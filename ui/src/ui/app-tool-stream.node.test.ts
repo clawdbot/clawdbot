@@ -10,6 +10,7 @@ type MutableHost = ToolStreamHost & {
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
 };
+const TOOL_STREAM_TEST_NOW = new Date("2026-05-09T00:00:00.000Z").getTime();
 
 function createHost(overrides?: Partial<MutableHost>): MutableHost {
   return {
@@ -22,6 +23,7 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
     toolStreamOrder: [],
     chatToolMessages: [],
     toolStreamSyncTimer: null,
+    chatModelOverrides: {},
     compactionStatus: null,
     compactionClearTimer: null,
     fallbackStatus: null,
@@ -51,14 +53,17 @@ function expectCompactionCompleteAndAutoClears(host: MutableHost) {
   expect(host.compactionStatus).toEqual({
     phase: "complete",
     runId: "run-1",
-    startedAt: expect.any(Number),
-    completedAt: expect.any(Number),
+    startedAt: TOOL_STREAM_TEST_NOW,
+    completedAt: TOOL_STREAM_TEST_NOW,
   });
-  expect(host.compactionClearTimer).toMatchObject({
-    hasRef: expect.any(Function),
-    ref: expect.any(Function),
-    unref: expect.any(Function),
-  });
+  const clearTimer = host.compactionClearTimer as unknown as {
+    hasRef?: unknown;
+    ref?: unknown;
+    unref?: unknown;
+  };
+  expect(typeof clearTimer.hasRef).toBe("function");
+  expect(typeof clearTimer.ref).toBe("function");
+  expect(typeof clearTimer.unref).toBe("function");
 
   vi.advanceTimersByTime(5_000);
   expect(host.compactionStatus).toBeNull();
@@ -74,6 +79,7 @@ function requireFallbackStatus(host: MutableHost): FallbackStatus {
 
 function useToolStreamFakeTimers(): void {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  vi.setSystemTime(TOOL_STREAM_TEST_NOW);
 }
 
 describe("app-tool-stream fallback lifecycle handling", () => {
@@ -206,6 +212,71 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     vi.useRealTimers();
   });
 
+  it("updates the chat model cache from session_status model changes", () => {
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "result",
+        name: "session_status",
+        toolCallId: "status-1",
+        result: {
+          details: {
+            ok: true,
+            sessionKey: "main",
+            changedModel: true,
+            modelProvider: "anthropic",
+            model: "claude-sonnet-4-6",
+            modelOverride: "anthropic/claude-sonnet-4-6",
+          },
+        },
+      },
+    });
+
+    expect(host.chatModelOverrides?.main).toEqual({
+      kind: "qualified",
+      value: "anthropic/claude-sonnet-4-6",
+    });
+  });
+
+  it("clears the chat model cache from session_status default resets", () => {
+    const host = createHost({
+      chatModelOverrides: {
+        main: { kind: "qualified", value: "anthropic/claude-sonnet-4-6" },
+      },
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "result",
+        name: "session_status",
+        toolCallId: "status-1",
+        result: {
+          details: {
+            ok: true,
+            sessionKey: "main",
+            changedModel: true,
+            modelProvider: "openai",
+            model: "gpt-5.4",
+            modelOverride: null,
+          },
+        },
+      },
+    });
+
+    expect(host.chatModelOverrides?.main).toBeNull();
+  });
+
   it("keeps compaction in retry-pending state until the matching lifecycle end", () => {
     useToolStreamFakeTimers();
     const host = createHost();
@@ -215,7 +286,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionStatus).toEqual({
       phase: "active",
       runId: "run-1",
-      startedAt: expect.any(Number),
+      startedAt: TOOL_STREAM_TEST_NOW,
       completedAt: null,
     });
 
@@ -231,7 +302,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionStatus).toEqual({
       phase: "retrying",
       runId: "run-1",
-      startedAt: expect.any(Number),
+      startedAt: TOOL_STREAM_TEST_NOW,
       completedAt: null,
     });
     expect(host.compactionClearTimer).toBeNull();
@@ -241,7 +312,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionStatus).toEqual({
       phase: "retrying",
       runId: "run-1",
-      startedAt: expect.any(Number),
+      startedAt: TOOL_STREAM_TEST_NOW,
       completedAt: null,
     });
 
@@ -270,7 +341,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionStatus).toEqual({
       phase: "retrying",
       runId: "run-1",
-      startedAt: expect.any(Number),
+      startedAt: TOOL_STREAM_TEST_NOW,
       completedAt: null,
     });
 

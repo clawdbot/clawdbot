@@ -79,6 +79,8 @@ import type {
   ProviderValidateReplayTurnsContext,
   ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
+  UnifiedModelCatalogProviderContext,
+  UnifiedModelCatalogProviderPlugin,
   OpenClawGatewayDiscoveryAdvertiseContext,
   OpenClawGatewayDiscoveryService,
   SpeechProviderPlugin,
@@ -196,6 +198,8 @@ export type {
   ProviderValidateReplayTurnsContext,
   ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
+  UnifiedModelCatalogProviderContext,
+  UnifiedModelCatalogProviderPlugin,
   OpenClawGatewayDiscoveryAdvertiseContext,
   OpenClawGatewayDiscoveryService,
   OpenClawPluginService,
@@ -221,6 +225,11 @@ export type {
   PluginHookInboundClaimResult,
 } from "../plugins/hook-types.js";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+export type {
+  UnifiedModelCatalogEntry,
+  UnifiedModelCatalogKind,
+  UnifiedModelCatalogSource,
+} from "../model-catalog/types.js";
 export type { OpenClawConfig };
 
 export {

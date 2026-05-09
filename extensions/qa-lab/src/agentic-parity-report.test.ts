@@ -198,7 +198,7 @@ describe("qa agentic parity report", () => {
     const regressionFailures = comparison.failures.filter((failure) =>
       failure.includes("completion rate"),
     );
-    expect(regressionFailures).toEqual([]);
+    expect(regressionFailures).toStrictEqual([]);
   });
 
   it("fails the parity gate when required parity scenarios are missing on both sides", () => {

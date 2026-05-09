@@ -150,7 +150,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
 
     expect(result.source).toBe("persisted");
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toStrictEqual([]);
   });
 
   it("keeps persisted package plugins when file hashes match", () => {
@@ -188,7 +188,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
 
     expect(result.source).toBe("persisted");
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toStrictEqual([]);
   });
 
   it("detects same-size same-mtime manifest replacements", () => {

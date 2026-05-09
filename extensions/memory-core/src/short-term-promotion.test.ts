@@ -1093,7 +1093,7 @@ describe("short-term promotion", () => {
         minUniqueQueries: 0,
       });
 
-      expect(ranked).toEqual([]);
+      expect(ranked).toStrictEqual([]);
     });
   });
 

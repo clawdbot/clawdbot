@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { botApi, botCtorSpy } = vi.hoisted(() => ({
   botApi: {
+    config: { use: vi.fn() },
     sendMessage: vi.fn(),
     setMessageReaction: vi.fn(),
     deleteMessage: vi.fn(),
@@ -110,6 +111,7 @@ describe("telegram proxy client", () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
     botApi.setMessageReaction.mockResolvedValue(undefined);
     botApi.deleteMessage.mockResolvedValue(true);
+    botApi.config.use.mockClear();
     botCtorSpy.mockClear();
     loadConfig.mockReturnValue(TELEGRAM_PROXY_CFG);
     makeProxyFetch.mockClear();

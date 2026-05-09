@@ -411,6 +411,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `agents.list` returns configured agent entries, including effective model and runtime metadata.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
+    - `tasks.list`, `tasks.get`, and `tasks.cancel` expose the Gateway task ledger to SDK and operator clients.
     - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
     - `environments.list` and `environments.status` expose read-only Gateway-local and node environment discovery for SDK clients.
     - `agent.identity.get` returns the effective assistant identity for an agent or session.
@@ -498,6 +499,34 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
 - Nodes may call `skills.bins` to fetch the current list of skill executables
   for auto-allow checks.
+
+### Task ledger RPCs
+
+Operator clients may inspect and cancel Gateway background task records through
+the task ledger RPCs. These methods return sanitized task summaries, not raw
+runtime state.
+
+- `tasks.list` requires `operator.read`.
+  - Params: optional `status` (`"queued"`, `"running"`, `"completed"`,
+    `"failed"`, `"cancelled"`, or `"timed_out"`) or an array of those statuses,
+    optional `agentId`, optional `sessionKey`, optional `limit` from `1` to
+    `500`, and optional string `cursor`.
+  - Result: `{ "tasks": TaskSummary[], "nextCursor"?: string }`.
+- `tasks.get` requires `operator.read`.
+  - Params: `{ "taskId": string }`.
+  - Result: `{ "task": TaskSummary }`.
+  - Missing task ids return the Gateway not-found error shape.
+- `tasks.cancel` requires `operator.write`.
+  - Params: `{ "taskId": string, "reason"?: string }`.
+  - Result:
+    `{ "found": boolean, "cancelled": boolean, "reason"?: string, "task"?: TaskSummary }`.
+  - `found` reports whether the ledger had a matching task. `cancelled`
+    reports whether the runtime accepted or recorded cancellation.
+
+`TaskSummary` includes `id`, `status`, and optional metadata such as `kind`,
+`runtime`, `title`, `agentId`, `sessionKey`, `childSessionKey`, `ownerKey`,
+`runId`, `taskId`, `flowId`, `parentTaskId`, `sourceId`, timestamps, progress,
+terminal summary, and sanitized error text.
 
 ### Operator helper methods
 

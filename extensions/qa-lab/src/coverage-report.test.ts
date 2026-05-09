@@ -11,7 +11,7 @@ describe("qa coverage report", () => {
     expect(inventory.primaryCoverageIdCount).toBeGreaterThan(0);
     expect(inventory.secondaryCoverageIdCount).toBeGreaterThan(0);
     expect(inventory.overlappingCoverage.length).toBeGreaterThan(0);
-    expect(inventory.missingCoverage).toEqual([]);
+    expect(inventory.missingCoverage).toStrictEqual([]);
     expect(inventory.byTheme.memory.map((feature) => feature.id)).toContain("memory.recall");
     expect(inventory.bySurface.memory.map((feature) => feature.id)).toContain("memory.recall");
   });

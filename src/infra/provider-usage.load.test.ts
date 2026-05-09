@@ -127,7 +127,7 @@ describe("provider-usage.load", () => {
         [{ provider: "anthropic", token: "token-a" }],
         mockFetch,
       );
-      expect(summary.providers).toEqual([]);
+      expect(summary.providers).toStrictEqual([]);
     } finally {
       ignoredErrors.delete("HTTP 500");
     }

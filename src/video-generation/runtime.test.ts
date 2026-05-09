@@ -346,6 +346,94 @@ describe("video-generation runtime", () => {
     expect(attempt.error).toMatch(/does not accept providerOptions/);
   });
 
+  it("overlays selected-model capabilities before option guards and normalization", async () => {
+    let seenCapabilityLookupTimeoutMs: number | undefined;
+    let seenSupportedDurationHint: readonly number[] | undefined;
+    let seenRequest:
+      | {
+          durationSeconds?: number;
+          providerOptions?: Record<string, unknown>;
+          resolution?: string;
+          audio?: boolean;
+        }
+      | undefined;
+    providers = [
+      {
+        id: "openrouter",
+        capabilities: {
+          providerOptions: {} as Record<string, VideoGenerationProviderOptionType>,
+          generate: {
+            supportsResolution: true,
+            resolutions: ["1080P"],
+            supportedDurationSeconds: [8],
+            supportsAudio: true,
+          },
+        },
+        resolveModelCapabilities: async (ctx) => {
+          seenCapabilityLookupTimeoutMs = ctx.timeoutMs;
+          return {
+            providerOptions: { seed: "number" },
+            generate: {
+              supportsResolution: true,
+              resolutions: ["720P"],
+              supportedDurationSeconds: [5],
+              supportsAudio: false,
+            },
+          };
+        },
+        async generateVideo(req) {
+          seenSupportedDurationHint = (req as Record<symbol, readonly number[] | undefined>)[
+            Symbol.for("openclaw.videoGeneration.supportedDurations")
+          ];
+          seenRequest = {
+            durationSeconds: req.durationSeconds,
+            providerOptions: req.providerOptions,
+            resolution: req.resolution,
+            audio: req.audio,
+          };
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: "google/veo-3.1",
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "openrouter/google/veo-3.1" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+      durationSeconds: 6,
+      providerOptions: { seed: 42 },
+      resolution: "720P",
+      audio: true,
+      timeoutMs: 120_000,
+    });
+
+    expect(result.attempts).toEqual([]);
+    expect(seenRequest).toEqual({
+      durationSeconds: 5,
+      providerOptions: { seed: 42 },
+      resolution: "720P",
+      audio: undefined,
+    });
+    expect(seenCapabilityLookupTimeoutMs).toBe(5_000);
+    expect(seenSupportedDurationHint).toEqual([5]);
+    expect(result.ignoredOverrides).toContainEqual({ key: "audio", value: true });
+    expect(result.normalization).toMatchObject({
+      durationSeconds: {
+        requested: 6,
+        applied: 5,
+        supportedValues: [5],
+      },
+    });
+  });
+
   it("skips providers that cannot satisfy reference audio inputs and falls back", async () => {
     providers = [
       {
@@ -391,6 +479,110 @@ describe("video-generation runtime", () => {
     const attempt = requireAttempt(result, 0);
     expect(attempt.provider).toBe("openai");
     expect(attempt.error).toMatch(/does not support reference audio inputs/);
+  });
+
+  it("skips providers whose live model capabilities lower image input limits", async () => {
+    let fallbackCalled = false;
+    providers = [
+      {
+        id: "openrouter",
+        defaultModel: "minimax/hailuo-2.3",
+        capabilities: {
+          imageToVideo: {
+            enabled: true,
+            maxInputImages: 4,
+          },
+        },
+        isConfigured: () => true,
+        resolveModelCapabilities: async () => ({
+          imageToVideo: {
+            enabled: true,
+            maxInputImages: 1,
+          },
+        }),
+        async generateVideo() {
+          throw new Error("should not be called");
+        },
+      },
+      {
+        id: "runway",
+        defaultModel: "gen4.5",
+        capabilities: {
+          imageToVideo: {
+            enabled: true,
+            maxInputImages: 2,
+          },
+        },
+        isConfigured: () => true,
+        async generateVideo(req) {
+          fallbackCalled = true;
+          expect(req.inputImages).toHaveLength(2);
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: "gen4.5",
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "openrouter/minimax/hailuo-2.3" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate two references",
+      inputImages: [
+        { url: "https://example.com/first.png" },
+        { url: "https://example.com/second.png" },
+      ],
+    });
+
+    expect(result.provider).toBe("runway");
+    expect(fallbackCalled).toBe(true);
+    expect(result.attempts).toHaveLength(1);
+    const attempt = requireAttempt(result, 0);
+    expect(attempt.provider).toBe("openrouter");
+    expect(attempt.error).toMatch(/supports at most 1 reference image\(s\), 2 requested/);
+  });
+
+  it("skips providers whose live model capabilities disable video inputs", async () => {
+    providers = [
+      {
+        id: "openrouter",
+        defaultModel: "minimax/hailuo-2.3",
+        capabilities: {
+          videoToVideo: {
+            enabled: true,
+            maxInputVideos: 1,
+          },
+        },
+        resolveModelCapabilities: async () => ({
+          videoToVideo: {
+            enabled: false,
+          },
+        }),
+        async generateVideo() {
+          throw new Error("should not be called");
+        },
+      },
+    ];
+
+    await expect(
+      runGenerateVideo({
+        cfg: {
+          agents: {
+            defaults: {
+              videoGenerationModel: { primary: "openrouter/minimax/hailuo-2.3" },
+            },
+          },
+        } as OpenClawConfig,
+        prompt: "restyle this clip",
+        inputVideos: [{ url: "https://example.com/reference.mp4" }],
+      }),
+    ).rejects.toThrow(/does not support reference video inputs/);
   });
 
   it("forwards mixed image, video, and audio references when explicitly supported", async () => {

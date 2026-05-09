@@ -84,7 +84,7 @@ describe("shared/entry-status", () => {
     });
 
     expect(result.requirementsSatisfied).toBe(true);
-    expect(result.missing.os).toEqual([]);
+    expect(result.missing.os).toStrictEqual([]);
   });
 
   it("pulls metadata and frontmatter from entry objects in the entry wrapper", () => {

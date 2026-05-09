@@ -105,7 +105,7 @@ describe("createDangerousNameMatchingMutableAllowlistWarningCollector", () => {
           },
         } as never,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 
@@ -115,8 +115,8 @@ describe("normalizeAllowFromList", () => {
   });
 
   it("returns an empty list for non-arrays", () => {
-    expect(normalizeAllowFromList(undefined)).toEqual([]);
-    expect(normalizeAllowFromList(null)).toEqual([]);
+    expect(normalizeAllowFromList(undefined)).toStrictEqual([]);
+    expect(normalizeAllowFromList(null)).toStrictEqual([]);
   });
 });
 

@@ -1151,7 +1151,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       completion_tokens: 5,
       total_tokens: 20,
     });
-    expect(usageChunk?.choices).toEqual([]);
+    expect(usageChunk?.choices).toStrictEqual([]);
   });
 
   it("keeps aggregate-only usage total in final stream usage chunk", async () => {

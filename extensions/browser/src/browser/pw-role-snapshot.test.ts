@@ -57,7 +57,7 @@ describe("pw-role-snapshot", () => {
     const aria = ['- heading "Hello"', "- paragraph: world"].join("\n");
     const res = buildRoleSnapshotFromAriaSnapshot(aria, { interactive: true });
     expect(res.snapshot).toBe("(no interactive elements)");
-    expect(Object.keys(res.refs)).toEqual([]);
+    expect(Object.keys(res.refs)).toStrictEqual([]);
   });
 
   it("parses role refs", () => {

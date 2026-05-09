@@ -115,7 +115,7 @@ describe("NodeSqliteKyselyDialect", () => {
         throw new Error("rollback outer");
       }),
     ).rejects.toThrow("rollback outer");
-    await expect(db.selectFrom("person").selectAll().execute()).resolves.toEqual([]);
+    await expect(db.selectFrom("person").selectAll().execute()).resolves.toStrictEqual([]);
 
     const trx = await db.startTransaction().execute();
     await trx.insertInto("person").values({ name: "Ada" }).execute();

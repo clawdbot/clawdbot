@@ -191,6 +191,32 @@ Override the command or version in plugin config:
 - `expectedVersion: "any"` disables strict version matching.
 - Custom `command` paths disable plugin-local auto-install.
 
+Override an individual ACP agent command with structured arguments when a path
+or flag value should remain one argv token:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "acpx": {
+        "enabled": true,
+        "config": {
+          "agents": {
+            "claude": {
+              "command": "node",
+              "args": ["/path/to/custom adapter.mjs", "--verbose"]
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+- `agents.<id>.command` is the executable or existing command string for that ACP agent.
+- `agents.<id>.args` is optional. Each array item is shell-quoted before OpenClaw passes it through the current acpx command-string registry.
+
 See [Plugins](/tools/plugin).
 
 ### Automatic dependency install

@@ -45,10 +45,10 @@ async function expectLifecycleStarted(params: {
 function expectLazyServiceHandle(
   handle: Awaited<ReturnType<typeof startLazyPluginServiceModule>>,
 ): LazyPluginServiceHandle {
-  expect(handle).toEqual(expect.objectContaining({ stop: expect.any(Function) }));
   if (handle === null) {
     throw new Error("Expected lazy plugin service handle");
   }
+  expect(handle.stop).toBeTypeOf("function");
   return handle;
 }
 

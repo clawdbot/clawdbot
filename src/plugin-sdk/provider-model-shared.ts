@@ -30,6 +30,11 @@ import {
 
 export type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
 export type {
+  UnifiedModelCatalogEntry,
+  UnifiedModelCatalogKind,
+  UnifiedModelCatalogSource,
+} from "../model-catalog/types.js";
+export type {
   BedrockDiscoveryConfig,
   ModelCompatConfig,
   ModelDefinitionConfig,
@@ -38,7 +43,11 @@ export type {
   ProviderEndpointClass,
   ProviderEndpointResolution,
 } from "../agents/provider-attribution.js";
-export type { ProviderPlugin } from "../plugins/types.js";
+export type {
+  ProviderPlugin,
+  UnifiedModelCatalogProviderContext,
+  UnifiedModelCatalogProviderPlugin,
+} from "../plugins/types.js";
 
 export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 export {

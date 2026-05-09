@@ -273,6 +273,6 @@ describe("resolveClaudeThinkingProfile", () => {
     const fixedBudgetLevels = profile.levels.filter(
       (level) => level.id === "xhigh" || level.id === "max",
     );
-    expect(fixedBudgetLevels).toEqual([]);
+    expect(fixedBudgetLevels).toStrictEqual([]);
   });
 });

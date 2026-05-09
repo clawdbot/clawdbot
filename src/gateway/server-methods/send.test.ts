@@ -99,6 +99,7 @@ vi.mock("../../infra/outbound/channel-selection.js", () => ({
 
 vi.mock("../../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
 }));
 
 vi.mock("../../config/sessions.js", async () => {

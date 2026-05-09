@@ -43,8 +43,10 @@ function createMemoryFlushPlan(relativePath: string) {
 
 function expectClearedMemoryState() {
   expect(resolveMemoryFlushPlan({})).toBeNull();
-  expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toEqual([]);
-  expect(listMemoryCorpusSupplements()).toEqual([]);
+  expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toStrictEqual(
+    [],
+  );
+  expect(listMemoryCorpusSupplements()).toStrictEqual([]);
   expect(getMemoryRuntime()).toBeUndefined();
 }
 

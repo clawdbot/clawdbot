@@ -395,12 +395,12 @@ describe("cdp internal", () => {
 
   describe("formatAriaSnapshot", () => {
     it("returns an empty array when the AX tree is empty", () => {
-      expect(formatAriaSnapshot([], 100)).toEqual([]);
+      expect(formatAriaSnapshot([], 100)).toStrictEqual([]);
     });
 
     it("returns an empty array when no node has an id", () => {
       const nodes = [{ role: { value: "Role" }, name: { value: "" } }] as unknown as RawAXNode[];
-      expect(formatAriaSnapshot(nodes, 100)).toEqual([]);
+      expect(formatAriaSnapshot(nodes, 100)).toStrictEqual([]);
     });
 
     it("skips child references that are absent from the node map", () => {
@@ -492,7 +492,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotAria({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
     });
   });
 
@@ -733,7 +733,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotDom({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
     });
 
     it("returns an empty nodes array when nodes is not an array", async () => {
@@ -753,7 +753,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotDom({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
     });
   });
 
@@ -864,7 +864,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const out = await querySelector({ wsUrl: server.wsUrl, selector: "button" });
-      expect(out.matches).toEqual([]);
+      expect(out.matches).toStrictEqual([]);
     });
   });
 
@@ -1095,7 +1095,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotAria({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
     });
 
     it("swallows a failing Runtime.enable in evaluateJavaScript", async () => {

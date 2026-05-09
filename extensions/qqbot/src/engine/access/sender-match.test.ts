@@ -32,8 +32,8 @@ describe("normalizeQQBotAllowFrom", () => {
   });
 
   it("returns empty array for undefined/null", () => {
-    expect(normalizeQQBotAllowFrom(undefined)).toEqual([]);
-    expect(normalizeQQBotAllowFrom(null)).toEqual([]);
+    expect(normalizeQQBotAllowFrom(undefined)).toStrictEqual([]);
+    expect(normalizeQQBotAllowFrom(null)).toStrictEqual([]);
   });
 });
 

@@ -1,14 +1,23 @@
 import { describe, expect, it } from "vitest";
+import type { TalkEvent } from "./talk-events.js";
 import { createTalkSessionController, normalizeTalkTransport } from "./talk-session-controller.js";
+
+const TEST_TALK_CONTEXT = {
+  brain: "agent-consult",
+  mode: "realtime",
+  provider: "test",
+  sessionId: "talk-session",
+  transport: "gateway-relay",
+} as const;
+
+function expectTalkEvent(event: TalkEvent | undefined, expected: TalkEvent) {
+  expect(event).toStrictEqual(expected);
+}
 
 function createController() {
   return createTalkSessionController(
     {
-      sessionId: "talk-session",
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-      provider: "test",
+      ...TEST_TALK_CONTEXT,
       maxRecentEvents: 3,
     },
     { now: () => "2026-05-05T00:00:00.000Z" },
@@ -33,17 +42,19 @@ describe("createTalkSessionController", () => {
       final: true,
     });
 
-    expect(firstTurn.event).toMatchObject({
+    expectTalkEvent(firstTurn.event, {
+      ...TEST_TALK_CONTEXT,
+      callId: undefined,
+      captureId: undefined,
+      final: undefined,
       id: "talk-session:2",
-      type: "turn.started",
-      sessionId: "talk-session",
-      turnId: "turn-1",
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-      provider: "test",
+      itemId: undefined,
+      parentId: undefined,
+      payload: {},
       seq: 2,
       timestamp: "2026-05-05T00:00:00.000Z",
+      turnId: "turn-1",
+      type: "turn.started",
     });
     expect(talk.recentEvents.map((event) => event.type)).toEqual([
       "turn.started",
@@ -63,15 +74,23 @@ describe("createTalkSessionController", () => {
 
     const ended = talk.endTurn({ turnId: "turn-old", payload: { reason: "done" } });
 
-    expect(ended).toMatchObject({
+    expect(ended).toStrictEqual({
+      event: {
+        ...TEST_TALK_CONTEXT,
+        callId: undefined,
+        captureId: undefined,
+        final: true,
+        id: "talk-session:2",
+        itemId: undefined,
+        parentId: undefined,
+        payload: { reason: "done" },
+        seq: 2,
+        timestamp: "2026-05-05T00:00:00.000Z",
+        turnId: "turn-old",
+        type: "turn.ended",
+      },
       ok: true,
       turnId: "turn-old",
-      event: {
-        type: "turn.ended",
-        turnId: "turn-old",
-        payload: { reason: "done" },
-        final: true,
-      },
     });
     expect(talk.activeTurnId).toBeUndefined();
   });
@@ -83,16 +102,34 @@ describe("createTalkSessionController", () => {
     const second = talk.startOutputAudio({ payload: { callId: "call-1" } });
     const done = talk.finishOutputAudio({ payload: { reason: "mark" } });
 
-    expect(first.event).toMatchObject({
-      type: "output.audio.started",
+    expectTalkEvent(first.event, {
+      ...TEST_TALK_CONTEXT,
+      callId: undefined,
+      captureId: undefined,
+      final: undefined,
+      id: "talk-session:2",
+      itemId: undefined,
+      parentId: undefined,
+      payload: { callId: "call-1" },
+      seq: 2,
+      timestamp: "2026-05-05T00:00:00.000Z",
       turnId: "turn-1",
+      type: "output.audio.started",
     });
     expect(second).toEqual({ turnId: "turn-1" });
-    expect(done).toMatchObject({
-      type: "output.audio.done",
-      turnId: "turn-1",
-      payload: { reason: "mark" },
+    expectTalkEvent(done, {
+      ...TEST_TALK_CONTEXT,
+      callId: undefined,
+      captureId: undefined,
       final: true,
+      id: "talk-session:3",
+      itemId: undefined,
+      parentId: undefined,
+      payload: { reason: "mark" },
+      seq: 3,
+      timestamp: "2026-05-05T00:00:00.000Z",
+      turnId: "turn-1",
+      type: "output.audio.done",
     });
     expect(talk.outputAudioActive).toBe(false);
   });
@@ -127,9 +164,22 @@ describe("createTalkSessionController", () => {
 
     const current = talk.startTurn({ turnId: "turn-current" });
 
-    expect(current).toMatchObject({
+    expect(current).toStrictEqual({
+      event: {
+        ...TEST_TALK_CONTEXT,
+        callId: undefined,
+        captureId: undefined,
+        final: undefined,
+        id: "talk-session:3",
+        itemId: undefined,
+        parentId: undefined,
+        payload: {},
+        seq: 3,
+        timestamp: "2026-05-05T00:00:00.000Z",
+        turnId: "turn-current",
+        type: "turn.started",
+      },
       turnId: "turn-current",
-      event: expect.objectContaining({ type: "turn.started", turnId: "turn-current" }),
     });
     expect(talk.activeTurnId).toBe("turn-current");
     expect(talk.outputAudioActive).toBe(false);

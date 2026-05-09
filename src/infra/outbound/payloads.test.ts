@@ -87,7 +87,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
           text: "Updated [wiki/tools.md] with the rollback failure-mode nuance. No channel reply.",
         },
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps normal payloads that mention wiki without matching relay placeholders", () => {
@@ -114,7 +114,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         { text: '{"action":"NO_REPLY"}' },
         { text: '{\n  "action": "NO_REPLY"\n}' },
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps JSON NO_REPLY objects that include extra fields", () => {
@@ -241,7 +241,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
           surface: "telegram",
         }),
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not add silent-reply chatter when visible content is already being delivered", () => {
@@ -291,14 +291,14 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       );
 
     it("drops bare silent replies when the context flag is set", () => {
-      expect(planSilent("agent:main:telegram:direct:123", true)).toEqual([]);
+      expect(planSilent("agent:main:telegram:direct:123", true)).toStrictEqual([]);
     });
 
     it("drops bare silent replies via the registered runtime query", () => {
       const sessionKey = "agent:main:telegram:direct:456";
       const previousQuery = registerPendingSpawnedChildrenQuery((key) => key === sessionKey);
       try {
-        expect(planSilent(sessionKey)).toEqual([]);
+        expect(planSilent(sessionKey)).toStrictEqual([]);
       } finally {
         registerPendingSpawnedChildrenQuery(previousQuery);
       }

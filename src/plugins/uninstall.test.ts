@@ -245,7 +245,7 @@ describe("resolveUninstallChannelConfigKeys", () => {
   });
 
   it("keeps explicit empty channelIds as remove-nothing", () => {
-    expect(resolveUninstallChannelConfigKeys("telegram", { channelIds: [] })).toEqual([]);
+    expect(resolveUninstallChannelConfigKeys("telegram", { channelIds: [] })).toStrictEqual([]);
   });
 
   it("filters shared keys and duplicate channel ids", () => {
@@ -862,7 +862,7 @@ describe("uninstallPlugin", () => {
       const successfulResult = expectSuccessfulUninstall(result);
       expect(successfulResult.actions).toEqual(expectedActions);
       expect(successfulResult.config).toEqual(expectedConfig);
-      expect(successfulResult.warnings).toEqual([]);
+      expect(successfulResult.warnings).toStrictEqual([]);
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     },
   );
@@ -1166,7 +1166,7 @@ describe("uninstallPlugin", () => {
     expect(successfulResult.actions.entry).toBe(true);
     expect(successfulResult.actions.install).toBe(true);
     expect(successfulResult.actions.directory).toBe(false);
-    expect(successfulResult.warnings).toEqual([]);
+    expect(successfulResult.warnings).toStrictEqual([]);
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 

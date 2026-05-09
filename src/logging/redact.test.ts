@@ -110,6 +110,24 @@ describe("redactSensitiveText", () => {
     );
   });
 
+  it("masks HTTP client config secrets in JSON and object-inspection fields", () => {
+    const appSecret = "feishu_app_secret_1234567890";
+    const clientSecret = "oauth_client_secret_1234567890";
+    const input = [
+      `body: {"app_secret":"${appSecret}"}`,
+      `config: { appSecret: '${appSecret}', client_secret: '${clientSecret}' }`,
+    ].join("\n");
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toContain('"app_secret":"feishu…7890"');
+    expect(output).toContain("appSecret: 'feishu…7890'");
+    expect(output).toContain("client_secret: 'oauth_…7890'");
+    expect(output).not.toContain(appSecret);
+    expect(output).not.toContain(clientSecret);
+  });
+
   it("masks payment credential assignments and flags", () => {
     const input = [
       "LINK_CARD_NUMBER=4242424242424242",
@@ -131,6 +149,20 @@ describe("redactSensitiveText", () => {
     expect(output).toContain("shared_payment_token=spt_ab…wxyz");
     expect(output).toContain("--payment-credential paycre…wxyz");
     expect(output).toContain("--card-number ***");
+  });
+
+  it("masks quoted HTTP auth headers in object-inspection fields", () => {
+    const bearer = "feishu_tenant_access_abcdef123456";
+    const cookie = "session_cookie_value_abcdef123456";
+    const input = `headers: { authorization: 'Bearer ${bearer}', cookie: '${cookie}' }`;
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toContain("authorization: 'Bearer…3456'");
+    expect(output).toContain("cookie: 'sessio…3456'");
+    expect(output).not.toContain(bearer);
+    expect(output).not.toContain(cookie);
   });
 
   it("masks payment credential URL query parameters", () => {
@@ -399,7 +431,7 @@ describe("redactSensitiveLines", () => {
 
   it("returns empty array unchanged — does not produce a synthetic blank line", () => {
     const resolved = resolveRedactOptions({ mode: "tools", patterns: defaults });
-    expect(redactSensitiveLines([], resolved)).toEqual([]);
+    expect(redactSensitiveLines([], resolved)).toStrictEqual([]);
   });
 
   it("redacts a PEM block spanning multiple lines in the array", () => {

@@ -165,4 +165,34 @@ describe("durable inbound reply delivery", () => {
       }),
     );
   });
+
+  it("reports durable partial send failures as failed delivery", async () => {
+    const error = new Error("second chunk failed");
+    mocks.sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "partial_failed",
+      results: [{ channel: "telegram", messageId: "m1" }],
+      receipt: {
+        primaryPlatformMessageId: "m1",
+        platformMessageIds: ["m1"],
+        parts: [{ platformMessageId: "m1", kind: "text", index: 0 }],
+        sentAt: 1,
+      },
+      error,
+      sentBeforeError: true,
+    });
+
+    const result = await deliverInboundReplyWithMessageSendContext({
+      cfg: {},
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      payload: { text: "final" },
+      ctxPayload: {
+        CommandAuthorized: true,
+        OriginatingTo: "chat-1",
+      },
+    });
+
+    expect(result).toEqual({ status: "failed", error });
+  });
 });

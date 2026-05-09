@@ -1,4 +1,5 @@
 import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
+import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-message";
 import type {
   MarkdownTableMode,
   OpenClawConfig,
@@ -7,7 +8,6 @@ import type {
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildOutboundSessionContext,
-  deliverOutboundPayloads,
   type OutboundDeliveryFormattingOptions,
   type OutboundIdentity,
   type OutboundSendDeps,
@@ -181,7 +181,7 @@ export async function deliverDiscordReply(params: {
     return;
   }
 
-  const results = await deliverOutboundPayloads({
+  const send = await sendDurableMessageBatch({
     cfg: params.cfg,
     channel: "discord",
     to: delivery.to,
@@ -205,6 +205,10 @@ export async function deliverDiscordReply(params: {
       requesterAccountId: params.accountId,
     }),
   });
+  if (send.status === "failed" || send.status === "partial_failed") {
+    throw send.error;
+  }
+  const results = send.status === "sent" ? send.results : [];
   if (results.length === 0) {
     throw new Error(`discord final reply produced no delivered message for ${delivery.to}`);
   }

@@ -3,6 +3,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
+import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
@@ -13,7 +14,6 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { buildOutboundResultEnvelope } from "../../infra/outbound/envelope.js";
 import {
   createOutboundPayloadPlan,
@@ -381,7 +381,7 @@ export async function deliverAgentCommandResult(params: {
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget) {
-      await deliverOutboundPayloads({
+      const send = await sendDurableMessageBatch({
         cfg,
         channel: deliveryChannel,
         to: deliveryTarget,
@@ -391,10 +391,17 @@ export async function deliverAgentCommandResult(params: {
         replyToId: resolvedReplyToId ?? null,
         threadId: resolvedThreadTarget ?? null,
         bestEffort: bestEffortDeliver,
+        durability: bestEffortDeliver ? "best_effort" : "required",
         onError: markDeliveryError,
         onPayload: logPayload,
         deps: createOutboundSendDeps(deps),
       });
+      if (!bestEffortDeliver && (send.status === "failed" || send.status === "partial_failed")) {
+        throw send.error;
+      }
+      if (send.status === "failed" || send.status === "partial_failed") {
+        deliveryHadError = true;
+      }
       deliverySucceeded = !deliveryHadError;
     }
   }

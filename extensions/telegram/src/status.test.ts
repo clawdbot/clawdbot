@@ -117,7 +117,7 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual([]);
+    expect(issues).toStrictEqual([]);
   });
 
   it("reports stale polling transport activity after successful getUpdates stops refreshing", () => {
@@ -158,7 +158,7 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual([]);
+    expect(issues).toStrictEqual([]);
   });
 
   it("reports webhook runtime state that never completed setWebhook after startup grace", () => {
@@ -200,7 +200,7 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual([]);
+    expect(issues).toStrictEqual([]);
   });
 
   it("does not report an advertised webhook just because no user updates arrived", () => {
@@ -216,7 +216,7 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual([]);
+    expect(issues).toStrictEqual([]);
   });
 
   it("ignores accounts that are not both enabled and configured", () => {
@@ -228,7 +228,7 @@ describe("collectTelegramStatusIssues", () => {
           configured: true,
         } as ChannelAccountSnapshot,
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 

@@ -297,6 +297,6 @@ describeLaunchdIntegration("launchd integration", () => {
     const lines = trimmedEvents.length > 0 ? trimmedEvents.split(/\r?\n/) : [];
     expect(lines.reduce((count, line) => count + (line.startsWith("start ") ? 1 : 0), 0)).toBe(1);
     const signalLines = lines.filter((line) => /^(SIGHUP|SIGINT|SIGTERM) /.test(line));
-    expect(signalLines).toEqual([]);
+    expect(signalLines).toStrictEqual([]);
   }, 60_000);
 });

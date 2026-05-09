@@ -20,7 +20,7 @@ describe("linePlugin status.collectStatusIssues", () => {
           tokenSource: "env",
         },
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("reports missing access token when the snapshot is unconfigured and tokenSource is none", () => {

@@ -29,7 +29,7 @@ describe("listChannelPlugins", () => {
     const malformedRegistry = withMalformedChannels(createEmptyPluginRegistry());
     setActivePluginRegistry(malformedRegistry);
 
-    expect(listChannelPlugins()).toEqual([]);
+    expect(listChannelPlugins()).toStrictEqual([]);
   });
 
   it("falls back to bundled channel plugins for direct lookups before registry bootstrap", () => {

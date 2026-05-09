@@ -85,9 +85,17 @@ describe("media understanding attachments SSRF", () => {
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
 
-    await expect(
-      allowedCache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-    ).resolves.toMatchObject({ mime: "image/jpeg" });
+    const result = await allowedCache.getBuffer({
+      attachmentIndex: 0,
+      maxBytes: 1024,
+      timeoutMs: 1000,
+    });
+    expect(result).toStrictEqual({
+      buffer: Buffer.from("image"),
+      mime: "image/jpeg",
+      fileName: "file.jpg",
+      size: 5,
+    });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 

@@ -481,7 +481,7 @@ cli note
     });
     expect(dryRun.dryRun).toBe(true);
     expect(dryRun.createdCount).toBe(1);
-    await expect(fs.readdir(path.join(rootDir, "sources"))).resolves.toEqual([]);
+    await expect(fs.readdir(path.join(rootDir, "sources"))).resolves.toStrictEqual([]);
 
     const applied = await runWikiChatGptImport({
       config,
@@ -522,6 +522,6 @@ cli note
       fs
         .readdir(path.join(rootDir, "sources"))
         .then((entries) => entries.filter((entry) => entry !== "index.md")),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   });
 });

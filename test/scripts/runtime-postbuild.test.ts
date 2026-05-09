@@ -15,19 +15,27 @@ import { createScriptTestHarness } from "./test-helpers.js";
 const { createTempDir } = createScriptTestHarness();
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  let statError: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  expect(statError).toBeInstanceOf(Error);
+  if (!(statError instanceof Error)) {
+    throw new Error("expected missing path error");
+  }
+  expect(Reflect.get(statError, "code")).toBe("ENOENT");
 }
 
 describe("runtime postbuild static assets", () => {
   it("tracks plugin-owned static assets that release packaging must ship", () => {
-    expect(listStaticExtensionAssetOutputs()).toEqual(
-      expect.arrayContaining([
-        "dist/extensions/acpx/error-format.mjs",
-        "dist/extensions/acpx/mcp-command-line.mjs",
-        "dist/extensions/acpx/mcp-proxy.mjs",
-        "dist/extensions/diffs/assets/viewer-runtime.js",
-      ]),
-    );
+    expect(listStaticExtensionAssetOutputs()).toEqual([
+      "dist/extensions/acpx/error-format.mjs",
+      "dist/extensions/acpx/mcp-command-line.mjs",
+      "dist/extensions/acpx/mcp-proxy.mjs",
+      "dist/extensions/diffs/assets/viewer-runtime.js",
+    ]);
   });
 
   it("discovers static assets from plugin package metadata", async () => {

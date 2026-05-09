@@ -134,7 +134,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { readStoreAllowFromForDmPolicy, resolveDmGroupAccessWithCommandGate } from "openclaw/plugin-sdk/channel-policy";',
     'export type { BlockStreamingCoalesceConfig, DmConfig, DmPolicy, GroupPolicy, GroupToolPolicyConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";',
     'export { GROUP_POLICY_BLOCKED_LABEL, resolveAllowlistProviderRuntimeGroupPolicy, resolveDefaultGroupPolicy, warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";',
-    'export { dispatchChannelMessageReplyWithBase } from "openclaw/plugin-sdk/channel-message";',
+    'export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";',
     'export type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";',
     'export { deliverFormattedTextWithAttachments } from "openclaw/plugin-sdk/reply-payload";',
     'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',

@@ -568,7 +568,7 @@ describe("resolveRuntimePluginRegistry", () => {
 
     const scopedEmpty = resolveRuntimePluginRegistry({ ...loadOptions, onlyPluginIds: [] });
     expect(scopedEmpty).not.toBe(registry);
-    expect(scopedEmpty?.plugins).toEqual([]);
+    expect(scopedEmpty?.plugins).toStrictEqual([]);
   });
 
   it("keeps the full workspace registry warm when scoped cron registries churn", () => {
@@ -637,8 +637,8 @@ describe("clearPluginLoaderCache", () => {
 
     clearPluginLoaderCache();
 
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
-    expect(listMemoryCorpusSupplements()).toEqual([]);
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toStrictEqual([]);
+    expect(listMemoryCorpusSupplements()).toStrictEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
     expect(getMemoryEmbeddingProvider("stale")).toBeUndefined();

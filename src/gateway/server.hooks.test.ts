@@ -328,7 +328,7 @@ describe("gateway server hooks", () => {
       expect(targetEvents).toEqual(
         expect.arrayContaining([expect.stringContaining("Hook Email: done")]),
       );
-      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+      expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
     });
   });
@@ -362,7 +362,7 @@ describe("gateway server hooks", () => {
       });
       expect(directSilent.status).toBe(200);
       await waitForCronIsolatedRuns(1);
-      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+      expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
 
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
@@ -372,7 +372,7 @@ describe("gateway server hooks", () => {
       const mappedSilent = await postHook(port, "/hooks/mapped-silent", { subject: "Email" });
       expect(mappedSilent.status).toBe(200);
       await waitForCronIsolatedRuns(2);
-      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+      expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
 
       cronIsolatedRun.mockResolvedValueOnce({
         status: "error",
@@ -409,7 +409,7 @@ describe("gateway server hooks", () => {
       });
       expect(response.status).toBe(200);
       await waitForCronIsolatedRuns(1);
-      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+      expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
     });
   });
 

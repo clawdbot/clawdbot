@@ -107,7 +107,7 @@ describe("scanCodexNativeAssets", () => {
         cfg: {} as OpenClawConfig,
         env: { CODEX_HOME: codexHome, HOME: root },
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   });
 });
 

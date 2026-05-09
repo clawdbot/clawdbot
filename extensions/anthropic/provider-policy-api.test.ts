@@ -127,7 +127,7 @@ describe("anthropic provider policy public artifact", () => {
     if (!profile) {
       throw new Error("Expected Anthropic policy profile");
     }
-    expect(collectLegacyExtendedLevelIds(profile.levels)).toEqual([]);
+    expect(collectLegacyExtendedLevelIds(profile.levels)).toStrictEqual([]);
   });
 
   it("does not expose Anthropic thinking profiles for unrelated providers", () => {

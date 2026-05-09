@@ -59,7 +59,7 @@ describe("vercel ai gateway thinking profile", () => {
       levels: expect.arrayContaining([{ id: "adaptive" }]),
       defaultLevel: "adaptive",
     });
-    expect(collectLegacyExtendedLevelIds(profile?.levels)).toEqual([]);
+    expect(collectLegacyExtendedLevelIds(profile?.levels)).toStrictEqual([]);
   });
 
   it("falls through for unsupported OpenAI or untrusted namespaced refs", async () => {

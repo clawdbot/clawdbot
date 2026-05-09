@@ -1,9 +1,9 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
+  createChannelMessageReplyPipeline,
   createChannelPairingController,
   deliverFormattedTextWithAttachments,
-  dispatchChannelMessageReplyWithBase,
   logInboundDrop,
   readStoreAllowFromForDmPolicy,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -286,35 +286,52 @@ export async function handleNextcloudTalkInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
-  await dispatchChannelMessageReplyWithBase({
+  const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: config as OpenClawConfig,
+    agentId: route.agentId,
     channel: CHANNEL_ID,
     accountId: account.accountId,
-    route,
+  });
+
+  await core.channel.turn.runPrepared({
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+    routeSessionKey: route.sessionKey,
     storePath,
     ctxPayload,
-    core,
-    deliver: async (payload) => {
-      await deliverNextcloudTalkReply({
-        cfg: config,
-        payload,
-        roomToken,
-        accountId: account.accountId,
-        statusSink,
-      });
-    },
-    onRecordError: (err) => {
-      runtime.error?.(`nextcloud-talk: failed updating session meta: ${String(err)}`);
-    },
-    onDispatchError: (err, info) => {
-      runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
-    },
-    replyOptions: {
-      skillFilter: roomConfig?.skills,
-      disableBlockStreaming:
-        typeof account.config.blockStreaming === "boolean"
-          ? !account.config.blockStreaming
-          : undefined,
+    recordInboundSession: core.channel.session.recordInboundSession,
+    runDispatch: async () =>
+      await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+        ctx: ctxPayload,
+        cfg: config as OpenClawConfig,
+        dispatcherOptions: {
+          ...replyPipeline,
+          deliver: async (payload) => {
+            await deliverNextcloudTalkReply({
+              cfg: config,
+              payload,
+              roomToken,
+              accountId: account.accountId,
+              statusSink,
+            });
+          },
+          onError: (err, info) => {
+            runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
+          },
+        },
+        replyOptions: {
+          onModelSelected,
+          skillFilter: roomConfig?.skills,
+          disableBlockStreaming:
+            typeof account.config.blockStreaming === "boolean"
+              ? !account.config.blockStreaming
+              : undefined,
+        },
+      }),
+    record: {
+      onRecordError: (err) => {
+        runtime.error?.(`nextcloud-talk: failed updating session meta: ${String(err)}`);
+      },
     },
   });
 }

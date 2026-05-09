@@ -10,7 +10,6 @@ export {
   createDefaultChannelRuntimeState,
   createPluginRuntimeStore,
   defineChannelPluginEntry,
-  dispatchChannelMessageReplyWithBase,
   getChatChannelMeta,
   jsonResult,
   type OpenClawConfig,

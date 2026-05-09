@@ -83,7 +83,7 @@ describe("qa multipass runtime", () => {
     });
 
     expect(plan.outputDir).toBe(outputDir);
-    expect(plan.scenarioIds).toEqual([]);
+    expect(plan.scenarioIds).toStrictEqual([]);
     expect(plan.qaCommand).not.toContain("--scenario");
     expect(plan.guestOutputDir).toBe("/workspace/openclaw-host/.artifacts/qa-e2e/multipass-test");
     expect(plan.reportPath).toBe(path.join(outputDir, "qa-suite-report.md"));
@@ -251,7 +251,7 @@ describe("qa multipass runtime", () => {
     const tempEntries = fs
       .readdirSync(resolvePreferredOpenClawTmpDir())
       .filter((entry) => entry.startsWith(path.basename(expectedTransferDir)));
-    expect(tempEntries).toEqual([]);
+    expect(tempEntries).toStrictEqual([]);
     fs.rmSync(outputDir, { recursive: true, force: true });
   });
 

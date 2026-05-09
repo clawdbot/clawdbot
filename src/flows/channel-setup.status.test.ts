@@ -307,16 +307,19 @@ describe("resolveChannelSetupSelectionContributions", () => {
       selection: ["zalo"],
     });
 
-    expect(formatChannelSelectionLine).toHaveBeenCalledWith(
-      expect.objectContaining({
-        label: "Zalo\\nBot",
-        blurb: "Setup\\nhelp",
-        docsLabel: "Docs\\nLabel",
-        selectionDocsPrefix: "Docs\\nPrefix",
-        selectionExtras: ["Extra\\nOne"],
-      }),
-      expect.any(Function),
-    );
+    expect(formatChannelSelectionLine).toHaveBeenCalledOnce();
+    const [selectionMeta, docsLink] = formatChannelSelectionLine.mock.calls[0] ?? [];
+    expect(selectionMeta).toMatchObject({
+      label: "Zalo\\nBot",
+      blurb: "Setup\\nhelp",
+      docsLabel: "Docs\\nLabel",
+      selectionDocsPrefix: "Docs\\nPrefix",
+      selectionExtras: ["Extra\\nOne"],
+    });
+    if (typeof docsLink !== "function") {
+      throw new Error("Expected docs link formatter");
+    }
+    expect(docsLink("/channels/zalo", "Docs")).toContain("https://docs.openclaw.ai/channels/zalo");
     expect(lines).toEqual(["Zalo\\nBot — Setup\\nhelp"]);
   });
 });

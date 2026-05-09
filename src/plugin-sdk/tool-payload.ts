@@ -57,6 +57,15 @@ export type PlainTextToolCallParseOptions = {
 
 const DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES = 256_000;
 const END_TOOL_REQUEST = "[END_TOOL_REQUEST]";
+const HARMONY_CHANNEL_MARKER = "<|channel|>";
+const HARMONY_MESSAGE_MARKER = "<|message|>";
+const HARMONY_CALL_MARKER = "<|call|>";
+
+type PlainTextToolCallOpening = {
+  end: number;
+  name: string;
+  requiresClosing: boolean;
+};
 
 function isToolNameChar(char: string | undefined): boolean {
   return Boolean(char && /[A-Za-z0-9_-]/.test(char));
@@ -88,7 +97,7 @@ function consumeLineBreak(text: string, start: number): number | null {
   return null;
 }
 
-function parseOpening(text: string, start: number): { end: number; name: string } | null {
+function parseBracketOpening(text: string, start: number): PlainTextToolCallOpening | null {
   if (text[start] !== "[") {
     return null;
   }
@@ -107,7 +116,49 @@ function parseOpening(text: string, start: number): { end: number; name: string 
   if (afterLineBreak === null) {
     return null;
   }
-  return { end: afterLineBreak, name };
+  return { end: afterLineBreak, name, requiresClosing: true };
+}
+
+function parseHarmonyOpening(text: string, start: number): PlainTextToolCallOpening | null {
+  let cursor = start;
+  if (text.startsWith(HARMONY_CHANNEL_MARKER, cursor)) {
+    cursor += HARMONY_CHANNEL_MARKER.length;
+  }
+  const channelStart = cursor;
+  while (/[A-Za-z_]/.test(text[cursor] ?? "")) {
+    cursor += 1;
+  }
+  const channel = text.slice(channelStart, cursor);
+  if (channel !== "commentary" && channel !== "analysis" && channel !== "final") {
+    return null;
+  }
+  cursor = skipHorizontalWhitespace(text, cursor);
+  if (!text.startsWith("to=", cursor)) {
+    return null;
+  }
+  cursor += 3;
+  const nameStart = cursor;
+  while (isToolNameChar(text[cursor])) {
+    cursor += 1;
+  }
+  if (cursor === nameStart) {
+    return null;
+  }
+  const name = text.slice(nameStart, cursor);
+  cursor = skipHorizontalWhitespace(text, cursor);
+  if (!text.startsWith("code", cursor)) {
+    return null;
+  }
+  cursor += 4;
+  cursor = skipWhitespace(text, cursor);
+  if (text.startsWith(HARMONY_MESSAGE_MARKER, cursor)) {
+    cursor = skipWhitespace(text, cursor + HARMONY_MESSAGE_MARKER.length);
+  }
+  return { end: cursor, name, requiresClosing: false };
+}
+
+function parseOpening(text: string, start: number): PlainTextToolCallOpening | null {
+  return parseBracketOpening(text, start) ?? parseHarmonyOpening(text, start);
 }
 
 function consumeJsonObject(
@@ -174,6 +225,14 @@ function parseClosing(text: string, start: number, name: string): number | null 
   return null;
 }
 
+function parseOptionalHarmonyClosing(text: string, start: number): number {
+  const cursor = skipWhitespace(text, start);
+  if (text.startsWith(HARMONY_CALL_MARKER, cursor)) {
+    return cursor + HARMONY_CALL_MARKER.length;
+  }
+  return start;
+}
+
 function parsePlainTextToolCallBlockAt(
   text: string,
   start: number,
@@ -197,15 +256,17 @@ function parsePlainTextToolCallBlockAt(
   if (!payload) {
     return null;
   }
-  const end = parseClosing(text, payload.end, opening.name);
-  if (end === null) {
+  const closingEnd = opening.requiresClosing
+    ? parseClosing(text, payload.end, opening.name)
+    : parseOptionalHarmonyClosing(text, payload.end);
+  if (closingEnd === null) {
     return null;
   }
   return {
     arguments: payload.value,
-    end,
+    end: closingEnd,
     name: opening.name,
-    raw: text.slice(start, end),
+    raw: text.slice(start, closingEnd),
     start,
   };
 }
@@ -228,7 +289,11 @@ export function parseStandalonePlainTextToolCallBlocks(
 }
 
 export function stripPlainTextToolCallBlocks(text: string): string {
-  if (!text || !/\[[A-Za-z0-9_-]+\]/.test(text)) {
+  if (
+    !text ||
+    (!/\[[A-Za-z0-9_-]+\]/.test(text) &&
+      !/(?:^|\n)\s*(?:<\|channel\|>)?(?:commentary|analysis|final)\s+to=/.test(text))
+  ) {
     return text;
   }
   let result = "";
@@ -248,7 +313,13 @@ export function stripPlainTextToolCallBlocks(text: string): string {
     }
     result += text.slice(cursor, index);
     cursor = block.end;
-    index = block.end;
+    if (text[blockStart] !== "[") {
+      const afterBlockLineBreak = consumeLineBreak(text, cursor);
+      if (afterBlockLineBreak !== null) {
+        cursor = afterBlockLineBreak;
+      }
+    }
+    index = cursor;
   }
   result += text.slice(cursor);
   return result;

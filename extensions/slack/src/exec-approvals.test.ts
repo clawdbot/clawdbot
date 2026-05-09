@@ -82,7 +82,7 @@ describe("slack exec approvals", () => {
       },
     );
 
-    expect(getSlackExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(getSlackExecApprovalApprovers({ cfg })).toStrictEqual([]);
     expect(isSlackExecApprovalApprover({ cfg, senderId: "U789" })).toBe(false);
   });
 

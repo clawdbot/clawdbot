@@ -35,7 +35,7 @@ describe("pi-tools.policy", () => {
   it("treats * in deny as deny-all", () => {
     const tools = [createStubTool("read"), createStubTool("exec")];
     const filtered = filterToolsByPolicy(tools, { deny: ["*"] });
-    expect(filtered).toEqual([]);
+    expect(filtered).toStrictEqual([]);
   });
 
   it("supports wildcard allow/deny patterns", () => {

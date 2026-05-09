@@ -309,7 +309,7 @@ describe("createInboundDebouncer", () => {
     await debouncer.enqueue({ key: "a", id: "1" });
     await debouncer.enqueue({ key: "a", id: "2" });
 
-    expect(calls).toEqual([]);
+    expect(calls).toStrictEqual([]);
     await vi.advanceTimersByTimeAsync(10);
     expect(calls).toEqual([["1", "2"]]);
 
@@ -353,7 +353,7 @@ describe("createInboundDebouncer", () => {
     await debouncer.enqueue({ key: "forward", id: "1", windowMs: 30 });
     await debouncer.enqueue({ key: "forward", id: "2", windowMs: 30 });
 
-    expect(calls).toEqual([]);
+    expect(calls).toStrictEqual([]);
     await vi.advanceTimersByTimeAsync(30);
     expect(calls).toEqual([["1", "2"]]);
 
@@ -402,7 +402,7 @@ describe("createInboundDebouncer", () => {
       await Promise.resolve();
 
       expect(started).toEqual(["1"]);
-      expect(finished).toEqual([]);
+      expect(finished).toStrictEqual([]);
 
       if (!releaseFirst) {
         throw new Error("Expected first inbound debounce release callback to be initialized");
@@ -473,7 +473,7 @@ describe("createInboundDebouncer", () => {
       await Promise.resolve();
 
       expect(started).toEqual(["1"]);
-      expect(finished).toEqual([]);
+      expect(finished).toStrictEqual([]);
 
       if (!releaseFirst) {
         throw new Error("Expected first inbound debounce release callback to be initialized");
@@ -558,7 +558,7 @@ describe("createInboundDebouncer", () => {
     try {
       await expect(debouncer.enqueue({ key: "a", id: "1" })).resolves.toBeUndefined();
       await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(unhandled).toEqual([]);
+      expect(unhandled).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
@@ -639,7 +639,7 @@ describe("createInboundDebouncer", () => {
 
       await Promise.resolve();
       expect(started).toEqual(["2"]);
-      expect(finished).toEqual([]);
+      expect(finished).toStrictEqual([]);
 
       if (!releaseOverflow) {
         throw new Error("Expected inbound overflow release callback to be initialized");

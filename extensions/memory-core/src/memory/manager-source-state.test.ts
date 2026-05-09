@@ -56,7 +56,7 @@ describe("memory source state", () => {
     });
 
     expect(hash).toBe("hash-from-snapshot");
-    expect(calls).toEqual([]);
+    expect(calls).toStrictEqual([]);
   });
 
   it("falls back to per-file lookups without a bulk snapshot", () => {

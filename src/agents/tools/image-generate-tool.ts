@@ -31,17 +31,19 @@ import {
 } from "../../media/media-reference.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
-import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { optionalStringEnum } from "../schema/string-enum.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
+  createMediaGenerateProviderListActionResult,
+  type MediaGenerateActionResult,
+} from "./media-generate-tool-actions-shared.js";
+import {
   applyImageGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
   hasGenerationToolAvailability,
-  isCapabilityProviderConfigured,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
   resolveRemoteMediaSsrfPolicy,
@@ -180,10 +182,6 @@ const ImageGenerateToolSchema = Type.Object({
   ),
 });
 
-function getImageGenerationProviderAuthEnvVars(providerId: string): string[] {
-  return getProviderEnvVars(providerId);
-}
-
 function formatImageGenerationAuthHint(provider: {
   id: string;
   authEnvVars: readonly string[];
@@ -195,6 +193,55 @@ function formatImageGenerationAuthHint(provider: {
     return undefined;
   }
   return `set ${provider.authEnvVars.join(" / ")} to use ${provider.id}/*`;
+}
+
+function listSupportedImageGenerationModes(provider: ImageGenerationProvider): string[] {
+  return ["generate", ...(provider.capabilities.edit.enabled ? ["edit"] : [])];
+}
+
+function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider): string {
+  const caps: string[] = [];
+  if (provider.capabilities.edit.enabled) {
+    const maxRefs = provider.capabilities.edit.maxInputImages;
+    caps.push(
+      `editing${typeof maxRefs === "number" ? ` up to ${maxRefs} ref${maxRefs === 1 ? "" : "s"}` : ""}`,
+    );
+  }
+  if ((provider.capabilities.geometry?.resolutions?.length ?? 0) > 0) {
+    caps.push(`resolutions ${provider.capabilities.geometry?.resolutions?.join("/")}`);
+  }
+  if ((provider.capabilities.geometry?.sizes?.length ?? 0) > 0) {
+    caps.push(`sizes ${provider.capabilities.geometry?.sizes?.join(", ")}`);
+  }
+  if ((provider.capabilities.geometry?.aspectRatios?.length ?? 0) > 0) {
+    caps.push(`aspect ratios ${provider.capabilities.geometry?.aspectRatios?.join(", ")}`);
+  }
+  if ((provider.capabilities.output?.formats?.length ?? 0) > 0) {
+    caps.push(`formats ${provider.capabilities.output?.formats?.join("/")}`);
+  }
+  if ((provider.capabilities.output?.backgrounds?.length ?? 0) > 0) {
+    caps.push(`backgrounds ${provider.capabilities.output?.backgrounds?.join("/")}`);
+  }
+  return caps.join("; ");
+}
+
+function createImageGenerateListActionResult(params: {
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+}): MediaGenerateActionResult {
+  const providers = listRuntimeImageGenerationProviders({ config: params.cfg });
+  return createMediaGenerateProviderListActionResult({
+    kind: "image_generation",
+    providers,
+    emptyText: "No image-generation providers are registered.",
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    authStore: params.authStore,
+    listModes: listSupportedImageGenerationModes,
+    summarizeCapabilities: summarizeImageGenerationCapabilities,
+    formatAuthHint: formatImageGenerationAuthHint,
+  });
 }
 
 export function resolveImageGenerationModelConfigForTool(params: {
@@ -611,66 +658,11 @@ export function createImageGenerateTool(options?: {
       const params = args as Record<string, unknown>;
       const action = resolveAction(params);
       if (action === "list") {
-        const runtimeProviders = listRuntimeImageGenerationProviders({ config: cfg });
-        const providers = runtimeProviders.map((provider) =>
-          Object.assign(
-            { id: provider.id },
-            provider.label ? { label: provider.label } : {},
-            provider.defaultModel ? { defaultModel: provider.defaultModel } : {},
-            {
-              models: provider.models ?? (provider.defaultModel ? [provider.defaultModel] : []),
-              configured: isCapabilityProviderConfigured({
-                providers: runtimeProviders,
-                provider,
-                cfg,
-                agentDir: options?.agentDir,
-                authStore: options?.authProfileStore,
-              }),
-              authEnvVars: getImageGenerationProviderAuthEnvVars(provider.id),
-              capabilities: provider.capabilities,
-            },
-          ),
-        );
-        const lines = providers.flatMap((provider) => {
-          const caps: string[] = [];
-          if (provider.capabilities.edit.enabled) {
-            const maxRefs = provider.capabilities.edit.maxInputImages;
-            caps.push(
-              `editing${typeof maxRefs === "number" ? ` up to ${maxRefs} ref${maxRefs === 1 ? "" : "s"}` : ""}`,
-            );
-          }
-          if ((provider.capabilities.geometry?.resolutions?.length ?? 0) > 0) {
-            caps.push(`resolutions ${provider.capabilities.geometry?.resolutions?.join("/")}`);
-          }
-          if ((provider.capabilities.geometry?.sizes?.length ?? 0) > 0) {
-            caps.push(`sizes ${provider.capabilities.geometry?.sizes?.join(", ")}`);
-          }
-          if ((provider.capabilities.geometry?.aspectRatios?.length ?? 0) > 0) {
-            caps.push(`aspect ratios ${provider.capabilities.geometry?.aspectRatios?.join(", ")}`);
-          }
-          if ((provider.capabilities.output?.formats?.length ?? 0) > 0) {
-            caps.push(`formats ${provider.capabilities.output?.formats?.join("/")}`);
-          }
-          if ((provider.capabilities.output?.backgrounds?.length ?? 0) > 0) {
-            caps.push(`backgrounds ${provider.capabilities.output?.backgrounds?.join("/")}`);
-          }
-          const modelLine =
-            provider.models.length > 0
-              ? `models: ${provider.models.join(", ")}`
-              : "models: unknown";
-          const authHint = formatImageGenerationAuthHint(provider);
-          return [
-            `${provider.id}${provider.defaultModel ? ` (default ${provider.defaultModel})` : ""}`,
-            `  ${modelLine}`,
-            `  configured: ${provider.configured ? "yes" : "no"}`,
-            ...(authHint ? [`  auth: ${authHint}`] : []),
-            ...(caps.length > 0 ? [`  capabilities: ${caps.join("; ")}`] : []),
-          ];
+        return createImageGenerateListActionResult({
+          cfg,
+          agentDir: options?.agentDir,
+          authStore: options?.authProfileStore,
         });
-        return {
-          content: [{ type: "text", text: lines.join("\n") }],
-          details: { providers },
-        };
       }
 
       const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({

@@ -285,11 +285,11 @@ describeLive("music generation provider live", () => {
       );
 
       if (attempted.length === 0) {
-        expect(failures).toEqual([]);
+        expect(failures).toStrictEqual([]);
         console.warn("[live:music-generation] no provider had usable auth; skipping assertions");
         return;
       }
-      expect(failures).toEqual([]);
+      expect(failures).toStrictEqual([]);
     },
     10 * 60_000,
   );

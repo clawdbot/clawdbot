@@ -200,6 +200,23 @@ describe("createOpenClawCodingTools", () => {
     );
   });
 
+  it("passes source reply delivery mode to OpenClaw tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      forceMessageTool: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    );
+  });
+
   it("skips unrelated tool families when construction is planned from a narrow allowlist", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
@@ -338,7 +355,7 @@ describe("createOpenClawCodingTools", () => {
     const missingNames = toolNames.filter(
       (name) => !defaultTools.some((candidate) => candidate.name === name),
     );
-    expect(missingNames).toEqual([]);
+    expect(missingNames).toStrictEqual([]);
 
     for (const name of toolNames) {
       const tool = defaultTools.find((candidate) => candidate.name === name);
@@ -447,7 +464,7 @@ describe("createOpenClawCodingTools", () => {
       })
       .filter((entry) => entry.type !== "object");
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("does not expose provider-specific message tools", () => {
@@ -805,7 +822,7 @@ describe("createOpenClawCodingTools", () => {
         `${tool.name}.parameters`,
         GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
       );
-      expect(violations).toEqual([]);
+      expect(violations).toStrictEqual([]);
     }
   });
 
@@ -828,7 +845,7 @@ describe("createOpenClawCodingTools", () => {
           const keyword = violation.split(".").at(-1) ?? "";
           return XAI_UNSUPPORTED_SCHEMA_KEYWORDS.has(keyword);
         }),
-      ).toEqual([]);
+      ).toStrictEqual([]);
     }
   });
 

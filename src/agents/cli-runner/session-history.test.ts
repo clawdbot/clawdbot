@@ -153,7 +153,7 @@ describe("loadCliSessionHistoryMessages", () => {
           sessionKey: "agent:main:main",
           agentId: "main",
         }),
-      ).toEqual([]);
+      ).toStrictEqual([]);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
       fs.rmSync(outsideDir, { recursive: true, force: true });
@@ -181,7 +181,7 @@ describe("loadCliSessionHistoryMessages", () => {
           sessionKey: "agent:main:main",
           agentId: "main",
         }),
-      ).toEqual([]);
+      ).toStrictEqual([]);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -243,7 +243,7 @@ describe("loadCliSessionReseedMessages", () => {
           sessionKey: "agent:main:main",
           agentId: "main",
         }),
-      ).toEqual([]);
+      ).toStrictEqual([]);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }

@@ -53,8 +53,8 @@ describe("embedded attempt context injection", () => {
       });
 
     expect(result.isContinuationTurn).toBe(true);
-    expect(result.bootstrapFiles).toEqual([]);
-    expect(result.contextFiles).toEqual([]);
+    expect(result.bootstrapFiles).toStrictEqual([]);
+    expect(result.contextFiles).toStrictEqual([]);
     expect(hasCompletedBootstrapTurn).toHaveBeenCalledWith("/tmp/session.jsonl");
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
   });
@@ -87,8 +87,8 @@ describe("embedded attempt context injection", () => {
 
     expect(result.isContinuationTurn).toBe(false);
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
-    expect(result.bootstrapFiles).toEqual([]);
-    expect(result.contextFiles).toEqual([]);
+    expect(result.bootstrapFiles).toStrictEqual([]);
+    expect(result.contextFiles).toStrictEqual([]);
     expect(hasCompletedBootstrapTurn).not.toHaveBeenCalled();
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
   });

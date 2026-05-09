@@ -95,7 +95,7 @@ describe("subagent registry read index", () => {
     const runs = new Map<string, SubagentRunRecord>();
     const index = buildSubagentRunReadIndexFromRuns({ runs });
 
-    expect(listRunsForController(index, "agent:main:main")).toEqual([]);
+    expect(listRunsForController(index, "agent:main:main")).toStrictEqual([]);
     expect(index.getDisplaySubagentRun("agent:main:subagent:missing")).toBeNull();
     expect(index.countActiveDescendantRuns("agent:main:main")).toBe(0);
   });

@@ -1336,7 +1336,7 @@ describe("sessions tools", () => {
           "Agent-to-agent reply step",
         ),
     );
-    expect(replyPromptAgentCalls).toEqual([]);
+    expect(replyPromptAgentCalls).toStrictEqual([]);
     expect(calls.some((call) => call.method === "send")).toBe(false);
   });
 

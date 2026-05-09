@@ -612,6 +612,18 @@
     "target": "插件路径所有权"
   },
   {
+    "source": "Path",
+    "target": "路径"
+  },
+  {
+    "source": "OC Path plugin",
+    "target": "OC Path 插件"
+  },
+  {
+    "source": "CLI reference",
+    "target": "CLI 参考"
+  },
+  {
     "source": "Docker permissions",
     "target": "Docker 权限"
   },

@@ -88,6 +88,19 @@ const constants: QaScenarioRuntimeConstants = {
   imageUnderstandingValidPngBase64: "png-valid",
 };
 
+const browserAndWebRuntimeTools = [
+  "browserRequest",
+  "waitForBrowserReady",
+  "browserOpenTab",
+  "browserSnapshot",
+  "browserAct",
+  "webOpenPage",
+  "webWait",
+  "webType",
+  "webSnapshot",
+  "webEvaluate",
+] as const;
+
 describe("createQaScenarioRuntimeApi", () => {
   it("builds a markdown-flow runtime surface from generic transport capabilities", async () => {
     const state = createQaBusState();
@@ -128,11 +141,12 @@ describe("createQaScenarioRuntimeApi", () => {
         },
       },
     };
+    const deps = createDeps({ sleep });
 
     const api = createQaScenarioRuntimeApi({
       env,
       scenario,
-      deps: createDeps({ sleep }),
+      deps,
       constants,
     });
 
@@ -141,18 +155,9 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.config).toEqual({ expected: "value" });
     expect(api.waitForCondition).toBe(waitForCondition);
     expect(api.waitForChannelReady).toBe(api.waitForTransportReady);
-    expect(api).toMatchObject({
-      browserRequest: expect.any(Function),
-      waitForBrowserReady: expect.any(Function),
-      browserOpenTab: expect.any(Function),
-      browserSnapshot: expect.any(Function),
-      browserAct: expect.any(Function),
-      webOpenPage: expect.any(Function),
-      webWait: expect.any(Function),
-      webType: expect.any(Function),
-      webSnapshot: expect.any(Function),
-      webEvaluate: expect.any(Function),
-    });
+    for (const toolName of browserAndWebRuntimeTools) {
+      expect(api[toolName]).toBe(deps[toolName]);
+    }
     expect(api.getTransportSnapshot()).toEqual(state.getSnapshot());
     expect(api.imageUnderstandingPngBase64).toBe("png-small");
 

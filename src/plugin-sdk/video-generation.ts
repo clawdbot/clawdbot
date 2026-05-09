@@ -10,6 +10,7 @@ import type {
   VideoGenerationAssetRole as CoreVideoGenerationAssetRole,
   VideoGenerationMode as CoreVideoGenerationMode,
   VideoGenerationModeCapabilities as CoreVideoGenerationModeCapabilities,
+  VideoGenerationModelCapabilitiesContext as CoreVideoGenerationModelCapabilitiesContext,
   VideoGenerationProvider as CoreVideoGenerationProvider,
   VideoGenerationProviderCapabilities as CoreVideoGenerationProviderCapabilities,
   VideoGenerationProviderConfiguredContext as CoreVideoGenerationProviderConfiguredContext,
@@ -64,6 +65,15 @@ export type VideoGenerationSourceAsset = {
 export type VideoGenerationProviderConfiguredContext = {
   cfg?: OpenClawConfig;
   agentDir?: string;
+};
+
+export type VideoGenerationModelCapabilitiesContext = {
+  provider: string;
+  model: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+  timeoutMs?: number;
 };
 
 export type VideoGenerationRequest = {
@@ -151,6 +161,12 @@ export type VideoGenerationProvider = {
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
+  resolveModelCapabilities?: (
+    ctx: VideoGenerationModelCapabilitiesContext,
+  ) =>
+    | VideoGenerationProviderCapabilities
+    | undefined
+    | Promise<VideoGenerationProviderCapabilities | undefined>;
   generateVideo: (req: VideoGenerationRequest) => Promise<VideoGenerationResult>;
 };
 
@@ -178,6 +194,14 @@ type _VideoGenerationSdkCompat = [
   AssertAssignable<
     CoreVideoGenerationProviderConfiguredContext,
     VideoGenerationProviderConfiguredContext
+  >,
+  AssertAssignable<
+    VideoGenerationModelCapabilitiesContext,
+    CoreVideoGenerationModelCapabilitiesContext
+  >,
+  AssertAssignable<
+    CoreVideoGenerationModelCapabilitiesContext,
+    VideoGenerationModelCapabilitiesContext
   >,
   AssertAssignable<VideoGenerationRequest, CoreVideoGenerationRequest>,
   AssertAssignable<CoreVideoGenerationRequest, VideoGenerationRequest>,

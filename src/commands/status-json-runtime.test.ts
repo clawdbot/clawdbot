@@ -101,7 +101,10 @@ describe("status-json-runtime", () => {
         ],
       }),
     );
-    expect(result).toEqual({ built: true, input: expect.any(Object) });
+    expect(result).toEqual({
+      built: true,
+      input: mocks.buildStatusJsonPayload.mock.calls[0][0],
+    });
   });
 
   it("skips optional sections when flags are off", async () => {

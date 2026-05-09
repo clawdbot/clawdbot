@@ -147,7 +147,7 @@ describe("security audit read-only plugin scope", () => {
       loadPluginSecurityCollectors: false,
     });
 
-    expect(findings).toEqual([]);
+    expect(findings).toStrictEqual([]);
     expect(getActivePluginRegistryMock).not.toHaveBeenCalled();
     expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
     expect(loadPluginMetadataRegistrySnapshotMock).not.toHaveBeenCalled();

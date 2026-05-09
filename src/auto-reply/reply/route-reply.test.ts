@@ -18,6 +18,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../infra/outbound/deliver-runtime.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
+}));
+
+vi.mock("../../infra/outbound/deliver.js", () => ({
+  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
 }));
 
 const { routeReply } = await import("./route-reply.js");

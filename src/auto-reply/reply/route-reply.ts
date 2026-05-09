@@ -30,12 +30,12 @@ import {
   shouldSuppressReasoningPayload,
 } from "./reply-payloads.js";
 
-const deliverRuntimeLoader = createLazyImportLoader(
-  () => import("../../infra/outbound/deliver-runtime.js"),
+const messageRuntimeLoader = createLazyImportLoader(
+  () => import("../../channels/message/runtime.js"),
 );
 
 function loadDeliverRuntime() {
-  return deliverRuntimeLoader.load();
+  return messageRuntimeLoader.load();
 }
 
 export type RouteReplyParams = {
@@ -215,7 +215,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
-    const { deliverOutboundPayloads } = await loadDeliverRuntime();
+    const { sendDurableMessageBatch } = await loadDeliverRuntime();
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: resolvedAgentId,
@@ -229,7 +229,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
     });
-    const results = await deliverOutboundPayloads({
+    const send = await sendDurableMessageBatch({
       cfg,
       channel: channelId,
       to,
@@ -238,7 +238,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
       session: outboundSession,
-      abortSignal,
+      signal: abortSignal,
       mirror:
         params.mirror !== false && params.sessionKey
           ? {
@@ -251,6 +251,10 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
             }
           : undefined,
     });
+    if (send.status === "failed" || send.status === "partial_failed") {
+      throw send.error;
+    }
+    const results = send.status === "sent" ? send.results : [];
 
     const last = results.at(-1);
     return { ok: true, messageId: last?.messageId };

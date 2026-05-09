@@ -22,7 +22,7 @@ function expectChunksWithinLength(chunks: string[], maxLength: number) {
     chunks
       .map((chunk, index) => ({ index, length: chunk.length }))
       .filter((entry) => entry.length > maxLength),
-  ).toEqual([]);
+  ).toStrictEqual([]);
 }
 
 describe("EmbeddedBlockChunker", () => {
@@ -70,7 +70,7 @@ describe("EmbeddedBlockChunker", () => {
 
     chunker.append("First paragraph.\n \nSecond paragraph.");
 
-    expect(drainChunks(chunker)).toEqual([]);
+    expect(drainChunks(chunker)).toStrictEqual([]);
     expect(drainChunks(chunker, true)).toEqual(["First paragraph.\n \nSecond paragraph."]);
     expect(chunker.bufferedText).toBe("");
   });

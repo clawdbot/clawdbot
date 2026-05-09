@@ -5,6 +5,7 @@ import {
 } from "../../../agents/agent-scope.js";
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace.js";
+import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { enablePluginInConfig } from "../../../plugins/enable.js";
 import { resolvePreferredProviderForAuthChoice } from "../../../plugins/provider-auth-choice-preference.js";
@@ -16,6 +17,8 @@ import type {
 } from "../../../plugins/types.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { createLazyRuntimeSurface } from "../../../shared/lazy-runtime.js";
+import type { WizardPrompter } from "../../../wizard/prompts.js";
+import { ensureCodexRuntimePluginForModelSelection } from "../../codex-runtime-plugin-install.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
@@ -28,6 +31,47 @@ const loadAuthChoicePluginProvidersRuntime = createLazyRuntimeSurface(
   loadPluginProviderRuntime,
   ({ authChoicePluginProvidersRuntime }) => authChoicePluginProvidersRuntime,
 );
+
+function createNonInteractivePluginInstallPrompter(runtime: RuntimeEnv): WizardPrompter {
+  const unavailable = <T>(message: string): Promise<T> =>
+    Promise.reject(new Error(`Non-interactive setup cannot prompt for plugin install: ${message}`));
+  return {
+    async intro(title) {
+      runtime.log(title);
+    },
+    async outro(message) {
+      runtime.log(message);
+    },
+    async note(message, title) {
+      runtime.log(title ? `${title}\n${message}` : message);
+    },
+    async select(params) {
+      return unavailable(params.message);
+    },
+    async multiselect(params) {
+      return unavailable(params.message);
+    },
+    async text(params) {
+      return unavailable(params.message);
+    },
+    async confirm(params) {
+      return unavailable(params.message);
+    },
+    progress(label) {
+      runtime.log(label);
+      return {
+        update(message) {
+          runtime.log(message);
+        },
+        stop(message) {
+          if (message) {
+            runtime.log(message);
+          }
+        },
+      };
+    },
+  };
+}
 
 export async function applyNonInteractivePluginProviderChoice(params: {
   nextConfig: OpenClawConfig;
@@ -139,7 +183,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     return null;
   }
 
-  return method.runNonInteractive({
+  const result = await method.runNonInteractive({
     authChoice: params.authChoice,
     config: enableResult.config,
     baseConfig: params.baseConfig,
@@ -150,4 +194,20 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     resolveApiKey: params.resolveApiKey,
     toApiKeyCredential: params.toApiKeyCredential,
   });
+  if (!result) {
+    return result;
+  }
+  const selectedModel = resolveAgentModelPrimaryValue(result.agents?.defaults?.model);
+  if (!selectedModel) {
+    return result;
+  }
+  return (
+    await ensureCodexRuntimePluginForModelSelection({
+      cfg: result,
+      model: selectedModel,
+      prompter: createNonInteractivePluginInstallPrompter(params.runtime),
+      runtime: params.runtime,
+      workspaceDir,
+    })
+  ).cfg;
 }

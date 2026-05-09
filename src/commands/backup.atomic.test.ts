@@ -74,7 +74,7 @@ describe("backupCreateCommand atomic archive write", () => {
 
       await expectPathMissing(outputPath);
       const remaining = await fs.readdir(archiveDir);
-      expect(remaining).toEqual([]);
+      expect(remaining).toStrictEqual([]);
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }

@@ -58,6 +58,7 @@ describe("buildAttemptSystemPrompt", () => {
     });
 
     expect(result.systemPrompt).toContain("Custom override prompt.");
+    expect(result.systemPrompt).toContain("Current model identity: openai/gpt-5.5.");
     expect(result.systemPrompt).toContain("## Bootstrap Pending");
     expect(result.systemPrompt).toContain("BOOTSTRAP.md is included below in Project Context");
     expect(result.systemPrompt).toContain("## Bootstrap Context Notice");
@@ -96,6 +97,7 @@ describe("buildAttemptSystemPrompt", () => {
     });
 
     expect(result.systemPrompt).toContain("Custom override prompt.");
+    expect(result.systemPrompt).toContain("Current model identity: openai/gpt-5.5.");
     expect(result.systemPrompt).toContain("## Subagent Context");
     expect(result.systemPrompt).toContain("RUN_MODE_TASK_77950");
   });

@@ -219,7 +219,7 @@ describe("Google Chat webhook routing", () => {
       const onSpy = vi.spyOn(req, "on");
       const res = await dispatchWebhookRequest(req);
       expect(res.statusCode).toBe(401);
-      expect(onSpy).not.toHaveBeenCalledWith("data", expect.any(Function));
+      expect(onSpy.mock.calls.some(([event]) => event === "data")).toBe(false);
     } finally {
       unregister();
     }

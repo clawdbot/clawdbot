@@ -146,7 +146,9 @@ describe("runCapability auto audio entries", () => {
     if (!runResult) {
       throw new Error("expected Codex audio result");
     }
-    expect(requireCapabilityOutput(runResult, 0)).toMatchObject({
+    expect(requireCapabilityOutput(runResult, 0)).toEqual({
+      kind: "audio.transcription",
+      attachmentIndex: 0,
       provider: "openai-codex",
       model: "gpt-4o-transcribe",
       text: "codex audio",

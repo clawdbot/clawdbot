@@ -875,6 +875,7 @@ async function runNativeHookRelayPreToolUse(params: {
       ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
       ...(params.registration.config ? { config: params.registration.config } : {}),
       runId: params.registration.runId,
+      ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
     },
   });
   if (outcome.blocked) {

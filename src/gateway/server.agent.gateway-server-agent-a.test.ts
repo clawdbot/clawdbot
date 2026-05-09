@@ -5,12 +5,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi 
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
+import { __resetModelCatalogCacheForTest as resetGatewayModelCatalogCacheForTest } from "./server-model-catalog.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   agentCommand,
   connectOk,
   installGatewayTestHooks,
+  piSdkMock,
   rpcReq,
   startServerWithClient,
   testState,
@@ -438,6 +440,69 @@ describe("gateway server agent", () => {
         }),
       ],
     });
+  });
+
+  test("agent validates first image attachment against per-agent model for fresh sessions", async () => {
+    testState.agentConfig = { model: { primary: "ollama-cloud/deepseek-v4-flash" } };
+    testState.agentsConfig = {
+      list: [
+        { id: "main", default: true },
+        { id: "vision", model: "ollama-cloud/gemma4:31b" },
+      ],
+    };
+    piSdkMock.enabled = true;
+    piSdkMock.models = [
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        provider: "ollama-cloud",
+        input: ["text"],
+      },
+      {
+        id: "gemma4:31b",
+        name: "Gemma 4 31B",
+        provider: "ollama-cloud",
+        input: ["text", "image"],
+      },
+    ];
+    await resetGatewayModelCatalogCacheForTest();
+
+    await setTestSessionStore({
+      agentId: "vision",
+      entries: {
+        main: {
+          sessionId: "sess-vision-fresh-image",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const res = await rpcReq(ws, "agent", {
+      message: "what is in the image?",
+      sessionKey: "agent:vision:main",
+      attachments: [
+        {
+          mimeType: "image/png",
+          fileName: "tiny.png",
+          content: BASE_IMAGE_PNG,
+        },
+      ],
+      idempotencyKey: "idem-agent-vision-first-image",
+    });
+    expect(
+      res,
+      `agent RPC should accept image using per-agent vision model: ${JSON.stringify(res)}`,
+    ).toMatchObject({ ok: true });
+
+    const call = await waitForAgentCommandCall("idem-agent-vision-first-image");
+    expect(call.sessionKey).toBe("agent:vision:main");
+    expect(call.images).toEqual([
+      expect.objectContaining({
+        type: "image",
+        mimeType: "image/png",
+        data: BASE_IMAGE_PNG,
+      }),
+    ]);
   });
 
   test("agent errors when delivery requested and no last channel exists", async () => {

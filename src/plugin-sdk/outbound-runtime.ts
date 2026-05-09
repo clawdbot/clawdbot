@@ -3,11 +3,21 @@ export { resolveOutboundSendDep, type OutboundSendDeps } from "../infra/outbound
 export { resolveAgentOutboundIdentity, type OutboundIdentity } from "../infra/outbound/identity.js";
 export type { OutboundDeliveryFormattingOptions } from "../infra/outbound/formatting.js";
 export { createReplyToFanout, type ReplyToResolution } from "../infra/outbound/reply-policy.js";
-export {
-  deliverOutboundPayloads,
-  type DeliverOutboundPayloadsParams,
-  type OutboundDeliveryResult,
-} from "../infra/outbound/deliver.js";
+/**
+ * @deprecated Direct outbound delivery is compatibility/runtime substrate. New
+ * channel and plugin send paths should use
+ * `openclaw/plugin-sdk/channel-message-runtime` helpers:
+ * `sendDurableMessageBatch`, `withDurableMessageSendContext`, or
+ * `deliverInboundReplyWithMessageSendContext`.
+ */
+export { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+/**
+ * @deprecated Direct outbound delivery params are compatibility/runtime
+ * substrate. New channel and plugin send paths should use
+ * `openclaw/plugin-sdk/channel-message-runtime` helpers.
+ */
+export type { DeliverOutboundPayloadsParams } from "../infra/outbound/deliver.js";
+export { type OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 export { sanitizeForPlainText } from "../infra/outbound/sanitize-text.js";
 export {
   buildOutboundSessionContext,

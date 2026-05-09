@@ -1879,7 +1879,7 @@ describe("google-meet plugin", () => {
       );
       expect(
         result.details.checks?.filter((check) => check.id === "chrome-local-audio-device"),
-      ).toEqual([]);
+      ).toStrictEqual([]);
       expect(runCommandWithTimeout).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
@@ -2960,7 +2960,7 @@ describe("google-meet plugin", () => {
     });
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(nodesList.mock.calls[0]).toEqual([]);
+    expect(nodesList.mock.calls[0]).toStrictEqual([]);
     expect(nodesInvoke).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: "node-1",

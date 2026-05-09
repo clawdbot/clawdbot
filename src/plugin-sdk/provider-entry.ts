@@ -1,9 +1,11 @@
+import type { UnifiedModelCatalogEntry } from "../model-catalog/types.js";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 import type {
   ProviderPlugin,
   ProviderCatalogContext,
   ProviderCatalogResult,
   ProviderPluginCatalog,
+  UnifiedModelCatalogProviderContext,
   ProviderPluginWizardSetup,
 } from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
@@ -106,6 +108,47 @@ function resolveEnvVars(params: {
   return combined.length > 0 ? [...new Set(combined)] : undefined;
 }
 
+function projectProviderCatalogResultToUnifiedTextRows(params: {
+  providerId: string;
+  result: ProviderCatalogResult;
+  source: UnifiedModelCatalogEntry["source"];
+}): UnifiedModelCatalogEntry[] {
+  if (!params.result) {
+    return [];
+  }
+  const providers =
+    "provider" in params.result
+      ? { [params.providerId]: params.result.provider }
+      : params.result.providers;
+  const rows: UnifiedModelCatalogEntry[] = [];
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    for (const model of providerConfig.models ?? []) {
+      rows.push({
+        kind: "text",
+        provider: providerId,
+        model: model.id,
+        ...(model.name ? { label: model.name } : {}),
+        source: params.source,
+      });
+    }
+  }
+  return rows;
+}
+
+async function runUnifiedTextCatalog(params: {
+  providerId: string;
+  catalog: ProviderPluginCatalog;
+  ctx: UnifiedModelCatalogProviderContext;
+  source: UnifiedModelCatalogEntry["source"];
+}): Promise<UnifiedModelCatalogEntry[]> {
+  const result = await params.catalog.run(params.ctx);
+  return projectProviderCatalogResultToUnifiedTextRows({
+    providerId: params.providerId,
+    result,
+    source: params.source,
+  });
+}
+
 export function defineSingleProviderPluginEntry(options: SingleProviderPluginOptions) {
   return definePluginEntry({
     id: options.id,
@@ -195,6 +238,28 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
                 ].includes(key),
             ),
           ),
+        });
+        api.registerModelCatalogProvider({
+          provider: providerId,
+          kinds: ["text"],
+          ...(staticCatalog
+            ? {
+                staticCatalog: (ctx: UnifiedModelCatalogProviderContext) =>
+                  runUnifiedTextCatalog({
+                    providerId,
+                    catalog: staticCatalog,
+                    ctx,
+                    source: "static",
+                  }),
+              }
+            : {}),
+          liveCatalog: (ctx: UnifiedModelCatalogProviderContext) =>
+            runUnifiedTextCatalog({
+              providerId,
+              catalog,
+              ctx,
+              source: "live",
+            }),
         });
       }
       options.register?.(api);

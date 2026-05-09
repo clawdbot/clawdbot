@@ -64,7 +64,7 @@ describe("diffConfigPaths", () => {
         },
       },
     };
-    expect(diffConfigPaths(prev, next)).toEqual([]);
+    expect(diffConfigPaths(prev, next)).toStrictEqual([]);
   });
 
   it("reports changed arrays of objects", () => {
@@ -190,7 +190,7 @@ describe("buildGatewayReloadPlan", () => {
     const plan = buildGatewayReloadPlan(["browser.enabled"]);
     expect(plan.restartGateway).toBe(true);
     expect(plan.restartReasons).toContain("browser.enabled");
-    expect(plan.hotReasons).toEqual([]);
+    expect(plan.hotReasons).toStrictEqual([]);
   });
 
   it("restarts the Gmail watcher for hooks.gmail changes", () => {
@@ -270,7 +270,7 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(true);
     expect(plan.restartReasons).toContain("models.pricing.enabled");
     expect(plan.restartHeartbeat).toBe(false);
-    expect(plan.hotReasons).toEqual([]);
+    expect(plan.hotReasons).toStrictEqual([]);
   });
 
   it("restarts heartbeat when agents.defaults.models allowlist changes", () => {
@@ -278,7 +278,7 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartHeartbeat).toBe(true);
     expect(plan.hotReasons).toContain("agents.defaults.models");
-    expect(plan.noopPaths).toEqual([]);
+    expect(plan.noopPaths).toStrictEqual([]);
   });
 
   it("restarts heartbeat when agents.list entries change", () => {
@@ -286,7 +286,7 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartHeartbeat).toBe(true);
     expect(plan.hotReasons).toContain("agents.list");
-    expect(plan.noopPaths).toEqual([]);
+    expect(plan.noopPaths).toStrictEqual([]);
   });
 
   it("treats plugin install timestamp-only changes as no-op", () => {
@@ -317,7 +317,7 @@ describe("buildGatewayReloadPlan", () => {
       "plugins.installs.lossless.resolvedAt",
       "plugins.installs.lossless.resolvedAt",
     ]);
-    expect(plan.noopPaths).toEqual([]);
+    expect(plan.noopPaths).toStrictEqual([]);
   });
 
   it("requires restart when plugin load paths change", () => {
@@ -722,14 +722,14 @@ describe("startGatewayConfigReloader", () => {
       expect(onHotReload).not.toHaveBeenCalled();
       expect(onRestart).toHaveBeenCalledTimes(1);
       expect(log.error).toHaveBeenCalledWith("config restart failed: Error: restart-check failed");
-      expect(unhandled).toEqual([]);
+      expect(unhandled).toStrictEqual([]);
 
       watcher.emit("change");
       await vi.runOnlyPendingTimersAsync();
       await Promise.resolve();
 
       expect(onRestart).toHaveBeenCalledTimes(2);
-      expect(unhandled).toEqual([]);
+      expect(unhandled).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandled);
       await reloader.stop();

@@ -890,9 +890,18 @@ describe("session_status tool", () => {
       sessionKey: "current",
       model: "anthropic/claude-sonnet-4-6",
     });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
+    const details = result.details as {
+      ok?: boolean;
+      sessionKey?: string;
+      model?: string;
+      modelProvider?: string;
+      modelOverride?: string | null;
+    };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
+    expect(details.model).toBe("claude-sonnet-4-6");
+    expect(details.modelProvider).toBe("anthropic");
+    expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
     expect(updateSessionStoreMock).toHaveBeenCalled();
     const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
       string,
@@ -2029,7 +2038,9 @@ describe("session_status tool", () => {
 
     const tool = getSessionStatusTool();
 
-    await tool.execute("call3", { model: "default" });
+    const result = await tool.execute("call3", { model: "default" });
+    const details = result.details as { modelOverride?: string | null };
+    expect(details.modelOverride).toBeNull();
     expect(updateSessionStoreMock).toHaveBeenCalled();
     const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
       string,

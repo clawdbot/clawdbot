@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "../../runtime.js";
 import { findRoutedCommand } from "./routes.js";
 
 const runConfigGetMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -63,10 +64,10 @@ describe("program routes", () => {
 
   function expectRoute(path: string[], argv?: string[]): ProgramRoute {
     const route = findRoutedCommand(path, argv);
-    expect(route).toEqual(expect.objectContaining({ run: expect.any(Function) }));
     if (route === null) {
       throw new Error(`Expected routed command for ${path.join(" ")}`);
     }
+    expect(route.run).toBeTypeOf("function");
     return route;
   }
 
@@ -99,7 +100,7 @@ describe("program routes", () => {
     await expect(expectRoute(["agents"]).run(["node", "openclaw", "agents"])).resolves.toBe(true);
     expect(agentsListCommandMock).toHaveBeenCalledWith(
       { json: false, bindings: false },
-      expect.any(Object),
+      defaultRuntime,
     );
 
     await expect(
@@ -114,7 +115,7 @@ describe("program routes", () => {
     ).resolves.toBe(true);
     expect(agentsListCommandMock).toHaveBeenLastCalledWith(
       { json: true, bindings: true },
-      expect.any(Object),
+      defaultRuntime,
     );
   });
 
@@ -125,7 +126,7 @@ describe("program routes", () => {
     );
     expect(channelsListCommandMock).toHaveBeenCalledWith(
       { json: true, all: false },
-      expect.any(Object),
+      defaultRuntime,
     );
 
     const statusRoute = expectRoute(["channels", "status"]);
@@ -143,7 +144,7 @@ describe("program routes", () => {
     ).resolves.toBe(true);
     expect(channelsStatusCommandMock).toHaveBeenCalledWith(
       { json: true, probe: true, timeout: "5000" },
-      expect.any(Object),
+      defaultRuntime,
     );
   });
 
@@ -251,7 +252,7 @@ describe("program routes", () => {
     ).resolves.toBe(true);
     expect(statusJsonCommandMock).toHaveBeenCalledWith(
       { deep: true, all: false, usage: true, timeoutMs: 5000 },
-      expect.any(Object),
+      defaultRuntime,
     );
   });
 
@@ -397,15 +398,19 @@ describe("program routes", () => {
       ]),
     ).resolves.toBe(true);
     expect(modelsStatusCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         probeProvider: "openai",
         probeTimeout: "5000",
         probeConcurrency: "2",
         probeMaxTokens: "64",
         probeProfile: "-1",
         agent: "default",
-      }),
-      expect.any(Object),
+        json: false,
+        plain: false,
+        check: false,
+        probe: false,
+      },
+      defaultRuntime,
     );
   });
 
@@ -426,7 +431,7 @@ describe("program routes", () => {
     ).resolves.toBe(true);
     expect(tasksListJsonCommandMock).toHaveBeenCalledWith(
       { json: true, runtime: "cli", status: "running" },
-      expect.any(Object),
+      defaultRuntime,
     );
 
     const listRoute = expectRoute(["tasks", "list"]);
@@ -436,7 +441,7 @@ describe("program routes", () => {
     ).resolves.toBe(true);
     expect(tasksListJsonCommandMock).toHaveBeenLastCalledWith(
       { json: true, runtime: "cron", status: undefined },
-      expect.any(Object),
+      defaultRuntime,
     );
   });
 
@@ -455,7 +460,7 @@ describe("program routes", () => {
     await expect(separateValueRoute.run(separateValueArgv)).resolves.toBe(true);
     expect(tasksListJsonCommandMock).toHaveBeenCalledWith(
       { json: true, runtime: "cli", status: "running" },
-      expect.any(Object),
+      defaultRuntime,
     );
 
     const parentOptionBeforeSubcommandArgv = [
@@ -476,7 +481,7 @@ describe("program routes", () => {
     ).resolves.toBe(true);
     expect(tasksListJsonCommandMock).toHaveBeenLastCalledWith(
       { json: true, runtime: "cli", status: undefined },
-      expect.any(Object),
+      defaultRuntime,
     );
   });
 
@@ -500,7 +505,7 @@ describe("program routes", () => {
     ).resolves.toBe(true);
     expect(tasksAuditJsonCommandMock).toHaveBeenCalledWith(
       { json: true, severity: "error", code: "stale_running", limit: 5 },
-      expect.any(Object),
+      defaultRuntime,
     );
   });
 

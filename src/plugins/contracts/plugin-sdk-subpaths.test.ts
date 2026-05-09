@@ -395,13 +395,13 @@ function sourceMentionsIdentifier(source: string, name: string): boolean {
 function expectSourceMentions(subpath: string, names: readonly string[]) {
   const source = readPluginSdkSource(subpath);
   const missing = names.filter((name) => !sourceMentionsIdentifier(source, name));
-  expect(missing, `${subpath} missing exports`).toEqual([]);
+  expect(missing, `${subpath} missing exports`).toStrictEqual([]);
 }
 
 function expectSourceOmits(subpath: string, names: readonly string[]) {
   const source = readPluginSdkSource(subpath);
   const present = names.filter((name) => sourceMentionsIdentifier(source, name));
-  expect(present, `${subpath} leaked exports`).toEqual([]);
+  expect(present, `${subpath} leaked exports`).toStrictEqual([]);
 }
 
 function expectSourceContract(
@@ -411,8 +411,8 @@ function expectSourceContract(
   const source = readPluginSdkSource(subpath);
   const missing = (params.mentions ?? []).filter((name) => !sourceMentionsIdentifier(source, name));
   const present = (params.omits ?? []).filter((name) => sourceMentionsIdentifier(source, name));
-  expect(missing, `${subpath} missing exports`).toEqual([]);
-  expect(present, `${subpath} leaked exports`).toEqual([]);
+  expect(missing, `${subpath} missing exports`).toStrictEqual([]);
+  expect(present, `${subpath} leaked exports`).toStrictEqual([]);
 }
 
 function expectSourceContains(subpath: string, snippet: string) {
@@ -471,7 +471,7 @@ describe("plugin-sdk subpath exports", () => {
   it("keeps removed bundled-channel aliases out of the public sdk list", () => {
     const removedChannelAliases = new Set(["signal", "slack", "telegram", "whatsapp"]);
     const banned = pluginSdkSubpaths.filter((subpath) => removedChannelAliases.has(subpath));
-    expect(banned).toEqual([]);
+    expect(banned).toStrictEqual([]);
   });
 
   it("keeps generated bundled-channel facades out of the public sdk list", () => {
@@ -485,7 +485,7 @@ describe("plugin-sdk subpath exports", () => {
           isGeneratedBundledFacadeSubpath(subpath),
       ),
     );
-    expect(banned).toEqual([]);
+    expect(banned).toStrictEqual([]);
   });
 
   it("keeps browser compatibility helper subpaths as thin facades", () => {
@@ -781,7 +781,7 @@ describe("plugin-sdk subpath exports", () => {
       )
       .toSorted();
 
-    expect(violations).toEqual([]);
+    expect(violations).toStrictEqual([]);
   });
 
   it("keeps the deprecated channel-runtime shim unused in repo imports", () => {
@@ -799,7 +799,7 @@ describe("plugin-sdk subpath exports", () => {
         "src/plugins/contracts/plugin-sdk-root-alias.test.ts",
       ],
     });
-    expect(matches).toEqual([]);
+    expect(matches).toStrictEqual([]);
   });
 
   it("keeps deprecated comparable channel target helpers behind compatibility shims", () => {
@@ -820,7 +820,7 @@ describe("plugin-sdk subpath exports", () => {
         "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
       ],
     });
-    expect(matches).toEqual([]);
+    expect(matches).toStrictEqual([]);
   });
 
   it("keeps deprecated channel route key aliases behind compatibility shims", () => {
@@ -839,7 +839,7 @@ describe("plugin-sdk subpath exports", () => {
         "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
       ],
     });
-    expect(matches).toEqual([]);
+    expect(matches).toStrictEqual([]);
   });
 
   it("keeps removed channel-named runtime boundaries out of core imports", () => {
@@ -853,7 +853,7 @@ describe("plugin-sdk subpath exports", () => {
       ],
       excludeFilesMatching: [/\.test\.ts$/u, /\.test-harness\.ts$/u],
     });
-    expect(matches).toEqual([]);
+    expect(matches).toStrictEqual([]);
   });
 
   it("exports channel runtime helpers from the dedicated subpath", () => {

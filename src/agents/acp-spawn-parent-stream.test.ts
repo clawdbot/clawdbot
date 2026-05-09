@@ -268,7 +268,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
       },
     });
 
-    expect(collectedTexts()).toEqual([]);
+    expect(collectedTexts()).toStrictEqual([]);
     expect(requestHeartbeatMock).not.toHaveBeenCalled();
     relay.dispose();
   });

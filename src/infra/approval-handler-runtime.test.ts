@@ -89,10 +89,10 @@ type ApprovalHandlerRuntime = NonNullable<Awaited<ReturnType<typeof createTestAp
 function expectApprovalRuntime(
   runtime: Awaited<ReturnType<typeof createTestApprovalHandler>>,
 ): ApprovalHandlerRuntime {
-  expect(runtime).toEqual(expect.objectContaining({ handleRequested: expect.any(Function) }));
   if (runtime === null) {
     throw new Error("Expected approval handler runtime");
   }
+  expect(typeof runtime.handleRequested).toBe("function");
   return runtime;
 }
 

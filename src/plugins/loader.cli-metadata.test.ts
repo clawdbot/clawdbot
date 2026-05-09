@@ -67,7 +67,7 @@ describe("plugin loader CLI metadata", () => {
       },
     });
 
-    expect(warnings).toEqual([]);
+    expect(warnings).toStrictEqual([]);
     expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("rogue");
   });
 

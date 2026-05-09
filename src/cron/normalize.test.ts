@@ -540,7 +540,7 @@ describe("normalizeCronJobCreate", () => {
     }) as unknown as Record<string, unknown>;
 
     const payload = normalized.payload as Record<string, unknown>;
-    expect(payload.toolsAllow).toEqual([]);
+    expect(payload.toolsAllow).toStrictEqual([]);
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
@@ -799,7 +799,7 @@ describe("normalizeCronJobPatch", () => {
 
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.kind).toBe("agentTurn");
-    expect(payload.fallbacks).toEqual([]);
+    expect(payload.fallbacks).toStrictEqual([]);
   });
 
   it("preserves empty toolsAllow lists so patches can disable all tools", () => {
@@ -811,7 +811,7 @@ describe("normalizeCronJobPatch", () => {
 
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.kind).toBe("agentTurn");
-    expect(payload.toolsAllow).toEqual([]);
+    expect(payload.toolsAllow).toStrictEqual([]);
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 

@@ -34,7 +34,7 @@ describe("realtime voice provider resolver", () => {
       },
     });
 
-    expect(resolution).toMatchObject({
+    expect(resolution).toStrictEqual({
       provider: providers[1],
       providerConfig: {
         enabled: true,
@@ -54,7 +54,7 @@ describe("realtime voice provider resolver", () => {
       },
     });
 
-    expect(resolution.providerConfig).toMatchObject({
+    expect(resolution.providerConfig).toStrictEqual({
       enabled: true,
       model: "gpt-realtime",
       resolved: true,
@@ -72,8 +72,10 @@ describe("realtime voice provider resolver", () => {
       },
     });
 
-    expect(resolution.providerConfig).toMatchObject({
+    expect(resolution.providerConfig).toStrictEqual({
+      enabled: true,
       model: "custom-realtime",
+      resolved: true,
     });
   });
 
@@ -91,7 +93,7 @@ describe("realtime voice provider resolver", () => {
       },
     });
 
-    expect(resolution.providerConfig).toMatchObject({
+    expect(resolution.providerConfig).toStrictEqual({
       enabled: true,
       model: "gpt-realtime-2",
       voice: "cedar",

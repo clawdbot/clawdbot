@@ -140,7 +140,7 @@ describe("config cli integration", () => {
         runtime: runtime.runtime,
       });
 
-      expect(runtime.errors).toEqual([]);
+      expect(runtime.errors).toStrictEqual([]);
       const afterWrite = JSON5.parse(fs.readFileSync(configPath, "utf8"));
       expect(afterWrite.plugins?.entries?.["openclaw-mem0"]?.hooks).toEqual({
         allowConversationAccess: true,
@@ -214,7 +214,7 @@ describe("config cli integration", () => {
       });
       const afterDryRun = fs.readFileSync(configPath, "utf8");
       expect(afterDryRun).toBe(before);
-      expect(runtime.errors).toEqual([]);
+      expect(runtime.errors).toStrictEqual([]);
       expect(runtime.logs).toEqual(
         expect.arrayContaining([expect.stringContaining("Dry run successful: 2 update(s)")]),
       );
@@ -291,7 +291,7 @@ describe("config cli integration", () => {
       ).rejects.toThrow("__exit__:1");
       const after = fs.readFileSync(configPath, "utf8");
       expect(after).toBe(before);
-      expect(runtime.errors).toEqual([]);
+      expect(runtime.errors).toStrictEqual([]);
       const raw = runtime.logs.at(-1);
       if (raw === undefined) {
         throw new Error("expected config check JSON log");

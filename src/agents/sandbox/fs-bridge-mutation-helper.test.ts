@@ -402,7 +402,7 @@ describe("sandbox pinned mutation helper", () => {
           fs.readFile(path.join(sourceRoot, "dir", "nested", "linked.txt"), "utf8"),
         ).resolves.toBe("classified");
         await expectPathMissing(path.join(destRoot, "moved"));
-        await expect(fs.readdir(destRoot)).resolves.toEqual([]);
+        await expect(fs.readdir(destRoot)).resolves.toStrictEqual([]);
       });
     },
   );

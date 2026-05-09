@@ -251,7 +251,7 @@ describe("loadPluginLookUpTable", () => {
     expect(table.owners.commandAliases.get("telegram-send")).toEqual(["telegram"]);
     expect(table.owners.contracts.get("tools")).toEqual(["telegram"]);
     expect(table.startup.channelPluginIds).toEqual(["telegram"]);
-    expect(table.startup.configuredDeferredChannelPluginIds).toEqual([]);
+    expect(table.startup.configuredDeferredChannelPluginIds).toStrictEqual([]);
     expect(table.startup.pluginIds).toEqual(["telegram"]);
   });
 

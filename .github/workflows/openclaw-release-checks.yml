@@ -705,11 +705,11 @@ jobs:
           case "${QA_PARITY_LANE}" in
             candidate)
               model="${OPENCLAW_CI_OPENAI_MODEL}"
-              alt_model="openai/gpt-5.4-alt"
+              alt_model="openai/gpt-5.5-alt"
               ;;
             baseline)
-              model="anthropic/claude-opus-4-6"
-              alt_model="anthropic/claude-sonnet-4-6"
+              model="anthropic/claude-opus-4-7"
+              alt_model="anthropic/claude-sonnet-4-7"
               ;;
             *)
               echo "Unknown QA parity lane: ${QA_PARITY_LANE}" >&2
@@ -779,7 +779,7 @@ jobs:
             --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
             --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
             --candidate-label "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --baseline-label anthropic/claude-opus-4-6 \
+            --baseline-label anthropic/claude-opus-4-7 \
             --output-dir .artifacts/qa-e2e/parity
 
       - name: Upload parity artifacts

@@ -1136,7 +1136,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "VIMINIT",
       "XDG_CONFIG_DIRS",
     ]);
-    expect(result.rejectedOverrideInvalidKeys).toEqual([]);
+    expect(result.rejectedOverrideInvalidKeys).toStrictEqual([]);
     expect(result.env.SAFE_KEY).toBe("ok");
     expect(result.env.VIMINIT).toBeUndefined();
     expect(result.env.LUA_INIT_5_4).toBeUndefined();
@@ -1165,7 +1165,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       },
     });
 
-    expect(result.rejectedOverrideBlockedKeys).toEqual([]);
+    expect(result.rejectedOverrideBlockedKeys).toStrictEqual([]);
     expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD-KEY"]);
     expect(result.env["ProgramFiles(x86)"]).toBe("D:\\SDKs");
   });

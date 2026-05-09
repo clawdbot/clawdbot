@@ -394,7 +394,7 @@ describe("parseMessageWithAttachments validation errors", () => {
 
     try {
       expect(parsed.images).toHaveLength(0);
-      expect(parsed.imageOrder).toEqual([]);
+      expect(parsed.imageOrder).toStrictEqual([]);
       expect(parsed.offloadedRefs).toHaveLength(1);
       expect(parsed.offloadedRefs[0]).toMatchObject({
         mimeType: "application/pdf",

@@ -82,7 +82,7 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
       inactiveRefPaths: new Set(["agents.defaults.memorySearch.remote.apiKey"]),
     });
 
-    expect(result.assignments).toEqual([]);
+    expect(result.assignments).toStrictEqual([]);
     expect(result.diagnostics).toEqual([
       "agents.defaults.memorySearch.remote.apiKey: secret ref is configured on an inactive surface; skipping command-time assignment.",
     ]);

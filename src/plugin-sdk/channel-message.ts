@@ -138,17 +138,28 @@ export type {
   RenderedMessageBatchPlanKind,
 } from "../channels/message/index.js";
 
+export {
+  hasFinalChannelTurnDispatch,
+  hasVisibleChannelTurnDispatch,
+  resolveChannelTurnDispatchCounts,
+};
+
 type ChannelTurnKernelModule = typeof import("../channels/turn/kernel.js");
 type InboundReplyDispatchModule = typeof import("./inbound-reply-dispatch.js");
 
+/** @deprecated Use `createChannelMessageReplyPipeline(...)` for compatibility dispatchers. */
 export function createChannelTurnReplyPipeline(params: CreateChannelReplyPipelineParams) {
   return createChannelReplyPipeline(params);
 }
 
+/** @deprecated Compatibility helper for legacy reply dispatch results. */
 export const hasFinalChannelMessageReplyDispatch = hasFinalChannelTurnDispatch;
+/** @deprecated Compatibility helper for legacy reply dispatch results. */
 export const hasVisibleChannelMessageReplyDispatch = hasVisibleChannelTurnDispatch;
+/** @deprecated Compatibility helper for legacy reply dispatch results. */
 export const resolveChannelMessageReplyDispatchCounts = resolveChannelTurnDispatchCounts;
 
+/** @deprecated Compatibility helper for legacy reply dispatch bridges. */
 export const buildChannelMessageReplyDispatchBase: InboundReplyDispatchModule["buildChannelMessageReplyDispatchBase"] =
   ((params) => ({
     cfg: params.cfg,
@@ -163,12 +174,24 @@ export const buildChannelMessageReplyDispatchBase: InboundReplyDispatchModule["b
       params.core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
   })) as InboundReplyDispatchModule["buildChannelMessageReplyDispatchBase"];
 
+/**
+ * @deprecated Compatibility reply-dispatch bridge. New channel plugins should
+ * expose a `message` adapter and route sends through
+ * `deliverInboundReplyWithMessageSendContext(...)` or
+ * `sendDurableMessageBatch(...)`.
+ */
 export const dispatchChannelMessageReplyWithBase: InboundReplyDispatchModule["dispatchChannelMessageReplyWithBase"] =
   async (...args) => {
     const mod = await import("./inbound-reply-dispatch.js");
     return await mod.dispatchChannelMessageReplyWithBase(...args);
   };
 
+/**
+ * @deprecated Compatibility reply-dispatch bridge. New channel plugins should
+ * expose a `message` adapter and route sends through
+ * `deliverInboundReplyWithMessageSendContext(...)` or
+ * `sendDurableMessageBatch(...)`.
+ */
 export const recordChannelMessageReplyDispatch: InboundReplyDispatchModule["recordChannelMessageReplyDispatch"] =
   async (...args) => {
     const mod = await import("./inbound-reply-dispatch.js");

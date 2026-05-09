@@ -57,12 +57,13 @@ describe("createChannelRunQueue", () => {
   });
 
   it("updates run status and routes async errors", async () => {
+    const taskError = new Error("boom");
     const setStatus = vi.fn();
     const onError = vi.fn();
     const queue = createChannelRunQueue({ setStatus, onError });
 
     queue.enqueue("key", async () => {
-      throw new Error("boom");
+      throw taskError;
     });
 
     await flushAsyncWork();
@@ -72,10 +73,11 @@ describe("createChannelRunQueue", () => {
     expect(setStatus).toHaveBeenLastCalledWith(
       expect.objectContaining({ activeRuns: 0, busy: false }),
     );
-    expect(onError).toHaveBeenCalledWith(expect.any(Error));
+    expect(onError).toHaveBeenCalledWith(taskError);
   });
 
   it("contains reporting hook errors", async () => {
+    const taskError = new Error("boom");
     const onError = vi.fn(() => {
       throw new Error("report failed");
     });
@@ -84,11 +86,11 @@ describe("createChannelRunQueue", () => {
     });
 
     queue.enqueue("key", async () => {
-      throw new Error("boom");
+      throw taskError;
     });
 
     await flushAsyncWork();
-    expect(onError).toHaveBeenCalledWith(expect.any(Error));
+    expect(onError).toHaveBeenCalledWith(taskError);
   });
 
   it("skips queued work after deactivation", async () => {

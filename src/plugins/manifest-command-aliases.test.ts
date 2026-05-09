@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeManifestCommandAliases,
   resolveManifestCommandAliasOwnerInRegistry,
+  resolveManifestToolOwnerInRegistry,
 } from "./manifest-command-aliases.js";
 
 describe("manifest command aliases", () => {
@@ -45,5 +46,32 @@ describe("manifest command aliases", () => {
       enabledByDefault: true,
       name: "legacy-memory",
     });
+  });
+
+  it("resolves agent tool owners from contracts.tools", () => {
+    const registry = {
+      plugins: [
+        {
+          id: "lossless-claw",
+          contracts: { tools: ["lcm_recent", "lcm_search"] },
+        },
+        {
+          id: "other-plugin",
+          contracts: { tools: ["unrelated_tool"] },
+        },
+      ],
+    };
+
+    expect(resolveManifestToolOwnerInRegistry({ toolName: "lcm_recent", registry })).toMatchObject({
+      pluginId: "lossless-claw",
+      toolName: "lcm_recent",
+    });
+    expect(resolveManifestToolOwnerInRegistry({ toolName: "LCM_Recent", registry })).toMatchObject({
+      pluginId: "lossless-claw",
+    });
+    expect(
+      resolveManifestToolOwnerInRegistry({ toolName: "missing_tool", registry }),
+    ).toBeUndefined();
+    expect(resolveManifestToolOwnerInRegistry({ toolName: "", registry })).toBeUndefined();
   });
 });

@@ -109,7 +109,7 @@ describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => 
       stderr: "lsof failed",
     });
 
-    expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
+    expect(findGatewayPidsOnPortSync(18789)).toStrictEqual([]);
   });
 });
 
@@ -178,7 +178,7 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
 
     const killed = cleanStaleGatewayProcessesSync();
 
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
     expect(killSpy).not.toHaveBeenCalled();
   });
 });

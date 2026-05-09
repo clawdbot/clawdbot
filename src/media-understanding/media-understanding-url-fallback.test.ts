@@ -62,9 +62,17 @@ describe("media understanding attachment URL fallback", () => {
         // and return a path to that temp file instead of throwing.
         expect(result.path).toEqual(expect.stringMatching(/\S/u));
         expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
-        expect(fetchRemoteMediaMock).toHaveBeenCalledWith(
-          expect.objectContaining({ url: fallbackUrl, maxBytes: 1024 }),
-        );
+        const fetchInput = fetchRemoteMediaMock.mock.calls[0]?.[0] as
+          | { url?: unknown; fetchImpl?: unknown; maxBytes?: unknown; ssrfPolicy?: unknown }
+          | undefined;
+        const fetchImpl = fetchInput?.fetchImpl;
+        expect(fetchInput).toStrictEqual({
+          url: fallbackUrl,
+          fetchImpl,
+          maxBytes: 1024,
+          ssrfPolicy: undefined,
+        });
+        expect(typeof fetchImpl).toBe("function");
         // Clean up the temp file
         if (result.cleanup) {
           await result.cleanup();
@@ -84,9 +92,17 @@ describe("media understanding attachment URL fallback", () => {
         });
         expect(result.buffer.toString()).toBe("fallback-buffer");
         expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
-        expect(fetchRemoteMediaMock).toHaveBeenCalledWith(
-          expect.objectContaining({ url: fallbackUrl, maxBytes: 1024 }),
-        );
+        const fetchInput = fetchRemoteMediaMock.mock.calls[0]?.[0] as
+          | { url?: unknown; fetchImpl?: unknown; maxBytes?: unknown; ssrfPolicy?: unknown }
+          | undefined;
+        const fetchImpl = fetchInput?.fetchImpl;
+        expect(fetchInput).toStrictEqual({
+          url: fallbackUrl,
+          fetchImpl,
+          maxBytes: 1024,
+          ssrfPolicy: undefined,
+        });
+        expect(typeof fetchImpl).toBe("function");
       },
     );
   });

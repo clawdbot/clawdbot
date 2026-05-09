@@ -15,6 +15,11 @@ const mocks = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
 }));
 
+vi.mock("./outbound/deliver.js", () => ({
+  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
+}));
+
 type SessionMaintenanceWarningModule = typeof import("./session-maintenance-warning.js");
 
 let deliverSessionMaintenanceWarning: SessionMaintenanceWarningModule["deliverSessionMaintenanceWarning"];

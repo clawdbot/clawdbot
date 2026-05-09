@@ -82,7 +82,7 @@ describe("google-meet config compatibility", () => {
 
     const migration = normalizeCompatibilityConfig({ cfg: config });
 
-    expect(migration.changes).toEqual([]);
+    expect(migration.changes).toStrictEqual([]);
     expect(
       (
         migration.config.plugins?.entries?.["google-meet"] as {

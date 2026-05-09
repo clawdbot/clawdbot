@@ -655,8 +655,12 @@ describe("discordPlugin outbound", () => {
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
 
     // Second account (index 1) — 10s delay
-    await startDiscordAccount(cfg, "zeta");
-    expect(sleepWithAbortMock).toHaveBeenCalledWith(10_000, expect.any(Object));
+    const zetaContext = createStartAccountContext({
+      account: resolveAccount(cfg, "zeta"),
+      cfg,
+    });
+    await discordPlugin.gateway!.startAccount!(zetaContext);
+    expect(sleepWithAbortMock).toHaveBeenCalledWith(10_000, zetaContext.abortSignal);
   });
 });
 

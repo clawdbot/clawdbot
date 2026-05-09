@@ -122,7 +122,7 @@ describe("anthropic cli migration", () => {
       },
     });
 
-    expect(result.profiles).toEqual([]);
+    expect(result.profiles).toStrictEqual([]);
     expect(result.defaultModel).toBe("anthropic/claude-opus-4-7");
     expect(result.configPatch).toEqual({
       agents: {

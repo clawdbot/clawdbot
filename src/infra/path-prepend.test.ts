@@ -25,7 +25,7 @@ describe("path prepend helpers", () => {
     expect(
       normalizePathPrepend([" /custom/bin ", "", " /custom/bin ", "/opt/bin", 42 as any]),
     ).toEqual(["/custom/bin", "/opt/bin"]);
-    expect(normalizePathPrepend()).toEqual([]);
+    expect(normalizePathPrepend()).toStrictEqual([]);
   });
 
   it.each([

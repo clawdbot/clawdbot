@@ -16,8 +16,9 @@ import {
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
-import { runTrustedToolPolicies } from "../plugins/trusted-tool-policy.js";
+import { hasTrustedToolPolicies, runTrustedToolPolicies } from "../plugins/trusted-tool-policy.js";
 import {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
@@ -27,6 +28,7 @@ import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { adjustedParamsByToolCallId } from "./pi-tools.before-tool-call.state.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -52,6 +54,8 @@ export function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): b
 export type HookContext = {
   agentId?: string;
   config?: OpenClawConfig;
+  /** Tool execution cwd for host-derived path facts. */
+  cwd?: string;
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
@@ -60,6 +64,10 @@ export type HookContext = {
   channelId?: string;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
+  sandbox?: {
+    root: string;
+    bridge: SandboxFsBridge;
+  };
 };
 
 type HookBlockedKind = "veto" | "failure";
@@ -494,7 +502,24 @@ export async function runBeforeToolCallHook(args: {
 
   const hookRunner = getGlobalHookRunner();
   try {
+    const hasBeforeToolCallHooks = hookRunner?.hasHooks("before_tool_call") === true;
+    const shouldRunTrustedPolicies = hasTrustedToolPolicies();
+    if (!shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
+      return { blocked: false, params };
+    }
     const normalizedParams = isPlainObject(params) ? params : {};
+    const deriveOptions =
+      args.ctx?.cwd || args.ctx?.sandbox
+        ? {
+            ...(args.ctx.cwd ? { cwd: args.ctx.cwd } : {}),
+            ...(args.ctx.sandbox ? { sandbox: args.ctx.sandbox } : {}),
+          }
+        : undefined;
+    const derivedToolParams = deriveToolParams(toolName, normalizedParams, deriveOptions);
+    const deriveToolEventParams = (candidateParams: Record<string, unknown>) => {
+      const derived = deriveToolParams(toolName, candidateParams, deriveOptions);
+      return derived.derivedPaths ? { derivedPaths: derived.derivedPaths } : {};
+    };
     const toolContext = {
       toolName,
       ...(args.ctx?.agentId && { agentId: args.ctx.agentId }),
@@ -505,16 +530,24 @@ export async function runBeforeToolCallHook(args: {
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
     };
-    const trustedPolicyResult = await runTrustedToolPolicies(
-      {
-        toolName,
-        params: normalizedParams,
-        ...(args.ctx?.runId && { runId: args.ctx.runId }),
-        ...(args.toolCallId && { toolCallId: args.toolCallId }),
-      },
-      toolContext,
-      args.ctx?.config ? { config: args.ctx.config } : undefined,
-    );
+    const trustedPolicyResult = shouldRunTrustedPolicies
+      ? await runTrustedToolPolicies(
+          {
+            toolName,
+            params: normalizedParams,
+            ...(args.ctx?.runId && { runId: args.ctx.runId }),
+            ...(args.toolCallId && { toolCallId: args.toolCallId }),
+            ...(derivedToolParams.derivedPaths
+              ? { derivedPaths: derivedToolParams.derivedPaths }
+              : {}),
+          },
+          toolContext,
+          {
+            ...(args.ctx?.config ? { config: args.ctx.config } : {}),
+            deriveEvent: deriveToolEventParams,
+          },
+        )
+      : undefined;
     if (trustedPolicyResult?.block) {
       return {
         blocked: true,
@@ -548,7 +581,11 @@ export async function runBeforeToolCallHook(args: {
       });
     }
     const policyAdjustedParams = trustedPolicyResult?.params ?? params;
-    if (!hookRunner?.hasHooks("before_tool_call")) {
+    const policyAdjustedDerivedToolParams =
+      trustedPolicyResult?.params && isPlainObject(policyAdjustedParams)
+        ? deriveToolParams(toolName, policyAdjustedParams, deriveOptions)
+        : derivedToolParams;
+    if (!hasBeforeToolCallHooks) {
       return { blocked: false, params: policyAdjustedParams };
     }
     const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
@@ -558,6 +595,9 @@ export async function runBeforeToolCallHook(args: {
         params: hookEventParams,
         ...(args.ctx?.runId && { runId: args.ctx.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
+        ...(policyAdjustedDerivedToolParams.derivedPaths
+          ? { derivedPaths: policyAdjustedDerivedToolParams.derivedPaths }
+          : {}),
       },
       toolContext,
     );

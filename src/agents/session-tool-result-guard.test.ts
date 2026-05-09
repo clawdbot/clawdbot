@@ -133,7 +133,7 @@ describe("installSessionToolResultGuard", () => {
     guard.clearPendingToolResults();
 
     expectPersistedRoles(sm, ["assistant"]);
-    expect(guard.getPendingIds()).toEqual([]);
+    expect(guard.getPendingIds()).toStrictEqual([]);
   });
 
   it("clears pending on user interruption when synthetic tool results are disabled", () => {
@@ -152,7 +152,7 @@ describe("installSessionToolResultGuard", () => {
     );
 
     expectPersistedRoles(sm, ["assistant", "user"]);
-    expect(guard.getPendingIds()).toEqual([]);
+    expect(guard.getPendingIds()).toStrictEqual([]);
   });
 
   it("does not add synthetic toolResult when a matching one exists", () => {
@@ -253,7 +253,7 @@ describe("installSessionToolResultGuard", () => {
       "assistant", // text
     ]);
     expect((messages[2] as { toolCallId?: string }).toolCallId).toBe("call_b");
-    expect(guard.getPendingIds()).toEqual([]);
+    expect(guard.getPendingIds()).toStrictEqual([]);
   });
 
   it("flushes pending on guard when no toolResult arrived", () => {
@@ -268,7 +268,7 @@ describe("installSessionToolResultGuard", () => {
         stopReason: "error",
       }),
     );
-    expect(guard.getPendingIds()).toEqual([]);
+    expect(guard.getPendingIds()).toStrictEqual([]);
   });
 
   it("handles toolUseId on toolResult", () => {
@@ -365,7 +365,7 @@ describe("installSessionToolResultGuard", () => {
     appendAssistantToolCall(sm, { id: "call_2", name: "write" });
 
     expectPersistedRoles(sm, ["assistant"]);
-    expect(guard.getPendingIds()).toEqual([]);
+    expect(guard.getPendingIds()).toStrictEqual([]);
   });
 
   it("drops older pending ids before new tool calls when synthetic results are disabled", () => {

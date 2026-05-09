@@ -23,7 +23,7 @@ describe("package dist inventory", () => {
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/current-BR6xv1a1.js",
       ]);
-      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toEqual([]);
+      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toStrictEqual([]);
 
       await fs.rm(currentFile);
       await fs.writeFile(
@@ -109,7 +109,7 @@ describe("package dist inventory", () => {
       await fs.writeFile(omittedRuntimePostBuildStamp, "{}\n", "utf8");
       await fs.writeFile(omittedMap, "{}", "utf8");
 
-      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([]);
+      await expect(writePackageDistInventory(packageRoot)).resolves.toStrictEqual([]);
     });
   });
 

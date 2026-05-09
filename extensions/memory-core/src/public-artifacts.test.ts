@@ -98,6 +98,6 @@ describe("listMemoryCorePublicArtifacts", () => {
       },
     };
 
-    await expect(listMemoryCorePublicArtifacts({ cfg })).resolves.toEqual([]);
+    await expect(listMemoryCorePublicArtifacts({ cfg })).resolves.toStrictEqual([]);
   });
 });

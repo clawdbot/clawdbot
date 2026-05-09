@@ -43,7 +43,7 @@ describe("message action media helpers", () => {
           media: "https://example.com/photo.png",
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(resolveChannelMessageToolMediaSourceParamKeysMock).not.toHaveBeenCalled();
   });
 

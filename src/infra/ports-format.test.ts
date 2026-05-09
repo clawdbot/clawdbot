@@ -33,7 +33,7 @@ describe("ports-format", () => {
       "Another process is listening on this port.",
       expect.stringContaining("Multiple listeners detected"),
     ]);
-    expect(buildPortHints([], 18789)).toEqual([]);
+    expect(buildPortHints([], 18789)).toStrictEqual([]);
   });
 
   it("treats single-process loopback dual-stack gateway listeners as benign", () => {

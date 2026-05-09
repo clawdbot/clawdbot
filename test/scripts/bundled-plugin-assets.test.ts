@@ -46,10 +46,13 @@ describe("bundled plugin assets", () => {
         rootDir,
       });
 
-      expect(hooks).toMatchObject([
+      expect(hooks).toEqual([
         {
+          aliases: ["@openclaw/canvas-plugin", "canvas", "canvas-plugin"],
           command: "node scripts/bundle-a2ui.mjs",
+          packageName: "@openclaw/canvas-plugin",
           phase: "build",
+          pluginDir: path.join(rootDir, "extensions", "canvas"),
           pluginId: "canvas",
         },
       ]);

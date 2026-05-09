@@ -20,8 +20,8 @@ describe("clearSessionResetRuntimeState", () => {
 
     expect(result.keys).toEqual(["alpha", "beta"]);
     expect(result.systemEventsCleared).toBe(2);
-    expect(peekSystemEvents("alpha")).toEqual([]);
-    expect(peekSystemEvents("beta")).toEqual([]);
+    expect(peekSystemEvents("alpha")).toStrictEqual([]);
+    expect(peekSystemEvents("beta")).toStrictEqual([]);
     expect(peekSystemEvents("gamma")).toEqual(["fresh gamma"]);
   });
 });

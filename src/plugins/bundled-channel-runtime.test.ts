@@ -25,7 +25,7 @@ describe("bundled channel runtime metadata", () => {
   it("preserves explicit empty bundled roots", () => {
     const tempRoot = createTempRoot();
 
-    expect(listBundledChannelPluginMetadata({ rootDir: tempRoot })).toEqual([]);
+    expect(listBundledChannelPluginMetadata({ rootDir: tempRoot })).toStrictEqual([]);
     expect(resolveBundledChannelWorkspacePath({ rootDir: tempRoot, pluginId: "telegram" })).toBe(
       null,
     );
@@ -37,6 +37,6 @@ describe("bundled channel runtime metadata", () => {
 
     expect(
       listBundledChannelPluginMetadata({ rootDir: tempRoot, scanDir: missingScanDir }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

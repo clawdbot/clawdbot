@@ -246,7 +246,7 @@ describe("command explainer tree-sitter runtime", () => {
       "python",
     ]);
     expect(explanation.topLevelCommands[2]?.argv).toEqual(["python", "-c", 'print("hi")']);
-    expect(explanation.nestedCommands).toEqual([]);
+    expect(explanation.nestedCommands).toStrictEqual([]);
     expect(explanation.topLevelCommands[2]?.span).toEqual(
       expect.objectContaining({ startIndex: expect.any(Number), endIndex: expect.any(Number) }),
     );
@@ -275,7 +275,7 @@ describe("command explainer tree-sitter runtime", () => {
   it("marks command substitution in executable position as dynamic", async () => {
     const explanation = await explainShellCommand("$(whoami) --help");
 
-    expect(explanation.topLevelCommands).toEqual([]);
+    expect(explanation.topLevelCommands).toStrictEqual([]);
     expect(explanation.nestedCommands).toEqual([
       expect.objectContaining({ context: "command-substitution", executable: "whoami" }),
     ]);
@@ -422,7 +422,7 @@ describe("command explainer tree-sitter runtime", () => {
     );
 
     const dynamicPayload = await explainShellCommand('bash -lc "$CMD"');
-    expect(dynamicPayload.nestedCommands).toEqual([]);
+    expect(dynamicPayload.nestedCommands).toStrictEqual([]);
     expect(dynamicPayload.risks).toContainEqual(
       expect.objectContaining({
         kind: "shell-wrapper",
@@ -439,7 +439,7 @@ describe("command explainer tree-sitter runtime", () => {
     const powershellPipeline = await explainShellCommand(
       'pwsh -Command "Get-ChildItem | Select Name"',
     );
-    expect(powershellPipeline.nestedCommands).toEqual([]);
+    expect(powershellPipeline.nestedCommands).toStrictEqual([]);
     expect(powershellPipeline.risks).toContainEqual(
       expect.objectContaining({
         kind: "shell-wrapper",
@@ -514,25 +514,25 @@ describe("command explainer tree-sitter runtime", () => {
 
   it("does not normalize dynamic executable names into trusted commands", async () => {
     const dynamicPrefix = await explainShellCommand("e${CMD}ho hi");
-    expect(dynamicPrefix.topLevelCommands).toEqual([]);
+    expect(dynamicPrefix.topLevelCommands).toStrictEqual([]);
     expect(dynamicPrefix.risks).toContainEqual(
       expect.objectContaining({ kind: "dynamic-executable", text: "e${CMD}ho" }),
     );
 
     const dynamicQuoted = await explainShellCommand('"${CMD}" hi');
-    expect(dynamicQuoted.topLevelCommands).toEqual([]);
+    expect(dynamicQuoted.topLevelCommands).toStrictEqual([]);
     expect(dynamicQuoted.risks).toContainEqual(
       expect.objectContaining({ kind: "dynamic-executable", text: '"${CMD}"' }),
     );
 
     const dynamicGlob = await explainShellCommand("./ec* hi");
-    expect(dynamicGlob.topLevelCommands).toEqual([]);
+    expect(dynamicGlob.topLevelCommands).toStrictEqual([]);
     expect(dynamicGlob.risks).toContainEqual(
       expect.objectContaining({ kind: "dynamic-executable", text: "./ec*" }),
     );
 
     const dynamicBraceExpansion = await explainShellCommand("./{echo,printf} hi");
-    expect(dynamicBraceExpansion.topLevelCommands).toEqual([]);
+    expect(dynamicBraceExpansion.topLevelCommands).toStrictEqual([]);
     expect(dynamicBraceExpansion.risks).toContainEqual(
       expect.objectContaining({ kind: "dynamic-executable", text: "./{echo,printf}" }),
     );
@@ -561,7 +561,7 @@ describe("command explainer tree-sitter runtime", () => {
     );
 
     const lineContinuation = await explainShellCommand("ec\\\nho hi");
-    expect(lineContinuation.topLevelCommands).toEqual([]);
+    expect(lineContinuation.topLevelCommands).toStrictEqual([]);
     expect(lineContinuation.risks).toContainEqual(
       expect.objectContaining({ kind: "line-continuation" }),
     );

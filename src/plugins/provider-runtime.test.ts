@@ -601,7 +601,7 @@ describe("provider-runtime", () => {
           store: { version: 1, profiles: {} },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
@@ -1821,7 +1821,7 @@ describe("provider-runtime", () => {
           tools: [DEMO_TOOL],
         }),
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       normalizeProviderResolvedModelWithPlugin({

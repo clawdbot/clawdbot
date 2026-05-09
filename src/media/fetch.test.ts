@@ -90,20 +90,27 @@ async function expectFetchRemoteMediaRejected(params: {
   lookupFn?: LookupFn;
   expectedError: RegExp | string | Record<string, unknown>;
 }) {
-  const rejection = expect(
-    fetchRemoteMedia({
-      url: params.url,
-      fetchImpl: params.fetchImpl,
-      lookupFn: params.lookupFn ?? makeLookupFn(),
-      maxBytes: params.maxBytes ?? 1024,
-      ...(params.readIdleTimeoutMs ? { readIdleTimeoutMs: params.readIdleTimeoutMs } : {}),
-    }),
-  ).rejects;
+  const request = {
+    url: params.url,
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn ?? makeLookupFn(),
+    maxBytes: params.maxBytes ?? 1024,
+    ...(params.readIdleTimeoutMs ? { readIdleTimeoutMs: params.readIdleTimeoutMs } : {}),
+  };
   if (params.expectedError instanceof RegExp || typeof params.expectedError === "string") {
-    await rejection.toThrow(params.expectedError);
+    await expect(fetchRemoteMedia(request)).rejects.toThrow(params.expectedError);
     return;
   }
-  await rejection.toMatchObject(params.expectedError);
+  let fetchError: unknown;
+  try {
+    await fetchRemoteMedia(request);
+  } catch (error) {
+    fetchError = error;
+  }
+  expect(fetchError).toBeInstanceOf(Error);
+  for (const [key, value] of Object.entries(params.expectedError)) {
+    expect((fetchError as Record<string, unknown>)[key]).toStrictEqual(value);
+  }
 }
 
 async function expectFetchRemoteMediaResolvesToError(
@@ -315,31 +322,35 @@ describe("fetchRemoteMedia", () => {
 
   it("uses trusted explicit-proxy mode when the caller opts in for proxy-side DNS", async () => {
     const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+    const lookupFn = makeLookupFn();
+    const dispatcherPolicy = {
+      mode: "explicit-proxy" as const,
+      proxyUrl: "http://localhost:8888",
+      allowPrivateProxy: true,
+    };
 
     await fetchRemoteMedia({
       url: "https://files.example.test/file/bot123/photos/test.jpg",
       fetchImpl,
-      lookupFn: makeLookupFn(),
+      lookupFn,
       trustExplicitProxyDns: true,
       dispatcherAttempts: [
         {
-          dispatcherPolicy: {
-            mode: "explicit-proxy",
-            proxyUrl: "http://localhost:8888",
-            allowPrivateProxy: true,
-          },
+          dispatcherPolicy,
         },
       ],
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "trusted_explicit_proxy",
-        dispatcherPolicy: expect.objectContaining({
-          mode: "explicit-proxy",
-          proxyUrl: "http://localhost:8888",
-        }),
-      }),
-    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).toStrictEqual({
+      url: "https://files.example.test/file/bot123/photos/test.jpg",
+      fetchImpl,
+      init: undefined,
+      maxRedirects: undefined,
+      policy: undefined,
+      lookupFn,
+      dispatcherPolicy,
+      mode: "trusted_explicit_proxy",
+    });
   });
 });

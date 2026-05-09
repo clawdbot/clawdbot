@@ -2,9 +2,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
+  type ProviderCatalogContext,
+  type ProviderCatalogResult,
   type ProviderAuthContext,
   type ProviderAuthResult,
   type ProviderAuthMethodNonInteractiveContext,
+  type UnifiedModelCatalogEntry,
+  type UnifiedModelCatalogProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
@@ -15,6 +19,7 @@ import {
   resolveDefaultSecretProviderAlias,
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
+import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
@@ -259,6 +264,88 @@ export default definePluginEntry({
       return config ? {} : startupPluginConfig;
     }
 
+    async function runGithubCopilotCatalog(
+      ctx: ProviderCatalogContext,
+    ): Promise<ProviderCatalogResult> {
+      const pluginConfig = resolveCurrentPluginConfig(ctx.config);
+      const discoveryEnabled =
+        pluginConfig.discovery?.enabled ?? ctx.config?.models?.copilotDiscovery?.enabled;
+      if (discoveryEnabled === false) {
+        return null;
+      }
+      const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } =
+        await loadGithubCopilotRuntime();
+      const { githubToken, hasProfile } = await resolveFirstGithubToken({
+        agentDir: ctx.agentDir,
+        config: ctx.config,
+        env: ctx.env,
+      });
+      if (!hasProfile && !githubToken) {
+        return null;
+      }
+      let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+      let copilotApiToken: string | undefined;
+      if (githubToken) {
+        try {
+          const token = await resolveCopilotApiToken({
+            githubToken,
+            env: ctx.env,
+          });
+          baseUrl = token.baseUrl;
+          copilotApiToken = token.token;
+        } catch {
+          baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+        }
+      }
+      // Try to fetch the live model catalog from Copilot's /models endpoint so
+      // the runtime tracks per-account entitlements and accurate context
+      // windows (max_context_window_tokens) without manifest churn. On any
+      // failure we return an empty model list, which lets the static manifest
+      // catalog continue to be the visible fallback for users.
+      let discoveredModels: Awaited<ReturnType<typeof fetchCopilotModelCatalog>> = [];
+      if (copilotApiToken) {
+        try {
+          discoveredModels = await getCachedLiveCatalogValue({
+            keyParts: [PROVIDER_ID, "models", baseUrl, copilotApiToken],
+            load: async () =>
+              await fetchCopilotModelCatalog({
+                copilotApiToken,
+                baseUrl,
+              }),
+          });
+        } catch {
+          discoveredModels = [];
+        }
+      }
+      return {
+        provider: {
+          baseUrl,
+          models: discoveredModels,
+        },
+      };
+    }
+
+    async function runGithubCopilotUnifiedLiveCatalog(
+      ctx: UnifiedModelCatalogProviderContext,
+    ): Promise<UnifiedModelCatalogEntry[] | null> {
+      const result = await runGithubCopilotCatalog(ctx);
+      if (!result || !("provider" in result)) {
+        return null;
+      }
+      return (result.provider.models ?? []).map((model) => {
+        const entry: UnifiedModelCatalogEntry = {
+          kind: "text",
+          provider: PROVIDER_ID,
+          model: model.id,
+          source: "live",
+        };
+        if (model.name) {
+          entry.label = model.name;
+        }
+        return entry;
+      });
+    }
+
     async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
       const existing = resolveExistingCopilotAuthResult(ctx.agentDir);
       if (existing) {
@@ -359,61 +446,7 @@ export default definePluginEntry({
       },
       catalog: {
         order: "late",
-        run: async (ctx) => {
-          const pluginConfig = resolveCurrentPluginConfig(ctx.config);
-          const discoveryEnabled =
-            pluginConfig.discovery?.enabled ?? ctx.config?.models?.copilotDiscovery?.enabled;
-          if (discoveryEnabled === false) {
-            return null;
-          }
-          const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } =
-            await loadGithubCopilotRuntime();
-          const { githubToken, hasProfile } = await resolveFirstGithubToken({
-            agentDir: ctx.agentDir,
-            config: ctx.config,
-            env: ctx.env,
-          });
-          if (!hasProfile && !githubToken) {
-            return null;
-          }
-          let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
-          let copilotApiToken: string | undefined;
-          if (githubToken) {
-            try {
-              const token = await resolveCopilotApiToken({
-                githubToken,
-                env: ctx.env,
-              });
-              baseUrl = token.baseUrl;
-              copilotApiToken = token.token;
-            } catch {
-              baseUrl = DEFAULT_COPILOT_API_BASE_URL;
-            }
-          }
-          // Try to fetch the live model catalog from Copilot's /models
-          // endpoint so the runtime tracks per-account entitlements and
-          // accurate context windows (max_context_window_tokens) without
-          // manifest churn. On any failure we return an empty model list,
-          // which lets the static manifest catalog continue to be the
-          // visible fallback for users.
-          let discoveredModels: Awaited<ReturnType<typeof fetchCopilotModelCatalog>> = [];
-          if (copilotApiToken) {
-            try {
-              discoveredModels = await fetchCopilotModelCatalog({
-                copilotApiToken,
-                baseUrl,
-              });
-            } catch {
-              discoveredModels = [];
-            }
-          }
-          return {
-            provider: {
-              baseUrl,
-              models: discoveredModels,
-            },
-          };
-        },
+        run: runGithubCopilotCatalog,
       },
       resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
       wrapStreamFn: wrapCopilotProviderStream,
@@ -449,6 +482,11 @@ export default definePluginEntry({
         const { fetchCopilotUsage } = await loadGithubCopilotRuntime();
         return await fetchCopilotUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
       },
+    });
+    api.registerModelCatalogProvider({
+      provider: PROVIDER_ID,
+      kinds: ["text"],
+      liveCatalog: runGithubCopilotUnifiedLiveCatalog,
     });
   },
 });

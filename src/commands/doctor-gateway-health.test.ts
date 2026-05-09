@@ -49,7 +49,7 @@ describe("checkGatewayHealth", () => {
       timeoutMs: 6000,
     });
     expect(runtime.error).not.toHaveBeenCalled();
-    expect(note).not.toHaveBeenCalledWith(expect.any(String), "OpenClaw version mismatch");
+    expect(note.mock.calls.map(([, title]) => title)).not.toContain("OpenClaw version mismatch");
   });
 
   it("notes CLI and gateway version mismatch when the gateway reports another runtime version", async () => {

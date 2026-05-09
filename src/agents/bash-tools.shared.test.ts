@@ -29,7 +29,7 @@ describe("resolveSandboxWorkdir", () => {
 
       expect(resolved.hostWorkdir).toBe(workspaceDir);
       expect(resolved.containerWorkdir).toBe("/workspace");
-      expect(warnings).toEqual([]);
+      expect(warnings).toStrictEqual([]);
     });
   });
 
@@ -50,7 +50,7 @@ describe("resolveSandboxWorkdir", () => {
 
       expect(resolved.hostWorkdir).toBe(nested);
       expect(resolved.containerWorkdir).toBe("/workspace/scripts/runner");
-      expect(warnings).toEqual([]);
+      expect(warnings).toStrictEqual([]);
     });
   });
 
@@ -71,7 +71,7 @@ describe("resolveSandboxWorkdir", () => {
 
       expect(resolved.hostWorkdir).toBe(nested);
       expect(resolved.containerWorkdir).toBe("/sandbox-root/project");
-      expect(warnings).toEqual([]);
+      expect(warnings).toStrictEqual([]);
     });
   });
 });

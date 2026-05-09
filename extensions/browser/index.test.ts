@@ -172,7 +172,7 @@ describe("browser plugin", () => {
     await expect(browserPluginNodeHostCommands[0]?.handle("{}")).resolves.toBe("ok");
     expect(runtimeApiMocks.runBrowserProxyCommand).toHaveBeenCalledWith("{}");
 
-    await expect(browserSecurityAuditCollectors[0]?.({} as never)).resolves.toEqual([]);
+    await expect(browserSecurityAuditCollectors[0]?.({} as never)).resolves.toStrictEqual([]);
     expect(runtimeApiMocks.collectBrowserSecurityAuditFindings).toHaveBeenCalled();
   });
 

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { VERSION } from "../version.js";
 import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 import { buildStatusJsonPayload } from "./status-json-payload.ts";
 
@@ -41,7 +42,7 @@ describe("status-json-payload", () => {
     expect(mocks.normalizeUpdateChannel).toHaveBeenCalledWith("beta");
     expect(mocks.resolveUpdateChannelDisplay).toHaveBeenCalledWith({
       configChannel: "beta",
-      currentVersion: expect.any(String),
+      currentVersion: VERSION,
       installKind: "package",
       gitTag: "v1.2.3",
       gitBranch: "main",

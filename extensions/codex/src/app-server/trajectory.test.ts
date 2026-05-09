@@ -27,10 +27,10 @@ afterEach(() => {
 function expectTrajectoryRecorder(
   recorder: ReturnType<typeof createCodexTrajectoryRecorder>,
 ): CodexTrajectoryRecorder {
-  expect(recorder).toEqual(expect.objectContaining({ recordEvent: expect.any(Function) }));
   if (recorder === null) {
     throw new Error("Expected Codex trajectory recorder");
   }
+  expect(typeof recorder.recordEvent).toBe("function");
   return recorder;
 }
 

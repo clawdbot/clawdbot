@@ -139,6 +139,13 @@ function resolveTsxImportSpecifier(): string {
   }
 }
 
+function shellQuoteCommandArg(arg: string): string {
+  if (!/[\s'"\\$|&;<>{}()*?[\]~`]/.test(arg)) {
+    return arg;
+  }
+  return `'${arg.replace(/'/g, "'\"'\"'")}'`;
+}
+
 function resolvePluginToolsMcpServerConfig(moduleUrl: string = import.meta.url): McpServerConfig {
   const pluginRoot = resolveAcpxPluginRoot(moduleUrl);
   const openClawRoot = resolveOpenClawRoot(pluginRoot);
@@ -238,10 +245,13 @@ export function resolveAcpxPluginConfig(params: {
     moduleUrl: params.moduleUrl,
   });
   const agents = Object.fromEntries(
-    Object.entries(normalized.agents ?? {}).map(([name, entry]) => [
-      normalizeLowercaseStringOrEmpty(name),
-      entry.command.trim(),
-    ]),
+    Object.entries(normalized.agents ?? {}).map(([name, entry]) => {
+      const cmd = entry.command.trim();
+      const cmdArgs = entry.args ?? [];
+      const fullCommand =
+        cmdArgs.length > 0 ? `${cmd} ${cmdArgs.map(shellQuoteCommandArg).join(" ")}` : cmd;
+      return [normalizeLowercaseStringOrEmpty(name), fullCommand];
+    }),
   );
 
   // Lowercase probeAgent so lookups match the registry keys built above, which

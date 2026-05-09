@@ -183,7 +183,7 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
     });
 
     expect(result.result).toBe(contractCase.result);
-    expect(result.attempts).toEqual([]);
+    expect(result.attempts).toStrictEqual([]);
     expect(run).toHaveBeenCalledTimes(1);
   });
 });

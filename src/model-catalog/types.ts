@@ -10,6 +10,38 @@ export type ModelCatalogSource =
   | "config"
   | "runtime-refresh";
 
+export type UnifiedModelCatalogKind =
+  | "text"
+  | "image_generation"
+  | "video_generation"
+  | "music_generation";
+
+export type UnifiedModelCatalogSource =
+  | "manifest"
+  | "provider-index"
+  | "static"
+  | "live"
+  | "cache"
+  | "configured"
+  | "runtime-refresh";
+
+export type UnifiedModelCatalogEntry<TCapabilities = unknown> = {
+  kind: UnifiedModelCatalogKind;
+  provider: string;
+  model: string;
+  label?: string;
+  source: UnifiedModelCatalogSource;
+  default?: boolean;
+  configured?: boolean;
+  capabilities?: TCapabilities;
+  modes?: readonly string[];
+  authEnvVars?: readonly string[];
+  docsPath?: string;
+  fetchedAt?: number;
+  expiresAt?: number;
+  warnings?: readonly string[];
+};
+
 export type ModelCatalogTieredCost = {
   input: number;
   output: number;

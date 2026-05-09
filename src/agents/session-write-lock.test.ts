@@ -563,7 +563,7 @@ describe("acquireSessionWriteLock", () => {
 
       await expectPathMissing(lockPath);
       expect(otherHandlerCalled).toBe(false);
-      expect(killCalls).toEqual([]);
+      expect(killCalls).toStrictEqual([]);
     } finally {
       process.off("SIGINT", otherHandler);
       process.kill = originalKill;

@@ -209,7 +209,7 @@ describe("makeProxyFetch", () => {
 
     const passedHeaders = undiciFetch.mock.calls[0]?.[1]?.headers;
     expect(passedHeaders).not.toBe(headers);
-    expect(Object.getOwnPropertySymbols(passedHeaders as object)).toEqual([]);
+    expect(Object.getOwnPropertySymbols(passedHeaders as object)).toStrictEqual([]);
     expect(new Headers(passedHeaders).get("content-type")).toBe("application/json");
     expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
   });

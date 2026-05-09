@@ -34,6 +34,6 @@ describe("loadProviderIndexCatalogRowsForList", () => {
         },
         providerFilter: "moonshot",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

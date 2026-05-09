@@ -80,7 +80,7 @@ describe("ssh-config", () => {
     expect(parsed.user).toBe("bob");
     expect(parsed.host).toBe("example.com");
     expect(parsed.port).toBeUndefined();
-    expect(parsed.identityFiles).toEqual([]);
+    expect(parsed.identityFiles).toStrictEqual([]);
   });
 
   it("resolves ssh config via ssh -G", async () => {

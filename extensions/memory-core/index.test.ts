@@ -10,7 +10,7 @@ import { buildPromptSection } from "./src/prompt-section.js";
 
 describe("buildPromptSection", () => {
   it("returns empty when no memory tools are available", () => {
-    expect(buildPromptSection({ availableTools: new Set() })).toEqual([]);
+    expect(buildPromptSection({ availableTools: new Set() })).toStrictEqual([]);
   });
 
   it("describes the two-step flow when both memory tools are available", () => {

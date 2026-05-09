@@ -178,7 +178,7 @@ describe("zalouser send helpers", () => {
       mockSendText.mock.calls
         .map((call, index) => ({ index, length: call[1].length }))
         .filter((call) => call.length > 2000),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(result).toMatchObject({ ok: true, messageId: "mid-2c-2" });
   });
 
@@ -388,7 +388,7 @@ describe("zalouser send helpers", () => {
       remove: undefined,
     });
     expect(result).toMatchObject({ ok: true, error: undefined });
-    expect(result.receipt.platformMessageIds).toEqual([]);
+    expect(result.receipt.platformMessageIds).toStrictEqual([]);
   });
 
   it("delegates delivered+seen helpers to JS transport", async () => {

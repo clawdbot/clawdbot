@@ -471,7 +471,7 @@ describe("task-registry maintenance issue #60299", () => {
         error: "backing session missing",
       }),
     ]);
-    expect(getInspectableActiveTaskRestartBlockers()).toEqual([]);
+    expect(getInspectableActiveTaskRestartBlockers()).toStrictEqual([]);
     expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
   });

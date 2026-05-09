@@ -37,7 +37,7 @@ describe("gateway tools.catalog", () => {
       expect(noPlugins.ok).toBe(true);
       expect(
         (noPlugins.payload?.groups ?? []).filter((group) => group.source === "plugin"),
-      ).toEqual([]);
+      ).toStrictEqual([]);
 
       const unknownAgent = await rpcReq(ws, "tools.catalog", { agentId: "does-not-exist" });
       expect(unknownAgent.ok).toBe(false);

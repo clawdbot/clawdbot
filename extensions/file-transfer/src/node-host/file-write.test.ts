@@ -77,7 +77,7 @@ describe("handleFileWrite — happy path", () => {
 
     const entries = await fs.readdir(tmpRoot);
     const tmpFiles = entries.filter((n) => n.includes(".tmp"));
-    expect(tmpFiles).toEqual([]);
+    expect(tmpFiles).toStrictEqual([]);
   });
 });
 

@@ -484,7 +484,7 @@ describe("chunkByNewline", () => {
   });
 
   it.each(["", "   \n\n   "] as const)("returns empty array for input %j", (text) => {
-    expect(chunkByNewline(text, 100)).toEqual([]);
+    expect(chunkByNewline(text, 100)).toStrictEqual([]);
   });
 });
 

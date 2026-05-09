@@ -506,7 +506,7 @@ describe("listSessionsFromStore subagent metadata", () => {
       },
     });
 
-    expect(result.sessions.map((session) => session.key)).toEqual([]);
+    expect(result.sessions.map((session) => session.key)).toStrictEqual([]);
   });
 
   test("reports the newest run owner for moved child session rows", () => {
@@ -904,7 +904,7 @@ describe("listSessionsFromStore subagent metadata", () => {
           }),
       );
 
-      expect(result.sessions).toEqual([]);
+      expect(result.sessions).toStrictEqual([]);
       const registryStatCount = statSpy.mock.calls.filter(
         ([pathname]) => path.normalize(String(pathname)) === path.normalize(registryPath),
       ).length;
@@ -1005,7 +1005,7 @@ describe("listSessionsFromStore subagent metadata", () => {
         spawnedBy: "agent:main:main",
       },
     });
-    expect(filtered.sessions.map((session) => session.key)).toEqual([]);
+    expect(filtered.sessions.map((session) => session.key)).toStrictEqual([]);
   });
 
   test("does not reattach stale orphan store-only child links without lifecycle fields", () => {
@@ -1041,7 +1041,7 @@ describe("listSessionsFromStore subagent metadata", () => {
         spawnedBy: "agent:main:main",
       },
     });
-    expect(filtered.sessions.map((session) => session.key)).toEqual([]);
+    expect(filtered.sessions.map((session) => session.key)).toStrictEqual([]);
   });
 
   test("does not keep old ended registry runs attached as child sessions", () => {
@@ -1089,7 +1089,7 @@ describe("listSessionsFromStore subagent metadata", () => {
         spawnedBy: "agent:main:main",
       },
     });
-    expect(filtered.sessions.map((session) => session.key)).toEqual([]);
+    expect(filtered.sessions.map((session) => session.key)).toStrictEqual([]);
   });
 
   test("keeps ended parents attached while live descendants are still running", () => {

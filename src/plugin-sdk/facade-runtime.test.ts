@@ -243,7 +243,7 @@ describe("plugin-sdk facade runtime", () => {
     expect(loaded.marker).toBe("post-load-ok");
     expect(reentryMarkers.length).toBeGreaterThan(0);
     const unexpectedReentryMarkers = reentryMarkers.filter((marker) => marker !== "post-load-ok");
-    expect(unexpectedReentryMarkers).toEqual([]);
+    expect(unexpectedReentryMarkers).toStrictEqual([]);
     expect(listImportedBundledPluginFacadeIds()).toEqual(["demo"]);
     expect(loader).toHaveBeenCalledTimes(1);
   });
@@ -258,7 +258,7 @@ describe("plugin-sdk facade runtime", () => {
       }),
     ).toThrow("plugin load failure");
 
-    expect(listImportedBundledPluginFacadeIds()).toEqual([]);
+    expect(listImportedBundledPluginFacadeIds()).toStrictEqual([]);
 
     // A second call must also throw (not return a stale empty sentinel).
     expect(() =>

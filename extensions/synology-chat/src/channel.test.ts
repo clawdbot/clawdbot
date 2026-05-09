@@ -381,8 +381,8 @@ describe("createSynologyChatPlugin", () => {
       const plugin = createSynologyChatPlugin();
       const params = { cfg: {}, runtime: {} as never };
       expect(await plugin.directory.self?.(params)).toBeNull();
-      expect(await plugin.directory.listPeers?.(params)).toEqual([]);
-      expect(await plugin.directory.listGroups?.(params)).toEqual([]);
+      expect(await plugin.directory.listPeers?.(params)).toStrictEqual([]);
+      expect(await plugin.directory.listGroups?.(params)).toStrictEqual([]);
     });
   });
 

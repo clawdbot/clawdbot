@@ -139,7 +139,7 @@ describe("collectStatusScanOverview", () => {
         sourceConfig: { session: {} },
       }),
     );
-    expect(result.channelIssues).toEqual([]);
+    expect(result.channelIssues).toStrictEqual([]);
   });
 
   it("skips channels.status when the gateway is unreachable", async () => {
@@ -177,6 +177,6 @@ describe("collectStatusScanOverview", () => {
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(result.channelsStatus).toBeNull();
-    expect(result.channelIssues).toEqual([]);
+    expect(result.channelIssues).toStrictEqual([]);
   });
 });

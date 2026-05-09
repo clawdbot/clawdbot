@@ -177,6 +177,18 @@ describe("nextcloud-talk send cfg threading", () => {
     });
   });
 
+  it("explains that 401 sends can mean the response feature is missing", async () => {
+    const cfg = { source: "provided" } as const;
+    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 401 }));
+
+    await expect(
+      sendMessageNextcloudTalk("room:abc123", "hello", {
+        cfg,
+        accountId: "work",
+      }),
+    ).rejects.toThrow("--feature response");
+  });
+
   it("declares message adapter durable text, media, and reply with receipt proofs", async () => {
     const cfg = { source: "provided" } as const;
     mockNextcloudMessageResponse(22345, 1_706_000_003);

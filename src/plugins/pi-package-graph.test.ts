@@ -48,7 +48,7 @@ function collectMissingSpecNames(specs: Array<{ name: string; spec?: string }>):
 }
 
 function expectNoGraphViolations(violations: string[], message: string) {
-  expect(violations, message).toEqual([]);
+  expect(violations, message).toStrictEqual([]);
 }
 
 describe("pi package graph guardrails", () => {

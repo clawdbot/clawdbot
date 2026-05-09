@@ -67,7 +67,7 @@ describe("scripts/run-vitest", () => {
         },
         "darwin",
       ).env,
-    ).toMatchObject({
+    ).toEqual({
       OPENCLAW_LOCAL_CHECK: "1",
       PATH: "/usr/bin",
     });
@@ -83,7 +83,7 @@ describe("scripts/run-vitest", () => {
         },
         "linux",
       ).env,
-    ).toMatchObject({
+    ).toEqual({
       CI: "true",
       OPENCLAW_LOCAL_CHECK: "0",
       PATH: "/usr/bin",
@@ -99,8 +99,9 @@ describe("scripts/run-vitest", () => {
         },
         "darwin",
       ).env,
-    ).toMatchObject({
+    ).toEqual({
       OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+      PATH: "/usr/bin",
       RAYON_NUM_THREADS: "1",
       TOKIO_WORKER_THREADS: "1",
     });
@@ -117,8 +118,9 @@ describe("scripts/run-vitest", () => {
         },
         "darwin",
       ).env,
-    ).toMatchObject({
+    ).toEqual({
       OPENCLAW_VITEST_MAX_WORKERS: "2",
+      PATH: "/usr/bin",
       RAYON_NUM_THREADS: "8",
       TOKIO_WORKER_THREADS: "6",
     });

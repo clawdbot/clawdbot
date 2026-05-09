@@ -49,7 +49,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       sandboxed: false,
       hits,
     });
-    expect(filtered).toEqual([]);
+    expect(filtered).toStrictEqual([]);
   });
 
   it("keeps non-session hits unchanged", async () => {
@@ -148,7 +148,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       sandboxed: false,
       hits: [hit],
     });
-    expect(filtered).toEqual([]);
+    expect(filtered).toStrictEqual([]);
   });
 
   it("keeps same-agent deleted archive hits using owner metadata when the live store entry is gone", async () => {
@@ -201,6 +201,6 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       hits: [hit],
     });
 
-    expect(filtered).toEqual([]);
+    expect(filtered).toStrictEqual([]);
   });
 });

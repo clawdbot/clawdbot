@@ -782,7 +782,7 @@ describe("block reply coalescer", () => {
 
     coalescer.enqueue({ text: "short" });
     await vi.advanceTimersByTimeAsync(50);
-    expect(flushes).toEqual([]);
+    expect(flushes).toStrictEqual([]);
 
     coalescer.enqueue({ text: "message" });
     await vi.advanceTimersByTimeAsync(50);

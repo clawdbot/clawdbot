@@ -21,7 +21,7 @@ describe("live cache regression runner", () => {
       warnings,
     });
 
-    expect(regressions).toEqual([]);
+    expect(regressions).toStrictEqual([]);
     expect(warnings).toEqual([
       "openai:image cacheRead=0 < min=3840",
       "openai:image hitRate=0.000 < min=0.820",
@@ -47,7 +47,7 @@ describe("live cache regression runner", () => {
       warnings,
     });
 
-    expect(regressions).toEqual([]);
+    expect(regressions).toStrictEqual([]);
     expect(warnings).toEqual([
       "openai:stable cacheRead=0 < min=4608",
       "openai:stable hitRate=0.000 < min=0.900",

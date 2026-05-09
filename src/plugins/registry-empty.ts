@@ -9,6 +9,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     channels: [],
     channelSetups: [],
     providers: [],
+    modelCatalogProviders: [],
     cliBackends: [],
     textTransforms: [],
     speechProviders: [],

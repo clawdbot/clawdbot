@@ -4,7 +4,13 @@ import { describe, expect, it } from "vitest";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`Expected missing path: ${targetPath}`);
 }
 
 describe("openclaw test instance", () => {
@@ -35,7 +41,7 @@ describe("openclaw test instance", () => {
       expect(inst.env.OPENCLAW_SKIP_CRON).toBe("0");
 
       const config = JSON.parse(await fs.readFile(inst.configPath, "utf8"));
-      expect(config).toMatchObject({
+      expect(config).toStrictEqual({
         gateway: {
           bind: "loopback",
           port: inst.port,

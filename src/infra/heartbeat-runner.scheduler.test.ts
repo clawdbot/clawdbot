@@ -356,7 +356,7 @@ describe("startHeartbeatRunner", () => {
     const scheduledSlotCallsBeforeInterval = callTimes.filter(
       (time) => time >= firstDueMs + intervalMs,
     );
-    expect(scheduledSlotCallsBeforeInterval).toEqual([]);
+    expect(scheduledSlotCallsBeforeInterval).toStrictEqual([]);
 
     // The next interval tick at the next scheduled slot should still fire —
     // the retries must not push the phase out by multiple intervals.
@@ -508,7 +508,7 @@ describe("startHeartbeatRunner", () => {
       },
     });
     const financeCalls = runSpy.mock.calls.filter((call) => call[0]?.agentId === "finance");
-    expect(financeCalls).toEqual([]);
+    expect(financeCalls).toStrictEqual([]);
 
     runner.stop();
   });

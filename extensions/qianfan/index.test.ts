@@ -12,7 +12,7 @@ import {
   QIANFAN_DEFAULT_MODEL_REF,
 } from "./onboard.js";
 
-function expectRecord<T>(value: T | undefined, label: string): T {
+function expectRecord<T>(value: T | null | undefined, label: string): NonNullable<T> {
   if (!value) {
     throw new Error(`Expected ${label}`);
   }
@@ -32,9 +32,13 @@ describe("qianfan provider plugin", () => {
     expect(provider.docsPath).toBe("/providers/qianfan");
     expect(provider.envVars).toEqual(["QIANFAN_API_KEY"]);
     expect(provider.auth).toHaveLength(1);
-    expect(resolved).toMatchObject({
-      provider: { id: "qianfan" },
-      method: { id: "api-key" },
+    const resolvedChoice = expectRecord(resolved, "Qianfan provider choice");
+    expect({
+      providerId: resolvedChoice.provider.id,
+      methodId: resolvedChoice.method.id,
+    }).toEqual({
+      providerId: "qianfan",
+      methodId: "api-key",
     });
   });
 
@@ -54,24 +58,38 @@ describe("qianfan provider plugin", () => {
         models.find((model) => model.id === "deepseek-v3.2"),
         "deepseek model",
       ),
-    ).toMatchObject({
+    ).toEqual({
       name: "DEEPSEEK V3.2",
+      id: "deepseek-v3.2",
       reasoning: true,
       input: ["text"],
       contextWindow: 98304,
       maxTokens: 32768,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
     });
     expect(
       expectRecord(
         models.find((model) => model.id === "ernie-5.0-thinking-preview"),
         "ernie model",
       ),
-    ).toMatchObject({
+    ).toEqual({
       name: "ERNIE-5.0-Thinking-Preview",
+      id: "ernie-5.0-thinking-preview",
       reasoning: true,
       input: ["text", "image"],
       contextWindow: 119000,
       maxTokens: 64000,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
     });
   });
 
@@ -87,10 +105,8 @@ describe("qianfan provider plugin", () => {
     const modelsConfig = expectRecord(cfg.models, "models config");
     const providers = expectRecord(modelsConfig.providers, "model providers");
     const providerConfig = expectRecord(providers.qianfan, "Qianfan provider config");
-    expect(providerConfig).toMatchObject({
-      api: "openai-completions",
-      baseUrl: "https://qianfan.baidubce.com/v2",
-    });
+    expect(providerConfig.api).toBe("openai-completions");
+    expect(providerConfig.baseUrl).toBe("https://qianfan.baidubce.com/v2");
     const providerModels = expectRecord(providerConfig.models, "Qianfan provider models");
     expect(providerModels.map((model) => model.id)).toEqual([
       "deepseek-v3.2",

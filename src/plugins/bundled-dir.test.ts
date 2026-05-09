@@ -361,7 +361,7 @@ describe("resolveBundledPluginsDir", () => {
     const bundledDir = requireBundledDir(resolveBundledPluginsDir());
 
     expect(fs.existsSync(bundledDir)).toBe(true);
-    expect(fs.readdirSync(bundledDir)).toEqual([]);
+    expect(fs.readdirSync(bundledDir)).toStrictEqual([]);
   });
 
   it("separates tilde override cache entries by OPENCLAW_HOME", () => {

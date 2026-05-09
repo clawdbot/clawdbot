@@ -2391,6 +2391,7 @@ export async function runEmbeddedPiAgent(
           // partial assistant fragment. Emit an explicit timeout error instead.
           if (
             timedOutDuringPrompt &&
+            !hasMessagingToolDeliveryEvidence(attempt) &&
             (!payloadsWithToolMedia?.length || hasPartialAssistantTextAfterPromptTimeout)
           ) {
             const timeoutText = idleTimedOut

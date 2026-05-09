@@ -47,7 +47,7 @@ describe("wrapArgvForChildOomScoreRaise", () => {
   });
 
   it("returns empty argv unchanged", () => {
-    expect(wrapArgvForChildOomScoreRaise([], linux)).toEqual([]);
+    expect(wrapArgvForChildOomScoreRaise([], linux)).toStrictEqual([]);
   });
 
   it("skips wrap for command names that exec could parse as options", () => {

@@ -64,6 +64,7 @@ import type {
   VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
+  UnifiedModelCatalogProviderPlugin,
 } from "./types.js";
 
 export type PluginToolRegistration = {
@@ -132,6 +133,14 @@ export type PluginProviderRegistration = {
   pluginId: string;
   pluginName?: string;
   provider: ProviderPlugin;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginModelCatalogProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: UnifiedModelCatalogProviderPlugin;
   source: string;
   rootDir?: string;
 };
@@ -408,6 +417,7 @@ export type PluginRegistry = {
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
+  modelCatalogProviders: PluginModelCatalogProviderRegistration[];
   cliBackends?: PluginCliBackendRegistration[];
   textTransforms: PluginTextTransformsRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];

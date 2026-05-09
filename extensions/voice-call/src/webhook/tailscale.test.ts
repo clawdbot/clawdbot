@@ -5,6 +5,8 @@ const { spawnMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
 }));
 
+const tailscaleSpawnOptions = { stdio: ["ignore", "pipe", "pipe"] } as const;
+
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
@@ -126,19 +128,19 @@ describe("voice-call tailscale helpers", () => {
       1,
       "tailscale",
       ["status", "--json"],
-      expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] }),
+      tailscaleSpawnOptions,
     );
     expect(spawnMock).toHaveBeenNthCalledWith(
       2,
       "tailscale",
       ["serve", "--bg", "--yes", "--set-path", "/voice", "http://127.0.0.1:8787/webhook"],
-      expect.any(Object),
+      tailscaleSpawnOptions,
     );
     expect(spawnMock).toHaveBeenNthCalledWith(
       3,
       "tailscale",
       ["serve", "off", "/voice"],
-      expect.any(Object),
+      tailscaleSpawnOptions,
     );
   });
 
@@ -202,13 +204,13 @@ describe("voice-call tailscale helpers", () => {
       2,
       "tailscale",
       ["funnel", "--bg", "--yes", "--set-path", "/voice", "http://127.0.0.1:8787/webhook"],
-      expect.any(Object),
+      tailscaleSpawnOptions,
     );
     expect(spawnMock).toHaveBeenNthCalledWith(
       3,
       "tailscale",
       ["serve", "off", "/voice"],
-      expect.any(Object),
+      tailscaleSpawnOptions,
     );
   });
 });

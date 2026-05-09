@@ -138,7 +138,7 @@ describe("createPluginModuleLoader", () => {
       },
     });
 
-    expect(sourceLoaderCalls).toEqual([]);
+    expect(sourceLoaderCalls).toStrictEqual([]);
   });
 
   it("loads packaged JavaScript without creating a module loader", async () => {
@@ -171,6 +171,6 @@ describe("createPluginModuleLoader", () => {
     });
 
     expect(registry.plugins.find((plugin) => plugin.id === "npm-demo")?.status).toBe("loaded");
-    expect(sourceLoaderCalls).toEqual([]);
+    expect(sourceLoaderCalls).toStrictEqual([]);
   });
 });

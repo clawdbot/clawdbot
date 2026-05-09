@@ -100,7 +100,7 @@ describe("sendWebhookMessageDiscord activity", () => {
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      expect.any(String),
+      "https://discord.com/api/v10/webhooks/wh-1/tok-1?wait=true&thread_id=thread-1",
       expect.objectContaining({
         body: expect.stringContaining('"content":"hello <@123456789012345678>"'),
       }),

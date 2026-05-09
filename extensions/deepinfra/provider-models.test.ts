@@ -66,7 +66,7 @@ describe("discoverDeepInfraModels", () => {
 
     expect(DEEPINFRA_DEFAULT_MODEL_REF).toBe("deepinfra/deepseek-ai/DeepSeek-V3.2");
     expect(modelIds).toContain("deepseek-ai/DeepSeek-V3.2");
-    expect(streamingUsageIncompatibleModelIds).toEqual([]);
+    expect(streamingUsageIncompatibleModelIds).toStrictEqual([]);
   });
 
   it("fetches DeepInfra's curated LLM catalog and parses model metadata", async () => {
@@ -77,14 +77,17 @@ describe("discoverDeepInfraModels", () => {
 
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverDeepInfraModels();
-      expect(mockFetch).toHaveBeenCalledWith(
-        DEEPINFRA_MODELS_URL,
-        expect.objectContaining({
-          headers: { Accept: "application/json" },
-        }),
-      );
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [fetchUrl, fetchInit] = mockFetch.mock.calls[0] ?? [];
+      const fetchSignal = Reflect.get(fetchInit ?? {}, "signal");
+      expect(fetchUrl).toBe(DEEPINFRA_MODELS_URL);
+      expect(fetchSignal).toBeInstanceOf(AbortSignal);
+      expect(fetchInit).toEqual({
+        headers: { Accept: "application/json" },
+        signal: fetchSignal,
+      });
       expect(models).toEqual([
-        expect.objectContaining({
+        {
           id: "openai/gpt-oss-120b",
           name: "openai/gpt-oss-120b",
           reasoning: true,
@@ -92,8 +95,8 @@ describe("discoverDeepInfraModels", () => {
           contextWindow: 131072,
           maxTokens: 65536,
           cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
-          compat: expect.objectContaining({ supportsUsageInStreaming: true }),
-        }),
+          compat: { supportsUsageInStreaming: true },
+        },
       ]);
     });
   });
@@ -133,13 +136,15 @@ describe("discoverDeepInfraModels", () => {
 
     await withFetchPathTest(mockFetch, async () => {
       const [model] = await discoverDeepInfraModels();
-      expect(model).toMatchObject({
+      expect(model).toEqual({
         id: "some/model",
+        name: "some/model",
         reasoning: false,
         input: ["text"],
         contextWindow: 128000,
         maxTokens: 8192,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        compat: { supportsUsageInStreaming: true },
       });
     });
   });

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   gracefulStopSlackApp,
   publishSlackConnectedStatus,
@@ -36,8 +36,13 @@ class FakeEmitter {
 }
 
 describe("slack socket reconnect helpers", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("marks socket mode healthy without seeding event liveness on connect", () => {
     const setStatus = vi.fn();
+    vi.spyOn(Date, "now").mockReturnValue(1_711_406_400_000);
 
     publishSlackConnectedStatus(setStatus);
 
@@ -45,19 +50,20 @@ describe("slack socket reconnect helpers", () => {
     expect(setStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         connected: true,
-        lastConnectedAt: expect.any(Number),
+        lastConnectedAt: 1_711_406_400_000,
         healthState: "healthy",
         lastError: null,
       }),
     );
     expect(setStatus).not.toHaveBeenCalledWith(
-      expect.objectContaining({ lastEventAt: expect.any(Number) }),
+      expect.objectContaining({ lastEventAt: 1_711_406_400_000 }),
     );
   });
 
   it("marks socket mode disconnected when an error closes the socket", () => {
     const setStatus = vi.fn();
     const err = new Error("dns down");
+    vi.spyOn(Date, "now").mockReturnValue(1_711_406_401_000);
 
     publishSlackDisconnectedStatus(setStatus, err);
 
@@ -66,7 +72,7 @@ describe("slack socket reconnect helpers", () => {
       connected: false,
       healthState: "disconnected",
       lastDisconnect: {
-        at: expect.any(Number),
+        at: 1_711_406_401_000,
         error: "dns down",
       },
       lastError: "dns down",
@@ -75,6 +81,7 @@ describe("slack socket reconnect helpers", () => {
 
   it("marks socket mode disconnected without error when the socket closes cleanly", () => {
     const setStatus = vi.fn();
+    vi.spyOn(Date, "now").mockReturnValue(1_711_406_402_000);
 
     publishSlackDisconnectedStatus(setStatus);
 
@@ -83,7 +90,7 @@ describe("slack socket reconnect helpers", () => {
       connected: false,
       healthState: "disconnected",
       lastDisconnect: {
-        at: expect.any(Number),
+        at: 1_711_406_402_000,
       },
       lastError: null,
     });

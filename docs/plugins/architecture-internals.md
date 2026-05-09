@@ -764,10 +764,21 @@ built-in implicit providers:
 Later providers win on key collision, so plugins can intentionally override a
 built-in provider entry with the same provider id.
 
+Plugins can also publish read-only model rows through
+`api.registerModelCatalogProvider({ provider, kinds, staticCatalog, liveCatalog
+})`. This is the forward path for list/help/picker surfaces and supports
+`text`, `image_generation`, `video_generation`, and `music_generation` rows.
+Provider plugins still own live endpoint calls, token exchange, and vendor
+response mapping; core owns the common row shape, source labels, and media tool
+help formatting. Media-generation provider registrations synthesize static
+catalog rows automatically from `defaultModel`, `models`, and `capabilities`.
+
 Compatibility:
 
-- `discovery` still works as a legacy alias
+- `discovery` still works as a legacy alias, but emits a deprecation warning
 - if both `catalog` and `discovery` are registered, OpenClaw uses `catalog`
+- `augmentModelCatalog` is deprecated; bundled providers should publish
+  supplemental rows through `registerModelCatalogProvider`
 
 ## Read-only channel inspection
 

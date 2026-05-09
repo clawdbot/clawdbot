@@ -5,7 +5,6 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { formatGoogleOauthApiKey, parseGoogleUsageToken } from "./oauth-token-shared.js";
 import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
@@ -20,11 +19,6 @@ const ENV_VARS = [
   "GEMINI_CLI_OAUTH_CLIENT_ID",
   "GEMINI_CLI_OAUTH_CLIENT_SECRET",
 ] as const;
-
-const GOOGLE_GEMINI_CLI_PROVIDER_HOOKS = {
-  ...GOOGLE_GEMINI_PROVIDER_HOOKS,
-  ...buildProviderToolCompatFamilyHooks("gemini"),
-};
 
 async function fetchGeminiCliUsage(ctx: ProviderFetchUsageSnapshotContext) {
   return await fetchGeminiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, PROVIDER_ID);
@@ -125,7 +119,7 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
         providerId: PROVIDER_ID,
         ctx,
       }),
-    ...GOOGLE_GEMINI_CLI_PROVIDER_HOOKS,
+    ...GOOGLE_GEMINI_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
     resolveUsageAuth: async (ctx) => {

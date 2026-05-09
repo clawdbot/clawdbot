@@ -118,13 +118,11 @@ describe("local media roots", () => {
       ],
     );
 
-    expect(roots.map(normalizeHostPath)).toEqual(
-      expect.arrayContaining([
-        normalizeHostPath("/tmp/base"),
-        normalizeHostPath(picturesDir),
-        normalizeHostPath(moviesDir),
-      ]),
-    );
+    expect(roots.map(normalizeHostPath)).toStrictEqual([
+      normalizeHostPath("/tmp/base"),
+      normalizeHostPath(picturesDir),
+      normalizeHostPath(moviesDir),
+    ]);
     expect(roots.map(normalizeHostPath)).not.toContain(normalizeHostPath("/"));
   });
 

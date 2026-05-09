@@ -63,7 +63,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: () => {},
     });
 
-    expect(filtered).toEqual([]);
+    expect(filtered).toStrictEqual([]);
   });
 
   it("drops caller-provided groupId when it disagrees with session-derived group context", () => {
@@ -167,6 +167,6 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: () => {},
     });
 
-    expect(filtered).toEqual([]);
+    expect(filtered).toStrictEqual([]);
   });
 });

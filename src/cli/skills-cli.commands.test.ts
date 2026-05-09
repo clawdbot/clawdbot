@@ -340,7 +340,7 @@ describe("skills cli commands", () => {
     expect(runtimeLogs).toEqual(
       expect.arrayContaining([expect.stringContaining("Updated calendar: 1.2.2 -> 1.2.3")]),
     );
-    expect(runtimeErrors).toEqual([]);
+    expect(runtimeErrors).toStrictEqual([]);
   });
 
   it("updates tracked ClawHub skills in the cwd-inferred agent workspace", async () => {
@@ -436,7 +436,7 @@ describe("skills cli commands", () => {
       defaultRuntime.writeStdout.mock.calls.length + defaultRuntime.writeJson.mock.calls.length,
     ).toBeGreaterThan(0);
     expect(defaultRuntime.log).not.toHaveBeenCalled();
-    expect(runtimeErrors).toEqual([]);
+    expect(runtimeErrors).toStrictEqual([]);
     expect(runtimeStdout.length).toBeGreaterThan(0);
 
     const payload = JSON.parse(runtimeStdout.at(-1) ?? "{}") as Record<string, unknown>;
@@ -504,7 +504,7 @@ describe("skills cli commands", () => {
 
     expect(defaultRuntime.writeStdout).toHaveBeenCalledTimes(1);
     expect(defaultRuntime.log).not.toHaveBeenCalled();
-    expect(runtimeErrors).toEqual([]);
+    expect(runtimeErrors).toStrictEqual([]);
     expect(runtimeStdout.at(-1)).toContain("calendar");
     expect(runtimeStdout.at(-1)).toContain("openclaw skills search");
   });

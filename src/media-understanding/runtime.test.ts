@@ -137,6 +137,9 @@ describe("media-understanding runtime", () => {
   });
 
   it("passes per-request image prompts into media understanding config", async () => {
+    const media = [{ index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" }];
+    const providerRegistry = new Map();
+    const cache = { cleanup: mocks.cleanup };
     const output: MediaUnderstandingOutput = {
       kind: "image.description",
       attachmentIndex: 0,
@@ -144,39 +147,61 @@ describe("media-understanding runtime", () => {
       model: "vision-v1",
       text: "button count ok",
     };
-    mocks.normalizeMediaAttachments.mockReturnValue([
-      { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
-    ]);
+    mocks.buildProviderRegistry.mockReturnValue(providerRegistry);
+    mocks.createMediaAttachmentCache.mockReturnValue(cache);
+    mocks.normalizeMediaAttachments.mockReturnValue(media);
     mocks.runCapability.mockResolvedValue({
       outputs: [output],
     });
 
+    const cfg = {
+      tools: {
+        media: {
+          image: {
+            prompt: "default image prompt",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
     await describeImageFile({
       filePath: "/tmp/sample.jpg",
       mime: "image/jpeg",
-      cfg: {
-        tools: {
-          media: {
-            image: {
-              prompt: "default image prompt",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg,
       agentDir: "/tmp/agent",
       prompt: "Count visible buttons",
       timeoutMs: 90_000,
     });
 
-    expect(mocks.runCapability).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          prompt: "Count visible buttons",
-          _requestPromptOverride: "Count visible buttons",
-          timeoutSeconds: 90,
-        }),
-      }),
-    );
+    expect(mocks.runCapability).toHaveBeenCalledOnce();
+    expect(mocks.runCapability.mock.calls[0]?.[0]).toEqual({
+      capability: "image",
+      cfg: {
+        tools: {
+          media: {
+            image: {
+              prompt: "Count visible buttons",
+              _requestPromptOverride: "Count visible buttons",
+              timeoutSeconds: 90,
+            },
+          },
+        },
+      },
+      ctx: {
+        MediaPath: "/tmp/sample.jpg",
+        MediaType: "image/jpeg",
+      },
+      attachments: cache,
+      media,
+      agentDir: "/tmp/agent",
+      providerRegistry,
+      config: {
+        prompt: "Count visible buttons",
+        _requestPromptOverride: "Count visible buttons",
+        timeoutSeconds: 90,
+      },
+      activeModel: undefined,
+    });
   });
 
   it("surfaces the underlying provider failure when media understanding fails", async () => {

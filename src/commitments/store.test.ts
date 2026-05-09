@@ -70,7 +70,7 @@ describe("commitment store delivery selection", () => {
         sessionKey,
         nowMs,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   });
 
   it("limits delivered commitments per agent session in a rolling day", async () => {
@@ -90,7 +90,7 @@ describe("commitment store delivery selection", () => {
         sessionKey,
         nowMs,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     const store = await loadCommitmentStore();
     expect(store.commitments).toHaveLength(2);
@@ -118,7 +118,7 @@ describe("commitment store delivery selection", () => {
         sessionKey,
         nowMs,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     const store = await loadCommitmentStore();
     expect(store.commitments[0]).toMatchObject({

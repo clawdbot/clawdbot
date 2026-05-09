@@ -407,7 +407,7 @@ describe("doctor state integrity oauth dir checks", () => {
     const archivedOrphanTranscripts = files.filter((name) =>
       name.startsWith("orphan-session.jsonl.deleted."),
     );
-    expect(archivedOrphanTranscripts).toEqual([]);
+    expect(archivedOrphanTranscripts).toStrictEqual([]);
   });
 
   it.skipIf(process.platform === "win32")(

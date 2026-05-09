@@ -29,6 +29,13 @@ const GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-flash"] as const;
 // until a dedicated Gemma template is registered in the catalog.
 const GEMMA_TEMPLATE_IDS = GEMINI_3_1_FLASH_TEMPLATE_IDS;
 
+function normalizeGeminiProRequestId(id: string): string {
+  if (id === "gemini-3-pro" || id === "gemini-3-pro-preview" || id === "gemini-3.1-pro") {
+    return "gemini-3.1-pro-preview";
+  }
+  return id;
+}
+
 type GoogleForwardCompatFamily = {
   googleTemplateIds: readonly string[];
   cliTemplateIds: readonly string[];
@@ -120,7 +127,7 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
   templateProviderId?: string;
   ctx: ProviderResolveDynamicModelContext;
 }): ProviderRuntimeModel | undefined {
-  const trimmed = params.ctx.modelId.trim();
+  const trimmed = normalizeGeminiProRequestId(params.ctx.modelId.trim());
   const lower = normalizeOptionalLowercaseString(trimmed) ?? "";
 
   let family: GoogleForwardCompatFamily;

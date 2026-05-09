@@ -43,9 +43,9 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   expect(reset.payload?.key).toBe("agent:main:main");
   expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
   expectActiveRunCleanup("agent:main:main", ["main", "agent:main:main", "sess-main"], "sess-main");
-  expect(peekSystemEvents("main")).toEqual([]);
-  expect(peekSystemEvents("agent:main:main")).toEqual([]);
-  expect(peekSystemEvents("sess-main")).toEqual([]);
+  expect(peekSystemEvents("main")).toStrictEqual([]);
+  expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
+  expect(peekSystemEvents("sess-main")).toStrictEqual([]);
   expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).toHaveBeenCalledWith("sess-main");
   expect(waitCallCountAtSnapshotClear).toEqual([1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(1);

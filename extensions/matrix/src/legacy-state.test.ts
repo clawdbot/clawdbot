@@ -35,7 +35,7 @@ describe("matrix legacy state migration", () => {
 
       const result = await autoMigrateLegacyMatrixState({ cfg, env: process.env });
       expect(result.migrated).toBe(true);
-      expect(result.warnings).toEqual([]);
+      expect(result.warnings).toStrictEqual([]);
       expect(fs.existsSync(path.join(stateDir, "matrix", "bot-storage.json"))).toBe(false);
       expect(fs.existsSync(path.join(stateDir, "matrix", "crypto"))).toBe(false);
       expect(fs.existsSync(detection.targetStoragePath)).toBe(true);

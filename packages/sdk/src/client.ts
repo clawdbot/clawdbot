@@ -20,6 +20,10 @@ import type {
   SessionCreateParams,
   SessionSendParams,
   SessionTarget,
+  TasksCancelResult,
+  TasksGetResult,
+  TasksListParams,
+  TasksListResult,
   ToolInvokeParams,
   ToolInvokeResult,
 } from "./types.js";
@@ -725,19 +729,19 @@ export class TasksNamespace extends RpcNamespace {
     super(client, "tasks");
   }
 
-  async list(params?: unknown): Promise<unknown> {
-    void params;
-    return unsupportedGatewayApi("oc.tasks.list");
+  async list(params?: TasksListParams): Promise<TasksListResult> {
+    return await this.call("list", params);
   }
 
-  async get(taskId: string): Promise<unknown> {
-    void taskId;
-    return unsupportedGatewayApi("oc.tasks.get");
+  async get(taskId: string): Promise<TasksGetResult> {
+    return await this.call("get", { taskId });
   }
 
-  async cancel(taskId: string): Promise<unknown> {
-    void taskId;
-    return unsupportedGatewayApi("oc.tasks.cancel");
+  async cancel(taskId: string, options?: { reason?: string }): Promise<TasksCancelResult> {
+    return await this.call("cancel", {
+      taskId,
+      ...(options?.reason ? { reason: options.reason } : {}),
+    });
   }
 }
 

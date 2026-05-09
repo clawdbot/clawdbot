@@ -112,6 +112,28 @@ describe("realtime voice bridge session runtime", () => {
     expect(expectBridgeRequest(request).autoRespondToAudio).toBe(false);
   });
 
+  it("passes the audio interrupt preference to the provider bridge", () => {
+    let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (nextRequest) => {
+        request = nextRequest;
+        return makeBridge();
+      },
+    };
+
+    createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      interruptResponseOnInputAudio: false,
+      audioSink: { sendAudio: vi.fn() },
+    });
+
+    expect(expectBridgeRequest(request).interruptResponseOnInputAudio).toBe(false);
+  });
+
   it("can acknowledge provider marks without transport mark support", () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const bridge = makeBridge();

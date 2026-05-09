@@ -26,6 +26,6 @@ describe("session manager cache", () => {
     cache.trackSessionManagerAccess("/tmp/session.jsonl");
 
     expect(cache.isSessionManagerCached("/tmp/session.jsonl")).toBe(false);
-    expect(cache.keys()).toEqual([]);
+    expect(cache.keys()).toStrictEqual([]);
   });
 });

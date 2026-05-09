@@ -126,7 +126,7 @@ describe("cron run log", () => {
           durationMs: 100,
         }),
       ]);
-      expect(readCronRunLogEntriesSync(path.join(dir, "runs", "missing.jsonl"))).toEqual([]);
+      expect(readCronRunLogEntriesSync(path.join(dir, "runs", "missing.jsonl"))).toStrictEqual([]);
     });
   });
 
@@ -223,7 +223,7 @@ describe("cron run log", () => {
         limit: 10,
         jobId: "b",
       });
-      expect(wrongFilter).toEqual([]);
+      expect(wrongFilter).toStrictEqual([]);
     });
   });
 
@@ -310,7 +310,7 @@ describe("cron run log", () => {
             query: "-100",
           })
         ).entries,
-      ).toEqual([]);
+      ).toStrictEqual([]);
     });
   });
 

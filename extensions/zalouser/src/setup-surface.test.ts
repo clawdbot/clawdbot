@@ -142,7 +142,7 @@ describe("zalouser setup wizard", () => {
     });
 
     expectEnabledDefaultSetup(result, "allowlist");
-    expect(result.cfg.channels?.zalouser?.allowFrom).toEqual([]);
+    expect(result.cfg.channels?.zalouser?.allowFrom).toStrictEqual([]);
     expect(
       note.mock.calls.some(([message]) => message.includes("No DM allowlist entries added yet.")),
     ).toBe(true);
@@ -214,7 +214,7 @@ describe("zalouser setup wizard", () => {
     const result = await runSetup({ prompter, forceAllowFrom: true });
 
     expect(result.cfg.channels?.zalouser?.dmPolicy).toBe("allowlist");
-    expect(result.cfg.channels?.zalouser?.allowFrom).toEqual([]);
+    expect(result.cfg.channels?.zalouser?.allowFrom).toStrictEqual([]);
     expect(seen).not.toContain("Zalo Personal DM policy");
     expect(seen).toContain("Zalouser allowFrom (name or user id)");
     expect(

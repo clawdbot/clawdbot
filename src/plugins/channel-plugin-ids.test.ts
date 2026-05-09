@@ -1169,7 +1169,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           DEMO_CHANNEL_ANYTHING: "1",
         } as NodeJS.ProcessEnv,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps explicitly trusted deferred channel owners eligible at startup", () => {
@@ -1264,7 +1264,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           OPENCLAW_STATE_DIR: "/tmp/openclaw-with-persisted-demo-channel",
         } as NodeJS.ProcessEnv,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("loads channel, deferred, and startup plugin ids from one manifest registry", () => {
@@ -1287,7 +1287,7 @@ describe("resolveGatewayStartupPluginIds", () => {
 
     expect(plan.channelPluginIds).toContain("demo-channel");
     expect(plan.pluginIds).toContain("demo-channel");
-    expect(plan.configuredDeferredChannelPluginIds).toEqual([]);
+    expect(plan.configuredDeferredChannelPluginIds).toStrictEqual([]);
     expect(loadPluginRegistrySnapshot).toHaveBeenCalledOnce();
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
   });
@@ -1311,7 +1311,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         workspaceDir: "/tmp",
         env: {},
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("includes the explicitly selected memory slot plugin in startup scope", () => {
@@ -1425,9 +1425,24 @@ describe("resolveGatewayStartupPluginIds", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
         modelId: "openai/gpt-5.5",
-        enabledPluginIds: ["codex"],
       }),
       expected: ["demo-channel", "browser", "codex", "memory-core"],
+    });
+  });
+
+  it("does not include Codex when an OpenAI model is manually pinned to PI", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "pi" } },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["demo-channel", "browser", "memory-core"],
     });
   });
 
@@ -1604,7 +1619,7 @@ describe("resolveConfiguredChannelPluginIds", () => {
         workspaceDir: "/tmp",
         env: process.env,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps explicitly configured bundled channel owners under restrictive allowlists", () => {
@@ -1640,7 +1655,7 @@ describe("resolveConfiguredChannelPluginIds", () => {
         workspaceDir: "/tmp",
         env: process.env,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("blocks bundled activation owners when plugins are globally disabled", () => {
@@ -1657,7 +1672,7 @@ describe("resolveConfiguredChannelPluginIds", () => {
         workspaceDir: "/tmp",
         env: process.env,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("filters untrusted workspace activation owners from configured-channel runtime planning", () => {
@@ -1669,7 +1684,7 @@ describe("resolveConfiguredChannelPluginIds", () => {
         workspaceDir: "/tmp",
         env: process.env,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("filters untrusted global activation owners from configured-channel runtime planning", () => {
@@ -1681,7 +1696,7 @@ describe("resolveConfiguredChannelPluginIds", () => {
         workspaceDir: "/tmp",
         env: process.env,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps explicitly enabled global activation owners eligible for configured-channel runtime planning", () => {
@@ -1710,7 +1725,7 @@ describe("resolveConfiguredChannelPluginIds", () => {
         workspaceDir: "/tmp",
         env: process.env,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("includes trusted external channel owners configured only by manifest env vars", () => {
@@ -1747,7 +1762,7 @@ describe("resolveConfiguredChannelPluginIds", () => {
         workspaceDir: "/tmp",
         env: process.env,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 
@@ -1779,7 +1794,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       hasConfiguredChannelsForReadOnlyScope({
@@ -1903,7 +1918,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
       },
     } as OpenClawConfig;
 
-    expect(listExplicitConfiguredChannelIdsForConfig(config)).toEqual([]);
+    expect(listExplicitConfiguredChannelIdsForConfig(config)).toStrictEqual([]);
     expect(
       resolveConfiguredChannelPresencePolicy({
         config,
@@ -1911,7 +1926,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         env: {},
         includePersistedAuthState: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       listConfiguredChannelIdsForReadOnlyScope({
         config,
@@ -1919,7 +1934,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         env: {},
         includePersistedAuthState: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("treats disabled channel config as a hard read-only env suppressor", () => {
@@ -1953,7 +1968,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       listConfiguredChannelIdsForReadOnlyScope({
         config,
@@ -1963,7 +1978,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("treats disabled channel config as a hard persisted-auth suppressor", () => {
@@ -1991,7 +2006,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         workspaceDir: "/tmp",
         env: {},
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("treats disabled channel config as a hard manifest-env suppressor", () => {
@@ -2013,7 +2028,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("lets explicit bundled channel config bypass restrictive allowlists", () => {
@@ -2098,7 +2113,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         env: {},
         includePersistedAuthState: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       listConfiguredChannelIdsForReadOnlyScope({
@@ -2116,7 +2131,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         env: {},
         includePersistedAuthState: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("lists explicit configured channels without ambient env triggers", () => {
@@ -2165,7 +2180,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
           DEMO_CHANNEL_TOKEN: "ambient",
         } as NodeJS.ProcessEnv,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("uses effective read-only channel policy for announce channels", () => {
@@ -2256,7 +2271,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       hasConfiguredChannelsForReadOnlyScope({
@@ -2286,7 +2301,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("accepts lowercase or mixed-case manifest env vars as read-only configured channel triggers", () => {

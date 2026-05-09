@@ -152,7 +152,7 @@ describe("matrix exec approvals", () => {
   it("ignores wildcard allowlist entries when inferring exec approvers", () => {
     const cfg = buildConfig({ enabled: true }, { dm: { allowFrom: ["*"] } });
 
-    expect(getMatrixExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(getMatrixExecApprovalApprovers({ cfg })).toStrictEqual([]);
     expect(isMatrixExecApprovalClientEnabled({ cfg })).toBe(false);
   });
 

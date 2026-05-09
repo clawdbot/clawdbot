@@ -41,9 +41,16 @@ async function captureProviderEntry(params: {
 }) {
   const captured = capturePluginRegistration(params.entry);
   const provider = captured.providers[0];
+  const modelCatalogProvider = captured.modelCatalogProviders[0];
   const catalog = await provider?.catalog?.run(createCatalogContext(params.config));
   const staticCatalog = await provider?.staticCatalog?.run(createCatalogContext(params.config));
-  return { captured, provider, catalog, staticCatalog };
+  const unifiedCatalog = await modelCatalogProvider?.liveCatalog?.(
+    createCatalogContext(params.config),
+  );
+  const unifiedStaticCatalog = await modelCatalogProvider?.staticCatalog?.(
+    createCatalogContext(params.config),
+  );
+  return { captured, provider, catalog, staticCatalog, unifiedCatalog, unifiedStaticCatalog };
 }
 
 describe("defineSingleProviderPluginEntry", () => {
@@ -82,8 +89,10 @@ describe("defineSingleProviderPluginEntry", () => {
       },
     });
 
-    const { captured, provider, catalog, staticCatalog } = await captureProviderEntry({ entry });
+    const { captured, provider, catalog, staticCatalog, unifiedCatalog, unifiedStaticCatalog } =
+      await captureProviderEntry({ entry });
     expect(captured.providers).toHaveLength(1);
+    expect(captured.modelCatalogProviders).toHaveLength(1);
     expect(provider).toMatchObject({
       id: "demo",
       label: "Demo",
@@ -120,6 +129,24 @@ describe("defineSingleProviderPluginEntry", () => {
         models: [createModel("default", "Default")],
       },
     });
+    expect(unifiedCatalog).toEqual([
+      {
+        kind: "text",
+        provider: "demo",
+        model: "default",
+        label: "Default",
+        source: "live",
+      },
+    ]);
+    expect(unifiedStaticCatalog).toEqual([
+      {
+        kind: "text",
+        provider: "demo",
+        model: "default",
+        label: "Default",
+        source: "static",
+      },
+    ]);
   });
 
   it("supports provider overrides, explicit env vars, and extra registration", async () => {
@@ -194,6 +221,7 @@ describe("defineSingleProviderPluginEntry", () => {
       },
     });
     expect(captured.providers).toHaveLength(1);
+    expect(captured.modelCatalogProviders).toHaveLength(1);
     expect(captured.webSearchProviders).toHaveLength(1);
 
     expect(provider).toMatchObject({

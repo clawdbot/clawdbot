@@ -731,7 +731,7 @@ describe("convertToOllamaMessages", () => {
 
   it("handles empty messages array", () => {
     const result = convertToOllamaMessages([]);
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 });
 
@@ -1285,9 +1285,9 @@ describe("createOllamaStreamFn streaming events", () => {
 
         // start/text_start carry empty partials (before any content accumulates)
         const startEvent = events.find((e) => e.type === "start");
-        expect(startEvent?.partial.content).toEqual([]);
+        expect(startEvent?.partial.content).toStrictEqual([]);
         const textStartEvent = events.find((e) => e.type === "text_start");
-        expect(textStartEvent?.partial.content).toEqual([]);
+        expect(textStartEvent?.partial.content).toStrictEqual([]);
 
         // text_delta partials accumulate content progressively
         expect(deltas[0].partial.content).toEqual([{ type: "text", text: "Hello" }]);

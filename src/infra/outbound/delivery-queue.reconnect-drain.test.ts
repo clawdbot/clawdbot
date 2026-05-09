@@ -376,7 +376,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(
       fs.readdirSync(path.join(tmpDir, "delivery-queue")).filter((f) => f.endsWith(".json")),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("drains backoff-eligible retries on reconnect", async () => {

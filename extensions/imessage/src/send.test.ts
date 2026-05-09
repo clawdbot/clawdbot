@@ -89,6 +89,6 @@ describe("sendMessageIMessage receipts", () => {
     });
 
     expect(result.messageId).toBe("ok");
-    expect(result.receipt.platformMessageIds).toEqual([]);
+    expect(result.receipt.platformMessageIds).toStrictEqual([]);
   });
 });

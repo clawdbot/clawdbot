@@ -403,10 +403,10 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.addLabels).toEqual([]);
-    expect(calls.createComment).toEqual([]);
-    expect(calls.removeLabel).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.addLabels).toStrictEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.removeLabel).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("leaves stale Barnacle labels alone on maintainer-authored PRs", async () => {
@@ -433,10 +433,10 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.addLabels).toEqual([]);
-    expect(calls.createComment).toEqual([]);
-    expect(calls.removeLabel).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.addLabels).toStrictEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.removeLabel).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("does not mutate maintainer-authored issues", async () => {
@@ -456,9 +456,9 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.addLabels).toEqual([]);
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.addLabels).toStrictEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("does not action close labels on maintainer-authored issues", async () => {
@@ -485,8 +485,8 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("closes issues tagged as false positives", async () => {
@@ -541,8 +541,8 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("does not close automation PRs for the active PR limit", async () => {
@@ -606,8 +606,8 @@ describe("barnacle-auto-response", () => {
     });
 
     expect(calls.removeLabel).toContainEqual(expect.objectContaining({ name: "r: too-many-prs" }));
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("does not close GitHub App-authored PRs when stale PR-limit label removal returns 404", async () => {
@@ -632,8 +632,8 @@ describe("barnacle-auto-response", () => {
     });
 
     expect(calls.removeLabel).toContainEqual(expect.objectContaining({ name: "r: too-many-prs" }));
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("still adds candidate labels to broad contributor PRs", async () => {
@@ -657,8 +657,8 @@ describe("barnacle-auto-response", () => {
         labels: expect.arrayContaining([candidateLabels.dirtyCandidate]),
       }),
     );
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("adds proof labels to external PRs without auto-closing by default", async () => {
@@ -677,8 +677,8 @@ describe("barnacle-auto-response", () => {
         labels: expect.arrayContaining([candidateLabels.needsRealBehaviorProof]),
       }),
     );
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("removes stale proof labels when override is present", async () => {
@@ -706,7 +706,7 @@ describe("barnacle-auto-response", () => {
         PROOF_SUFFICIENT_LABEL,
       ]),
     );
-    expect(calls.update).toEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("removes stale negative proof labels and adds supplied when proof is present", async () => {
@@ -856,8 +856,8 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("actions existing candidate labels when a maintainer adds trigger-response", async () => {

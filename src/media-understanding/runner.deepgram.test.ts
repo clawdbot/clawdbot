@@ -123,7 +123,7 @@ describe("runCapability deepgram provider options", () => {
       }
       expect(output.text).toBe("ok");
       expect(seenBaseUrl).toBe("https://entry.example");
-      expect(seenHeaders).toMatchObject({
+      expect(seenHeaders).toStrictEqual({
         "X-Provider": "1",
         "X-Provider-Managed": "secretref-managed",
         "X-Config": "2",
@@ -131,7 +131,7 @@ describe("runCapability deepgram provider options", () => {
         "X-Entry": "3",
         "X-Entry-Managed": "secretref-managed",
       });
-      expect(seenQuery).toMatchObject({
+      expect(seenQuery).toStrictEqual({
         detect_language: false,
         punctuate: false,
         smart_format: true,

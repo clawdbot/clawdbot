@@ -44,7 +44,10 @@ describe("createApprovalNativeRouteReporter", () => {
         },
       });
 
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 5 * 60_000);
+      expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
+      const [cleanupCallback, cleanupDelayMs] = setTimeoutSpy.mock.calls[0];
+      expect(cleanupDelayMs).toBe(5 * 60_000);
+      expect(cleanupCallback).toBeTypeOf("function");
     } finally {
       vi.useRealTimers();
     }

@@ -1858,6 +1858,7 @@ export function linkTaskToFlowById(params: { taskId: string; flowId: string }): 
 export async function cancelTaskById(params: {
   cfg: OpenClawConfig;
   taskId: string;
+  reason?: string;
 }): Promise<{ found: boolean; cancelled: boolean; reason?: string; task?: TaskRecord }> {
   ensureTaskRegistryReady();
   const task = tasks.get(params.taskId.trim());
@@ -1894,7 +1895,7 @@ export async function cancelTaskById(params: {
         await getAcpSessionManager().cancelSession({
           cfg: params.cfg,
           sessionKey: childSessionKey,
-          reason: "task-cancel",
+          reason: params.reason?.trim() || "task-cancel",
         });
       } else if (task.runtime === "subagent") {
         const { killSubagentRunAdmin } = await loadTaskRegistryControlRuntime();
@@ -1923,7 +1924,7 @@ export async function cancelTaskById(params: {
       status: "cancelled",
       endedAt: Date.now(),
       lastEventAt: Date.now(),
-      error: "Cancelled by operator.",
+      error: params.reason?.trim() || "Cancelled by operator.",
     });
     if (updated) {
       void maybeDeliverTaskTerminalUpdate(updated.taskId);

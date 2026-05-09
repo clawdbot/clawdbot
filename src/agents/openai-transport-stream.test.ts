@@ -1002,7 +1002,7 @@ describe("openai transport stream", () => {
     expect(params.input?.map((item) => item.role)).toEqual(["user"]);
     expect(
       params.input?.filter((item) => item.role === "system" || item.role === "developer"),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(params.prompt_cache_key).toBe("session-123");
     expect(params.store).toBe(false);
     expect(params).not.toHaveProperty("metadata");
@@ -2262,7 +2262,7 @@ describe("openai transport stream", () => {
       } as never,
     ) as { reasoning_effort?: unknown; tools?: unknown };
 
-    expect(params.tools).toEqual([]);
+    expect(params.tools).toStrictEqual([]);
     expect(params.reasoning_effort).toBe("medium");
   });
 
@@ -3392,7 +3392,7 @@ describe("openai transport stream", () => {
     expect(output.stopReason).toBe("stop");
     expect(
       output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("handles reasoning_details from OpenRouter/Qwen3 in completions stream", async () => {

@@ -21,7 +21,7 @@ describe("applyEmbeddingBatchOutputLine", () => {
     });
 
     expect(remaining.has("req-1")).toBe(false);
-    expect(errors).toEqual([]);
+    expect(errors).toStrictEqual([]);
     expect(byCustomId.get("req-1")).toEqual([0.1, 0.2]);
   });
 

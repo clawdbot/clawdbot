@@ -53,7 +53,7 @@ describe("resolveCronFallbacksOverride", () => {
           model: "google/gemini-2.0-flash",
         }),
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("lets payload fallbacks override the configured fallback policy", () => {
@@ -68,7 +68,7 @@ describe("resolveCronFallbacksOverride", () => {
           fallbacks: [],
         }),
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("leaves the default model path to the fallback runner when no payload model is set", () => {

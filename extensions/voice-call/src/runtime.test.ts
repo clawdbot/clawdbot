@@ -356,10 +356,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
         expect.objectContaining({ name: "custom_tool" }),
       ],
     });
-    expect(mocks.realtimeHandlerRegisterToolHandler).toHaveBeenCalledWith(
-      "openclaw_agent_consult",
-      expect.any(Function),
-    );
+    const registeredToolHandler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0];
+    expect(registeredToolHandler?.[0]).toBe("openclaw_agent_consult");
+    expect(registeredToolHandler?.[1]).toBeTypeOf("function");
 
     const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
       | ((
@@ -528,7 +527,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
         sources: ["memory"],
         timeoutMs: 800,
       },
-      logger: expect.any(Object),
+      logger: {
+        info: console.log,
+        warn: console.warn,
+        error: console.error,
+        debug: console.debug,
+      },
       sessionKey: "voice:15550001234",
     });
     expect(runEmbeddedPiAgent).not.toHaveBeenCalled();

@@ -68,6 +68,6 @@ describe("OpenAI-family schema normalization runtime contract", () => {
         model: createNativeOpenAICodexResponsesModel() as never,
         tools: [tool] as never,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

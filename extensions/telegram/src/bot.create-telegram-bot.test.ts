@@ -1353,7 +1353,7 @@ describe("createTelegramBot", () => {
       await runMiddlewareChain({ update: { update_id: 13_100 } }, async () => {});
       await flushTelegramTestMicrotasks();
       expect(onUpdateId).toHaveBeenCalledWith(13_100);
-      expect(unhandled).toEqual([]);
+      expect(unhandled).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
@@ -3066,7 +3066,7 @@ describe("createTelegramBot", () => {
 
     const payload = requireValue(dispatchCall?.ctx, "topic dispatch context");
     expect(payload.GroupSystemPrompt).toBe("Group prompt\n\nTopic prompt");
-    expect(dispatchCall?.replyOptions?.skillFilter).toEqual([]);
+    expect(dispatchCall?.replyOptions?.skillFilter).toStrictEqual([]);
   });
   it("threads native command replies inside topics", async () => {
     commandSpy.mockClear();

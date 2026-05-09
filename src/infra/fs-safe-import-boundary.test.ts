@@ -46,6 +46,6 @@ describe("fs-safe import boundary", () => {
         return source.includes('"@openclaw/fs-safe') || source.includes("'@openclaw/fs-safe");
       });
 
-    expect(violations).toEqual([]);
+    expect(violations).toStrictEqual([]);
   });
 });

@@ -31,7 +31,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       } as AssistantMessage,
     });
 
-    expect(payloads).toEqual([]);
+    expect(payloads).toStrictEqual([]);
   });
 
   it("falls back to final-answer assistant text when streamed text is unavailable", () => {

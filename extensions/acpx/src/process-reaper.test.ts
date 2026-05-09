@@ -149,7 +149,7 @@ describe("process reaper", () => {
       terminatedPids: [],
       skippedReason: "not-openclaw-owned",
     });
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("skips recorded pid cleanup when process listing is unavailable", async () => {
@@ -174,7 +174,7 @@ describe("process reaper", () => {
       terminatedPids: [],
       skippedReason: "unverified-root",
     });
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("does not kill a reused pid when the live command is not OpenClaw-owned", async () => {
@@ -192,7 +192,7 @@ describe("process reaper", () => {
       terminatedPids: [],
       skippedReason: "not-openclaw-owned",
     });
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("does not kill a reused adapter pid when the stored root was a generated wrapper", async () => {
@@ -216,7 +216,7 @@ describe("process reaper", () => {
       terminatedPids: [],
       skippedReason: "not-openclaw-owned",
     });
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("skips non-owned recorded process trees", async () => {
@@ -230,7 +230,7 @@ describe("process reaper", () => {
     });
 
     expect(result.skippedReason).toBe("not-openclaw-owned");
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("reaps stale OpenClaw-owned wrapper and adapter orphans on startup", async () => {

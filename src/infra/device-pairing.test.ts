@@ -307,7 +307,7 @@ describe("device pairing tokens", () => {
 
     const paired = await getPairedDevice("device-1", baseDir);
     expect(paired && listEffectivePairedDeviceRoles(paired)).toEqual(["node", "operator"]);
-    expect(paired?.tokens?.node?.scopes).toEqual([]);
+    expect(paired?.tokens?.node?.scopes).toStrictEqual([]);
     expect(paired?.tokens?.operator?.scopes).toEqual([
       "operator.read",
       "operator.talk.secrets",
@@ -655,8 +655,8 @@ describe("device pairing tokens", () => {
     expect(paired?.publicKey).toBe("public-key-node-1");
     expect(paired?.role).toBe("node");
     expect(paired?.roles).toEqual(["node"]);
-    expect(paired?.scopes).toEqual([]);
-    expect(paired?.approvedScopes).toEqual([]);
+    expect(paired?.scopes).toStrictEqual([]);
+    expect(paired?.approvedScopes).toStrictEqual([]);
     expect(paired?.tokens?.node).toMatchObject({ token: expect.any(String) });
     expect(paired?.tokens?.operator).toBeUndefined();
   });
@@ -903,8 +903,8 @@ describe("device pairing tokens", () => {
     await setupPairedNodeDevice(baseDir);
 
     const paired = await getPairedDevice("node-1", baseDir);
-    expect(paired?.scopes).toEqual([]);
-    expect(paired?.approvedScopes).toEqual([]);
+    expect(paired?.scopes).toStrictEqual([]);
+    expect(paired?.approvedScopes).toStrictEqual([]);
 
     const seededToken = requireToken(paired?.tokens?.node?.token);
     await expect(
@@ -947,9 +947,9 @@ describe("device pairing tokens", () => {
     await approveDevicePairing(repair.request.requestId, { callerScopes: [] }, baseDir);
 
     const paired = await getPairedDevice("node-1", baseDir);
-    expect(paired?.scopes).toEqual([]);
-    expect(paired?.approvedScopes).toEqual([]);
-    expect(paired?.tokens?.node?.scopes).toEqual([]);
+    expect(paired?.scopes).toStrictEqual([]);
+    expect(paired?.approvedScopes).toStrictEqual([]);
+    expect(paired?.tokens?.node?.scopes).toStrictEqual([]);
   });
 
   test("bootstrap pairing seeds node and operator device tokens explicitly", async () => {
@@ -979,7 +979,7 @@ describe("device pairing tokens", () => {
     expect(paired?.approvedScopes).toEqual(
       expect.arrayContaining(PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes),
     );
-    expect(paired?.tokens?.node?.scopes).toEqual([]);
+    expect(paired?.tokens?.node?.scopes).toStrictEqual([]);
     expect(paired?.tokens?.operator?.scopes).toEqual(
       expect.arrayContaining(PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes),
     );
@@ -1012,7 +1012,7 @@ describe("device pairing tokens", () => {
 
     const paired = await getPairedDevice("bootstrap-device-operator-scope", baseDir);
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read", "operator.write"]);
-    expect(paired?.tokens?.node?.scopes).toEqual([]);
+    expect(paired?.tokens?.node?.scopes).toStrictEqual([]);
   });
 
   test("bootstrap pairing bounds approved baseline to handoff scopes", async () => {
@@ -1061,7 +1061,7 @@ describe("device pairing tokens", () => {
       "operator.talk.secrets",
       "operator.write",
     ]);
-    expect(paired?.tokens?.node?.scopes).toEqual([]);
+    expect(paired?.tokens?.node?.scopes).toStrictEqual([]);
     await expect(
       ensureDeviceToken({
         deviceId: "bootstrap-device-bounded-baseline",
@@ -1283,7 +1283,7 @@ describe("device pairing tokens", () => {
       "expected paired node device after revoke",
     );
     expect(paired.roles).toContain("node");
-    expect(listEffectivePairedDeviceRoles(paired)).toEqual([]);
+    expect(listEffectivePairedDeviceRoles(paired)).toStrictEqual([]);
     expect(hasEffectivePairedDeviceRole(paired, "node")).toBe(false);
   });
 
@@ -1297,7 +1297,7 @@ describe("device pairing tokens", () => {
       createdAtMs: Date.now(),
       approvedAtMs: Date.now(),
     };
-    expect(listEffectivePairedDeviceRoles(device)).toEqual([]);
+    expect(listEffectivePairedDeviceRoles(device)).toStrictEqual([]);
     expect(hasEffectivePairedDeviceRole(device, "node")).toBe(false);
     expect(hasEffectivePairedDeviceRole(device, "operator")).toBe(false);
   });

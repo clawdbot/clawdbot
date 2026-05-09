@@ -45,6 +45,7 @@ export async function ensureCodexRuntimePluginForModelSelection(params: {
         defaultChoice: "npm",
       },
       trustedSourceLinkedOfficialInstall: true,
+      preferRemoteInstall: true,
     },
     prompter: params.prompter,
     runtime: params.runtime,

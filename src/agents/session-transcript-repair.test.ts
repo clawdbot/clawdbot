@@ -489,7 +489,7 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
       allowProviderOwnedThinkingReplay: true,
     });
 
-    expect(out).toEqual([]);
+    expect(out).toStrictEqual([]);
   });
 
   it("drops signed-thinking assistant turns when sibling tool calls reuse an id", () => {
@@ -513,7 +513,7 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
       allowProviderOwnedThinkingReplay: true,
     });
 
-    expect(out).toEqual([]);
+    expect(out).toStrictEqual([]);
   });
 
   it("drops later signed-thinking assistant turns that reuse an earlier signed tool id", () => {
@@ -579,7 +579,7 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
       allowProviderOwnedThinkingReplay: true,
     });
 
-    expect(out).toEqual([]);
+    expect(out).toStrictEqual([]);
     expect(JSON.stringify(out)).not.toContain(secret);
   });
 

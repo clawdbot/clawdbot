@@ -86,7 +86,7 @@ describe("dreaming artifact repair", () => {
 
     expect(audit.suspiciousSessionCorpusFileCount).toBe(0);
     expect(audit.suspiciousSessionCorpusLineCount).toBe(0);
-    expect(audit.issues).toEqual([]);
+    expect(audit.issues).toStrictEqual([]);
   });
 
   it("rejects relative workspace paths during audit and repair", async () => {

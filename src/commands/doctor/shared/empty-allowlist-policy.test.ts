@@ -53,7 +53,7 @@ describe("doctor empty allowlist policy warnings", () => {
       prefix: "channels.zalouser",
     });
 
-    expect(warnings).toEqual([]);
+    expect(warnings).toStrictEqual([]);
   });
 
   it("stays quiet for channels that do not use sender-based group allowlists", () => {
@@ -64,6 +64,6 @@ describe("doctor empty allowlist policy warnings", () => {
       prefix: "channels.discord",
     });
 
-    expect(warnings).toEqual([]);
+    expect(warnings).toStrictEqual([]);
   });
 });

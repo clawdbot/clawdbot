@@ -300,11 +300,11 @@ describeLive("image generation live (provider sweep)", () => {
       );
 
       if (attempted.length === 0) {
-        expect(failures).toEqual([]);
+        expect(failures).toStrictEqual([]);
         console.warn("[live:image-generation] no provider had usable auth; skipping assertions");
         return;
       }
-      expect(failures).toEqual([]);
+      expect(failures).toStrictEqual([]);
     },
     15 * 60_000,
   );

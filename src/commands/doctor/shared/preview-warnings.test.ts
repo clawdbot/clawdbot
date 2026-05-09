@@ -480,13 +480,13 @@ describe("doctor preview warnings", () => {
           profile: "messaging",
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       collectVisibleReplyToolPolicyWarnings({
         tools: {
           allow: ["read"],
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

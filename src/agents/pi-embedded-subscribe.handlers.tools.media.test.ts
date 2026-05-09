@@ -239,7 +239,7 @@ describe("handleToolExecutionEnd media emission", () => {
     await emitUntrustedToolMediaResult(ctx, "/tmp/secret.png");
 
     expect(onToolResult).not.toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("emits remote media for untrusted tools", async () => {
@@ -259,13 +259,13 @@ describe("handleToolExecutionEnd media emission", () => {
     await emitMcpMediaToolResult(ctx, "/tmp/secret.png");
 
     expect(onToolResult).not.toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("does NOT emit local media for case-variant collisions with trusted built-ins", async () => {
     const ctx = await handleCaseVariantBuiltinMedia("/tmp/secret.png");
 
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("still emits remote media for case-variant collisions with trusted built-ins", async () => {
@@ -294,7 +294,7 @@ describe("handleToolExecutionEnd media emission", () => {
     // It may be called by emitToolOutput, but the new block should not fire.
     // Verify emitToolOutput was called instead.
     expect(ctx.emitToolOutput).toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("queues TTS structured media without leaking spoken text when verbose is full", async () => {
@@ -380,7 +380,7 @@ describe("handleToolExecutionEnd media emission", () => {
     });
 
     expect(ctx.emitToolOutput).toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
   });
 
@@ -452,7 +452,7 @@ describe("handleToolExecutionEnd media emission", () => {
     const ctx = await handleVerboseGeneratedImage("plain");
 
     expect(ctx.emitToolOutput).toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("queues structured media once for markdown verbose output", async () => {
@@ -471,7 +471,7 @@ describe("handleToolExecutionEnd media emission", () => {
       });
 
       expect(ctx.emitToolOutput).not.toHaveBeenCalled();
-      expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+      expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
     },
   );
 
@@ -489,7 +489,7 @@ describe("handleToolExecutionEnd media emission", () => {
         providerInventoryText,
         expect.any(Object),
       );
-      expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+      expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
     },
   );
 
@@ -500,7 +500,7 @@ describe("handleToolExecutionEnd media emission", () => {
     await emitPngMediaToolResult(ctx, { isError: true });
 
     expect(onToolResult).not.toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("does NOT emit when tool result has no media", async () => {
@@ -518,7 +518,7 @@ describe("handleToolExecutionEnd media emission", () => {
     });
 
     expect(onToolResult).not.toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("does NOT emit media for <media:audio> placeholder text", async () => {
@@ -541,7 +541,7 @@ describe("handleToolExecutionEnd media emission", () => {
     });
 
     expect(onToolResult).not.toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("does NOT emit media for malformed MEDIA:-prefixed prose", async () => {
@@ -564,7 +564,7 @@ describe("handleToolExecutionEnd media emission", () => {
     });
 
     expect(onToolResult).not.toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("queues media from details.path fallback when no MEDIA: text", async () => {

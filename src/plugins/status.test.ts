@@ -315,8 +315,8 @@ function expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig() {
 }
 
 function expectNoCompatibilityWarnings() {
-  expect(buildPluginCompatibilityNotices()).toEqual([]);
-  expect(buildPluginCompatibilityWarnings()).toEqual([]);
+  expect(buildPluginCompatibilityNotices()).toStrictEqual([]);
+  expect(buildPluginCompatibilityWarnings()).toStrictEqual([]);
 }
 
 function expectCompatibilityOutput(params: { notices?: unknown[]; warnings?: string[] }) {
@@ -363,7 +363,7 @@ function expectBundleInspectState(
   },
 ) {
   expect(inspect.bundleCapabilities).toEqual(params.bundleCapabilities);
-  expect(inspect.mcpServers).toEqual([]);
+  expect(inspect.mcpServers).toStrictEqual([]);
   expect(inspect.shape).toBe(params.shape);
 }
 
@@ -815,7 +815,7 @@ describe("plugin status reports", () => {
       capabilityKinds: ["context-engine"],
     });
     expect(inspect.capabilities).toEqual([{ kind: "context-engine", ids: ["moon-engine"] }]);
-    expect(inspect.compatibility).toEqual([]);
+    expect(inspect.compatibility).toStrictEqual([]);
     expectNoCompatibilityWarnings();
   });
 

@@ -6,6 +6,8 @@ import {
   validateModelsListParams,
   validateNodeEventResult,
   validateNodePresenceAlivePayload,
+  validateTasksCancelParams,
+  validateTasksListParams,
   validateTalkConfigResult,
   validateTalkEvent,
   validateTalkClientCreateParams,
@@ -454,6 +456,25 @@ describe("validateModelsListParams", () => {
   it("rejects unknown model catalog views and extra fields", () => {
     expect(validateModelsListParams({ view: "available" })).toBe(false);
     expect(validateModelsListParams({ view: "configured", provider: "minimax" })).toBe(false);
+  });
+});
+
+describe("validateTasksListParams", () => {
+  it("accepts SDK task ledger filters", () => {
+    expect(
+      validateTasksListParams({
+        status: ["running", "completed"],
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        limit: 50,
+        cursor: "100",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects internal task statuses and unknown fields", () => {
+    expect(validateTasksListParams({ status: "succeeded" })).toBe(false);
+    expect(validateTasksCancelParams({ taskId: "task-1", force: true })).toBe(false);
   });
 });
 

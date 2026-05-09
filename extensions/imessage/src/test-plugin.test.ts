@@ -81,11 +81,11 @@ function requireMessageSendMedia(
 
 describe("createIMessageTestPlugin", () => {
   it("does not load the bundled iMessage facade by default", () => {
-    expect(listImportedBundledPluginFacadeIds()).toEqual([]);
+    expect(listImportedBundledPluginFacadeIds()).toStrictEqual([]);
 
     createIMessageTestPlugin();
 
-    expect(listImportedBundledPluginFacadeIds()).toEqual([]);
+    expect(listImportedBundledPluginFacadeIds()).toStrictEqual([]);
   });
 
   it("normalizes repeated transport prefixes without recursive stack growth", () => {

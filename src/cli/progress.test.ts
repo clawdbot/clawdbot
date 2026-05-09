@@ -99,6 +99,6 @@ describe("cli progress", () => {
       progress.done();
     });
 
-    expect(writes).toEqual([]);
+    expect(writes).toStrictEqual([]);
   });
 });

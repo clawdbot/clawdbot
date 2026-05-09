@@ -181,6 +181,9 @@ describe("resolveGatewayInstallToken", () => {
   });
 
   it("persists auto-generated token when requested", async () => {
+    const baseSnapshot = { exists: false, valid: true, config: {} };
+    readConfigFileSnapshotMock.mockResolvedValueOnce(baseSnapshot);
+
     const result = await resolveGatewayInstallToken({
       config: {
         gateway: { auth: { mode: "token" } },
@@ -193,23 +196,22 @@ describe("resolveGatewayInstallToken", () => {
     expect(result.warnings).toEqual(
       expect.arrayContaining([expect.stringContaining("saving to config")]),
     );
-    expect(replaceConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nextConfig: expect.objectContaining({
-          gateway: {
-            auth: {
-              mode: "token",
-              token: "generated-token",
-            },
+    expect(replaceConfigFileMock).toHaveBeenCalledOnce();
+    expect(replaceConfigFileMock.mock.calls[0]?.[0]).toStrictEqual({
+      nextConfig: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "generated-token",
           },
-        }),
-        writeOptions: expect.objectContaining({
-          baseSnapshot: expect.any(Object),
-          skipRuntimeSnapshotRefresh: true,
-        }),
-        afterWrite: { mode: "auto" },
-      }),
-    );
+        },
+      },
+      writeOptions: {
+        baseSnapshot,
+        skipRuntimeSnapshotRefresh: true,
+      },
+      afterWrite: { mode: "auto" },
+    });
   });
 
   it("drops generated plaintext when config changes to SecretRef before persist", async () => {
@@ -323,7 +325,7 @@ describe("resolveGatewayInstallToken", () => {
 
     expect(resolveSecretRefValuesMock).not.toHaveBeenCalled();
     expect(result.unavailableReason).toBeUndefined();
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
     expect(result.token).toBeUndefined();
     expect(result.tokenRefConfigured).toBe(true);
   });

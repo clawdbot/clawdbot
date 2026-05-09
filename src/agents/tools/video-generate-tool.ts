@@ -824,7 +824,10 @@ export function createVideoGenerateTool(options?: {
       const action = resolveAction(args);
 
       if (action === "list") {
-        return createVideoGenerateListActionResult(cfg);
+        return createVideoGenerateListActionResult(cfg, {
+          agentDir: options?.agentDir,
+          authStore: options?.authProfileStore,
+        });
       }
 
       if (action === "status") {

@@ -1793,7 +1793,7 @@ describe("resolveSessionTranscriptCandidates safety", () => {
       "/tmp/openclaw/agents/main/sessions/sessions.json",
     );
 
-    expect(candidates).toEqual([]);
+    expect(candidates).toStrictEqual([]);
   });
 
   test("drops unsafe sessionFile candidates and keeps safe fallbacks", () => {
@@ -1937,7 +1937,7 @@ describe("archiveSessionTranscripts", () => {
       reason: "reset",
     });
 
-    expect(archived).toEqual([]);
+    expect(archived).toStrictEqual([]);
   });
 
   test("skips files that do not exist and archives only existing ones", () => {

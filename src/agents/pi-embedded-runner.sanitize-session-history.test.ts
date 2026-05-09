@@ -940,7 +940,7 @@ describe("sanitizeSessionHistory", () => {
       allowedToolNames: ["read"],
     });
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("downgrades orphaned openai reasoning even when the model has not changed", async () => {
@@ -961,7 +961,7 @@ describe("sanitizeSessionHistory", () => {
       sessionManager,
     });
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("downgrades orphaned openai reasoning when the model changes too", async () => {

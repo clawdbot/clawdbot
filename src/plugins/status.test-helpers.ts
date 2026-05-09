@@ -122,7 +122,13 @@ export function createCustomHook(params: {
 export function createPluginLoadResult(
   overrides: Partial<PluginLoadResult> & Pick<PluginLoadResult, "plugins"> = { plugins: [] },
 ): PluginLoadResult {
-  const { plugins, realtimeTranscriptionProviders, realtimeVoiceProviders, ...rest } = overrides;
+  const {
+    plugins,
+    modelCatalogProviders,
+    realtimeTranscriptionProviders,
+    realtimeVoiceProviders,
+    ...rest
+  } = overrides;
   return {
     plugins,
     diagnostics: [],
@@ -159,6 +165,7 @@ export function createPluginLoadResult(
     sessionSchedulerJobs: [],
     conversationBindingResolvedHandlers: [],
     ...rest,
+    modelCatalogProviders: modelCatalogProviders ?? [],
     gatewayDiscoveryServices: rest.gatewayDiscoveryServices ?? [],
     realtimeTranscriptionProviders: realtimeTranscriptionProviders ?? [],
     realtimeVoiceProviders: realtimeVoiceProviders ?? [],

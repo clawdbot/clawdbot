@@ -40,12 +40,17 @@ function isDefaultPiStreamFnForModel(
   return streamFn === provider?.streamSimple || streamFn === provider?.stream;
 }
 
+function hasResolvedRuntimeApiKey(apiKey: string | undefined): boolean {
+  return typeof apiKey === "string" && apiKey.trim().length > 0;
+}
+
 export function describeEmbeddedAgentStreamStrategy(params: {
   currentStreamFn: StreamFn | undefined;
   providerStreamFn?: StreamFn;
   shouldUseWebSocketTransport: boolean;
   wsApiKey?: string;
   model: EmbeddedRunAttemptParams["model"];
+  resolvedApiKey?: string;
 }): string {
   if (params.providerStreamFn) {
     return "provider";
@@ -60,6 +65,12 @@ export function describeEmbeddedAgentStreamStrategy(params: {
     return createBoundaryAwareStreamFnForModel(params.model)
       ? `boundary-aware:${params.model.api}`
       : "stream-simple";
+  }
+  if (
+    hasResolvedRuntimeApiKey(params.resolvedApiKey) &&
+    createBoundaryAwareStreamFnForModel(params.model)
+  ) {
+    return `boundary-aware:${params.model.api}`;
   }
   return "session-custom";
 }
@@ -119,9 +130,16 @@ export function resolveEmbeddedAgentStreamFn(params: {
     return createAnthropicVertexStreamFnForModel(params.model);
   }
 
-  if (isDefaultPiStreamFnForModel(params.model, params.currentStreamFn)) {
+  if (
+    isDefaultPiStreamFnForModel(params.model, params.currentStreamFn) ||
+    hasResolvedRuntimeApiKey(params.resolvedApiKey)
+  ) {
     const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
     if (boundaryAwareStreamFn) {
+      // Some PI session factories return a provider-specific stream wrapper
+      // once runtime auth is resolved. Keep transport-supported APIs on
+      // OpenClaw's HTTP transport so provider-specific auth/header semantics
+      // are not lost behind that wrapper.
       // Boundary-aware transports read credentials from options.apiKey just
       // like provider-owned streams, but the embedded run layer never gets to
       // inject the resolved runtime key for them. Without this wrap, OAuth

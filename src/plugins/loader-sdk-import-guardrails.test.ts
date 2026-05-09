@@ -42,6 +42,6 @@ describe("plugin loader fixture SDK imports", () => {
       (entry) => !ALLOWED_PLUGIN_SDK_FIXTURE_IMPORTS.has(entry),
     );
 
-    expect(unexpected).toEqual([]);
+    expect(unexpected).toStrictEqual([]);
   });
 });

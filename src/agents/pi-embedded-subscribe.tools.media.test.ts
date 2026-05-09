@@ -8,13 +8,13 @@ import {
 
 describe("extractToolResultMediaPaths", () => {
   it("returns empty array for null/undefined", () => {
-    expect(extractToolResultMediaPaths(null)).toEqual([]);
-    expect(extractToolResultMediaPaths(undefined)).toEqual([]);
+    expect(extractToolResultMediaPaths(null)).toStrictEqual([]);
+    expect(extractToolResultMediaPaths(undefined)).toStrictEqual([]);
   });
 
   it("returns empty array for non-object", () => {
-    expect(extractToolResultMediaPaths("hello")).toEqual([]);
-    expect(extractToolResultMediaPaths(42)).toEqual([]);
+    expect(extractToolResultMediaPaths("hello")).toStrictEqual([]);
+    expect(extractToolResultMediaPaths(42)).toStrictEqual([]);
   });
 
   it("extracts structured details.media without content blocks", () => {
@@ -32,7 +32,7 @@ describe("extractToolResultMediaPaths", () => {
   });
 
   it("returns empty array when content has no text or image blocks", () => {
-    expect(extractToolResultMediaPaths({ content: [{ type: "other" }] })).toEqual([]);
+    expect(extractToolResultMediaPaths({ content: [{ type: "other" }] })).toStrictEqual([]);
   });
 
   it("extracts structured media with audioAsVoice", () => {
@@ -143,7 +143,7 @@ describe("extractToolResultMediaPaths", () => {
         { type: "image", data: "base64data", mimeType: "image/png" },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("does not fall back to details.path when MEDIA: paths are found", () => {
@@ -176,7 +176,7 @@ describe("extractToolResultMediaPaths", () => {
     const result = {
       content: [{ type: "text", text: "Command executed successfully" }],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("ignores details.path when no image content exists", () => {
@@ -185,7 +185,7 @@ describe("extractToolResultMediaPaths", () => {
       content: [{ type: "text", text: "File saved" }],
       details: { path: "/tmp/data.json" },
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("handles details.path with whitespace", () => {
@@ -201,7 +201,7 @@ describe("extractToolResultMediaPaths", () => {
       content: [{ type: "image", data: "base64", mimeType: "image/png" }],
       details: { path: "   " },
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("does not match <media:audio> placeholder as a MEDIA: token", () => {
@@ -213,14 +213,14 @@ describe("extractToolResultMediaPaths", () => {
         },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("does not match <media:image> placeholder as a MEDIA: token", () => {
     const result = {
       content: [{ type: "text", text: "<media:image> (2 images)" }],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("does not match other media placeholder variants", () => {
@@ -233,7 +233,7 @@ describe("extractToolResultMediaPaths", () => {
       const result = {
         content: [{ type: "text", text: `${tag} some context` }],
       };
-      expect(extractToolResultMediaPaths(result)).toEqual([]);
+      expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
     }
   });
 
@@ -246,7 +246,7 @@ describe("extractToolResultMediaPaths", () => {
         },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("does not treat malformed MEDIA:-prefixed prose as a file path", () => {
@@ -258,7 +258,7 @@ describe("extractToolResultMediaPaths", () => {
         },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("still extracts MEDIA: at line start after other text lines", () => {
@@ -323,10 +323,10 @@ describe("extractToolResultMediaPaths", () => {
   it("blocks trusted-media aliases that are not exact registered built-ins", () => {
     expect(
       filterToolResultMediaUrls("bash", ["/etc/passwd"], undefined, new Set(["exec"])),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       filterToolResultMediaUrls("Web_Search", ["/etc/passwd"], undefined, new Set(["web_search"])),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps local media for exact registered built-in tool names", () => {
@@ -380,7 +380,7 @@ describe("extractToolResultMediaPaths", () => {
         undefined,
         new Set(["music_generate"]),
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not let non-TTS trustedLocalMedia bypass the exact-name gate", () => {
@@ -398,7 +398,7 @@ describe("extractToolResultMediaPaths", () => {
         },
         new Set(["web_search"]),
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("still allows remote media for colliding aliases", () => {
@@ -420,7 +420,7 @@ describe("extractToolResultMediaPaths", () => {
           mcpTool: "browser",
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not trust external TTS results with trustedLocalMedia", () => {
@@ -435,7 +435,7 @@ describe("extractToolResultMediaPaths", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("still allows remote MEDIA urls for MCP-provenance results", () => {

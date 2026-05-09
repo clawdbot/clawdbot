@@ -202,7 +202,7 @@ describe("createWebOnMessageHandler audio preflight", () => {
 
     await handler({ ...makeAudioMsg(), accessControlPassed: undefined });
 
-    expect(events).toEqual([]);
+    expect(events).toStrictEqual([]);
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
     expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
     expect(processMessageMock).toHaveBeenCalledWith(

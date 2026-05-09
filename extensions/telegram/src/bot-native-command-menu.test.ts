@@ -126,7 +126,7 @@ describe("bot-native-command-menu", () => {
     });
 
     expect(result.commands).toEqual([{ command: "agent_run", description: "Run agent" }]);
-    expect(result.issues).toEqual([]);
+    expect(result.issues).toStrictEqual([]);
   });
 
   it("ignores malformed plugin specs without crashing", () => {

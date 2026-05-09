@@ -338,6 +338,21 @@ async function resolveUnownedCliPrimary(params: {
   return primary;
 }
 
+async function resolveUnownedCliPrimaryMessage(params: {
+  primary: string;
+  config: OpenClawConfig;
+}): Promise<string> {
+  const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
+    await import("../plugins/manifest-command-aliases.runtime.js");
+  return (
+    resolveMissingPluginCommandMessageFromPolicy(params.primary, params.config, {
+      resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
+      resolveToolOwner: resolveManifestToolOwner,
+    }) ??
+    `Unknown command: openclaw ${params.primary}. No built-in command or plugin CLI metadata owns "${params.primary}".`
+  );
+}
+
 async function bootstrapCliProxyCaptureAndDispatcher(
   startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
   options: { ensureDispatcher?: boolean } = {},
@@ -432,9 +447,7 @@ export async function runCli(argv: string[] = process.argv) {
     const config = await readBestEffortCliConfig();
     const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
     if (unownedPrimary) {
-      throw new Error(
-        `Unknown command: openclaw ${unownedPrimary}. No built-in command or plugin CLI metadata owns "${unownedPrimary}".`,
-      );
+      throw new Error(await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }));
     }
     const { startProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     proxyHandle = await startProxy(config?.proxy ?? undefined);
@@ -673,13 +686,14 @@ export async function runCli(argv: string[] = process.argv) {
               (command) => command.name() === primary || command.aliases().includes(primary),
             )
           ) {
-            const { resolveManifestCommandAliasOwner } =
+            const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
               await import("../plugins/manifest-command-aliases.runtime.js");
             const missingPluginCommandMessage = resolveMissingPluginCommandMessageFromPolicy(
               primary,
               config,
               {
                 resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
+                resolveToolOwner: resolveManifestToolOwner,
               },
             );
             if (missingPluginCommandMessage) {

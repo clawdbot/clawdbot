@@ -195,7 +195,7 @@ describe("matrixMessageActions", () => {
     }
     const actions = discovery.actions;
 
-    expect(actions).toEqual([]);
+    expect(actions).toStrictEqual([]);
   });
 
   it("honors the selected Matrix account during discovery", () => {

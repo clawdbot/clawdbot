@@ -4,6 +4,8 @@ const EVENT_LOOP_MONITOR_RESOLUTION_MS = 20;
 const EVENT_LOOP_DELAY_WARN_MS = 1_000;
 const EVENT_LOOP_UTILIZATION_WARN = 0.95;
 const CPU_CORE_RATIO_WARN = 0.9;
+// Load counters can spike during frequent short async wakeups; delay is the blocking signal.
+const LOAD_DEGRADATION_DELAY_COEVIDENCE_MS = 25;
 const SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS = 1_000;
 
 type EventLoopDelayMonitor = ReturnType<typeof monitorEventLoopDelay>;
@@ -38,6 +40,11 @@ type GatewayEventLoopHealthMonitorDeps = {
   createDelayMonitor?: EventLoopDelayMonitorFactory;
 };
 
+type GatewayEventLoopHealthMetrics = Pick<
+  GatewayEventLoopHealth,
+  "intervalMs" | "delayP99Ms" | "delayMaxMs" | "utilization" | "cpuCoreRatio"
+>;
+
 function roundMetric(value: number, digits = 3): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -50,26 +57,33 @@ function nanosecondsToMilliseconds(value: number): number {
   return roundMetric(value / 1_000_000, 1);
 }
 
-function resolveGatewayEventLoopHealthReasons(params: {
-  intervalMs: number;
-  delayP99Ms: number;
-  delayMaxMs: number;
-  utilization: number;
-  cpuCoreRatio: number;
-}): GatewayEventLoopHealthReason[] {
+export function classifyGatewayEventLoopHealthReasons(
+  metrics: GatewayEventLoopHealthMetrics,
+): GatewayEventLoopHealthReason[] {
   const reasons: GatewayEventLoopHealthReason[] = [];
-  const hasSustainedLoadWindow = params.intervalMs >= SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS;
 
   if (
-    params.delayP99Ms >= EVENT_LOOP_DELAY_WARN_MS ||
-    params.delayMaxMs >= EVENT_LOOP_DELAY_WARN_MS
+    metrics.delayP99Ms >= EVENT_LOOP_DELAY_WARN_MS ||
+    metrics.delayMaxMs >= EVENT_LOOP_DELAY_WARN_MS
   ) {
     reasons.push("event_loop_delay");
   }
-  if (hasSustainedLoadWindow && params.utilization >= EVENT_LOOP_UTILIZATION_WARN) {
+
+  if (metrics.intervalMs < SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS) {
+    return reasons;
+  }
+
+  const hasDelayCoEvidence =
+    metrics.delayP99Ms >= LOAD_DEGRADATION_DELAY_COEVIDENCE_MS ||
+    metrics.delayMaxMs >= LOAD_DEGRADATION_DELAY_COEVIDENCE_MS;
+  if (!hasDelayCoEvidence) {
+    return reasons;
+  }
+
+  if (metrics.utilization >= EVENT_LOOP_UTILIZATION_WARN) {
     reasons.push("event_loop_utilization");
   }
-  if (hasSustainedLoadWindow && params.cpuCoreRatio >= CPU_CORE_RATIO_WARN) {
+  if (metrics.cpuCoreRatio >= CPU_CORE_RATIO_WARN) {
     reasons.push("cpu");
   }
 
@@ -90,6 +104,7 @@ export function createGatewayEventLoopHealthMonitor(
   let lastWallAt = nowMs();
   let lastCpuUsage: CpuUsage | null = readCpuUsage();
   let lastEventLoopUtilization: EventLoopUtilization | null = readEventLoopUtilization();
+  let lastSnapshot: GatewayEventLoopHealth | undefined;
 
   try {
     monitor = createDelayMonitor(EVENT_LOOP_MONITOR_RESOLUTION_MS);
@@ -113,8 +128,7 @@ export function createGatewayEventLoopHealthMonitor(
         delayP99Ms >= EVENT_LOOP_DELAY_WARN_MS || delayMaxMs >= EVENT_LOOP_DELAY_WARN_MS;
 
       if (!hasDelayWarning && intervalMs < SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS) {
-        monitor.reset();
-        return undefined;
+        return lastSnapshot;
       }
 
       const cpuUsage = readCpuUsage(lastCpuUsage);
@@ -124,7 +138,7 @@ export function createGatewayEventLoopHealthMonitor(
       );
       const cpuTotalMs = roundMetric((cpuUsage.user + cpuUsage.system) / 1_000, 1);
       const cpuCoreRatio = roundMetric(cpuTotalMs / intervalMs);
-      const reasons = resolveGatewayEventLoopHealthReasons({
+      const reasons = classifyGatewayEventLoopHealthReasons({
         intervalMs,
         delayP99Ms,
         delayMaxMs,
@@ -132,12 +146,7 @@ export function createGatewayEventLoopHealthMonitor(
         cpuCoreRatio,
       });
 
-      monitor.reset();
-      lastWallAt = now;
-      lastCpuUsage = readCpuUsage();
-      lastEventLoopUtilization = currentEventLoopUtilization;
-
-      return {
+      const snapshot: GatewayEventLoopHealth = {
         degraded: reasons.length > 0,
         reasons,
         intervalMs,
@@ -146,6 +155,14 @@ export function createGatewayEventLoopHealthMonitor(
         utilization,
         cpuCoreRatio,
       };
+
+      monitor.reset();
+      lastWallAt = now;
+      lastCpuUsage = readCpuUsage();
+      lastEventLoopUtilization = currentEventLoopUtilization;
+      lastSnapshot = snapshot;
+
+      return snapshot;
     },
     stop: () => {
       monitor?.disable();
@@ -153,6 +170,7 @@ export function createGatewayEventLoopHealthMonitor(
       lastWallAt = 0;
       lastCpuUsage = null;
       lastEventLoopUtilization = null;
+      lastSnapshot = undefined;
     },
   };
 }

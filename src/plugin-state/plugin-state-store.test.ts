@@ -226,7 +226,7 @@ describe("plugin state keyed store", () => {
       await first.register("k1", { value: 1 });
       await first.clear();
 
-      await expect(first.entries()).resolves.toEqual([]);
+      await expect(first.entries()).resolves.toStrictEqual([]);
       await expect(second.lookup("k2")).resolves.toEqual({ value: 2 });
     });
   });
@@ -466,7 +466,7 @@ describe("plugin state keyed store", () => {
       const result = probePluginStateStore();
       expect(result.ok).toBe(true);
       const failedSteps = result.steps.filter((step) => !step.ok);
-      expect(failedSteps).toEqual([]);
+      expect(failedSteps).toStrictEqual([]);
       expect(JSON.stringify(result)).not.toContain("probe-value");
     });
   });

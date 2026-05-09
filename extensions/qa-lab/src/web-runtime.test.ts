@@ -105,11 +105,14 @@ describe("qa web runtime", () => {
     expect(launch).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "chrome", headless: true }),
     );
-    expect(goto).toHaveBeenCalledWith("http://127.0.0.1:3000/chat", expect.any(Object));
-    expect(pageWaitForSelector).toHaveBeenCalledWith("textarea", expect.any(Object));
+    expect(goto).toHaveBeenCalledWith("http://127.0.0.1:3000/chat", {
+      waitUntil: "domcontentloaded",
+      timeout: 20_000,
+    });
+    expect(pageWaitForSelector).toHaveBeenCalledWith("textarea", { timeout: 20_000 });
     expect(pageWaitForFunction).toHaveBeenCalled();
-    expect(locatorFill).toHaveBeenCalledWith("hello", expect.any(Object));
-    expect(locatorPress).toHaveBeenCalledWith("Enter", expect.any(Object));
+    expect(locatorFill).toHaveBeenCalledWith("hello", { timeout: 20_000 });
+    expect(locatorPress).toHaveBeenCalledWith("Enter", { timeout: 20_000 });
     expect(snapshot.text).toBe("hello");
     expect(evaluated).toBe("ok");
     expect(contextClose).toHaveBeenCalledTimes(1);

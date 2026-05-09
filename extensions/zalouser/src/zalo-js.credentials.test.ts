@@ -311,7 +311,7 @@ describe("zalouser credential persistence", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(listZaloFriends(profile)).resolves.toEqual([]);
+        await expect(listZaloFriends(profile)).resolves.toStrictEqual([]);
         const firstRaw = await readFile(filePath, "utf8");
         const stableMtime = new Date("2026-04-01T00:00:10.000Z");
         await utimes(filePath, stableMtime, stableMtime);
@@ -319,7 +319,7 @@ describe("zalouser credential persistence", () => {
 
         currentCookie = cookieB;
 
-        await expect(listZaloFriends(profile)).resolves.toEqual([]);
+        await expect(listZaloFriends(profile)).resolves.toStrictEqual([]);
         expect(await readFile(filePath, "utf8")).toBe(firstRaw);
         expect((await stat(filePath)).mtimeMs).toBe(firstMtimeMs);
       });

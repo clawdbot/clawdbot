@@ -37,6 +37,7 @@ type GatewayTestHoistedState = {
       provider: string;
       contextWindow?: number;
       reasoning?: boolean;
+      input?: string[];
     }>;
   };
   cronIsolatedRun: Mock<CronIsolatedRunFn>;

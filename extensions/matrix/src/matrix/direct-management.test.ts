@@ -126,7 +126,7 @@ describe("inspectMatrixDirectRooms", () => {
     });
 
     expect(result.activeRoomId).toBeNull();
-    expect(result.discoveredStrictRoomIds).toEqual([]);
+    expect(result.discoveredStrictRoomIds).toStrictEqual([]);
   });
 });
 

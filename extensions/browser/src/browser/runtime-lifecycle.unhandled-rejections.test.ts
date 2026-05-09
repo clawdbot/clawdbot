@@ -134,6 +134,6 @@ describe("browser unhandled rejection lifecycle", () => {
     expect(trackedTabCleanupMock).toHaveBeenCalledTimes(1);
     expect(stopKnownBrowserProfilesMock).toHaveBeenCalledTimes(1);
     expect(clearState).toHaveBeenCalledTimes(1);
-    expect(getUnhandledRejectionHandlers()).toEqual([]);
+    expect(getUnhandledRejectionHandlers()).toStrictEqual([]);
   });
 });

@@ -2752,7 +2752,7 @@ describe("syncPluginsForUpdateChannel", () => {
 
       expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
       expect(result.changed).toBe(expectedChanged);
-      expect(result.summary.switchedToNpm).toEqual([]);
+      expect(result.summary.switchedToNpm).toStrictEqual([]);
       expect(result.config.plugins?.load?.paths).toEqual(expectedLoadPaths);
       expectBundledPathInstall({
         install: result.config.plugins?.installs?.feishu,
@@ -2886,8 +2886,8 @@ describe("syncPluginsForUpdateChannel", () => {
     );
     expect(result.changed).toBe(true);
     expect(result.summary.switchedToNpm).toEqual(["legacy-chat"]);
-    expect(result.summary.errors).toEqual([]);
-    expect(result.config.plugins?.load?.paths).toEqual([]);
+    expect(result.summary.errors).toStrictEqual([]);
+    expect(result.config.plugins?.load?.paths).toStrictEqual([]);
     expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
       source: "npm",
       spec: "@openclaw/legacy-chat",
@@ -2999,9 +2999,9 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(true);
     expect(result.summary.switchedToClawHub).toEqual(["legacy-chat"]);
-    expect(result.summary.switchedToNpm).toEqual([]);
-    expect(result.summary.errors).toEqual([]);
-    expect(result.config.plugins?.load?.paths).toEqual([]);
+    expect(result.summary.switchedToNpm).toStrictEqual([]);
+    expect(result.summary.errors).toStrictEqual([]);
+    expect(result.config.plugins?.load?.paths).toStrictEqual([]);
     expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
       source: "clawhub",
       spec: "clawhub:legacy-chat@2026.5.1-beta.2",
@@ -3082,12 +3082,12 @@ describe("syncPluginsForUpdateChannel", () => {
       }),
     );
     expect(result.changed).toBe(true);
-    expect(result.summary.switchedToClawHub).toEqual([]);
+    expect(result.summary.switchedToClawHub).toStrictEqual([]);
     expect(result.summary.switchedToNpm).toEqual(["legacy-chat"]);
     expect(result.summary.warnings).toEqual([
       "ClawHub clawhub:legacy-chat@2026.5.1-beta.2 unavailable for legacy-chat; falling back to npm @openclaw/legacy-chat.",
     ]);
-    expect(result.summary.errors).toEqual([]);
+    expect(result.summary.errors).toStrictEqual([]);
     expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
       source: "npm",
       spec: "@openclaw/legacy-chat",

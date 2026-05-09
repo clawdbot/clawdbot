@@ -265,7 +265,7 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true });
 
-    expect(actionState.failed).toEqual([]);
+    expect(actionState.failed).toStrictEqual([]);
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
     expectFirstInstallPlanCallOmitsToken();
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
@@ -284,7 +284,7 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true });
 
-    expect(actionState.failed).toEqual([]);
+    expect(actionState.failed).toStrictEqual([]);
     expect(resolveSecretRefValuesMock).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
     expectFirstInstallPlanCallOmitsToken();
@@ -301,7 +301,7 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true });
 
-    expect(actionState.failed).toEqual([]);
+    expect(actionState.failed).toStrictEqual([]);
     expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
     const writeParams = replaceConfigFileMock.mock.calls[0]?.[0] as {
       nextConfig?: { gateway?: { auth?: { token?: string } } };
@@ -324,7 +324,7 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true });
 
-    expect(actionState.failed).toEqual([]);
+    expect(actionState.failed).toStrictEqual([]);
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
   });
 

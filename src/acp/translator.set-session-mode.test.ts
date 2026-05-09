@@ -75,6 +75,6 @@ describe("acp setSessionMode", () => {
     const agent = createAgentWithSession(request);
 
     await expect(agent.setSessionMode(createSetSessionModeRequest(""))).resolves.toStrictEqual({});
-    expect(calls).toEqual([]);
+    expect(calls).toStrictEqual([]);
   });
 });

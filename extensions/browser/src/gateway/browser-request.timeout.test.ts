@@ -61,7 +61,11 @@ describe("browser.request local timeout", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(withTimeoutMock).toHaveBeenCalledWith(expect.any(Function), 4321, "browser request");
+    expect(withTimeoutMock).toHaveBeenCalledTimes(1);
+    const [dispatchTask, timeoutMs, timeoutLabel] = withTimeoutMock.mock.calls[0];
+    expect(dispatchTask).toBeTypeOf("function");
+    expect(timeoutMs).toBe(4321);
+    expect(timeoutLabel).toBe("browser request");
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,

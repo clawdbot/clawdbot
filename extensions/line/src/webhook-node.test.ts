@@ -30,6 +30,10 @@ function createRes() {
 
 const SECRET = "secret";
 
+type ParsedLineWebhookPayload = {
+  events: unknown;
+};
+
 type RuntimeEnvMock = RuntimeEnv & {
   error: ReturnType<typeof vi.fn<(...args: unknown[]) => void>>;
   exit: ReturnType<typeof vi.fn<(code: number) => void>>;
@@ -409,9 +413,9 @@ describe("createLineNodeWebhookHandler", () => {
     await runSignedPost({ handler, rawBody, secret, res });
 
     expect(res.statusCode).toBe(200);
-    expect(bot.handleWebhook).toHaveBeenCalledWith(
-      expect.objectContaining({ events: expect.any(Array) }),
-    );
+    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+    const [payload] = bot.handleWebhook.mock.calls[0] as unknown as [ParsedLineWebhookPayload];
+    expect(payload.events).toEqual([{ type: "message" }]);
   });
 
   it("releases authenticated requests before event processing completes", async () => {
@@ -480,12 +484,18 @@ describe("readLineWebhookRequestBody", () => {
 
 describe("createLineWebhookMiddleware", () => {
   it.each([
-    ["raw string body", JSON.stringify({ events: [{ type: "message" }] })],
-    ["raw buffer body", Buffer.from(JSON.stringify({ events: [{ type: "follow" }] }), "utf-8")],
-  ])("parses JSON from %s", async (_label, body) => {
+    ["raw string body", JSON.stringify({ events: [{ type: "message" }] }), [{ type: "message" }]],
+    [
+      "raw buffer body",
+      Buffer.from(JSON.stringify({ events: [{ type: "follow" }] }), "utf-8"),
+      [{ type: "follow" }],
+    ],
+  ])("parses JSON from %s", async (_label, body, expectedEvents) => {
     const { res, onEvents } = await invokeWebhook({ body });
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(onEvents).toHaveBeenCalledWith(expect.objectContaining({ events: expect.any(Array) }));
+    expect(onEvents).toHaveBeenCalledTimes(1);
+    const [payload] = onEvents.mock.calls[0] as unknown as [ParsedLineWebhookPayload];
+    expect(payload.events).toEqual(expectedEvents);
   });
 
   it("rejects invalid JSON payloads", async () => {

@@ -49,26 +49,46 @@ describe("deepinfra video generation provider", () => {
       },
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "deepinfra",
-        capability: "video",
-        baseUrl: "https://api.deepinfra.com/v1/inference",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.deepinfra.com/v1/inference/Pixverse/Pixverse-T2V",
-        body: {
-          prompt: "A bicycle weaving through a rainy neon street",
-          aspect_ratio: "16:9",
-          duration: 8,
-          seed: 42,
-          negative_prompt: "blur",
-          style: "anime",
+    expect(resolveProviderHttpRequestConfigMock.mock.calls).toEqual([
+      [
+        {
+          baseUrl: "https://api.deepinfra.com/v1/inference",
+          defaultBaseUrl: "https://api.deepinfra.com/v1/inference",
+          allowPrivateNetwork: false,
+          defaultHeaders: {
+            Authorization: "Bearer provider-key",
+            "Content-Type": "application/json",
+          },
+          provider: "deepinfra",
+          capability: "video",
+          transport: "http",
         },
-      }),
-    );
+      ],
+    ]);
+    expect(postJsonRequestMock).toHaveBeenCalledOnce();
+    const [postRequest] = postJsonRequestMock.mock.calls[0] ?? [];
+    const postRequestHeaders = Reflect.get(postRequest ?? {}, "headers");
+    expect(postRequestHeaders).toBeInstanceOf(Headers);
+    expect(Object.fromEntries((postRequestHeaders as Headers).entries())).toEqual({
+      authorization: "Bearer provider-key",
+      "content-type": "application/json",
+    });
+    expect(postRequest).toEqual({
+      url: "https://api.deepinfra.com/v1/inference/Pixverse/Pixverse-T2V",
+      headers: postRequestHeaders,
+      body: {
+        prompt: "A bicycle weaving through a rainy neon street",
+        aspect_ratio: "16:9",
+        duration: 8,
+        seed: 42,
+        negative_prompt: "blur",
+        style: "anime",
+      },
+      timeoutMs: undefined,
+      fetchFn: fetch,
+      allowPrivateNetwork: false,
+      dispatcherPolicy: undefined,
+    });
     expect(result.videos).toEqual([
       {
         url: "https://api.deepinfra.com/generated/video.mp4",
@@ -109,10 +129,10 @@ describe("deepinfra video generation provider", () => {
     if (!video) {
       throw new Error("Expected generated DeepInfra video");
     }
-    expect(video).toMatchObject({
+    expect(video).toEqual({
+      buffer: Buffer.from("webm-data"),
       mimeType: "video/webm",
       fileName: "video-1.webm",
     });
-    expect(video.buffer).toEqual(Buffer.from("webm-data"));
   });
 });

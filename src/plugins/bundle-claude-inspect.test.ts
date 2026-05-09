@@ -109,7 +109,7 @@ describe("Claude bundle plugin inspect integration", () => {
   }
 
   function expectNoDiagnostics(diagnostics: unknown[]) {
-    expect(diagnostics).toEqual([]);
+    expect(diagnostics).toStrictEqual([]);
   }
 
   function expectBundleRuntimeSupport(params: {

@@ -99,6 +99,6 @@ describe("formatCommandSpans", () => {
       risks: [],
     };
 
-    expect(formatCommandSpans(explanation)).toEqual([]);
+    expect(formatCommandSpans(explanation)).toStrictEqual([]);
   });
 });

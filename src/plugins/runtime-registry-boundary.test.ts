@@ -46,6 +46,6 @@ describe("runtime plugin registry boundary", () => {
       )
       .map((file) => file.relativePath);
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 });

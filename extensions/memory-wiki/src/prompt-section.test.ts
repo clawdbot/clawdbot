@@ -29,7 +29,7 @@ describe("buildWikiPromptSection", () => {
   });
 
   it("stays empty when no wiki or memory-adjacent tools are registered", () => {
-    expect(buildWikiPromptSection({ availableTools: new Set(["web_search"]) })).toEqual([]);
+    expect(buildWikiPromptSection({ availableTools: new Set(["web_search"]) })).toStrictEqual([]);
   });
 
   it("can append a compact compiled digest snapshot when enabled", async () => {
@@ -97,7 +97,7 @@ describe("buildWikiPromptSection", () => {
       }),
     );
 
-    expect(builder({ availableTools: new Set(["web_search"]) })).toEqual([]);
+    expect(builder({ availableTools: new Set(["web_search"]) })).toStrictEqual([]);
   });
 
   it("stabilizes digest prompt ordering for prompt-cache-friendly output", async () => {

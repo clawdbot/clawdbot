@@ -101,7 +101,7 @@ describe("zalo send", () => {
       ok: false,
       error: "No Zalo bot token configured",
     });
-    expect(missingToken.receipt.platformMessageIds).toEqual([]);
+    expect(missingToken.receipt.platformMessageIds).toStrictEqual([]);
 
     const blankPhoto = await sendPhotoZalo("dm-chat-4", "   ", {
       token: "zalo-token",
@@ -110,7 +110,7 @@ describe("zalo send", () => {
       ok: false,
       error: "No photo URL provided",
     });
-    expect(blankPhoto.receipt.platformMessageIds).toEqual([]);
+    expect(blankPhoto.receipt.platformMessageIds).toStrictEqual([]);
 
     expect(sendMessageMock).not.toHaveBeenCalled();
     expect(sendPhotoMock).not.toHaveBeenCalled();

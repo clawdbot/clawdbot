@@ -496,7 +496,7 @@ describe("compileMemoryWikiVault", () => {
     await compileMemoryWikiVault(config);
     const second = await compileMemoryWikiVault(config);
 
-    expect(second.updatedFiles).toEqual([]);
+    expect(second.updatedFiles).toStrictEqual([]);
     await expect(fs.readFile(path.join(rootDir, "entities", "beta.md"), "utf8")).resolves.toContain(
       "[Gamma](concepts/gamma.md)",
     );

@@ -74,6 +74,15 @@ export type VideoGenerationRequest = {
   providerOptions?: Record<string, unknown>;
 };
 
+export type VideoGenerationModelCapabilitiesContext = {
+  provider: string;
+  model: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+  timeoutMs?: number;
+};
+
 export type VideoGenerationResult = {
   videos: GeneratedVideoAsset[];
   model?: string;
@@ -154,5 +163,11 @@ export type VideoGenerationProvider = {
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
+  resolveModelCapabilities?: (
+    ctx: VideoGenerationModelCapabilitiesContext,
+  ) =>
+    | VideoGenerationProviderCapabilities
+    | undefined
+    | Promise<VideoGenerationProviderCapabilities | undefined>;
   generateVideo: (req: VideoGenerationRequest) => Promise<VideoGenerationResult>;
 };

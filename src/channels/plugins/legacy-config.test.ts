@@ -124,7 +124,7 @@ describe("collectChannelLegacyConfigRules", () => {
       },
     });
 
-    expect(rules).toEqual([]);
+    expect(rules).toStrictEqual([]);
     expect(listPluginDoctorLegacyConfigRulesMock).not.toHaveBeenCalled();
   });
 
@@ -153,7 +153,7 @@ describe("collectChannelLegacyConfigRules", () => {
       },
     });
 
-    expect(rules).toEqual([]);
+    expect(rules).toStrictEqual([]);
     expect(getBootstrapChannelPluginMock).not.toHaveBeenCalled();
     expect(listPluginDoctorLegacyConfigRulesMock).not.toHaveBeenCalled();
   });

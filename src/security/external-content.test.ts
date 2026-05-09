@@ -35,7 +35,7 @@ function expectSuspiciousPatternDetection(content: string, expected: boolean) {
     expect(patterns.length).toBeGreaterThan(0);
     return;
   }
-  expect(patterns).toEqual([]);
+  expect(patterns).toStrictEqual([]);
 }
 
 describe("external-content security", () => {

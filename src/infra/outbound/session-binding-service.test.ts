@@ -496,7 +496,7 @@ describe("session binding service", () => {
       adapter: firstAdapter,
     });
 
-    expect(getSessionBindingService().listBySession("agent:main")).toEqual([]);
+    expect(getSessionBindingService().listBySession("agent:main")).toStrictEqual([]);
   });
 
   it("shares registered adapters across duplicate module instances", async () => {

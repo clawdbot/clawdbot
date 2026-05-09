@@ -976,7 +976,7 @@ describe("resolveSlackThreadHistory", () => {
       limit: 0,
     });
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(replies).not.toHaveBeenCalled();
   });
 
@@ -994,7 +994,7 @@ describe("resolveSlackThreadHistory", () => {
       limit: 20,
     });
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
       expect.stringContaining("slack thread history fetch failed"),
     );

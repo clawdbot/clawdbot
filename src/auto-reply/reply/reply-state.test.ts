@@ -218,7 +218,7 @@ describe("history helpers", () => {
     expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["one", "two"]);
 
     clearHistoryEntriesIfEnabled({ historyMap, historyKey: "group", limit: 2 });
-    expect(historyMap.get("group")).toEqual([]);
+    expect(historyMap.get("group")).toStrictEqual([]);
   });
 });
 

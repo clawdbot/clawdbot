@@ -8,6 +8,7 @@ export type {
   VideoGenerationIgnoredOverride,
   VideoGenerationMode,
   VideoGenerationModeCapabilities,
+  VideoGenerationModelCapabilitiesContext,
   VideoGenerationProvider,
   VideoGenerationProviderCapabilities,
   VideoGenerationProviderConfiguredContext,

@@ -73,7 +73,11 @@ describe("scripts/ci-run-timings.mjs", () => {
         ],
         "current",
       ),
-    ).toMatchObject({ databaseId: 1 });
+    ).toEqual({
+      databaseId: 1,
+      event: "push",
+      headSha: "current",
+    });
   });
 
   it("falls back to the newest push CI run when the exact SHA has not appeared yet", () => {
@@ -93,7 +97,11 @@ describe("scripts/ci-run-timings.mjs", () => {
         ],
         "current",
       ),
-    ).toMatchObject({ databaseId: 3 });
+    ).toEqual({
+      databaseId: 3,
+      event: "push",
+      headSha: "previous",
+    });
   });
 
   it("ignores pnpm passthrough sentinels when parsing monitor args", () => {

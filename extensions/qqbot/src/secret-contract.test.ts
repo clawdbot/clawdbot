@@ -30,7 +30,7 @@ async function resolveQqbotSecretAssignments(
   );
   applyResolvedAssignments({ assignments: context.assignments, resolved });
 
-  expect(context.warnings).toEqual([]);
+  expect(context.warnings).toStrictEqual([]);
   return resolvedConfig;
 }
 

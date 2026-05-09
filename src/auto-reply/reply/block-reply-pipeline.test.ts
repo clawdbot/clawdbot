@@ -93,7 +93,7 @@ describe("createBlockReplyPipeline dedup with threading", () => {
       timeoutMs: 5000,
     });
 
-    expect(pipeline.getSentMediaUrls()).toEqual([]);
+    expect(pipeline.getSentMediaUrls()).toStrictEqual([]);
 
     pipeline.enqueue({ text: "caption", mediaUrl: "file:///a.ogg" });
     pipeline.enqueue({ mediaUrls: ["file:///b.ogg", "file:///c.ogg"] });
@@ -116,7 +116,7 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     pipeline.enqueue({ text: "world" });
     await pipeline.flush({ force: true });
 
-    expect(pipeline.getSentMediaUrls()).toEqual([]);
+    expect(pipeline.getSentMediaUrls()).toStrictEqual([]);
   });
 
   it("does not coalesce logical assistant blocks across assistantMessageIndex boundaries", async () => {

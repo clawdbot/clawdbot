@@ -287,7 +287,7 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
       "channels.zalo.accounts.work.botToken": "zalo-work-bot-token",
       "channels.zalo.accounts.work.webhookSecret": "zalo-work-webhook-secret",
     });
-    expect(snapshot.warnings).toEqual([]);
+    expect(snapshot.warnings).toStrictEqual([]);
     expectMetadataBackedContractsWereUsed();
   });
 

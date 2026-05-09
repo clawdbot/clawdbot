@@ -15,6 +15,7 @@ vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal)
 }));
 
 let buildGoogleGenerativeAiParams: typeof import("./transport-stream.js").buildGoogleGenerativeAiParams;
+let buildGoogleGemini3FirstResponseRetryParams: typeof import("./transport-stream.js").buildGoogleGemini3FirstResponseRetryParams;
 let createGoogleGenerativeAiTransportStreamFn: typeof import("./transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
 let createGoogleVertexTransportStreamFn: typeof import("./transport-stream.js").createGoogleVertexTransportStreamFn;
 let hasGoogleVertexAuthorizedUserAdcSync: typeof import("./vertex-adc.js").hasGoogleVertexAuthorizedUserAdcSync;
@@ -85,10 +86,40 @@ function buildSseResponse(events: unknown[]): Response {
   });
 }
 
+function buildDelayedSecondSseResponse(params: {
+  first: unknown;
+  second: unknown;
+  delayMs: number;
+}): Response {
+  const encoder = new TextEncoder();
+  const first = `data: ${JSON.stringify(params.first)}\n\n`;
+  const second = `data: ${JSON.stringify(params.second)}\n\ndata: [DONE]\n\n`;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(first));
+      timeout = setTimeout(() => {
+        controller.enqueue(encoder.encode(second));
+        controller.close();
+      }, params.delayMs);
+    },
+    cancel() {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
 describe("google transport stream", () => {
   beforeAll(async () => {
     ({
       buildGoogleGenerativeAiParams,
+      buildGoogleGemini3FirstResponseRetryParams,
       createGoogleGenerativeAiTransportStreamFn,
       createGoogleVertexTransportStreamFn,
     } = await import("./transport-stream.js"));
@@ -246,6 +277,124 @@ describe("google transport stream", () => {
         },
       ],
     });
+  });
+
+  it("builds a lean Gemini 3 first-response retry payload", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+    const retryPayload = buildGoogleGemini3FirstResponseRetryParams({
+      model,
+      request: {
+        contents: [{ role: "user", parts: [{ text: "hello" }] }],
+        generationConfig: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingLevel: "HIGH",
+          },
+        },
+      },
+    });
+
+    expect(retryPayload?.generationConfig).toEqual({
+      thinkingConfig: {
+        thinkingLevel: "LOW",
+      },
+    });
+  });
+
+  it("retries Gemini 3 requests with lean thinking when the first attempt has no first response", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+    guardedFetchMock
+      .mockImplementationOnce(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(init.signal?.reason ?? new Error("aborted"));
+            });
+          }),
+      )
+      .mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
+          },
+        ]),
+      );
+
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [
+            {
+              name: "lookup",
+              description: "Look up a value",
+              parameters: {
+                type: "object",
+                properties: { q: { type: "string" } },
+              },
+            },
+          ],
+        } as never,
+        { reasoning: "high" } as never,
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
+    expect(guardedFetchMock).toHaveBeenCalledTimes(2);
+    const firstBody = JSON.parse(guardedFetchMock.mock.calls[0]?.[1]?.body as string);
+    const retryBody = JSON.parse(guardedFetchMock.mock.calls[1]?.[1]?.body as string);
+    expect(firstBody.generationConfig.thinkingConfig).toMatchObject({
+      includeThoughts: true,
+      thinkingLevel: "HIGH",
+    });
+    expect(retryBody.generationConfig.thinkingConfig).toEqual({
+      thinkingLevel: "LOW",
+    });
+    expect(retryBody.tools).toEqual(firstBody.tools);
+  });
+
+  it("keeps streaming after the first Gemini 3 chunk arrives before the retry deadline", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+    guardedFetchMock.mockResolvedValueOnce(
+      buildDelayedSecondSseResponse({
+        first: {
+          candidates: [{ content: { parts: [{ text: "first " }] } }],
+        },
+        second: {
+          candidates: [{ content: { parts: [{ text: "second" }] }, finishReason: "STOP" }],
+        },
+        delayMs: 25,
+      }),
+    );
+
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as never,
+        { reasoning: "high" } as never,
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.content).toEqual([{ type: "text", text: "first second" }]);
+    expect(guardedFetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("uses bearer auth when the Google api key is an OAuth JSON payload", async () => {

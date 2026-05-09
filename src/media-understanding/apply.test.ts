@@ -6,6 +6,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
@@ -104,6 +105,29 @@ function expectTranscriptApplied(params: {
   expect(params.ctx.CommandBody).toBe(params.commandBody);
   expect(params.ctx.RawBody).toBe(params.commandBody);
   expect(params.ctx.BodyForCommands).toBe(params.commandBody);
+}
+
+function getRunExecCall(index = 0) {
+  const call = mockedRunExec.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected runExec call ${index}`);
+  }
+  return call;
+}
+
+function getRunFfmpegArgs(index = 0) {
+  const [args] = mockedRunFfmpeg.mock.calls[index] ?? [];
+  if (!Array.isArray(args)) {
+    throw new Error(`expected runFfmpeg args ${index}`);
+  }
+  return args;
+}
+
+function expectCliRunOptions(options: unknown) {
+  expect(options).toEqual({
+    timeoutMs: 60_000,
+    maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+  });
 }
 
 function createMediaDisabledConfig(): OpenClawConfig {
@@ -500,12 +524,13 @@ describe("applyMediaUnderstanding", () => {
     expect(transcribeAudio).not.toHaveBeenCalled();
     expect(result.appliedAudio).toBe(true);
     expect(result.outputs).toEqual([
-      expect.objectContaining({
+      {
         kind: "audio.transcription",
+        attachmentIndex: 0,
         text: "[Voice note could not be transcribed because the audio attachment was too small]",
         provider: "openclaw",
         model: "synthetic-empty-audio",
-      }),
+      },
     ]);
     expect(ctx.Transcript).toBe(
       "[Voice note could not be transcribed because the audio attachment was too small]",
@@ -545,12 +570,13 @@ describe("applyMediaUnderstanding", () => {
     expect(transcribeAudio).not.toHaveBeenCalled();
     expect(result.appliedAudio).toBe(true);
     expect(result.outputs).toEqual([
-      expect.objectContaining({
+      {
         kind: "audio.transcription",
+        attachmentIndex: 0,
         text: "[Voice note could not be transcribed because the audio attachment was too small]",
         provider: "openclaw",
         model: "synthetic-empty-audio",
-      }),
+      },
     ]);
     expect(ctx.Transcript).toBe(
       "[Voice note could not be transcribed because the audio attachment was too small]",
@@ -733,11 +759,16 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBe("sherpa ok");
-    expect(mockedRunExec).toHaveBeenCalledWith(
-      "sherpa-onnx-offline",
-      expect.any(Array),
-      expect.any(Object),
-    );
+    const [command, args, options] = getRunExecCall();
+    expect(command).toBe("sherpa-onnx-offline");
+    expect(args).toEqual([
+      `--tokens=${path.join(modelDir, "tokens.txt")}`,
+      `--encoder=${path.join(modelDir, "encoder.onnx")}`,
+      `--decoder=${path.join(modelDir, "decoder.onnx")}`,
+      `--joiner=${path.join(modelDir, "joiner.onnx")}`,
+      await fs.realpath(ctx.MediaPath ?? ""),
+    ]);
+    expectCliRunOptions(options);
   });
 
   it("auto-detects whisper-cli when sherpa is unavailable", async () => {
@@ -762,11 +793,16 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBe("whisper cpp ok");
-    expect(mockedRunExec).toHaveBeenCalledWith(
-      "whisper-cli",
-      expect.any(Array),
-      expect.any(Object),
-    );
+    const [command, args, options] = getRunExecCall();
+    expect(command).toBe("whisper-cli");
+    if (!Array.isArray(args)) {
+      throw new Error("expected whisper-cli args");
+    }
+    expect(args.slice(0, 4)).toEqual(["-m", modelPath, "-otxt", "-of"]);
+    expect(typeof args[4]).toBe("string");
+    expect(String(args[4]).endsWith("sample")).toBe(true);
+    expect(args.slice(5)).toEqual(["-np", "-nt", await fs.realpath(ctx.MediaPath ?? "")]);
+    expectCliRunOptions(options);
   });
 
   it("transcodes non-wav audio before auto-detected whisper-cli runs", async () => {
@@ -809,24 +845,23 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBe("whisper cpp ogg ok");
-    expect(mockedRunFfmpeg).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        "-i",
-        expect.stringMatching(/telegram-voice\.ogg$/),
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-c:a",
-        "pcm_s16le",
-        expect.stringMatching(/telegram-voice\.wav.*\.part$/),
-      ]),
-    );
-    expect(mockedRunExec).toHaveBeenCalledWith(
-      "whisper-cli",
-      expect.arrayContaining([expect.stringMatching(/telegram-voice\.wav$/)]),
-      expect.any(Object),
-    );
+    const ffmpegArgs = getRunFfmpegArgs();
+    expect(ffmpegArgs).toHaveLength(10);
+    expect(ffmpegArgs.slice(0, 2)).toEqual(["-y", "-i"]);
+    expect(String(ffmpegArgs[2]).endsWith("telegram-voice.ogg")).toBe(true);
+    expect(ffmpegArgs.slice(3, 9)).toEqual(["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le"]);
+    expect(String(ffmpegArgs[9]).includes("telegram-voice.wav")).toBe(true);
+    expect(String(ffmpegArgs[9]).endsWith(".part")).toBe(true);
+
+    const [command, args, options] = getRunExecCall();
+    expect(command).toBe("whisper-cli");
+    if (!Array.isArray(args)) {
+      throw new Error("expected whisper-cli transcode args");
+    }
+    expect(args.slice(0, 4)).toEqual(["-m", modelPath, "-otxt", "-of"]);
+    expect(args.slice(5, 7)).toEqual(["-np", "-nt"]);
+    expect(String(args[7]).endsWith("telegram-voice.wav")).toBe(true);
+    expectCliRunOptions(options);
   });
 
   it("skips audio auto-detect when no supported binaries or provider keys are available", async () => {
@@ -1021,12 +1056,12 @@ describe("applyMediaUnderstanding", () => {
     expect(transcribeAudio).not.toHaveBeenCalled();
     expect(result.appliedAudio).toBe(false);
     expect(ctx.Transcript).toBe("preflight transcript");
-    expect(result.decisions).toContainEqual(
-      expect.objectContaining({
-        capability: "audio",
-        outcome: "no-attachment",
-      }),
-    );
+    const audioDecision = result.decisions.find((decision) => decision.capability === "audio");
+    expect(audioDecision).toEqual({
+      capability: "audio",
+      outcome: "no-attachment",
+      attachments: [],
+    });
   });
 
   it("handles multiple audio attachments when attachment mode is all", async () => {

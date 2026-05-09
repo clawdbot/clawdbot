@@ -308,7 +308,7 @@ describe("slack native approval adapter", () => {
     });
 
     expect(originTarget).toBeNull();
-    expect(dmTargets).toEqual([]);
+    expect(dmTargets).toStrictEqual([]);
   });
 
   it("skips native delivery when the request is bound to another Slack account", async () => {
@@ -347,7 +347,7 @@ describe("slack native approval adapter", () => {
     });
 
     expect(originTarget).toBeNull();
-    expect(dmTargets).toEqual([]);
+    expect(dmTargets).toStrictEqual([]);
   });
 
   it("suppresses generic slack fallback only for slack-originated approvals", () => {

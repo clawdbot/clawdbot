@@ -1,3 +1,4 @@
+import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { POSIX_OPENCLAW_TMP_DIR, resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
@@ -166,8 +167,11 @@ describe("resolvePreferredOpenClawTmpDir", () => {
     });
 
     expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
-    expect(accessSync).toHaveBeenCalledWith("/tmp", expect.any(Number));
-    expect(mkdirSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR, expect.any(Object));
+    expect(accessSync).toHaveBeenCalledWith("/tmp", fsConstants.W_OK | fsConstants.X_OK);
+    expect(mkdirSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR, {
+      recursive: true,
+      mode: 0o700,
+    });
     expect(tmpdir).not.toHaveBeenCalled();
   });
 

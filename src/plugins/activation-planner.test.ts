@@ -372,6 +372,6 @@ describe("activation planner", () => {
         },
         onlyPluginIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

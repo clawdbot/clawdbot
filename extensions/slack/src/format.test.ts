@@ -74,7 +74,7 @@ describe("markdownToSlackMrkdwn", () => {
       chunks
         .map((chunk, index) => ({ index, length: chunk.length }))
         .filter((chunk) => chunk.length > 8),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 

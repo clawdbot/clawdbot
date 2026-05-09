@@ -104,15 +104,32 @@ describe("statusJsonCommand", () => {
 
     await statusJsonCommand({ all: true }, runtime);
 
-    expect(mocks.runSecurityAudit).toHaveBeenCalledWith({
-      config: expect.any(Object),
-      sourceConfig: expect.any(Object),
-      deep: false,
-      includeFilesystem: true,
-      includeChannelSecurity: true,
-      loadPluginSecurityCollectors: false,
-      plugins: expect.any(Array),
-    });
+    expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
+    const auditInput = mocks.runSecurityAudit.mock.calls[0]?.[0] as
+      | {
+          config?: unknown;
+          sourceConfig?: unknown;
+          deep?: unknown;
+          includeFilesystem?: unknown;
+          includeChannelSecurity?: unknown;
+          loadPluginSecurityCollectors?: unknown;
+          plugins?: Array<{ id: string }>;
+        }
+      | undefined;
+    expect(auditInput?.config).toStrictEqual({ update: { channel: "stable" } });
+    expect(auditInput?.sourceConfig).toStrictEqual({});
+    expect(auditInput?.deep).toBe(false);
+    expect(auditInput?.includeFilesystem).toBe(true);
+    expect(auditInput?.includeChannelSecurity).toBe(true);
+    expect(auditInput?.loadPluginSecurityCollectors).toBe(false);
+    expect(auditInput?.plugins?.map((plugin) => plugin.id)).toStrictEqual([
+      "discord",
+      "imessage",
+      "signal",
+      "slack",
+      "telegram",
+      "whatsapp",
+    ]);
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toHaveProperty("securityAudit.summary.critical", 1);
   });

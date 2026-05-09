@@ -35,6 +35,6 @@ describe("trackBackgroundTask", () => {
     await waitForAsyncCallbacks();
 
     expect(backgroundTasks.size).toBe(0);
-    expect(unhandledRejections).toEqual([]);
+    expect(unhandledRejections).toStrictEqual([]);
   });
 });

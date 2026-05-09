@@ -161,7 +161,7 @@ describe("createTelephonyTtsProvider deepMerge hardening", () => {
     );
 
     expect(requestText).toBe("Speak this instead");
-    expect(requestOverrides).toMatchObject({ ttsText: "Speak this instead" });
+    expect(requestOverrides).toStrictEqual({ ttsText: "Speak this instead" });
   });
 
   it("exposes configured timeoutMs as synthesisTimeoutMs", () => {

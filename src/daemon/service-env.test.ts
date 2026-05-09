@@ -123,7 +123,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
       "/sbin",
     ]);
     const userPathEntries = result.filter((entry) => entry.startsWith("/Users/testuser/"));
-    expect(userPathEntries).toEqual([]);
+    expect(userPathEntries).toStrictEqual([]);
   });
 
   it("can include env-configured version manager dirs on macOS when requested", () => {
@@ -169,7 +169,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     });
 
     // Windows returns empty array (uses existing PATH)
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("omits hard-coded version-manager fallbacks on Linux when missing", () => {

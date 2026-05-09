@@ -276,7 +276,7 @@ describe("openshell fs bridges", () => {
     await expect(fs.stat(path.join(outsideDir, "escape.txt"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
+    await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
     expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
   });
 

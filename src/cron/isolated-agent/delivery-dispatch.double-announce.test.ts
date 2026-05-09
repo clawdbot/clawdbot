@@ -15,12 +15,17 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 
 // --- Module mocks (must be hoisted before imports) ---
 
-const { countActiveDescendantRunsMock, maybeApplyTtsToPayloadMock, retireSessionMcpRuntimeMock } =
-  vi.hoisted(() => ({
-    countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
-    maybeApplyTtsToPayloadMock: vi.fn(async (params: { payload: unknown }) => params.payload),
-    retireSessionMcpRuntimeMock: vi.fn().mockResolvedValue(true),
-  }));
+const {
+  countActiveDescendantRunsMock,
+  deliverOutboundPayloadsMock,
+  maybeApplyTtsToPayloadMock,
+  retireSessionMcpRuntimeMock,
+} = vi.hoisted(() => ({
+  countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
+  deliverOutboundPayloadsMock: vi.fn().mockResolvedValue([{ ok: true }]),
+  maybeApplyTtsToPayloadMock: vi.fn(async (params: { payload: unknown }) => params.payload),
+  retireSessionMcpRuntimeMock: vi.fn().mockResolvedValue(true),
+}));
 
 vi.mock("../../config/sessions/main-session.js", () => ({
   resolveAgentMainSessionKey: vi.fn(({ agentId }: { agentId: string }) => `agent:${agentId}:main`),
@@ -40,7 +45,8 @@ vi.mock("./delivery-subagent-registry.runtime.js", () => ({
 }));
 
 vi.mock("../../infra/outbound/deliver.js", () => ({
-  deliverOutboundPayloads: vi.fn().mockResolvedValue([{ ok: true }]),
+  deliverOutboundPayloads: deliverOutboundPayloadsMock,
+  deliverOutboundPayloadsInternal: deliverOutboundPayloadsMock,
 }));
 
 vi.mock("../../infra/outbound/identity.js", () => ({

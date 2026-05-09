@@ -167,7 +167,7 @@ describe("channel-streaming", () => {
 
   it("uses auto progress labels when no explicit label is configured", () => {
     const invalidLabels = DEFAULT_PROGRESS_DRAFT_LABELS.filter((label) => !label.endsWith("..."));
-    expect(invalidLabels).toEqual([]);
+    expect(invalidLabels).toStrictEqual([]);
     expect(resolveChannelProgressDraftLabel({ random: () => 0 })).toBe(
       DEFAULT_PROGRESS_DRAFT_LABELS[0],
     );

@@ -276,6 +276,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-wiki/**"
+"extensions: oc-path":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/oc-path/**"
 "extensions: open-prose":
   - changed-files:
       - any-glob-to-any-file:

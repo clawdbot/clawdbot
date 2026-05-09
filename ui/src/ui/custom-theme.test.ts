@@ -186,11 +186,12 @@ describe("custom theme import helpers", () => {
       { headers?: unknown; redirect?: unknown; signal?: unknown },
     ];
     expect(fetchUrl).toBe("https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z");
-    expect(fetchOptions).toMatchObject({
+    expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchOptions).toEqual({
       headers: { accept: "application/json" },
       redirect: "error",
+      signal: fetchOptions.signal,
     });
-    expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("rejects oversized tweakcn theme responses before parsing", async () => {

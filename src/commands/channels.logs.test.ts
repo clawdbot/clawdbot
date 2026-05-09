@@ -155,6 +155,6 @@ describe("channelsLogsCommand", () => {
 
     const payload = readJsonPayload();
     expect(payload.file).toBe(configuredFile);
-    expect(payload.lines).toEqual([]);
+    expect(payload.lines).toStrictEqual([]);
   });
 });

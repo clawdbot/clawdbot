@@ -166,7 +166,7 @@ async function expectNoUnhandledRejection(run: () => void | Promise<void>): Prom
   } finally {
     process.off("unhandledRejection", onUnhandledRejection);
   }
-  expect(unhandledRejections).toEqual([]);
+  expect(unhandledRejections).toStrictEqual([]);
 }
 
 afterEach(() => {
@@ -279,7 +279,7 @@ describe("setup-registry module loader", () => {
       env: {},
     });
 
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
@@ -546,7 +546,7 @@ describe("setup-registry module loader", () => {
       requiresRuntime: true,
     });
 
-    expect(resolvePluginSetupRegistry({ env: {} }).diagnostics).toEqual([]);
+    expect(resolvePluginSetupRegistry({ env: {} }).diagnostics).toStrictEqual([]);
   });
 
   it("does not load setup-api modules from the current working directory", () => {

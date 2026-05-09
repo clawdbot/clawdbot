@@ -14,6 +14,20 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
+async function expectPathMissing(targetPath: string) {
+  let statError: unknown;
+  try {
+    await fsPromises.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  expect(statError).toBeInstanceOf(Error);
+  if (!(statError instanceof Error)) {
+    throw new Error("expected missing path error");
+  }
+  expect(Reflect.get(statError, "code")).toBe("ENOENT");
+}
+
 describe("resolveTsdownBuildInvocation", () => {
   it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {
     const result = resolveTsdownBuildInvocation({
@@ -97,15 +111,9 @@ describe("resolveTsdownBuildInvocation", () => {
     await expect(
       fsPromises.readFile(path.join(distRuntimeDir, "heartbeat-runner.runtime.js"), "utf8"),
     ).resolves.toBe("alias\n");
-    await expect(fsPromises.stat(path.join(distDir, "delegate-BPjCe4gC.js"))).rejects.toMatchObject(
-      { code: "ENOENT" },
-    );
-    await expect(
-      fsPromises.stat(path.join(distDir, "compact.runtime-2DiEmVcA.js")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fsPromises.stat(path.join(distRuntimeDir, "heartbeat-runner.runtime-fspOEj_1.js")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(path.join(distDir, "delegate-BPjCe4gC.js"));
+    await expectPathMissing(path.join(distDir, "compact.runtime-2DiEmVcA.js"));
+    await expectPathMissing(path.join(distRuntimeDir, "heartbeat-runner.runtime-fspOEj_1.js"));
   });
 
   it("cleans tsdown output roots before using tsdown --no-clean", async () => {
@@ -125,11 +133,9 @@ describe("resolveTsdownBuildInvocation", () => {
 
     cleanTsdownOutputRoots({ cwd: rootDir });
 
-    await expect(fsPromises.stat(distFile)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fsPromises.stat(pluginGeneratedFile)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fsPromises.stat(path.join(rootDir, "dist-runtime"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(distFile);
+    await expectPathMissing(pluginGeneratedFile);
+    await expectPathMissing(path.join(rootDir, "dist-runtime"));
     await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
   });
 });

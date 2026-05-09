@@ -18,7 +18,7 @@ describe("markdownToSignalText", () => {
     const res = markdownToSignalText("see [docs](https://example.com) and https://example.com");
 
     expect(res.text).toBe("see docs (https://example.com) and https://example.com");
-    expect(res.styles).toEqual([]);
+    expect(res.styles).toStrictEqual([]);
   });
 
   it("keeps style offsets correct with multiple expanded links", () => {
@@ -55,7 +55,7 @@ describe("markdownToSignalText", () => {
     const res = markdownToSignalText("- one\n- two");
 
     expect(res.text).toBe("• one\n• two");
-    expect(res.styles).toEqual([]);
+    expect(res.styles).toStrictEqual([]);
   });
 
   it("uses UTF-16 code units for offsets", () => {

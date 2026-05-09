@@ -32,7 +32,7 @@ describe("collectMissingExplicitDefaultAccountWarnings", () => {
       },
     };
 
-    expect(collectMissingExplicitDefaultAccountWarnings(cfg)).toEqual([]);
+    expect(collectMissingExplicitDefaultAccountWarnings(cfg)).toStrictEqual([]);
   });
 
   it("does not warn when accounts.default exists", () => {
@@ -47,7 +47,7 @@ describe("collectMissingExplicitDefaultAccountWarnings", () => {
       },
     };
 
-    expect(collectMissingExplicitDefaultAccountWarnings(cfg)).toEqual([]);
+    expect(collectMissingExplicitDefaultAccountWarnings(cfg)).toStrictEqual([]);
   });
 
   it("does not warn when defaultAccount points to a configured account", () => {
@@ -63,7 +63,7 @@ describe("collectMissingExplicitDefaultAccountWarnings", () => {
       },
     };
 
-    expect(collectMissingExplicitDefaultAccountWarnings(cfg)).toEqual([]);
+    expect(collectMissingExplicitDefaultAccountWarnings(cfg)).toStrictEqual([]);
   });
 
   it("normalizes defaultAccount before validating configured account ids", () => {
@@ -79,7 +79,7 @@ describe("collectMissingExplicitDefaultAccountWarnings", () => {
       },
     };
 
-    expect(collectMissingExplicitDefaultAccountWarnings(cfg)).toEqual([]);
+    expect(collectMissingExplicitDefaultAccountWarnings(cfg)).toStrictEqual([]);
   });
 
   it("warns when defaultAccount is invalid for configured accounts", () => {

@@ -1070,7 +1070,7 @@ describe("cron service timer regressions", () => {
 
     await onTimer(state);
 
-    expect(state.store?.jobs).toEqual([]);
+    expect(state.store?.jobs).toStrictEqual([]);
     expect(log.warn).not.toHaveBeenCalledWith(
       expect.anything(),
       "cron: applyOutcomeToStoredJob — job not found after forceReload, result discarded",
@@ -1124,7 +1124,7 @@ describe("cron service timer regressions", () => {
 
     await onTimer(state);
 
-    expect(state.store?.jobs).toEqual([]);
+    expect(state.store?.jobs).toStrictEqual([]);
     expect(log.warn).toHaveBeenCalledWith(
       { jobId: failedJob.id },
       "cron: applyOutcomeToStoredJob — job not found after forceReload, result discarded",

@@ -90,7 +90,11 @@ describe("installFromNpmSpecArchive", () => {
 
     expect(result).toEqual({ ok: false, error: "pack failed" });
     expect(installFromArchive).not.toHaveBeenCalled();
-    expect(withTempDir).toHaveBeenCalledWith("openclaw-test-", expect.any(Function));
+    const withTempDirMock = vi.mocked(withTempDir);
+    expect(withTempDirMock).toHaveBeenCalledTimes(1);
+    const [tempDirPrefix, tempDirCallback] = withTempDirMock.mock.calls[0];
+    expect(tempDirPrefix).toBe("openclaw-test-");
+    expect(tempDirCallback).toBeTypeOf("function");
   });
 
   it("rejects unsupported npm specs before packing", async () => {

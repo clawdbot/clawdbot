@@ -88,6 +88,6 @@ describe("inferUpdateFailureHints", () => {
       "npm ERR! code EACCES\nnpm ERR! Error: EACCES: permission denied",
       "pnpm",
     );
-    expect(inferUpdateFailureHints(result)).toEqual([]);
+    expect(inferUpdateFailureHints(result)).toStrictEqual([]);
   });
 });

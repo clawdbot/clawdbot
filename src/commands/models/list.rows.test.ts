@@ -116,7 +116,7 @@ describe("appendProviderCatalogRows", () => {
         models: { providers: {} },
       },
     });
-    expect(rows).toEqual([]);
+    expect(rows).toStrictEqual([]);
   });
 
   it("uses Codex auth availability for configured canonical OpenAI rows", async () => {

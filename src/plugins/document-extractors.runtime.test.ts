@@ -67,7 +67,7 @@ describe("resolvePluginDocumentExtractors", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not expand an operator plugin allowlist", () => {
@@ -79,6 +79,6 @@ describe("resolvePluginDocumentExtractors", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

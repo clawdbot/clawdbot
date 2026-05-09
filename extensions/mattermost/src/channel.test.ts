@@ -248,7 +248,7 @@ describe("mattermostPlugin", () => {
       };
 
       const actions = getDescribedActions(cfg);
-      expect(actions).toEqual([]);
+      expect(actions).toStrictEqual([]);
     });
 
     it("declares presentation capability for message sends", () => {

@@ -425,6 +425,7 @@ describe("installContextEngineLoopHook", () => {
       messages: AgentMessage[];
       prePromptMessageCount: number;
     }) => Record<string, unknown> | undefined,
+    onAfterTurnCheckpoint?: (messageCount: number) => void,
   ): () => void {
     return installContextEngineLoopHook({
       agent,
@@ -436,6 +437,7 @@ describe("installContextEngineLoopHook", () => {
       modelId,
       ...(prePromptCount !== undefined ? { getPrePromptMessageCount: () => prePromptCount } : {}),
       ...(getRuntimeContext ? { getRuntimeContext } : {}),
+      ...(onAfterTurnCheckpoint ? { onAfterTurnCheckpoint } : {}),
     });
   }
 
@@ -570,6 +572,22 @@ describe("installContextEngineLoopHook", () => {
     expect(engine.afterTurn).toHaveBeenCalledTimes(2);
     expect(engine.afterTurn.mock.calls[0]?.[0]?.prePromptMessageCount).toBe(2);
     expect(engine.afterTurn.mock.calls[1]?.[0]?.prePromptMessageCount).toBe(4);
+  });
+
+  it("reports the latest delivered afterTurn checkpoint", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    const onAfterTurnCheckpoint = vi.fn();
+    installHook(agent, engine, undefined, undefined, onAfterTurnCheckpoint);
+
+    const batch0 = [makeUser("h1"), makeToolResult("c1", "r1")];
+    await callTransform(agent, batch0);
+
+    const batch1 = [...batch0, makeUser("h2"), makeToolResult("c2", "r2")];
+    await callTransform(agent, batch1);
+
+    expect(onAfterTurnCheckpoint).toHaveBeenCalledTimes(1);
+    expect(onAfterTurnCheckpoint).toHaveBeenCalledWith(batch1.length);
   });
 
   it("skips afterTurn and assemble when messages have not changed", async () => {

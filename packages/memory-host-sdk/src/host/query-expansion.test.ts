@@ -170,8 +170,8 @@ describe("extractKeywords", () => {
   });
 
   it("handles empty query", () => {
-    expect(extractKeywords("")).toEqual([]);
-    expect(extractKeywords("   ")).toEqual([]);
+    expect(extractKeywords("")).toStrictEqual([]);
+    expect(extractKeywords("   ")).toStrictEqual([]);
   });
 
   it("handles query with only stop words", () => {

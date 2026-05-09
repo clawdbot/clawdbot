@@ -217,7 +217,7 @@ describe("nodes camera_snap", () => {
     );
 
     expectNoImages(result);
-    expect(result.content ?? []).toEqual([]);
+    expect(result.content ?? []).toStrictEqual([]);
     expect(expectFirstMediaUrl(result)).toMatch(/openclaw-camera-snap-front-.*\.jpg$/);
   });
 
@@ -269,7 +269,7 @@ describe("nodes camera_snap", () => {
       facing: "front",
     });
 
-    expect(result.content ?? []).toEqual([]);
+    expect(result.content ?? []).toStrictEqual([]);
     await expect(readFileUtf8AndCleanup(expectFirstMediaUrl(result))).resolves.toBe("url-image");
   });
 
@@ -367,8 +367,8 @@ describe("nodes photos_latest", () => {
       { modelHasVision: false },
     );
 
-    expect(result.content ?? []).toEqual([]);
-    expect(result.details).toEqual([]);
+    expect(result.content ?? []).toStrictEqual([]);
+    expect(result.details).toStrictEqual([]);
   });
 
   it("returns MEDIA paths and no inline images when model has no vision", async () => {
@@ -377,7 +377,7 @@ describe("nodes photos_latest", () => {
     const result = await executePhotosLatest({ modelHasVision: false });
 
     expectNoImages(result);
-    expect(result.content ?? []).toEqual([]);
+    expect(result.content ?? []).toStrictEqual([]);
     const details =
       (result.details as { photos?: Array<Record<string, unknown>> } | undefined)?.photos ?? [];
     expect(details[0]).toMatchObject({

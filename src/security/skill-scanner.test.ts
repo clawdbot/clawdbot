@@ -298,7 +298,7 @@ export function greet(name: string): string {
 }
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings).toEqual([]);
+    expect(findings).toStrictEqual([]);
   });
 
   it("returns empty array for normal http client code (just a fetch GET)", () => {
@@ -308,7 +308,7 @@ const json = await response.json();
 console.log(json);
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings).toEqual([]);
+    expect(findings).toStrictEqual([]);
   });
 
   it("does not treat fetch in names or comments as network send context", () => {

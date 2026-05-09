@@ -43,7 +43,7 @@ describe("normalizeHeadersInitForFetch", () => {
     const normalized = normalizeHeadersInitForFetch(headers);
 
     expect(normalized).not.toBe(headers);
-    expect(Object.getOwnPropertySymbols(normalized as object)).toEqual([]);
+    expect(Object.getOwnPropertySymbols(normalized as object)).toStrictEqual([]);
     expect(new Headers(normalized).get("content-type")).toBe("application/json");
     expect(Object.getOwnPropertySymbols(headers as object)).toHaveLength(1);
   });
@@ -57,7 +57,7 @@ describe("normalizeHeadersInitForFetch", () => {
 
     const normalized = normalizeHeadersInitForFetch(headers);
 
-    expect(Object.getOwnPropertySymbols(normalized as object)).toEqual([]);
+    expect(Object.getOwnPropertySymbols(normalized as object)).toStrictEqual([]);
     expect(new Headers(normalized).get("x-hidden")).toBe("yes");
     expect(new Headers(normalized).get("content-type")).toBe("application/json");
   });
@@ -76,7 +76,7 @@ describe("normalizeRequestInitHeadersForFetch", () => {
     const normalized = normalizeRequestInitHeadersForFetch(init);
 
     expect(normalized).not.toBe(init);
-    expect(Object.getOwnPropertySymbols(normalized?.headers as object)).toEqual([]);
+    expect(Object.getOwnPropertySymbols(normalized?.headers as object)).toStrictEqual([]);
     expect(Object.getOwnPropertySymbols(init.headers as object)).toHaveLength(1);
   });
 });

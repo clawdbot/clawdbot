@@ -217,7 +217,7 @@ describe("delivery-queue storage", () => {
 
   describe("loadPendingDeliveries", () => {
     it("returns empty array when queue directory does not exist", async () => {
-      expect(await loadPendingDeliveries(path.join(tmpDir(), "no-such-dir"))).toEqual([]);
+      expect(await loadPendingDeliveries(path.join(tmpDir(), "no-such-dir"))).toStrictEqual([]);
     });
 
     it("loads multiple entries", async () => {

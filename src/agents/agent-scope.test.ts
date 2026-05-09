@@ -196,14 +196,14 @@ describe("resolveAgentConfig", () => {
         ],
       },
     };
-    expect(resolveAgentModelFallbacksOverride(cfgNoOverride, "linus")).toEqual([]);
+    expect(resolveAgentModelFallbacksOverride(cfgNoOverride, "linus")).toStrictEqual([]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg: cfgNoOverride,
         agentId: "linus",
         hasSessionModelOverride: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     const cfgStringModel: OpenClawConfig = {
       agents: {
@@ -215,7 +215,7 @@ describe("resolveAgentConfig", () => {
         ],
       },
     };
-    expect(resolveAgentModelFallbacksOverride(cfgStringModel, "linus")).toEqual([]);
+    expect(resolveAgentModelFallbacksOverride(cfgStringModel, "linus")).toStrictEqual([]);
 
     const cfgStrictAgentWithDefaultFallbacks: OpenClawConfig = {
       agents: {
@@ -244,7 +244,7 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
         modelOverrideSource: "auto",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     // Explicit empty list disables global fallbacks for that agent.
     const cfgDisable: OpenClawConfig = {
@@ -260,7 +260,7 @@ describe("resolveAgentConfig", () => {
         ],
       },
     };
-    expect(resolveAgentModelFallbacksOverride(cfgDisable, "linus")).toEqual([]);
+    expect(resolveAgentModelFallbacksOverride(cfgDisable, "linus")).toStrictEqual([]);
 
     expect(
       resolveEffectiveModelFallbacks({
@@ -284,21 +284,21 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
         modelOverrideSource: "user",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg,
         agentId: "linus",
         hasSessionModelOverride: true,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg: cfgNoOverride,
         agentId: "linus",
         hasSessionModelOverride: true,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     const cfgInheritDefaultsWithoutAgentModel: OpenClawConfig = {
       agents: {
@@ -325,7 +325,7 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
         modelOverrideSource: "auto",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("updates the effective model primary at the winning config layer", () => {
@@ -770,6 +770,6 @@ describe("resolveAgentSkillsFilter", () => {
       },
     };
 
-    expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual([]);
+    expect(resolveAgentSkillsFilter(cfg, "writer")).toStrictEqual([]);
   });
 });

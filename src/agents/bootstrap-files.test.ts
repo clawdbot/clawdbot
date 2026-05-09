@@ -187,7 +187,7 @@ describe("resolveBootstrapContextForRun", () => {
 
     expect(files.length).toBeGreaterThan(0);
     const nonHeartbeatFiles = files.filter((file) => file.name !== "HEARTBEAT.md");
-    expect(nonHeartbeatFiles).toEqual([]);
+    expect(nonHeartbeatFiles).toStrictEqual([]);
   });
 
   it("keeps bootstrap context empty in lightweight cron mode", async () => {
@@ -200,7 +200,7 @@ describe("resolveBootstrapContextForRun", () => {
       runKind: "cron",
     });
 
-    expect(files).toEqual([]);
+    expect(files).toStrictEqual([]);
   });
 
   it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat prompt section is disabled", async () => {

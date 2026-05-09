@@ -62,7 +62,7 @@ describe("splitSignalFormattedText", () => {
     it("empty text returns empty array", () => {
       // Empty input produces no chunks (not an empty chunk)
       const chunks = markdownToSignalTextChunks("", 100);
-      expect(chunks).toEqual([]);
+      expect(chunks).toStrictEqual([]);
     });
 
     it("text under limit returns single chunk unchanged", () => {

@@ -693,7 +693,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(result.response.status).toBe(200);
     const firstHeaders = fetchImpl.mock.calls[0]?.[1]?.headers;
     expect(firstHeaders).not.toBe(headers);
-    expect(Object.getOwnPropertySymbols(firstHeaders as object)).toEqual([]);
+    expect(Object.getOwnPropertySymbols(firstHeaders as object)).toStrictEqual([]);
     const secondHeaders = getSecondRequestHeaders(fetchImpl);
     expect(secondHeaders.get("authorization")).toBeNull();
     expect(secondHeaders.get("accept")).toBe("application/json");

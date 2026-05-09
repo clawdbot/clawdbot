@@ -101,7 +101,10 @@ function expectNoBundledPluginNamingMismatches(params: {
   collectMismatches: (records: BundledPluginRecord[]) => string[];
 }) {
   const mismatches = resolveBundledPluginMismatches(params.collectMismatches);
-  expect(mismatches, `${params.message}\nFound: ${mismatches.join(", ") || "<none>"}`).toEqual([]);
+  expect(
+    mismatches,
+    `${params.message}\nFound: ${mismatches.join(", ") || "<none>"}`,
+  ).toStrictEqual([]);
 }
 
 describe("bundled plugin naming guardrails", () => {

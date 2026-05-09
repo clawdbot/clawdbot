@@ -49,8 +49,8 @@ function expectAssistantToolCallsOmitted(result: AgentMessage[], expectedLength:
 
 describe("validate turn edge cases", () => {
   it("returns empty array unchanged", () => {
-    expect(validateGeminiTurns([])).toEqual([]);
-    expect(validateAnthropicTurns([])).toEqual([]);
+    expect(validateGeminiTurns([])).toStrictEqual([]);
+    expect(validateAnthropicTurns([])).toStrictEqual([]);
   });
 
   it("returns single message unchanged", () => {
@@ -480,7 +480,7 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     const result = validateAnthropicTurns(msgs);
 
     expect(result).toHaveLength(3);
-    expect((result[1] as { content?: unknown[] }).content).toEqual([]);
+    expect((result[1] as { content?: unknown[] }).content).toStrictEqual([]);
   });
 
   it("should handle multiple dangling tool_use blocks", () => {

@@ -550,6 +550,51 @@ function formatFullAccessBlockedReason(reason?: EmbeddedFullAccessBlockedReason)
   }
   return "runtime constraints";
 }
+
+const MODEL_IDENTITY_PREFIX = "Current model identity:";
+
+export function buildModelIdentityPromptLine(model?: string): string | undefined {
+  const trimmed = model?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return `${MODEL_IDENTITY_PREFIX} ${trimmed}. If asked what model you are, answer with this value for the current run.`;
+}
+
+export function appendModelIdentitySystemPrompt(params: {
+  systemPrompt: string;
+  model?: string;
+}): string {
+  const line = buildModelIdentityPromptLine(params.model);
+  if (!line) {
+    return params.systemPrompt;
+  }
+
+  let replaced = false;
+  const nextLines = params.systemPrompt
+    .split(/\r?\n/u)
+    .filter((candidate) => {
+      if (!candidate.trimStart().startsWith(MODEL_IDENTITY_PREFIX)) {
+        return true;
+      }
+      if (replaced) {
+        return false;
+      }
+      replaced = true;
+      return true;
+    })
+    .map((candidate) =>
+      candidate.trimStart().startsWith(MODEL_IDENTITY_PREFIX) ? line : candidate,
+    );
+
+  if (replaced) {
+    return nextLines.join("\n");
+  }
+
+  const base = params.systemPrompt.trimEnd();
+  return base ? `${base}\n\n${line}` : line;
+}
+
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
@@ -757,6 +802,7 @@ export function buildAgentSystemPrompt(params: {
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const runtimeInfo = params.runtimeInfo;
+  const modelIdentityLine = buildModelIdentityPromptLine(runtimeInfo?.model);
   const runtimeChannel = normalizeOptionalLowercaseString(runtimeInfo?.channel);
   const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
   const runtimeCapabilitiesLower = new Set(
@@ -816,7 +862,9 @@ export function buildAgentSystemPrompt(params: {
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "You are a personal assistant running inside OpenClaw.";
+    return ["You are a personal assistant running inside OpenClaw.", modelIdentityLine]
+      .filter(Boolean)
+      .join("\n");
   }
 
   const contextFiles = params.contextFiles ?? [];
@@ -1174,6 +1222,7 @@ export function buildAgentSystemPrompt(params: {
   lines.push(
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
+    ...(modelIdentityLine ? [modelIdentityLine] : []),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
 

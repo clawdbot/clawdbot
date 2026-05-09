@@ -575,7 +575,7 @@ describe("getMemorySearchManager caching", () => {
 
     expect(replacementAttempt.manager).toBe(fallbackManager);
     expect(firstPrimary.close).not.toHaveBeenCalled();
-    await expect(firstManager.search("hello")).resolves.toEqual([]);
+    await expect(firstManager.search("hello")).resolves.toStrictEqual([]);
 
     const firstAgain = await getMemorySearchManager({ cfg: firstCfg, agentId });
     expect(firstAgain.manager).toBe(firstManager);

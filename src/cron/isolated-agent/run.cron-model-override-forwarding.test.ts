@@ -220,7 +220,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     // With the fix, the shared override helper resolves an explicit empty
     // list here: no configured fallback chain, and no silent agent-primary
     // append on retry.
-    expect(capturedFallbacksOverride).toEqual([]);
+    expect(capturedFallbacksOverride).toStrictEqual([]);
   });
 
   it("preserves default fallback chain for cron payload model overrides", async () => {

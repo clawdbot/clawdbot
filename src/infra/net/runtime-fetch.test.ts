@@ -84,7 +84,7 @@ describe("fetchWithRuntimeDispatcher", () => {
     expect(response.status).toBe(200);
     const sentHeaders = requireFetchInit(runtimeFetch).headers;
     expect(sentHeaders).not.toBe(headers);
-    expect(Object.getOwnPropertySymbols(sentHeaders as object)).toEqual([]);
+    expect(Object.getOwnPropertySymbols(sentHeaders as object)).toStrictEqual([]);
     expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
   });
 

@@ -39,6 +39,7 @@ export type OnboardingPluginInstallEntry = {
   label: string;
   install: PluginPackageInstall;
   trustedSourceLinkedOfficialInstall?: boolean;
+  preferRemoteInstall?: boolean;
 };
 
 export type OnboardingPluginInstallStatus = "installed" | "skipped" | "failed" | "timed_out";
@@ -730,14 +731,18 @@ export async function ensureOnboardingPluginInstalled(params: {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
   const allowLocal = hasGitWorkspace(workspaceDir);
-  const bundledLocalPath = resolveBundledLocalPath({ entry, workspaceDir });
+  const bundledLocalPath = entry.preferRemoteInstall
+    ? null
+    : resolveBundledLocalPath({ entry, workspaceDir });
   const localPath =
     bundledLocalPath ??
-    resolveLocalPath({
-      entry,
-      workspaceDir,
-      allowLocal,
-    });
+    (entry.preferRemoteInstall
+      ? null
+      : resolveLocalPath({
+          entry,
+          workspaceDir,
+          allowLocal,
+        }));
   const clawhubSpec = resolveClawHubSpecForOnboarding(entry.install);
   const npmSpec = resolveNpmSpecForOnboarding(entry.install);
   const updateChannel = resolveRegistryUpdateChannel({

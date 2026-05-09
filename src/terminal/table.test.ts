@@ -256,7 +256,7 @@ describe("wrapNoteMessage", () => {
     expect(lines.length).toBeGreaterThan(1);
     expect(lines[0]?.startsWith("- ")).toBe(true);
     const unindentedContinuationLines = lines.slice(1).filter((line) => !line.startsWith("  "));
-    expect(unindentedContinuationLines).toEqual([]);
+    expect(unindentedContinuationLines).toStrictEqual([]);
   });
 
   it("preserves long Windows paths without inserting spaces/newlines", () => {

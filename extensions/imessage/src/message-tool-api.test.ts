@@ -61,6 +61,6 @@ describe("iMessage message-tool artifact", () => {
       currentChannelId: "chat_id:1",
     });
 
-    expect(discovery?.actions).toEqual([]);
+    expect(discovery?.actions).toStrictEqual([]);
   });
 });

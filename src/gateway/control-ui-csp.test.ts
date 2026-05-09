@@ -58,7 +58,7 @@ describe("buildControlUiCspHeader", () => {
 
 describe("computeInlineScriptHashes", () => {
   it("returns empty for HTML without scripts", () => {
-    expect(computeInlineScriptHashes("<html><body>hi</body></html>")).toEqual([]);
+    expect(computeInlineScriptHashes("<html><body>hi</body></html>")).toStrictEqual([]);
   });
 
   it("hashes inline script content", () => {
@@ -70,7 +70,7 @@ describe("computeInlineScriptHashes", () => {
 
   it("skips scripts with src attribute", () => {
     const hashes = computeInlineScriptHashes('<html><script src="/app.js"></script></html>');
-    expect(hashes).toEqual([]);
+    expect(hashes).toStrictEqual([]);
   });
 
   it("does not treat data-src as an external script attribute", () => {
@@ -103,6 +103,6 @@ describe("computeInlineScriptHashes", () => {
   });
 
   it("skips empty inline scripts", () => {
-    expect(computeInlineScriptHashes("<script></script>")).toEqual([]);
+    expect(computeInlineScriptHashes("<script></script>")).toStrictEqual([]);
   });
 });

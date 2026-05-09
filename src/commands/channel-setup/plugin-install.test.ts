@@ -215,7 +215,7 @@ function expectSetupSnapshotDoesNotScopeToPlugin(params: {
   const firstLoadCall = vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as
     | { onlyPluginIds?: string[] }
     | undefined;
-  expect(firstLoadCall?.onlyPluginIds).toEqual([]);
+  expect(firstLoadCall?.onlyPluginIds).toStrictEqual([]);
 }
 
 beforeEach(() => {

@@ -3,6 +3,8 @@
 // Keep provider-owned exports out of this subpath so plugin loaders can import it
 // without recursing through provider-specific facades.
 
+import { createHash } from "node:crypto";
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import { findNormalizedProviderKey } from "../agents/provider-id.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
@@ -13,7 +15,6 @@ import type {
   ModelCatalogModel,
   ModelCatalogTieredCost,
 } from "../model-catalog/types.js";
-import { normalizeGooglePreviewModelId } from "./provider-model-id-normalize.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
 export type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
@@ -32,6 +33,47 @@ export type ConfiguredProviderCatalogEntry = {
   reasoning?: boolean;
   input?: Array<"text" | "image" | "audio" | "video" | "document">;
 };
+
+type LiveCatalogCacheEntry<T> = {
+  expiresAt: number;
+  value: Promise<T>;
+};
+
+const liveCatalogCache = new Map<string, LiveCatalogCacheEntry<unknown>>();
+
+function buildLiveCatalogCacheKey(parts: readonly unknown[]): string {
+  return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+}
+
+export async function getCachedLiveCatalogValue<T>(params: {
+  keyParts: readonly unknown[];
+  load: () => Promise<T>;
+  ttlMs?: number;
+  now?: () => number;
+}): Promise<T> {
+  const now = params.now?.() ?? Date.now();
+  const ttlMs = params.ttlMs ?? 30_000;
+  const key = buildLiveCatalogCacheKey(params.keyParts);
+  const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
+  if (existing && existing.expiresAt > now) {
+    return await existing.value;
+  }
+  const value = params.load();
+  liveCatalogCache.set(key, {
+    expiresAt: now + ttlMs,
+    value,
+  });
+  try {
+    return await value;
+  } catch (err) {
+    liveCatalogCache.delete(key);
+    throw err;
+  }
+}
+
+export function clearLiveCatalogCacheForTests(): void {
+  liveCatalogCache.clear();
+}
 
 function countRawManifestCatalogModels(catalog: unknown): number | undefined {
   if (!catalog || typeof catalog !== "object") {
@@ -159,17 +201,6 @@ function resolveConfiguredProviderModels(
   return Array.isArray(providerConfig.models) ? providerConfig.models : [];
 }
 
-function normalizeConfiguredProviderCatalogModelId(id: string): string {
-  const trimmed = id.trim();
-  const googlePrefix = "google/";
-  if (!trimmed.startsWith(googlePrefix)) {
-    return trimmed;
-  }
-  const modelId = trimmed.slice(googlePrefix.length);
-  const normalizedModelId = normalizeGooglePreviewModelId(modelId);
-  return normalizedModelId === modelId ? trimmed : `${googlePrefix}${normalizedModelId}`;
-}
-
 export function readConfiguredProviderCatalogEntries(params: {
   config?: OpenClawConfig;
   providerId: string;
@@ -186,7 +217,7 @@ export function readConfiguredProviderCatalogEntries(params: {
     if (!id) {
       continue;
     }
-    const normalizedId = normalizeConfiguredProviderCatalogModelId(id);
+    const normalizedId = normalizeConfiguredProviderCatalogModelId(provider, id);
     const name =
       (typeof model.name === "string" ? model.name : normalizedId).trim() || normalizedId;
     const contextWindow =

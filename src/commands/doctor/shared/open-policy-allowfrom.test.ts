@@ -109,7 +109,7 @@ describe("doctor open-policy allowFrom repair", () => {
       },
     });
 
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
     expect(result.config.channels?.discord?.allowFrom).toEqual(["*"]);
   });
 

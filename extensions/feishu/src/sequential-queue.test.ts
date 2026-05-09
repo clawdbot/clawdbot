@@ -85,7 +85,7 @@ describe("createSequentialQueue", () => {
       ).rejects.toThrow("boom");
 
       await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(unhandled).toEqual([]);
+      expect(unhandled).toStrictEqual([]);
 
       await expect(
         enqueue("feishu:default:chat-1", async () => {
@@ -156,7 +156,7 @@ describe("createSequentialQueue", () => {
     // Wait long enough that a timeout would have fired if it were active.
     await vi.advanceTimersByTimeAsync(30);
     expect(order).toEqual(["first:start"]);
-    expect(timeouts).toEqual([]);
+    expect(timeouts).toStrictEqual([]);
 
     gate.resolve();
     await Promise.all([first, second]);

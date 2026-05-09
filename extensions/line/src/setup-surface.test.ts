@@ -382,8 +382,8 @@ describe("linePlugin status.probeAccount", () => {
 describe("line runtime api", () => {
   it("keeps the LINE runtime barrel self-contained", () => {
     const runtimeApiPath = path.join(process.cwd(), "extensions", "line", "runtime-api.ts");
-    expect(collectRuntimeApiPreExports(runtimeApiPath)).toEqual([]);
-    expect(collectRuntimeApiPreExports(runtimeApiPath)).toEqual([]);
+    expect(collectRuntimeApiPreExports(runtimeApiPath)).toStrictEqual([]);
+    expect(collectRuntimeApiPreExports(runtimeApiPath)).toStrictEqual([]);
   });
 });
 

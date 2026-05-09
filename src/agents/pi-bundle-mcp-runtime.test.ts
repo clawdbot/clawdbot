@@ -467,7 +467,7 @@ describe("session MCP runtime", () => {
     await expect(manager.sweepIdleRuntimes()).resolves.toBe(1);
 
     expect(disposed).toEqual(["session-idle"]);
-    expect(manager.listSessionIds()).toEqual([]);
+    expect(manager.listSessionIds()).toStrictEqual([]);
     expect(manager.resolveSessionId("agent:test:session-idle")).toBeUndefined();
   });
 
@@ -498,6 +498,6 @@ describe("session MCP runtime", () => {
     now += 60_000_000;
     await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
     expect(manager.listSessionIds()).toEqual(["session-no-ttl"]);
-    expect(disposed).toEqual([]);
+    expect(disposed).toStrictEqual([]);
   });
 });

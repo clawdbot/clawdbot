@@ -44,7 +44,7 @@ const missingStoreDefaultCases = [
       const cfg = await loadVoiceWakeRoutingConfig(baseDir);
       expect(cfg.version).toBe(1);
       expect(cfg.defaultTarget).toEqual({ mode: "current" });
-      expect(cfg.routes).toEqual([]);
+      expect(cfg.routes).toStrictEqual([]);
       expect(cfg.updatedAtMs).toBe(0);
     },
   },

@@ -4,9 +4,9 @@ import { parseNodeList, parsePairingList } from "./node-list-parse.js";
 describe("shared/node-list-parse", () => {
   it("parses node.list payloads", () => {
     expect(parseNodeList({ nodes: [{ nodeId: "node-1" }] })).toEqual([{ nodeId: "node-1" }]);
-    expect(parseNodeList({ nodes: "nope" })).toEqual([]);
-    expect(parseNodeList(null)).toEqual([]);
-    expect(parseNodeList(["not-an-object"])).toEqual([]);
+    expect(parseNodeList({ nodes: "nope" })).toStrictEqual([]);
+    expect(parseNodeList(null)).toStrictEqual([]);
+    expect(parseNodeList(["not-an-object"])).toStrictEqual([]);
   });
 
   it("parses node.pair.list payloads", () => {

@@ -1,17 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
+import type { OutboundPayloadDeliveryOutcome } from "../../infra/outbound/deliver-types.js";
 import type { OutboundDeliveryIntent } from "../../infra/outbound/deliver.js";
 
 const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: deliverOutboundPayloads,
 }));
 
 import { sendDurableMessageBatch, withDurableMessageSendContext } from "./send.js";
 
 type DeliveryIntentCallbackParams = {
   onDeliveryIntent?: (intent: OutboundDeliveryIntent) => void;
+  onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
 };
 
 const cfg = {} as OpenClawConfig;
@@ -365,6 +369,211 @@ describe("withDurableMessageSendContext", () => {
         platformMessageIds: [],
       }),
     );
+  });
+
+  it("reports hook-cancelled deliveries as explicit suppressed sends", async () => {
+    deliverOutboundPayloads.mockImplementationOnce(async (params: DeliveryIntentCallbackParams) => {
+      params.onPayloadDeliveryOutcome?.({
+        index: 0,
+        status: "suppressed",
+        reason: "cancelled_by_message_sending_hook",
+        hookEffect: { cancelReason: "owned-by-other-agent" },
+      });
+      return [];
+    });
+    const onCommitReceipt = vi.fn();
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "slack",
+      to: "C123",
+      payloads: [{ text: "claimed elsewhere" }],
+      onCommitReceipt,
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "suppressed",
+        reason: "cancelled_by_message_sending_hook",
+        payloadOutcomes: [
+          expect.objectContaining({
+            status: "suppressed",
+            reason: "cancelled_by_message_sending_hook",
+            hookEffect: { cancelReason: "owned-by-other-agent" },
+          }),
+        ],
+      }),
+    );
+    expect(onCommitReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({ platformMessageIds: [] }),
+    );
+  });
+
+  it("forwards payload delivery outcomes to callers while collecting durable outcomes", async () => {
+    const onPayloadDeliveryOutcome = vi.fn();
+    deliverOutboundPayloads.mockImplementationOnce(async (params: DeliveryIntentCallbackParams) => {
+      params.onPayloadDeliveryOutcome?.({
+        index: 0,
+        status: "suppressed",
+        reason: "cancelled_by_message_sending_hook",
+      });
+      return [];
+    });
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "slack",
+      to: "C123",
+      payloads: [{ text: "claimed elsewhere" }],
+      onPayloadDeliveryOutcome,
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "suppressed",
+        payloadOutcomes: [
+          expect.objectContaining({
+            index: 0,
+            status: "suppressed",
+            reason: "cancelled_by_message_sending_hook",
+          }),
+        ],
+      }),
+    );
+    expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        index: 0,
+        status: "suppressed",
+        reason: "cancelled_by_message_sending_hook",
+      }),
+    );
+  });
+
+  it("reports zero-result failed best-effort payloads as failed sends", async () => {
+    const error = new Error("send failed");
+    deliverOutboundPayloads.mockImplementationOnce(async (params: DeliveryIntentCallbackParams) => {
+      params.onPayloadDeliveryOutcome?.({
+        index: 0,
+        status: "failed",
+        error,
+        sentBeforeError: false,
+        stage: "platform_send",
+      });
+      return [];
+    });
+    const onCommitReceipt = vi.fn();
+    const onSendFailure = vi.fn();
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "telegram",
+      to: "chat-1",
+      payloads: [{ text: "hello" }],
+      bestEffort: true,
+      onCommitReceipt,
+      onSendFailure,
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        error,
+        stage: "platform_send",
+        payloadOutcomes: [
+          expect.objectContaining({
+            index: 0,
+            status: "failed",
+            error,
+            stage: "platform_send",
+          }),
+        ],
+      }),
+    );
+    expect(onCommitReceipt).not.toHaveBeenCalled();
+    expect(onSendFailure).toHaveBeenCalledWith(error);
+  });
+
+  it("reports best-effort partial failures with the delivered receipt prefix", async () => {
+    const error = new Error("second payload failed");
+    deliverOutboundPayloads.mockImplementationOnce(async (params: DeliveryIntentCallbackParams) => {
+      params.onPayloadDeliveryOutcome?.({
+        index: 0,
+        status: "sent",
+        results: [{ channel: "telegram", messageId: "msg-1" }],
+      });
+      params.onPayloadDeliveryOutcome?.({
+        index: 1,
+        status: "failed",
+        error,
+        sentBeforeError: true,
+        stage: "platform_send",
+      });
+      return [{ channel: "telegram", messageId: "msg-1" }];
+    });
+    const onSendFailure = vi.fn();
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "telegram",
+      to: "chat-1",
+      payloads: [{ text: "first" }, { text: "second" }],
+      onSendFailure,
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "partial_failed",
+        results: [{ channel: "telegram", messageId: "msg-1" }],
+        receipt: expect.objectContaining({ platformMessageIds: ["msg-1"] }),
+        error,
+        sentBeforeError: true,
+      }),
+    );
+    expect(onSendFailure).toHaveBeenCalledWith(error);
+  });
+
+  it("maps thrown outbound partial delivery errors to partial_failed", async () => {
+    const cause = new Error("network reset");
+    const error = new OutboundDeliveryError("network reset", {
+      cause,
+      results: [{ channel: "telegram", messageId: "msg-1" }],
+      payloadOutcomes: [
+        {
+          index: 0,
+          status: "sent",
+          results: [{ channel: "telegram", messageId: "msg-1" }],
+        },
+        {
+          index: 1,
+          status: "failed",
+          error: cause,
+          sentBeforeError: true,
+          stage: "platform_send",
+        },
+      ],
+      stage: "platform_send",
+    });
+    deliverOutboundPayloads.mockRejectedValueOnce(error);
+    const onSendFailure = vi.fn();
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "telegram",
+      to: "chat-1",
+      payloads: [{ text: "first" }, { text: "second" }],
+      onSendFailure,
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "partial_failed",
+        results: [{ channel: "telegram", messageId: "msg-1" }],
+        receipt: expect.objectContaining({ platformMessageIds: ["msg-1"] }),
+        error,
+        sentBeforeError: true,
+      }),
+    );
+    expect(onSendFailure).toHaveBeenCalledWith(error);
   });
 
   it("runs the failure hook when send-context orchestration throws", async () => {

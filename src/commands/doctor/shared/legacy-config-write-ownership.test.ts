@@ -62,6 +62,6 @@ describe("legacy config write ownership", () => {
     const files = collectSourceFiles(SRC_ROOT);
     const violations = collectViolations(files);
 
-    expect(violations).toEqual([]);
+    expect(violations).toStrictEqual([]);
   });
 });

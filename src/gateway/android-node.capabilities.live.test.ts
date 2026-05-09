@@ -617,6 +617,6 @@ describeLive("android node capability integration (preconditioned)", () => {
         "summary:",
         summary,
       ].join("\n"),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

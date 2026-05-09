@@ -358,7 +358,7 @@ describe("task-executor", () => {
       });
 
       expect(created.parentFlowId).toBeUndefined();
-      expect(listTaskFlowRecords()).toEqual([]);
+      expect(listTaskFlowRecords()).toStrictEqual([]);
     });
   });
 

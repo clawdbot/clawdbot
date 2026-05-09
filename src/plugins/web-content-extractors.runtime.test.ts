@@ -11,6 +11,6 @@ describe("resolvePluginWebContentExtractors", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

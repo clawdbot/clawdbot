@@ -174,7 +174,7 @@ describe("resolvePluginWebFetchProviders", () => {
       env: createWebFetchEnv(),
     });
 
-    expect(providers).toEqual([]);
+    expect(providers).toStrictEqual([]);
     expect(inFlightSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         activate: false,

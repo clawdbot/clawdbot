@@ -318,8 +318,8 @@ describe("gateway session utils", () => {
       .filter((session) => !session.thinkingOptions?.includes("medium"))
       .map((session) => session.sessionId);
 
-    expect(missingMediumLevelSessionIds).toEqual([]);
-    expect(missingMediumOptionSessionIds).toEqual([]);
+    expect(missingMediumLevelSessionIds).toStrictEqual([]);
+    expect(missingMediumOptionSessionIds).toStrictEqual([]);
     expect(result.sessions.map((session) => session.thinkingDefault)).toEqual(
       Array.from({ length: result.sessions.length }, () => "medium"),
     );

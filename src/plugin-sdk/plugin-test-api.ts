@@ -31,6 +31,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerMigrationProvider() {},
     registerAutoEnableProbe() {},
     registerProvider() {},
+    registerModelCatalogProvider() {},
     registerSpeechProvider() {},
     registerRealtimeTranscriptionProvider() {},
     registerRealtimeVoiceProvider() {},

@@ -187,7 +187,7 @@ describe("resolveAuthProfileOrder", () => {
       provider: "fixture-provider",
     });
 
-    expect(order).toEqual([]);
+    expect(order).toStrictEqual([]);
   });
 
   it("keeps explicit empty stored auth order as a provider disable", async () => {
@@ -218,7 +218,7 @@ describe("resolveAuthProfileOrder", () => {
       provider: "fixture-provider",
     });
 
-    expect(order).toEqual([]);
+    expect(order).toStrictEqual([]);
   });
 
   it("marks aliased provider profiles good under the canonical auth provider", async () => {

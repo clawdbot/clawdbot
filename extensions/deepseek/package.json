@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/deepseek-provider",
-  "version": "2026.5.6",
+  "version": "2026.5.8",
   "private": true,
   "description": "OpenClaw DeepSeek provider plugin",
   "type": "module",

@@ -210,7 +210,7 @@ describe("status", () => {
     it("should handle empty snapshots array", () => {
       const issues = collectTwitchStatusIssues([]);
 
-      expect(issues).toEqual([]);
+      expect(issues).toStrictEqual([]);
     });
 
     it("should skip non-Twitch accounts gracefully", () => {

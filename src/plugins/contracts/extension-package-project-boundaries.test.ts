@@ -262,6 +262,6 @@ describe("opt-in extension package boundaries", () => {
   });
 
   it("keeps plugin-package-contract independent from core internals", () => {
-    expect(collectCoreReferenceFiles("packages/plugin-package-contract/src")).toEqual([]);
+    expect(collectCoreReferenceFiles("packages/plugin-package-contract/src")).toStrictEqual([]);
   });
 });

@@ -12,9 +12,9 @@ describe("shared/device-auth", () => {
     expect(
       normalizeDeviceAuthScopes([" node.invoke ", "operator.read", "", "node.invoke", "a.scope"]),
     ).toEqual(["a.scope", "node.invoke", "operator.read"]);
-    expect(normalizeDeviceAuthScopes(undefined)).toEqual([]);
-    expect(normalizeDeviceAuthScopes(null as unknown as string[])).toEqual([]);
-    expect(normalizeDeviceAuthScopes(["   ", "\t", "\n"])).toEqual([]);
+    expect(normalizeDeviceAuthScopes(undefined)).toStrictEqual([]);
+    expect(normalizeDeviceAuthScopes(null as unknown as string[])).toStrictEqual([]);
+    expect(normalizeDeviceAuthScopes(["   ", "\t", "\n"])).toStrictEqual([]);
     expect(normalizeDeviceAuthScopes(["z.scope", "A.scope", "m.scope"])).toEqual([
       "A.scope",
       "m.scope",

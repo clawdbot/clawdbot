@@ -34,6 +34,7 @@ import type {
 } from "../infra/diagnostic-events.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
+import type { UnifiedModelCatalogEntry, UnifiedModelCatalogKind } from "../model-catalog/types.js";
 import type { MusicGenerationProvider } from "../music-generation/types.js";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -457,6 +458,31 @@ export type ProviderCatalogResult =
 export type ProviderPluginCatalog = {
   order?: ProviderCatalogOrder;
   run: (ctx: ProviderCatalogContext) => Promise<ProviderCatalogResult>;
+};
+
+export type UnifiedModelCatalogProviderContext = ProviderCatalogContext & {
+  signal?: AbortSignal;
+  includeLive?: boolean;
+  timeoutMs?: number;
+};
+
+export type UnifiedModelCatalogProviderPlugin = {
+  provider: string;
+  kinds: readonly UnifiedModelCatalogKind[];
+  staticCatalog?: (
+    ctx: UnifiedModelCatalogProviderContext,
+  ) =>
+    | readonly UnifiedModelCatalogEntry[]
+    | Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>
+    | null
+    | undefined;
+  liveCatalog?: (
+    ctx: UnifiedModelCatalogProviderContext,
+  ) =>
+    | readonly UnifiedModelCatalogEntry[]
+    | Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>
+    | null
+    | undefined;
 };
 
 export type ProviderRuntimeProviderConfig = {
@@ -1217,12 +1243,19 @@ export type ProviderPlugin = {
   envVars?: string[];
   auth: ProviderAuthMethod[];
   /**
-   * Preferred hook for plugin-defined provider catalogs.
+   * Legacy text-provider catalog hook.
+   *
+   * @deprecated New catalog/control-plane surfaces should use
+   * `api.registerModelCatalogProvider`. This hook remains the text runtime
+   * source until the unified loader fully replaces it.
    * Returns provider config/model definitions that merge into models.providers.
    */
   catalog?: ProviderPluginCatalog;
   /**
-   * Offline provider catalog for display-only surfaces.
+   * Legacy offline text-provider catalog hook for display-only surfaces.
+   *
+   * @deprecated New static rows should be registered with
+   * `api.registerModelCatalogProvider`.
    *
    * Unlike `catalog`, this hook must not perform network I/O or require real
    * credentials. Use it for bundled/static rows that can be shown before auth is
@@ -1556,6 +1589,10 @@ export type ProviderPlugin = {
   ) => ProviderBuiltInModelSuppressionResult | null | undefined;
   /**
    * Provider-owned final catalog augmentation.
+   *
+   * @deprecated Use `api.registerModelCatalogProvider` for supplemental catalog
+   * rows. This hook is kept only for existing text-provider runtime
+   * compatibility during the migration window.
    *
    * Return extra rows to append to the final catalog after discovery/config
    * merging. OpenClaw deduplicates by `provider/id`, so plugins only need to
@@ -2506,6 +2543,8 @@ export type OpenClawPluginApi = {
   registerAutoEnableProbe: (probe: PluginSetupAutoEnableProbe) => void;
   /** Register a native model/provider plugin (text inference capability). */
   registerProvider: (provider: ProviderPlugin) => void;
+  /** Register provider-owned model catalog rows for text and media generation. */
+  registerModelCatalogProvider: (provider: UnifiedModelCatalogProviderPlugin) => void;
   /** Register a speech synthesis provider (speech capability). */
   registerSpeechProvider: (provider: SpeechProviderPlugin) => void;
   /** Register a realtime transcription provider (streaming STT capability). */

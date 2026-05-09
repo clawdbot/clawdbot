@@ -396,7 +396,7 @@ describe("QmdMemoryManager", () => {
     const searchPromise = manager.search("hello", { sessionKey: "session-b" });
 
     await vi.advanceTimersByTimeAsync(500);
-    await expect(searchPromise).resolves.toEqual([]);
+    await expect(searchPromise).resolves.toStrictEqual([]);
 
     (
       releaseUpdate ??
@@ -534,7 +534,7 @@ describe("QmdMemoryManager", () => {
     const updateCalls = spawnMock.mock.calls
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
-    expect(updateCalls).toEqual([]);
+    expect(updateCalls).toStrictEqual([]);
 
     await manager?.close();
   });
@@ -1637,7 +1637,7 @@ describe("QmdMemoryManager", () => {
 
     await expect(
       manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     const searchCall = spawnMock.mock.calls.find(
       (call: unknown[]) => (call[1] as string[])?.[0] === "search",
@@ -1822,7 +1822,7 @@ describe("QmdMemoryManager", () => {
 
     await expect(
       manager.search("記憶系統升級 QMD", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     const searchCall = spawnMock.mock.calls.find(
       (call: unknown[]) => (call[1] as string[])?.[0] === "search",
@@ -1899,7 +1899,7 @@ describe("QmdMemoryManager", () => {
     const query = "自然 高级感 结论先行 搜索偏好";
     await expect(
       manager.search(query, { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     const searchCall = spawnMock.mock.calls.find(
       (call: unknown[]) => (call[1] as string[])?.[0] === "search",
@@ -1933,7 +1933,7 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager();
     await expect(
       manager.search("記憶系統升級 QMD", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     const queryCall = spawnMock.mock.calls.find(
       (call: unknown[]) => (call[1] as string[])?.[0] === "query",
@@ -1977,7 +1977,7 @@ describe("QmdMemoryManager", () => {
 
     await expect(
       manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     const searchAndQueryCalls = spawnMock.mock.calls
       .map((call: unknown[]) => call[1])
@@ -2377,7 +2377,7 @@ describe("QmdMemoryManager", () => {
 
     await expect(
       manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     const queryCalls = spawnMock.mock.calls
       .map((call: unknown[]) => call[1] as string[])
@@ -2428,7 +2428,7 @@ describe("QmdMemoryManager", () => {
 
     await expect(
       manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     const searchAndQueryCalls = spawnMock.mock.calls
       .map((call: unknown[]) => call[1] as string[])
@@ -2470,7 +2470,7 @@ describe("QmdMemoryManager", () => {
     logWarnMock.mockClear();
     await expect(
       manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     const mcporterCalls = spawnMock.mock.calls.filter((call: unknown[]) =>
       isMcporterCommand(call[0]),
@@ -2973,7 +2973,7 @@ describe("QmdMemoryManager", () => {
       manager.search("abc: Tool query not found", {
         sessionKey: "agent:main:slack:dm:u123",
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     await manager.search("hello again", { sessionKey: "agent:main:slack:dm:u123" });
 
@@ -3322,7 +3322,7 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager();
 
     const results = await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
-    expect(results).toEqual([]);
+    expect(results).toStrictEqual([]);
     expect(
       spawnMock.mock.calls.some((call: unknown[]) => (call[1] as string[])?.[0] === "query"),
     ).toBe(false);
@@ -3575,7 +3575,7 @@ describe("QmdMemoryManager", () => {
     const commandCalls = spawnMock.mock.calls
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
-    expect(commandCalls).toEqual([]);
+    expect(commandCalls).toStrictEqual([]);
 
     await manager.close();
   });
@@ -3989,7 +3989,7 @@ describe("QmdMemoryManager", () => {
     const beforeCalls = spawnMock.mock.calls.length;
     await expect(
       manager.search("blocked", { sessionKey: "agent:main:discord:channel:c123" }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     expect(spawnMock.mock.calls.length).toBe(beforeCalls);
     expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("qmd search denied by scope"));
@@ -4723,7 +4723,7 @@ describe("QmdMemoryManager", () => {
       await expect(
         manager.search("missing", { sessionKey: "agent:main:slack:dm:u123" }),
         testCase.name,
-      ).resolves.toEqual([]);
+      ).resolves.toStrictEqual([]);
       await manager.close();
     }
   });

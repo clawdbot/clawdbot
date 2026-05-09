@@ -43,8 +43,8 @@ describe("buildSubagentList", () => {
       recentMinutes: 30,
       taskMaxChars: 110,
     });
-    expect(list.active).toEqual([]);
-    expect(list.recent).toEqual([]);
+    expect(list.active).toStrictEqual([]);
+    expect(list.recent).toStrictEqual([]);
     expect(list.text).toContain("active subagents:");
     expect(list.text).toContain("recent (last 30m):");
   });
@@ -118,7 +118,7 @@ describe("buildSubagentList", () => {
     expect(list.active[0]?.childSessions).toEqual([
       "agent:main:subagent:orchestrator-ended:subagent:child",
     ]);
-    expect(list.recent).toEqual([]);
+    expect(list.recent).toStrictEqual([]);
   });
 
   it("omits old ended descendants from child session summaries", () => {
@@ -227,8 +227,8 @@ describe("buildSubagentList", () => {
     });
 
     expect(list.total).toBe(1);
-    expect(list.active).toEqual([]);
-    expect(list.recent).toEqual([]);
+    expect(list.active).toStrictEqual([]);
+    expect(list.recent).toStrictEqual([]);
     expect(list.text).toContain("active subagents:\n(none)");
   });
 
@@ -269,7 +269,7 @@ describe("buildSubagentList", () => {
       taskMaxChars: 110,
     });
 
-    expect(list.active).toEqual([]);
+    expect(list.active).toStrictEqual([]);
     expect(list.recent[0]?.status).toBe("done");
   });
 });

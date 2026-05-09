@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSupportedMusicGenerationModes } from "../../music-generation/capabilities.js";
 import { listRuntimeMusicGenerationProviders } from "../../music-generation/runtime.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildMusicGenerationTaskStatusDetails,
   buildMusicGenerationTaskStatusText,
@@ -45,11 +46,16 @@ function summarizeMusicGenerationCapabilities(
 
 export function createMusicGenerateListActionResult(
   config?: OpenClawConfig,
+  options?: { agentDir?: string; authStore?: AuthProfileStore },
 ): MusicGenerateActionResult {
   const providers = listRuntimeMusicGenerationProviders({ config });
   return createMediaGenerateProviderListActionResult({
+    kind: "music_generation",
     providers,
     emptyText: "No music-generation providers are registered.",
+    cfg: config,
+    agentDir: options?.agentDir,
+    authStore: options?.authStore,
     listModes: listSupportedMusicGenerationModes,
     summarizeCapabilities: summarizeMusicGenerationCapabilities,
   });

@@ -34,6 +34,6 @@ describe("opencode provider policy public artifact", () => {
       levels: expect.arrayContaining([{ id: "adaptive" }]),
       defaultLevel: "adaptive",
     });
-    expect(collectLegacyExtendedLevelIds(profile.levels)).toEqual([]);
+    expect(collectLegacyExtendedLevelIds(profile.levels)).toStrictEqual([]);
   });
 });

@@ -89,7 +89,7 @@ describe("plugin-sdk/direct-dm", () => {
 
     expect(result.access.decision).toBe("block");
     expect(result.access.reason).toBe("dmPolicy=open (not allowlisted)");
-    expect(result.access.effectiveAllowFrom).toEqual([]);
+    expect(result.access.effectiveAllowFrom).toStrictEqual([]);
     expect(result.commandAuthorized).toBeUndefined();
   });
 

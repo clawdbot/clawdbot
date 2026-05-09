@@ -7,6 +7,7 @@ import type {
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   SpeechProviderPlugin,
+  UnifiedModelCatalogProviderPlugin,
   VideoGenerationProviderPlugin,
 } from "../plugins/types.js";
 
@@ -24,6 +25,7 @@ export type RegisteredProviderCollections = {
   imageProviders: ImageGenerationProviderPlugin[];
   musicProviders: MusicGenerationProviderPlugin[];
   videoProviders: VideoGenerationProviderPlugin[];
+  modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
 };
 
 export async function registerSingleProviderPlugin(params: {
@@ -57,6 +59,7 @@ export async function registerProviderPlugin(params: {
     imageProviders: captured.imageGenerationProviders,
     musicProviders: captured.musicGenerationProviders,
     videoProviders: captured.videoGenerationProviders,
+    modelCatalogProviders: captured.modelCatalogProviders,
   };
 }
 

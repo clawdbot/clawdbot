@@ -162,7 +162,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       includeDisabled: true,
     });
 
-    expect(registry.diagnostics).toEqual([]);
+    expect(registry.diagnostics).toStrictEqual([]);
     expect(registry.plugins).toEqual([
       expect.objectContaining({
         id: "claude-bundle",
@@ -279,7 +279,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       includeDisabled: true,
     });
 
-    expect(registry.diagnostics).toEqual([]);
+    expect(registry.diagnostics).toStrictEqual([]);
     expect(registry.plugins).toEqual([
       expect.objectContaining({
         id: "claude-bundle",

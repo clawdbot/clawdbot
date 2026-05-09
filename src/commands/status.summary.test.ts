@@ -160,7 +160,7 @@ describe("getStatusSummary", () => {
 
     const summary = await getStatusSummary();
 
-    expect(summary.channelSummary).toEqual([]);
+    expect(summary.channelSummary).toStrictEqual([]);
     expect(summary.linkChannel).toBeUndefined();
     expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).toHaveBeenCalledWith({
       config: {},
@@ -172,7 +172,7 @@ describe("getStatusSummary", () => {
   it("skips channel summary imports when explicitly disabled", async () => {
     const summary = await getStatusSummary({ includeChannelSummary: false });
 
-    expect(summary.channelSummary).toEqual([]);
+    expect(summary.channelSummary).toStrictEqual([]);
     expect(summary.linkChannel).toBeUndefined();
     expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(buildChannelSummary).not.toHaveBeenCalled();

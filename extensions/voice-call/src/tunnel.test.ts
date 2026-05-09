@@ -58,7 +58,9 @@ describe("voice-call tunnels", () => {
     proc.close(0);
 
     await expect(result).resolves.toBe(true);
-    expect(mocks.spawn).toHaveBeenCalledWith("ngrok", ["version"], expect.any(Object));
+    expect(mocks.spawn).toHaveBeenCalledWith("ngrok", ["version"], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   });
 
   it("treats ngrok spawn failures as unavailable", async () => {
@@ -79,11 +81,9 @@ describe("voice-call tunnels", () => {
       publicUrl: "https://abc.ngrok.io/voice/webhook",
       provider: "ngrok",
     });
-    expect(mocks.spawn).toHaveBeenCalledWith(
-      "ngrok",
-      expect.arrayContaining(["http", "3334"]),
-      expect.any(Object),
-    );
+    expect(mocks.spawn).toHaveBeenCalledWith("ngrok", expect.arrayContaining(["http", "3334"]), {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   });
 
   it("sets ngrok auth token before starting the tunnel", async () => {
@@ -102,12 +102,9 @@ describe("voice-call tunnels", () => {
     await expect(result).resolves.toMatchObject({
       publicUrl: "https://auth.ngrok.io/hook",
     });
-    expect(mocks.spawn).toHaveBeenNthCalledWith(
-      1,
-      "ngrok",
-      ["config", "add-authtoken", "token"],
-      expect.any(Object),
-    );
+    expect(mocks.spawn).toHaveBeenNthCalledWith(1, "ngrok", ["config", "add-authtoken", "token"], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   });
 
   it("rejects ngrok startup errors from stderr", async () => {
@@ -138,7 +135,7 @@ describe("voice-call tunnels", () => {
     expect(mocks.spawn).toHaveBeenCalledWith(
       "tailscale",
       expect.arrayContaining(["serve", "--set-path", "/voice/webhook"]),
-      expect.any(Object),
+      { stdio: ["ignore", "pipe", "pipe"] },
     );
   });
 

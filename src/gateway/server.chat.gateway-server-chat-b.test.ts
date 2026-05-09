@@ -1048,7 +1048,7 @@ describe("gateway server chat", () => {
       ]);
 
       const messages = await fetchHistoryMessages(ws, { maxChars: 3 });
-      expect(messages).toEqual([]);
+      expect(messages).toStrictEqual([]);
     });
   });
 

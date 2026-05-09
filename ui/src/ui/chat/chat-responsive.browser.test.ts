@@ -26,30 +26,26 @@ type ControlRect = {
   display?: string;
 };
 
+function expectFiniteRect(rect: Pick<ControlRect, "x" | "y" | "width" | "height">) {
+  for (const key of ["x", "y", "width", "height"] as const) {
+    expect(Number.isFinite(rect[key])).toBe(true);
+  }
+}
+
 async function getBoundingBox(page: Page, selector: string) {
   const box = await page.locator(selector).boundingBox();
-  expect(box).toMatchObject({
-    x: expect.any(Number),
-    y: expect.any(Number),
-    width: expect.any(Number),
-    height: expect.any(Number),
-  });
   if (box === null) {
     throw new Error(`Expected bounding box for ${selector}`);
   }
+  expectFiniteRect(box);
   return box;
 }
 
 function expectControlRect(rect: ControlRect | null, label: string): ControlRect {
-  expect(rect).toMatchObject({
-    x: expect.any(Number),
-    y: expect.any(Number),
-    width: expect.any(Number),
-    height: expect.any(Number),
-  });
   if (rect === null) {
     throw new Error(`Expected ${label} control rect`);
   }
+  expectFiniteRect(rect);
   return rect;
 }
 

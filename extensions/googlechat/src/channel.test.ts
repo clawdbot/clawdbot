@@ -519,7 +519,7 @@ describe("googlechatPlugin outbound cfg threading", () => {
       expect.objectContaining({
         account,
         space: "spaces/WORK",
-        text: expect.any(String),
+        text: googlechatPairingTextAdapter.message,
       }),
     );
   });

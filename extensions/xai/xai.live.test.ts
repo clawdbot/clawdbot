@@ -208,7 +208,7 @@ describeLive("xai plugin live", () => {
           console.warn(`[xai:live] skip realtime-open: billing drift: ${billingError.message}`);
           return;
         }
-        expect(errors).toEqual([]);
+        expect(errors).toStrictEqual([]);
         expect(session.isConnected()).toBe(true);
       } finally {
         session.close();

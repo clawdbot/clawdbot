@@ -118,7 +118,7 @@ describe("matrix reaction actions", () => {
 
     const result = await listMatrixReactions("!room:example.org", "$msg", { client });
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("rejects blank message ids before querying Matrix relations", async () => {

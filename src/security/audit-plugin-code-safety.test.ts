@@ -9,6 +9,6 @@ describe("security audit plugin code safety gating", () => {
       deep: false,
     });
 
-    expect(findings).toEqual([]);
+    expect(findings).toStrictEqual([]);
   });
 });

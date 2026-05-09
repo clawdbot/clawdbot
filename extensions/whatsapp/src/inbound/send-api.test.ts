@@ -275,7 +275,7 @@ describe("createWebSendApi", () => {
       messageId: "unknown",
       providerAccepted: false,
     });
-    expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toEqual([]);
+    expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toStrictEqual([]);
   });
 
   it("keeps direct-chat reactions without a participant key", async () => {

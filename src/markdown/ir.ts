@@ -250,13 +250,20 @@ function openStyle(state: RenderState, style: MarkdownStyle) {
   target.openStyles.push({ style, start: target.text.length });
 }
 
-function closeStyle(state: RenderState, style: MarkdownStyle) {
+function closeStyle(
+  state: RenderState,
+  style: MarkdownStyle,
+  options?: { trimTrailingParagraphSeparator?: boolean },
+) {
   const target = resolveRenderTarget(state);
   for (let i = target.openStyles.length - 1; i >= 0; i -= 1) {
     if (target.openStyles[i]?.style === style) {
       const start = target.openStyles[i].start;
       target.openStyles.splice(i, 1);
-      const end = target.text.length;
+      const end =
+        options?.trimTrailingParagraphSeparator && target.text.endsWith("\n\n")
+          ? target.text.length - 2
+          : target.text.length;
       if (end > start) {
         target.styles.push({ start, end, style });
       }
@@ -680,7 +687,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         openStyle(state, "blockquote");
         break;
       case "blockquote_close":
-        closeStyle(state, "blockquote");
+        closeStyle(state, "blockquote", { trimTrailingParagraphSeparator: true });
         break;
       case "bullet_list_open":
         // Add newline before nested list starts (so nested items appear on new line)

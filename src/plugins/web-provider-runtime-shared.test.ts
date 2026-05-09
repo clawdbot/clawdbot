@@ -382,7 +382,7 @@ describe("web-provider-runtime-shared", () => {
       },
     );
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 
@@ -442,7 +442,7 @@ describe("web-provider-runtime-shared", () => {
       },
     );
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 

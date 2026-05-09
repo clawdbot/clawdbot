@@ -1,4 +1,4 @@
-import { dispatchChannelMessageReplyWithBase } from "openclaw/plugin-sdk/channel-message";
+import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   buildAgentMediaPayload,
@@ -151,42 +151,59 @@ export async function handleQaInbound(params: {
     ...mediaPayload,
   });
 
-  await dispatchChannelMessageReplyWithBase({
+  const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: params.config as OpenClawConfig,
+    agentId: route.agentId,
     channel: params.channelId,
     accountId: params.account.accountId,
-    route,
+  });
+
+  await runtime.channel.turn.runPrepared({
+    channel: params.channelId,
+    accountId: params.account.accountId,
+    routeSessionKey: route.sessionKey,
     storePath,
     ctxPayload,
-    core: runtime,
-    deliver: async (payload) => {
-      const text =
-        payload && typeof payload === "object" && "text" in payload
-          ? ((payload as { text?: string }).text ?? "")
-          : "";
-      if (!text.trim()) {
-        return;
-      }
-      await sendQaBusMessage({
-        baseUrl: params.account.baseUrl,
-        accountId: params.account.accountId,
-        to: target,
-        text,
-        senderId: params.account.botUserId,
-        senderName: params.account.botDisplayName,
-        threadId: inbound.threadId,
-        replyToId: inbound.id,
-      });
-    },
-    onRecordError: (error) => {
-      throw error instanceof Error
-        ? error
-        : new Error(`qa-channel session record failed: ${String(error)}`);
-    },
-    onDispatchError: (error) => {
-      throw error instanceof Error
-        ? error
-        : new Error(`qa-channel dispatch failed: ${String(error)}`);
+    recordInboundSession: runtime.channel.session.recordInboundSession,
+    runDispatch: async () =>
+      await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+        ctx: ctxPayload,
+        cfg: params.config as OpenClawConfig,
+        dispatcherOptions: {
+          ...replyPipeline,
+          deliver: async (payload) => {
+            const text =
+              payload && typeof payload === "object" && "text" in payload
+                ? ((payload as { text?: string }).text ?? "")
+                : "";
+            if (!text.trim()) {
+              return;
+            }
+            await sendQaBusMessage({
+              baseUrl: params.account.baseUrl,
+              accountId: params.account.accountId,
+              to: target,
+              text,
+              senderId: params.account.botUserId,
+              senderName: params.account.botDisplayName,
+              threadId: inbound.threadId,
+              replyToId: inbound.id,
+            });
+          },
+          onError: (error) => {
+            throw error instanceof Error
+              ? error
+              : new Error(`qa-channel dispatch failed: ${String(error)}`);
+          },
+        },
+        replyOptions: { onModelSelected },
+      }),
+    record: {
+      onRecordError: (error) => {
+        throw error instanceof Error
+          ? error
+          : new Error(`qa-channel session record failed: ${String(error)}`);
+      },
     },
   });
 }

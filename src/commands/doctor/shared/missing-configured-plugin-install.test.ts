@@ -174,7 +174,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.changes).toEqual([
       'Installed missing configured plugin "matrix" from @openclaw/plugin-matrix@1.2.3.',
     ]);
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it("uses an explicit ClawHub install spec before npm", async () => {
@@ -212,7 +212,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.changes).toEqual([
       'Installed missing configured plugin "matrix" from clawhub:@openclaw/plugin-matrix@stable.',
     ]);
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it("installs a missing channel plugin selected by environment config from npm", async () => {
@@ -270,7 +270,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.changes).toEqual([
       'Installed missing configured plugin "matrix" from @openclaw/plugin-matrix@1.2.3.',
     ]);
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it("falls back to npm when an OpenClaw channel plugin is not on ClawHub", async () => {
@@ -312,7 +312,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       'ClawHub clawhub:@openclaw/plugin-matrix@stable unavailable for "matrix"; falling back to npm @openclaw/plugin-matrix@1.2.3.',
       'Installed missing configured plugin "matrix" from @openclaw/plugin-matrix@1.2.3.',
     ]);
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it("honors npm-first catalog metadata for missing OpenClaw channel plugins", async () => {
@@ -1181,7 +1181,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.changes).toEqual([
       'Installed missing configured plugin "codex" from @openclaw/codex.',
     ]);
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it.each([

@@ -413,11 +413,15 @@ function buildRecord(params: {
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
-    providerDiscoverySource: params.manifest.providerDiscoveryEntry
-      ? resolvePluginSourcePath(
-          path.resolve(params.candidate.rootDir, params.manifest.providerDiscoveryEntry),
-        )
-      : undefined,
+    providerDiscoverySource:
+      (params.manifest.providerCatalogEntry ?? params.manifest.providerDiscoveryEntry)
+        ? resolvePluginSourcePath(
+            path.resolve(
+              params.candidate.rootDir,
+              params.manifest.providerCatalogEntry ?? params.manifest.providerDiscoveryEntry!,
+            ),
+          )
+        : undefined,
     modelSupport: params.manifest.modelSupport,
     modelCatalog: params.manifest.modelCatalog,
     modelPricing: params.manifest.modelPricing,

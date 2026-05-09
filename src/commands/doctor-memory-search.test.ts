@@ -866,7 +866,7 @@ describe("detectLegacyWorkspaceDirs", () => {
     const workspaceDir = "/home/user/openclaw";
     const detection = detectLegacyWorkspaceDirs({ workspaceDir });
     expect(detection.activeWorkspace).toBe(path.resolve(workspaceDir));
-    expect(detection.legacyDirs).toEqual([]);
+    expect(detection.legacyDirs).toStrictEqual([]);
   });
 });
 

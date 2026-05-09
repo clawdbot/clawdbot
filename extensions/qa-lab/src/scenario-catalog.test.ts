@@ -32,15 +32,15 @@ describe("qa scenario catalog", () => {
       pack.scenarios
         .filter((scenario) => scenario.execution?.kind !== "flow")
         .map((scenario) => scenario.id),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       pack.scenarios.filter((scenario) => (scenario.execution.flow?.steps.length ?? 0) > 0),
-    ).not.toEqual([]);
+    ).not.toStrictEqual([]);
     expect(
       pack.scenarios
         .filter((scenario) => !(scenario.coverage?.primary.length ?? 0))
         .map((scenario) => scenario.id),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(readQaScenarioById("memory-recall").coverage?.primary).toContain("memory.recall");
   });
 
@@ -53,7 +53,7 @@ describe("qa scenario catalog", () => {
     expect(scenarioIds).toContain("subagent-fanout-synthesis");
     expect(
       QA_AGENTIC_PARITY_SCENARIO_IDS.filter((scenarioId) => !scenarioIds.includes(scenarioId)),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("loads scenario-specific execution config from per-scenario markdown", () => {

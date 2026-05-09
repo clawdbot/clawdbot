@@ -8,6 +8,7 @@ import { resolveDiscordAccountAllowFrom } from "../accounts.js";
 import { type Client, ReadyListener, ResumedListener } from "../internal/discord.js";
 import type { VoicePlugin } from "../internal/voice.js";
 import { formatMention } from "../mentions.js";
+import { parseDiscordTarget } from "../target-parsing.js";
 import { decodeOpusStream, decodeOpusStreamChunks, writeVoiceWavFile } from "./audio.js";
 import {
   beginVoiceCapture,
@@ -56,9 +57,18 @@ import {
 import { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 
 const logger = createSubsystemLogger("discord/voice");
+const VOICE_LOG_PREVIEW_CHARS = 500;
 
 type DiscordVoiceSdk = ReturnType<typeof loadDiscordVoiceSdk>;
 type DiscordVoiceConnection = ReturnType<DiscordVoiceSdk["joinVoiceChannel"]>;
+
+function formatVoiceLogPreview(text: string): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (oneLine.length <= VOICE_LOG_PREVIEW_CHARS) {
+    return oneLine;
+  }
+  return `${oneLine.slice(0, VOICE_LOG_PREVIEW_CHARS)}...`;
+}
 
 function isVoiceConnectionDestroyed(
   connection: DiscordVoiceConnection,
@@ -92,6 +102,55 @@ function startAutoJoin(manager: Pick<DiscordVoiceManager, "autoJoin">) {
   void manager
     .autoJoin()
     .catch((err) => logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`));
+}
+
+function resolveDiscordVoiceAgentRoute(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  guildId: string;
+  sessionChannelId: string;
+  voiceConfig: DiscordAccountConfig["voice"];
+}) {
+  const voiceRoute = resolveAgentRoute({
+    cfg: params.cfg,
+    channel: "discord",
+    accountId: params.accountId,
+    guildId: params.guildId,
+    peer: { kind: "channel", id: params.sessionChannelId },
+  });
+  const agentSession = params.voiceConfig?.agentSession;
+  if (agentSession?.mode !== "target") {
+    return {
+      route: voiceRoute,
+      voiceRoute,
+      agentSessionMode: "voice" as const,
+      agentSessionTarget: undefined,
+    };
+  }
+  const target = agentSession.target?.trim();
+  if (!target) {
+    throw new Error('channels.discord.voice.agentSession.target is required when mode is "target"');
+  }
+  const parsed = parseDiscordTarget(target, { defaultKind: "channel" });
+  if (!parsed) {
+    throw new Error(`Invalid Discord voice agent session target "${target}"`);
+  }
+  const route = resolveAgentRoute({
+    cfg: params.cfg,
+    channel: "discord",
+    accountId: params.accountId,
+    guildId: params.guildId,
+    peer: {
+      kind: parsed.kind === "user" ? "direct" : "channel",
+      id: parsed.id,
+    },
+  });
+  return {
+    route,
+    voiceRoute,
+    agentSessionMode: "target" as const,
+    agentSessionTarget: parsed.normalized,
+  };
 }
 
 export class DiscordVoiceManager {
@@ -302,13 +361,32 @@ export class DiscordVoiceManager {
         `join: using session channel ${sessionChannelId} for voice channel ${channelId}`,
       );
     }
-    const route = resolveAgentRoute({
-      cfg: this.params.cfg,
-      channel: "discord",
-      accountId: this.params.accountId,
-      guildId,
-      peer: { kind: "channel", id: sessionChannelId },
-    });
+    let routeInfo: ReturnType<typeof resolveDiscordVoiceAgentRoute>;
+    try {
+      routeInfo = resolveDiscordVoiceAgentRoute({
+        cfg: this.params.cfg,
+        accountId: this.params.accountId,
+        guildId,
+        sessionChannelId,
+        voiceConfig,
+      });
+    } catch (err) {
+      destroyVoiceConnectionSafely({
+        connection,
+        voiceSdk,
+        reason: `voice agent session route failed guild ${guildId} channel ${channelId}`,
+      });
+      return {
+        ok: false,
+        message: `Failed to resolve Discord voice agent session: ${formatErrorMessage(err)}`,
+        guildId,
+        channelId,
+      };
+    }
+    const { route, voiceRoute, agentSessionMode, agentSessionTarget } = routeInfo;
+    logger.info(
+      `discord voice: joining guild=${guildId} channel=${channelId} mode=${voiceMode} agent=${route.agentId} voiceSession=${voiceRoute.sessionKey} supervisorSession=${route.sessionKey} agentSessionMode=${agentSessionMode}${agentSessionTarget ? ` agentSessionTarget=${agentSessionTarget}` : ""} voiceModel=${voiceConfig?.model ?? "route-default"} realtimeProvider=${voiceConfig?.realtime?.provider ?? "auto"} realtimeModel=${voiceConfig?.realtime?.model ?? "provider-default"} realtimeVoice=${voiceConfig?.realtime?.voice ?? "provider-default"}`,
+    );
 
     const player = voiceSdk.createAudioPlayer();
     connection.subscribe(player);
@@ -376,6 +454,7 @@ export class DiscordVoiceManager {
           ? channelInfo.name
           : undefined,
       sessionChannelId,
+      voiceSessionKey: voiceRoute.sessionKey,
       route,
       connection,
       player,
@@ -479,6 +558,9 @@ export class DiscordVoiceManager {
     player.on("error", playerErrorHandler);
 
     this.sessions.set(guildId, entry);
+    logger.info(
+      `discord voice: joined guild=${guildId} channel=${channelId} mode=${voiceMode} agent=${route.agentId} voiceSession=${voiceRoute.sessionKey} supervisorSession=${route.sessionKey} voiceModel=${voiceConfig?.model ?? "route-default"}`,
+    );
     return {
       ok: true,
       message: `Joined ${formatMention({ channelId })}.`,
@@ -589,6 +671,12 @@ export class DiscordVoiceManager {
       return;
     }
     if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing && realtime) {
+      if (!realtime.isBargeInEnabled()) {
+        logger.info(
+          `discord voice: realtime capture ignored during playback (barge-in disabled): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+        );
+        return;
+      }
       logVoiceVerbose(
         `realtime barge-in: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
@@ -703,6 +791,9 @@ export class DiscordVoiceManager {
     userId: string;
   }): Promise<string> {
     const { context, entry, message, toolsAllow, userId } = params;
+    logger.info(
+      `discord voice: agent turn start guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId} user=${userId} speaker=${context.speakerLabel} owner=${context.senderIsOwner} model=${this.params.discordConfig.voice?.model ?? "route-default"} message=${formatVoiceLogPreview(message)}`,
+    );
     const turn = await runDiscordVoiceAgentTurn({
       entry,
       userId,
@@ -727,6 +818,9 @@ export class DiscordVoiceManager {
       );
       return "";
     }
+    logger.info(
+      `discord voice: agent turn answer (${turn.text.length} chars) guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}: ${formatVoiceLogPreview(turn.text)}`,
+    );
     return turn.text;
   }
 

@@ -1120,7 +1120,7 @@ describe("runtime web tools resolution", () => {
     expect(resolveSpy).not.toHaveBeenCalled();
     expect(metadata.fetch.selectedProvider).toBeUndefined();
     expect(metadata.fetch.selectedProviderKeySource).toBeUndefined();
-    expect(context.warnings).toEqual([]);
+    expect(context.warnings).toStrictEqual([]);
     expect(resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();

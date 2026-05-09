@@ -384,7 +384,7 @@ describe("agentCommand ACP runtime routing", () => {
 
       expect(assistantEvents.every((event) => !event.text)).toBe(true);
       expect(logLines).not.toEqual(expect.arrayContaining([expect.stringContaining("NO_REPLY")]));
-      expect(logLines).toEqual([]);
+      expect(logLines).toStrictEqual([]);
     });
   });
 

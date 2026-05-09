@@ -126,7 +126,7 @@ describe("buildChannelsTable", () => {
 
     const table = await buildChannelsTable({ channels: { feishu: { appId: "cli_xxx" } } });
 
-    expect(table.rows).toEqual([]);
+    expect(table.rows).toStrictEqual([]);
     expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
   });
 });

@@ -204,7 +204,9 @@ describe("runCapability image skip", () => {
         });
 
         expect(result.decision.outcome).toBe("success");
-        expect(result.outputs[0]).toMatchObject({
+        expect(requireCapabilityOutput(result, 0)).toEqual({
+          kind: "image.description",
+          attachmentIndex: 0,
           provider: "openrouter",
           model: "google/gemini-2.5-flash",
           text: "explicit ok",

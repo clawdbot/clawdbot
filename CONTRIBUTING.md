@@ -41,7 +41,7 @@ Welcome to the lobster tank! 🦞
 - **Vincent Koc** - Agents, Telemetry, Hooks, Security
   - GitHub: [@vincentkoc](https://github.com/vincentkoc) · X: [@vincent_koc](https://x.com/vincent_koc)
 
-- **Val Alexander** - UI/UX, Docs, and Agent DevX
+- **Val Alexander** - UI/UX, Docs, SDK, and Agent DevX
   - GitHub: [@BunsDev](https://github.com/BunsDev) · X: [@BunsDev](https://x.com/BunsDev)
 
 - **Seb Slight** - Docs, Agent Reliability, Runtime Hardening

@@ -56,7 +56,7 @@ describe("session-delivery queue storage", () => {
       expect(failedEntry?.lastError).toBe("dispatch failed");
 
       await ackSessionDelivery(id, tempDir);
-      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
+      expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
     });
   });
 

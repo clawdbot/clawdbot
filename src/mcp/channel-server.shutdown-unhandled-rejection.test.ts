@@ -118,7 +118,7 @@ describe("serveOpenClawChannelMcp shutdown", () => {
     await servePromise;
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(unhandledRejections).toEqual([]);
+    expect(unhandledRejections).toStrictEqual([]);
     expect(bridgeState.close).toHaveBeenCalledTimes(1);
   });
 });

@@ -3,11 +3,7 @@ import * as providerAuthRuntime from "./provider-auth-runtime.js";
 
 describe("plugin-sdk provider-auth-runtime", () => {
   it("exports the runtime-ready auth helper", () => {
-    expect(providerAuthRuntime).toEqual(
-      expect.objectContaining({
-        getRuntimeAuthForModel: expect.any(Function),
-      }),
-    );
+    expect(providerAuthRuntime.getRuntimeAuthForModel).toBeTypeOf("function");
   });
 
   it("generates random OAuth state tokens", () => {

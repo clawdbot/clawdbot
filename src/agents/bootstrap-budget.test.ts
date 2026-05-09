@@ -102,7 +102,7 @@ describe("analyzeBootstrapBudget", () => {
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
     });
-    expect(analysis.truncatedFiles[0]?.causes).toEqual([]);
+    expect(analysis.truncatedFiles[0]?.causes).toStrictEqual([]);
   });
 });
 
@@ -167,7 +167,7 @@ describe("bootstrap prompt warnings", () => {
       }),
     ).toEqual(["legacy-only"]);
 
-    expect(resolveBootstrapWarningSignaturesSeen(undefined)).toEqual([]);
+    expect(resolveBootstrapWarningSignaturesSeen(undefined)).toStrictEqual([]);
   });
 
   it("ignores single-signature fallback when warning mode is off", () => {
@@ -178,7 +178,7 @@ describe("bootstrap prompt warnings", () => {
           promptWarningSignature: "off-mode-signature",
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       resolveBootstrapWarningSignaturesSeen({
@@ -233,7 +233,7 @@ describe("bootstrap prompt warnings", () => {
       seenSignatures: first.warningSignaturesSeen,
     });
     expect(second.warningShown).toBe(false);
-    expect(second.lines).toEqual([]);
+    expect(second.lines).toStrictEqual([]);
   });
 
   it("dedupes once mode across non-consecutive repeated signatures", () => {
@@ -375,7 +375,7 @@ describe("bootstrap prompt warnings", () => {
       previousSignature: signature,
     });
     expect(off.warningShown).toBe(false);
-    expect(off.lines).toEqual([]);
+    expect(off.lines).toStrictEqual([]);
 
     const always = buildBootstrapPromptWarning({
       analysis,

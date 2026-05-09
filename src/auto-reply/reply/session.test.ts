@@ -821,7 +821,7 @@ describe("initSessionState RawBody", () => {
         isNewSession: true,
       }),
     ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toEqual([]);
+    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
   it("rotates local session state for /new on bound ACP sessions", async () => {
@@ -1397,7 +1397,7 @@ describe("initSessionState reset policy", () => {
         isNewSession: true,
       }),
     ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toEqual([]);
+    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
@@ -1496,7 +1496,7 @@ describe("initSessionState reset policy", () => {
         isNewSession: true,
       }),
     ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toEqual([]);
+    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
   it("keeps the existing stale session for /reset soft", async () => {

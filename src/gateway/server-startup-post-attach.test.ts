@@ -244,7 +244,7 @@ describe("startGatewayPostAttachRuntime", () => {
     await vi.waitFor(() => {
       expect(onSidecarsReady).toHaveBeenCalledTimes(1);
     });
-    expect([...unavailableGatewayMethods]).toEqual([]);
+    expect([...unavailableGatewayMethods]).toStrictEqual([]);
     expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
     expect(hoisted.loadInternalHooks).not.toHaveBeenCalled();
     expect(hoisted.setInternalHooksEnabled).not.toHaveBeenCalled();
@@ -698,9 +698,9 @@ describe("startGatewayPostAttachRuntime", () => {
     }
     resumeSidecars();
     await vi.waitFor(() => {
-      expect([...unavailableGatewayMethods]).toEqual([]);
+      expect([...unavailableGatewayMethods]).toStrictEqual([]);
     });
-    expect([...unavailableGatewayMethods]).toEqual([]);
+    expect([...unavailableGatewayMethods]).toStrictEqual([]);
     expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
   });
 

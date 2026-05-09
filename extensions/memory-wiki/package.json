@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/memory-wiki",
-  "version": "2026.5.6",
+  "version": "2026.5.8",
   "private": true,
   "description": "OpenClaw persistent wiki plugin",
   "type": "module",
@@ -13,7 +13,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.6"
+    "openclaw": ">=2026.5.8"
   },
   "peerDependenciesMeta": {
     "openclaw": {

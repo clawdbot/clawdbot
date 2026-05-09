@@ -1,8 +1,8 @@
+import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getChildLogger } from "../logging.js";
@@ -94,7 +94,7 @@ async function deliverCronAnnouncePayload(params: {
   message: string;
   abortSignal: AbortSignal;
 }): Promise<void> {
-  await deliverOutboundPayloads({
+  const send = await sendDurableMessageBatch({
     cfg: params.cfg,
     channel: params.delivery.resolvedTarget.channel,
     to: params.delivery.resolvedTarget.to,
@@ -105,8 +105,11 @@ async function deliverCronAnnouncePayload(params: {
     identity: params.delivery.identity,
     bestEffort: false,
     deps: createOutboundSendDeps(params.deps),
-    abortSignal: params.abortSignal,
+    signal: params.abortSignal,
   });
+  if (send.status === "failed" || send.status === "partial_failed") {
+    throw send.error;
+  }
 }
 
 export async function sendCronAnnouncePayloadStrict(params: {

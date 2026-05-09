@@ -161,7 +161,10 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
 
     await expect(session.connect()).rejects.toThrow("nope");
     expect(session.isConnected()).toBe(false);
-    expect(onError).toHaveBeenCalledWith(expect.any(Error));
+    expect(onError).toHaveBeenCalledTimes(1);
+    const setupError = onError.mock.calls[0]?.[0];
+    expect(setupError).toBeInstanceOf(Error);
+    expect(setupError).toMatchObject({ message: "nope" });
   });
 
   it("reports pre-ready closes separately from connection timeouts", async () => {
@@ -181,8 +184,10 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     await expect(session.connect()).rejects.toThrow(
       "test realtime transcription connection closed before ready",
     );
-    expect(onError).toHaveBeenCalledWith(expect.any(Error));
-    expect(onError.mock.calls[0]?.[0]).toMatchObject({
+    expect(onError).toHaveBeenCalledTimes(1);
+    const closeError = onError.mock.calls[0]?.[0];
+    expect(closeError).toBeInstanceOf(Error);
+    expect(closeError).toMatchObject({
       message: "test realtime transcription connection closed before ready",
     });
   });

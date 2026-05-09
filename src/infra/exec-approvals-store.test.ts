@@ -234,7 +234,7 @@ describe("exec approvals store helpers", () => {
     expect(rename).toHaveBeenCalled();
     expect(fs.readFileSync(approvalsPath, "utf8")).toContain('"security": "full"');
     expect(fs.statSync(approvalsPath).mode & 0o777).toBe(0o600);
-    expect(listExecApprovalTempFiles(dir)).toEqual([]);
+    expect(listExecApprovalTempFiles(dir)).toStrictEqual([]);
   });
 
   it("normalizes fallback temp files before copying", () => {
@@ -268,7 +268,7 @@ describe("exec approvals store helpers", () => {
 
     expect(fs.readFileSync(approvalsPath, "utf8")).toContain('"security": "full"');
     expect(fs.statSync(approvalsPath).mode & 0o777).toBe(0o600);
-    expect(listExecApprovalTempFiles(dir)).toEqual([]);
+    expect(listExecApprovalTempFiles(dir)).toStrictEqual([]);
   });
 
   it("restores the previous approvals file when fallback copy fails", () => {
@@ -304,7 +304,7 @@ describe("exec approvals store helpers", () => {
     ).toThrow(/copy failed after opening destination/);
     expect(fs.readFileSync(approvalsPath, "utf8")).toBe(previousRaw);
     expect(fs.statSync(approvalsPath).mode & 0o777).toBe(0o600);
-    expect(listExecApprovalTempFiles(dir)).toEqual([]);
+    expect(listExecApprovalTempFiles(dir)).toStrictEqual([]);
   });
 
   it("does not follow a symlink swapped in before fallback copy", () => {
@@ -338,7 +338,7 @@ describe("exec approvals store helpers", () => {
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
     ).toThrow(/symlink|ELOOP/);
     expect(fs.readFileSync(targetPath, "utf8")).toBe('{"sentinel":true}\n');
-    expect(listExecApprovalTempFiles(dir)).toEqual([]);
+    expect(listExecApprovalTempFiles(dir)).toStrictEqual([]);
   });
 
   it("does not use the copy fallback for hard-linked approvals files", () => {
@@ -361,7 +361,7 @@ describe("exec approvals store helpers", () => {
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
     ).toThrow(/hard-linked exec approvals file/);
     expect(fs.readFileSync(linkedPath, "utf8")).toBe('{"sentinel":true}\n');
-    expect(listExecApprovalTempFiles(dir)).toEqual([]);
+    expect(listExecApprovalTempFiles(dir)).toStrictEqual([]);
   });
 
   it("refuses to write approvals through a symlink destination", () => {

@@ -20,6 +20,7 @@ describe("runGatewayHttpRequestStages", () => {
   });
 
   it("skips a throwing stage marked continueOnError and continues to subsequent stages", async () => {
+    const stageError = new Error("Cannot find module '@slack/bolt'");
     const stageC = vi.fn(() => true);
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -29,7 +30,7 @@ describe("runGatewayHttpRequestStages", () => {
         name: "broken-facade",
         continueOnError: true,
         run: () => {
-          throw new Error("Cannot find module '@slack/bolt'");
+          throw stageError;
         },
       },
       { name: "c", run: stageC },
@@ -41,13 +42,14 @@ describe("runGatewayHttpRequestStages", () => {
     expect(stageC).toHaveBeenCalled();
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('stage "broken-facade" threw'),
-      expect.any(Error),
+      stageError,
     );
 
     consoleSpy.mockRestore();
   });
 
   it("skips a rejecting async stage marked continueOnError and continues", async () => {
+    const stageError = new Error("ERR_MODULE_NOT_FOUND");
     const stageC = vi.fn(() => true);
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -56,7 +58,7 @@ describe("runGatewayHttpRequestStages", () => {
         name: "async-broken",
         continueOnError: true,
         run: async () => {
-          throw new Error("ERR_MODULE_NOT_FOUND");
+          throw stageError;
         },
       },
       { name: "c", run: stageC },
@@ -68,7 +70,7 @@ describe("runGatewayHttpRequestStages", () => {
     expect(stageC).toHaveBeenCalled();
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('stage "async-broken" threw'),
-      expect.any(Error),
+      stageError,
     );
 
     consoleSpy.mockRestore();

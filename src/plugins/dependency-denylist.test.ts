@@ -196,7 +196,7 @@ describe("dependency denylist guardrails", () => {
 
   it("keeps blocked packages out of the root manifest", () => {
     const manifest = readRootManifest();
-    expect(findBlockedManifestDependencies(manifest)).toEqual([]);
+    expect(findBlockedManifestDependencies(manifest)).toStrictEqual([]);
   });
 
   it("keeps blocked packages out of the lockfile graph", () => {

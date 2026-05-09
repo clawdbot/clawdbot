@@ -145,7 +145,7 @@ const unresolvedSecretRefPrivateKeyCases = [
   {
     name: "listNostrAccountIds",
     assert: (cfg: ReturnType<typeof createUnresolvedNostrPrivateKeyCfg>) => {
-      expect(listNostrAccountIds(cfg)).toEqual([]);
+      expect(listNostrAccountIds(cfg)).toStrictEqual([]);
     },
   },
   {
@@ -192,7 +192,7 @@ describe("nostrPlugin", () => {
     it("listAccountIds returns empty array for unconfigured", () => {
       const cfg = { channels: {} };
       const ids = nostrTestPlugin.config.listAccountIds(cfg);
-      expect(ids).toEqual([]);
+      expect(ids).toStrictEqual([]);
     });
 
     it("listAccountIds returns default for configured", () => {
@@ -370,12 +370,12 @@ describe("nostr account helpers", () => {
   describe("listNostrAccountIds", () => {
     it("returns empty array when not configured", () => {
       const cfg = { channels: {} };
-      expect(listNostrAccountIds(cfg)).toEqual([]);
+      expect(listNostrAccountIds(cfg)).toStrictEqual([]);
     });
 
     it("returns empty array when nostr section exists but no privateKey", () => {
       const cfg = { channels: { nostr: { enabled: true } } };
-      expect(listNostrAccountIds(cfg)).toEqual([]);
+      expect(listNostrAccountIds(cfg)).toStrictEqual([]);
     });
 
     it("returns default when privateKey is configured", () => {

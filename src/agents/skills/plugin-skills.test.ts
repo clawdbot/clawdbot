@@ -278,7 +278,7 @@ describe("resolvePluginSkillDirs", () => {
       } as OpenClawConfig,
     });
 
-    expect(dirs).toEqual([]);
+    expect(dirs).toStrictEqual([]);
   });
 
   it("cleans up generated plugin skill links when the plugin registry is empty", async () => {
@@ -300,7 +300,7 @@ describe("resolvePluginSkillDirs", () => {
       pluginSkillsDir,
     });
 
-    expect(dirs).toEqual([]);
+    expect(dirs).toStrictEqual([]);
     await expect(fs.lstat(path.join(pluginSkillsDir, "stale-skill"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -319,7 +319,7 @@ describe("resolvePluginSkillDirs", () => {
       pluginSkillsDir,
     });
 
-    expect(dirs).toEqual([]);
+    expect(dirs).toStrictEqual([]);
     await expect(fs.lstat(path.join(pluginSkillsDir, "stale-skill"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -600,7 +600,7 @@ describe("publishPluginSkills", () => {
   it("handles empty skill dirs list without error", async () => {
     const managedDir = await tempDirs.make("managed-skills-");
     publishPluginSkills([], { pluginSkillsDir: managedDir });
-    expect(fsSync.readdirSync(managedDir)).toEqual([]);
+    expect(fsSync.readdirSync(managedDir)).toStrictEqual([]);
   });
 
   it("handles collision: same basename from different plugins uses first one", async () => {

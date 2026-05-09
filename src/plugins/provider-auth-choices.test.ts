@@ -409,7 +409,7 @@ describe("provider auth choice manifest helpers", () => {
       },
     ]);
 
-    expect(resolveManifestProviderAuthChoices()).toEqual([]);
+    expect(resolveManifestProviderAuthChoices()).toStrictEqual([]);
   });
 
   it("does not duplicate explicit provider auth choices with setup auth methods", () => {

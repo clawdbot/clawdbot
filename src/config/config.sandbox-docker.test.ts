@@ -299,7 +299,7 @@ describe("sandbox browser binds config", () => {
       globalBrowser: { binds: [] },
       agentBrowser: {},
     });
-    expect(resolved.binds).toEqual([]);
+    expect(resolved.binds).toStrictEqual([]);
   });
 
   it("ignores agent browser binds under shared scope", () => {

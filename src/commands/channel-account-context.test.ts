@@ -25,7 +25,7 @@ describe("resolveDefaultChannelAccountContext", () => {
     expect(result.account).toBe(account);
     expect(result.enabled).toBe(true);
     expect(result.configured).toBe(true);
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toStrictEqual([]);
     expect(result.degraded).toBe(false);
   });
 
@@ -49,7 +49,7 @@ describe("resolveDefaultChannelAccountContext", () => {
     expect(isConfigured).toHaveBeenCalledWith(account, {});
     expect(result.enabled).toBe(false);
     expect(result.configured).toBe(false);
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toStrictEqual([]);
     expect(result.degraded).toBe(false);
   });
 

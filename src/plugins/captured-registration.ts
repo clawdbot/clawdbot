@@ -34,6 +34,7 @@ import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
   SpeechProviderPlugin,
+  UnifiedModelCatalogProviderPlugin,
   VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
@@ -74,6 +75,7 @@ export type CapturedPluginRegistration = {
   agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[];
   sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[];
   tools: AnyAgentTool[];
+  modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
 };
 
 export function createCapturedPluginRegistration(params?: {
@@ -109,6 +111,7 @@ export function createCapturedPluginRegistration(params?: {
   const agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[] = [];
   const sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[] = [];
   const tools: AnyAgentTool[] = [];
+  const modelCatalogProviders: UnifiedModelCatalogProviderPlugin[] = [];
   const pluginId = params?.id ?? "captured-plugin-registration";
   const pluginName = params?.name ?? "Captured Plugin Registration";
   const pluginSource = params?.source ?? "captured-plugin-registration";
@@ -146,6 +149,7 @@ export function createCapturedPluginRegistration(params?: {
     agentEventSubscriptions,
     sessionSchedulerJobs,
     tools,
+    modelCatalogProviders,
     api: buildPluginApi({
       id: pluginId,
       name: pluginName,
@@ -185,6 +189,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerProvider(provider: ProviderPlugin) {
           providers.push(provider);
+        },
+        registerModelCatalogProvider(provider: UnifiedModelCatalogProviderPlugin) {
+          modelCatalogProviders.push(provider);
         },
         registerAgentHarness(harness: AgentHarness) {
           agentHarnesses.push(harness);

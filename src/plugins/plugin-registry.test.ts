@@ -260,7 +260,7 @@ describe("plugin registry facade", () => {
       },
     };
     expect(isPluginEnabled({ index, pluginId: "demo", config })).toBe(false);
-    expect(resolveProviderOwners({ index, providerId: "demo", config })).toEqual([]);
+    expect(resolveProviderOwners({ index, providerId: "demo", config })).toStrictEqual([]);
     expect(
       resolveProviderOwners({ index, providerId: "demo", config, includeDisabled: true }),
     ).toEqual(["demo"]);
@@ -436,7 +436,7 @@ describe("plugin registry facade", () => {
     });
 
     expect(result.source).toBe("persisted");
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toStrictEqual([]);
     expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
       "persisted",
     ]);

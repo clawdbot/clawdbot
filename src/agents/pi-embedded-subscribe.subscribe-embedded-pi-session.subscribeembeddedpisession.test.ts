@@ -473,7 +473,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const earlyMediaPayloads = onBlockReply.mock.calls
       .map(([payload]) => payload)
       .filter((payload) => payload.mediaUrls?.length);
-    expect(earlyMediaPayloads).toEqual([]);
+    expect(earlyMediaPayloads).toStrictEqual([]);
 
     emitAssistantTextDelta(emit, "MEDIA:/tmp/generated.png");
     emit({
@@ -618,7 +618,7 @@ describe("subscribeEmbeddedPiSession", () => {
       const earlyMediaPayloads = onBlockReply.mock.calls
         .map(([payload]) => payload)
         .filter((payload) => payload.mediaUrls?.length);
-      expect(earlyMediaPayloads).toEqual([]);
+      expect(earlyMediaPayloads).toStrictEqual([]);
 
       emitAssistantTextDelta(emit, `MEDIA:${mediaUrl}`);
       emit({

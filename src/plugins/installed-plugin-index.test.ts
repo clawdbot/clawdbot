@@ -350,7 +350,7 @@ describe("installed plugin index", () => {
       env: hermeticEnv(),
     });
 
-    expect(index.diagnostics).toEqual([]);
+    expect(index.diagnostics).toStrictEqual([]);
     expect(index.plugins[0]).toMatchObject({
       pluginId: "workspace",
       manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
@@ -559,7 +559,7 @@ describe("installed plugin index", () => {
         },
       },
     };
-    expect(listEnabledInstalledPluginRecords(index, config)).toEqual([]);
+    expect(listEnabledInstalledPluginRecords(index, config)).toStrictEqual([]);
     expect(getInstalledPluginRecord(index, "demo")).toMatchObject({
       pluginId: "demo",
       enabled: false,
@@ -634,7 +634,7 @@ describe("installed plugin index", () => {
       pluginId: "openai",
       enabled: false,
     });
-    expect(listEnabledInstalledPluginRecords(index, config)).toEqual([]);
+    expect(listEnabledInstalledPluginRecords(index, config)).toStrictEqual([]);
   });
 
   it("records explicit install records separately from package install intent", () => {
@@ -924,7 +924,7 @@ describe("installed plugin index", () => {
       })),
     };
 
-    expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([]);
+    expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toStrictEqual([]);
   });
 
   it("treats plugin index changes as source invalidation", () => {
@@ -1029,7 +1029,9 @@ describe("installed plugin index", () => {
       plugins: current.plugins.filter((plugin) => plugin.enabled),
     };
 
-    expect(diffInstalledPluginIndexInvalidationReasons(migratedEnabledOnly, current)).toEqual([]);
+    expect(diffInstalledPluginIndexInvalidationReasons(migratedEnabledOnly, current)).toStrictEqual(
+      [],
+    );
   });
 
   it("marks disabled plugins without dropping their cold contributions", () => {

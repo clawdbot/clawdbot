@@ -58,7 +58,7 @@ describe("resolveMatrixMonitorAccessState", () => {
       isRoom: false,
     });
 
-    expect(state.effectiveAllowFrom).toEqual([]);
+    expect(state.effectiveAllowFrom).toStrictEqual([]);
     expect(state.directAllowMatch.allowed).toBe(false);
   });
 

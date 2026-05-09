@@ -95,7 +95,7 @@ describe("resolveProviderAuths plugin boundary", () => {
           skipPluginAuthWithoutCredentialSource: true,
           env: { HOME: homeDir },
         }),
-      ).resolves.toEqual([]);
+      ).resolves.toStrictEqual([]);
     });
 
     expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
@@ -304,7 +304,7 @@ describe("resolveProviderAuths plugin boundary", () => {
           skipPluginAuthWithoutCredentialSource: true,
           env: { HOME: homeDir },
         }),
-      ).resolves.toEqual([]);
+      ).resolves.toStrictEqual([]);
     });
 
     expect(ensureAuthProfileStoreWithoutExternalProfilesMock).toHaveBeenCalledTimes(1);

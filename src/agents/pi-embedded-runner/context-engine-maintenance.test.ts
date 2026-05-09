@@ -1047,7 +1047,7 @@ describe("runContextEngineMaintenance", () => {
         });
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
         expect(sendMessageMock).not.toHaveBeenCalled();
-        expect(peekSystemEvents(sessionKey)).toEqual([]);
+        expect(peekSystemEvents(sessionKey)).toStrictEqual([]);
       } finally {
         vi.useRealTimers();
       }

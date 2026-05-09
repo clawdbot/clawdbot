@@ -32,7 +32,7 @@ describe("sendMessageSlack NO_REPLY guard", () => {
 
     expect(client.chat.postMessage).not.toHaveBeenCalled();
     expect(result.messageId).toBe("suppressed");
-    expect(result.receipt.platformMessageIds).toEqual([]);
+    expect(result.receipt.platformMessageIds).toStrictEqual([]);
   });
 
   it("suppresses NO_REPLY with surrounding whitespace", async () => {
@@ -152,7 +152,7 @@ describe("sendMessageSlack chunking", () => {
       postedTexts
         .map((text, index) => ({ index, length: typeof text === "string" ? text.length : null }))
         .filter((text) => text.length === null || text.length > 8000),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(postedTexts.join("")).toBe(message);
   });
 });

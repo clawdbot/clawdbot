@@ -1,5 +1,6 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { deriveDurableFinalDeliveryRequirements } from "../../channels/message/capabilities.js";
+import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
@@ -13,7 +14,6 @@ import {
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
-  deliverOutboundPayloads,
   resolveOutboundDurableFinalDeliverySupport,
   type DurableFinalDeliveryRequirements,
   type OutboundDeliveryResult,
@@ -379,7 +379,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         silent: params.silent,
       });
     }
-    const results = await deliverOutboundPayloads({
+    const send = await sendDurableMessageBatch({
       cfg,
       channel: outboundChannel,
       to: resolvedTarget.to,
@@ -392,8 +392,9 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       forceDocument: params.forceDocument,
       deps: params.deps,
       bestEffort: params.bestEffort,
-      queuePolicy: params.queuePolicy,
-      abortSignal: params.abortSignal,
+      durability:
+        params.bestEffort || params.queuePolicy === "best_effort" ? "best_effort" : "required",
+      signal: params.abortSignal,
       silent: params.silent,
       mediaAccess: params.mediaAccess,
       mirror: params.mirror
@@ -405,6 +406,10 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
           }
         : undefined,
     });
+    if (!params.bestEffort && (send.status === "failed" || send.status === "partial_failed")) {
+      throw send.error;
+    }
+    const results = send.status === "sent" || send.status === "partial_failed" ? send.results : [];
 
     return {
       channel,

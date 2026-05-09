@@ -336,11 +336,11 @@ function expectLiveVideoCasePassed(params: {
 }): void {
   logLiveVideoSummary(params);
   if (params.attempted.length === 0) {
-    expect(params.failures).toEqual([]);
+    expect(params.failures).toStrictEqual([]);
     console.warn("[live:video-generation] no live video attempt completed; skipping assertions");
     return;
   }
-  expect(params.failures).toEqual([]);
+  expect(params.failures).toStrictEqual([]);
 }
 
 function resolveLiveSmokeDurationSeconds(params: {

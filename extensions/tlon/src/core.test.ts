@@ -62,7 +62,7 @@ describe("tlon core", () => {
         cfg: {} as OpenClawConfig,
         accountId: "default",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("resolves dm allowlist from the default account", () => {

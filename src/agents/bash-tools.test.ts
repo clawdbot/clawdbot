@@ -518,7 +518,7 @@ const expectNotifyNoopEvents = (
   label: string,
 ) => {
   if (!notifyOnExitEmptySuccess) {
-    expect(events, label).toEqual([]);
+    expect(events, label).toStrictEqual([]);
     return;
   }
   expect(events.length, label).toBeGreaterThan(0);

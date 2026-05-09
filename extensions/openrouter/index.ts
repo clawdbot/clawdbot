@@ -27,7 +27,10 @@ import {
   resolveOpenRouterThinkingProfile,
   supportsOpenRouterXHighThinking,
 } from "./thinking-policy.js";
-import { buildOpenRouterVideoGenerationProvider } from "./video-generation-provider.js";
+import {
+  buildOpenRouterVideoGenerationProvider,
+  listOpenRouterVideoModelCatalog,
+} from "./video-generation-provider.js";
 
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
@@ -163,6 +166,11 @@ export default definePluginEntry({
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
     api.registerVideoGenerationProvider(buildOpenRouterVideoGenerationProvider());
+    api.registerModelCatalogProvider({
+      provider: PROVIDER_ID,
+      kinds: ["video_generation"],
+      liveCatalog: listOpenRouterVideoModelCatalog,
+    });
     api.registerSpeechProvider(buildOpenRouterSpeechProvider());
   },
 });

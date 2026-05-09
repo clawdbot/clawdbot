@@ -204,7 +204,7 @@ describe("pw-session ensurePageState", () => {
       handlers.get("download")?.[0]?.(download);
       await new Promise((resolve) => setImmediate(resolve));
 
-      expect(unhandled).toEqual([]);
+      expect(unhandled).toStrictEqual([]);
       await expect(download.path?.()).rejects.toThrow("save failed");
     } finally {
       process.off("unhandledRejection", onUnhandled);
@@ -266,8 +266,8 @@ describe("pw-session ensurePageState", () => {
 
     const state2 = ensurePageState(page);
     expect(state2).not.toBe(state1);
-    expect(state2.console).toEqual([]);
-    expect(state2.errors).toEqual([]);
-    expect(state2.requests).toEqual([]);
+    expect(state2.console).toStrictEqual([]);
+    expect(state2.errors).toStrictEqual([]);
+    expect(state2.requests).toStrictEqual([]);
   });
 });

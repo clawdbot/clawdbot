@@ -1217,7 +1217,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await vi.waitFor(() => {
       expect(agentCommand.mock.calls).toHaveLength(1);
     });
-    expect(openResponsesTesting.getResponseSessionIds()).toEqual([]);
+    expect(openResponsesTesting.getResponseSessionIds()).toStrictEqual([]);
 
     release?.({ payloads: [{ text: "hello" }] });
 

@@ -100,7 +100,7 @@ snapshots:
 
     const report = collectSbomRiskReport({ repoRoot });
 
-    expect(report.summary).toMatchObject({
+    expect(report.summary).toEqual({
       buildRiskPackageCount: 1,
       importerCount: 1,
       lockfilePackageCount: 4,
@@ -109,10 +109,19 @@ snapshots:
       rootOwnershipRecordCount: 2,
     });
     expect(report.ownershipGaps).toEqual(["missing-owner"]);
-    expect(report.topRootDependencyCones[0]).toMatchObject({
+    expect(report.topRootDependencyCones[0]).toEqual({
+      class: "core-runtime",
       closureSize: 3,
+      missingSnapshotKeys: [],
       name: "core-lib",
       owner: "core:test",
+      resolved: "1.0.0",
+      risk: ["network"],
+      section: "dependencies",
+      sourceCategory: "unreferenced",
+      sourceFileCount: 0,
+      sourceSections: [],
+      specifier: "1.0.0",
     });
     expect(collectSbomRiskCheckErrors(report)).toEqual([
       "root dependency 'missing-owner' is missing from scripts/lib/dependency-ownership.json",

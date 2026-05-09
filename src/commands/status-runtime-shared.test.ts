@@ -68,7 +68,7 @@ describe("status-runtime-shared", () => {
       includeFilesystem: true,
       includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,
-      plugins: expect.any(Array),
+      plugins: [{ id: "telegram" }],
     });
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
       { gateway: {} },
@@ -286,7 +286,7 @@ describe("status-runtime-shared", () => {
       includeFilesystem: true,
       includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,
-      plugins: expect.any(Array),
+      plugins: [{ id: "telegram" }],
     });
   });
 });

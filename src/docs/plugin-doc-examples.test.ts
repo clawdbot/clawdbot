@@ -44,6 +44,6 @@ describe("plugin docs examples", () => {
         }
       }
     }
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 });

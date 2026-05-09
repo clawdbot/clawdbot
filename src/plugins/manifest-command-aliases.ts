@@ -20,11 +20,29 @@ export type PluginManifestCommandAliasRecord = PluginManifestCommandAlias & {
   enabledByDefault?: boolean;
 };
 
+export type PluginManifestToolOwnerRecord = {
+  toolName: string;
+  pluginId: string;
+  /**
+   * "loaded" — the owning plugin passes control-plane availability filters and
+   * the tool itself passes manifest-tool-availability checks (configSignals/
+   * authSignals). The diagnostic can say the tool is available from this plugin.
+   *
+   * "manifest-only" — the manifest claims ownership but availability checks
+   * either failed (plugin denied/disabled, missing required config) or were
+   * not performed (pure registry lookup with no plugin metadata snapshot).
+   * Emit a softer "may be provided by" message in that case so the diagnostic
+   * does not over-assert about plugins that the runtime never registered.
+   */
+  availability?: "loaded" | "manifest-only";
+};
+
 export type PluginManifestCommandAliasRegistry = {
   plugins: readonly {
     id: string;
     enabledByDefault?: boolean;
     commandAliases?: readonly PluginManifestCommandAlias[];
+    contracts?: { tools?: readonly string[] };
   }[];
 };
 
@@ -60,6 +78,29 @@ export function normalizeManifestCommandAliases(
     });
   }
   return normalized.length > 0 ? normalized : undefined;
+}
+
+export function resolveManifestToolOwnerInRegistry(params: {
+  toolName: string | undefined;
+  registry: PluginManifestCommandAliasRegistry;
+}): PluginManifestToolOwnerRecord | undefined {
+  const normalizedToolName = normalizeOptionalLowercaseString(params.toolName);
+  if (!normalizedToolName) {
+    return undefined;
+  }
+  for (const plugin of params.registry.plugins) {
+    const tools = plugin.contracts?.tools;
+    if (!tools || tools.length === 0) {
+      continue;
+    }
+    const match = tools.find(
+      (entry) => normalizeOptionalLowercaseString(entry) === normalizedToolName,
+    );
+    if (match) {
+      return { toolName: match, pluginId: plugin.id };
+    }
+  }
+  return undefined;
 }
 
 export function resolveManifestCommandAliasOwnerInRegistry(params: {

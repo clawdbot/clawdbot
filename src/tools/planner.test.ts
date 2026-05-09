@@ -92,7 +92,7 @@ describe("buildToolPlan", () => {
       availability: { enabledPluginIds: new Set() },
     });
 
-    expect(plan.visible).toEqual([]);
+    expect(plan.visible).toStrictEqual([]);
     const hiddenTool = expectHiddenTool(plan, 0);
     expect(hiddenTool.descriptor.name).toBe("plugin_tool");
     expect(hiddenTool.diagnostics.map((entry) => entry.reason)).toEqual(["plugin-disabled"]);
@@ -103,7 +103,7 @@ describe("buildToolPlan", () => {
       descriptors: [descriptor("malformed", { availability: { allOf: [] } })],
     });
 
-    expect(plan.visible).toEqual([]);
+    expect(plan.visible).toStrictEqual([]);
     const hiddenTool = expectHiddenTool(plan, 0);
     expect(hiddenTool.descriptor.name).toBe("malformed");
     expect(hiddenTool.diagnostics).toEqual([

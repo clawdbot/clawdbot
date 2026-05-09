@@ -96,7 +96,7 @@ describe("runtime TaskFlow", () => {
     });
 
     expect(otherTaskFlow.get(created.flowId)).toBeUndefined();
-    expect(otherTaskFlow.list()).toEqual([]);
+    expect(otherTaskFlow.list()).toStrictEqual([]);
 
     const child = ownerTaskFlow.runTask({
       flowId: created.flowId,

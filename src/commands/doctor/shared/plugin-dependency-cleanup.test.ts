@@ -84,7 +84,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
 
     const result = await cleanupLegacyPluginDependencyState({ env, packageRoot });
 
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
     expect(result.changes.length).toBeGreaterThanOrEqual(6);
     await expectPathMissing(legacyRuntimeRoot);
     await expectPathMissing(legacyLocalRoot);
@@ -127,7 +127,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
       packageRoot,
     });
 
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain(`Removed stale plugin-runtime symlink: ${slackLink}`);
     await expectPathMissing(slackLink);
     expect((await fs.lstat(liveLink)).isSymbolicLink()).toBe(true);

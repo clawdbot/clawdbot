@@ -30,6 +30,7 @@ vi.mock("../infra/env.js", () => ({
 
 vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: hoisted.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: hoisted.deliverOutboundPayloads,
 }));
 
 vi.mock("../infra/outbound/delivery-queue.js", () => ({

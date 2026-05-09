@@ -5,7 +5,7 @@
   },
   "enabledByDefault": true,
   "providers": ["anthropic-vertex"],
-  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "providerCatalogEntry": "./provider-discovery.ts",
   "syntheticAuthRefs": ["anthropic-vertex"],
   "nonSecretAuthMarkers": ["gcp-vertex-credentials"],
   "configSchema": {

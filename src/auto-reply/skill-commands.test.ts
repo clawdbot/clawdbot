@@ -430,6 +430,6 @@ describe("dedupeBySkillName", () => {
   });
 
   it("returns an empty array for empty input", () => {
-    expect(skillCommandsTesting.dedupeBySkillName([])).toEqual([]);
+    expect(skillCommandsTesting.dedupeBySkillName([])).toStrictEqual([]);
   });
 });

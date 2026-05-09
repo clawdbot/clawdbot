@@ -191,7 +191,7 @@ describe("diagnostic stability bundles", () => {
     expect(messages[0]).toContain(tempDir);
 
     resetDiagnosticStabilityBundleForTest();
-    expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([]);
+    expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toStrictEqual([]);
   });
 
   it("retains only the newest bundle files", () => {

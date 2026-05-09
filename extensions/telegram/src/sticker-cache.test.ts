@@ -206,7 +206,7 @@ describe("sticker-cache", () => {
   describe("getAllCachedStickers", () => {
     it("returns empty array when cache is empty", () => {
       const result = stickerCache.getAllCachedStickers();
-      expect(result).toEqual([]);
+      expect(result).toStrictEqual([]);
     });
 
     it("returns all cached stickers", () => {

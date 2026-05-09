@@ -88,7 +88,7 @@ describe("device-pair notify persistence", () => {
     const persisted = JSON.parse(
       await fs.readFile(path.join(stateDir, "device-pair-notify.json"), "utf8"),
     ) as { subscribers: unknown[] };
-    expect(persisted.subscribers).toEqual([]);
+    expect(persisted.subscribers).toStrictEqual([]);
   });
 
   it("does not remove a different persisted subscriber when notify fields contain pipes", async () => {

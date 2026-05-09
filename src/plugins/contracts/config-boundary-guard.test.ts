@@ -125,6 +125,6 @@ describe("config boundary guard", () => {
       ].join("\n"),
     );
 
-    expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toEqual([]);
+    expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toStrictEqual([]);
   });
 });

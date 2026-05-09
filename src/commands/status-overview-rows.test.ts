@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { VERSION } from "../version.js";
 import {
   buildStatusAllOverviewRows,
   buildStatusCommandOverviewRows,
@@ -63,7 +64,7 @@ describe("status-overview-rows", () => {
       }),
     ).toEqual(
       expect.arrayContaining([
-        { Item: "Version", Value: expect.any(String) },
+        { Item: "Version", Value: VERSION },
         { Item: "OS", Value: "macOS" },
         { Item: "Config", Value: "/tmp/openclaw.json" },
         { Item: "Security", Value: "Run: openclaw security audit --deep" },

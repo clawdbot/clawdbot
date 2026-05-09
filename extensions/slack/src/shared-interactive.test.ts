@@ -114,7 +114,7 @@ describe("buildSlackInteractiveBlocks", () => {
           },
         ],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("caps Slack static selects at the Block Kit option limit", () => {

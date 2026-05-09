@@ -10,6 +10,10 @@ import {
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
+import {
+  buildReferenceInputCapabilityFailure,
+  resolveProviderWithModelCapabilities,
+} from "./capability-overlays.js";
 import { resolveVideoGenerationSupportedDurations } from "./duration-support.js";
 import { parseVideoGenerationModelRef } from "./model-ref.js";
 import { resolveVideoGenerationOverrides } from "./normalization.js";
@@ -18,6 +22,9 @@ import type { GenerateVideoParams, GenerateVideoRuntimeResult } from "./runtime-
 import type { VideoGenerationProviderOptionType, VideoGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("video-generation");
+const MODEL_CAPABILITY_LOOKUP_TIMEOUT_MS = 5_000;
+// Internal request hint for providers that perform their own final snapping.
+const SUPPORTED_DURATIONS_HINT = Symbol.for("openclaw.videoGeneration.supportedDurations");
 
 export type VideoGenerationRuntimeDeps = {
   getProvider?: typeof getVideoGenerationProvider;
@@ -148,6 +155,16 @@ export async function generateVideo(
       lastError = new Error(error);
       continue;
     }
+    const activeProvider = await resolveProviderWithModelCapabilities({
+      provider,
+      providerId: candidate.provider,
+      model: candidate.model,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      authStore: params.authStore,
+      timeoutMs: MODEL_CAPABILITY_LOOKUP_TIMEOUT_MS,
+      log: logger,
+    });
 
     // Guard: skip candidates that cannot satisfy reference-input counts so
     // we never silently drop audio/image/video refs by falling over to a
@@ -155,29 +172,26 @@ export async function generateVideo(
     const inputImageCount = params.inputImages?.length ?? 0;
     const inputVideoCount = params.inputVideos?.length ?? 0;
     const inputAudioCount = params.inputAudios?.length ?? 0;
-    if (inputAudioCount > 0) {
-      const { capabilities: candCaps } = resolveVideoGenerationModeCapabilities({
-        provider,
+    const referenceInputMismatch = buildReferenceInputCapabilityFailure({
+      providerId: candidate.provider,
+      model: candidate.model,
+      provider: activeProvider,
+      inputImageCount,
+      inputVideoCount,
+      inputAudioCount,
+    });
+    if (referenceInputMismatch) {
+      attempts.push({
+        provider: candidate.provider,
         model: candidate.model,
-        inputImageCount,
-        inputVideoCount,
+        error: referenceInputMismatch,
       });
-      // Fall back to flat provider.capabilities.maxInputAudios for providers that
-      // set the all-modes default directly rather than nesting it in capabilities.generate etc.
-      const maxAudio = candCaps?.maxInputAudios ?? provider.capabilities.maxInputAudios ?? 0;
-      if (inputAudioCount > maxAudio) {
-        const error =
-          maxAudio === 0
-            ? `${candidate.provider}/${candidate.model} does not support reference audio inputs; skipping to avoid silent audio drop`
-            : `${candidate.provider}/${candidate.model} supports at most ${maxAudio} reference audio(s), ${inputAudioCount} requested; skipping`;
-        attempts.push({ provider: candidate.provider, model: candidate.model, error });
-        lastError = new Error(error);
-        warnOnFirstSkip(error);
-        logger.debug(
-          `video-generation candidate skipped (audio capability): ${candidate.provider}/${candidate.model}`,
-        );
-        continue;
-      }
+      lastError = new Error(referenceInputMismatch);
+      warnOnFirstSkip(referenceInputMismatch);
+      logger.debug(
+        `video-generation candidate skipped (reference input capability): ${candidate.provider}/${candidate.model}`,
+      );
+      continue;
     }
 
     // Guard: skip candidates that do not accept the requested providerOptions keys,
@@ -193,13 +207,13 @@ export async function generateVideo(
       Object.keys(params.providerOptions).length > 0
     ) {
       const { capabilities: optCaps } = resolveVideoGenerationModeCapabilities({
-        provider,
+        provider: activeProvider,
         model: candidate.model,
         inputImageCount,
         inputVideoCount,
       });
       const declaredOptions =
-        optCaps?.providerOptions ?? provider.capabilities.providerOptions ?? undefined;
+        optCaps?.providerOptions ?? activeProvider.capabilities.providerOptions ?? undefined;
       const mismatch = validateProviderOptionsAgainstDeclaration({
         providerId: candidate.provider,
         model: candidate.model,
@@ -221,21 +235,22 @@ export async function generateVideo(
     // duration. Only applies when the provider uses a simple max with no explicit
     // supported-durations list — when a list exists, runtime normalization snaps to the
     // nearest valid value so skipping is not appropriate.
+    const supportedDurations = resolveVideoGenerationSupportedDurations({
+      provider: activeProvider,
+      model: candidate.model,
+      inputImageCount,
+      inputVideoCount,
+    });
     const requestedDuration = params.durationSeconds;
     if (typeof requestedDuration === "number" && Number.isFinite(requestedDuration)) {
       const { capabilities: durCaps } = resolveVideoGenerationModeCapabilities({
-        provider,
+        provider: activeProvider,
         model: candidate.model,
         inputImageCount,
         inputVideoCount,
       });
-      const supportedDurations = resolveVideoGenerationSupportedDurations({
-        provider,
-        model: candidate.model,
-        inputImageCount,
-        inputVideoCount,
-      });
-      const maxDuration = durCaps?.maxDurationSeconds ?? provider.capabilities.maxDurationSeconds;
+      const maxDuration =
+        durCaps?.maxDurationSeconds ?? activeProvider.capabilities.maxDurationSeconds;
       if (
         !supportedDurations &&
         typeof maxDuration === "number" &&
@@ -257,7 +272,7 @@ export async function generateVideo(
 
     try {
       const sanitized = resolveVideoGenerationOverrides({
-        provider,
+        provider: activeProvider,
         model: candidate.model,
         size: params.size,
         aspectRatio: params.aspectRatio,
@@ -268,7 +283,9 @@ export async function generateVideo(
         inputImageCount,
         inputVideoCount,
       });
-      const result: VideoGenerationResult = await provider.generateVideo({
+      const generationRequest: Parameters<typeof provider.generateVideo>[0] & {
+        [SUPPORTED_DURATIONS_HINT]?: readonly number[];
+      } = {
         provider: candidate.provider,
         model: candidate.model,
         prompt: params.prompt,
@@ -286,7 +303,11 @@ export async function generateVideo(
         inputAudios: params.inputAudios,
         providerOptions: params.providerOptions,
         ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
-      });
+      };
+      if (supportedDurations) {
+        generationRequest[SUPPORTED_DURATIONS_HINT] = supportedDurations;
+      }
+      const result: VideoGenerationResult = await provider.generateVideo(generationRequest);
       if (!Array.isArray(result.videos) || result.videos.length === 0) {
         throw new Error("Video generation provider returned no videos.");
       }

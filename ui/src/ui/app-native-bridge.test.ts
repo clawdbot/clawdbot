@@ -148,9 +148,10 @@ describe("initNativeBridge", () => {
     const host = makeHost();
     const cleanup = initNativeBridge(host);
     expect(bridge.listeners).toHaveLength(1);
+    const registeredListener = bridge.listeners[0];
     cleanup();
     expect(bridge.listeners).toHaveLength(0);
-    expect(bridge.removeEventListener).toHaveBeenCalledWith("message", expect.any(Function));
+    expect(bridge.removeEventListener).toHaveBeenCalledWith("message", registeredListener);
   });
 
   it("does not call handleChatDraftChange after cleanup", () => {

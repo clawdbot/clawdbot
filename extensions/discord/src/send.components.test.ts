@@ -1,4 +1,4 @@
-import { ChannelType } from "discord-api-types/v10";
+import { ChannelType, MessageFlags } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeDiscordRest } from "./send.test-harness.js";
 
@@ -123,12 +123,12 @@ describe("sendDiscordComponentMessage", () => {
       },
     );
 
-    expect(patchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/channels/chan-1/messages/msg1"),
-      expect.objectContaining({
-        body: expect.any(Object),
-      }),
-    );
+    expect(patchMock).toHaveBeenCalledTimes(1);
+    const [patchUrl, patchRequest] = patchMock.mock.calls[0] ?? [];
+    expect(patchUrl).toEqual(expect.stringContaining("/channels/chan-1/messages/msg1"));
+    expect(patchRequest?.body?.flags).toBe(MessageFlags.IsComponentsV2);
+    expect(Array.isArray(patchRequest?.body?.components)).toBe(true);
+    expect(patchRequest?.body?.components).toHaveLength(1);
     expect(registerMock).toHaveBeenCalledTimes(1);
     const args = registerMock.mock.calls[0]?.[0];
     expect(args?.messageId).toBe("msg1");

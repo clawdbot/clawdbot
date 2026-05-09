@@ -4,12 +4,11 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 
-let deliverRuntimePromise: Promise<typeof import("../infra/outbound/deliver-runtime.js")> | null =
-  null;
+let messageRuntimePromise: Promise<typeof import("../channels/message/runtime.js")> | null = null;
 
-function loadDeliverRuntime() {
-  deliverRuntimePromise ??= import("../infra/outbound/deliver-runtime.js");
-  return deliverRuntimePromise;
+function loadMessageRuntime() {
+  messageRuntimePromise ??= import("../channels/message/runtime.js");
+  return messageRuntimePromise;
 }
 
 export const DEFAULT_ECHO_TRANSCRIPT_FORMAT = '📝 "{transcript}"';
@@ -52,8 +51,8 @@ export async function sendTranscriptEcho(params: {
   const text = formatEchoTranscript(transcript, params.format ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT);
 
   try {
-    const { deliverOutboundPayloads } = await loadDeliverRuntime();
-    await deliverOutboundPayloads({
+    const { sendDurableMessageBatch } = await loadMessageRuntime();
+    const send = await sendDurableMessageBatch({
       cfg,
       channel: normalizedChannel,
       to,
@@ -61,7 +60,11 @@ export async function sendTranscriptEcho(params: {
       threadId: ctx.MessageThreadId ?? undefined,
       payloads: [{ text }],
       bestEffort: true,
+      durability: "best_effort",
     });
+    if (send.status === "failed") {
+      throw send.error;
+    }
     if (shouldLogVerbose()) {
       logVerbose(`media: echo-transcript sent to ${normalizedChannel}/${to}`);
     }

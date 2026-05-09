@@ -353,7 +353,7 @@ describe("extractMentions", () => {
 
   it("returns empty array when no mentions", () => {
     const mentions = extractMentions("hello everyone");
-    expect(mentions).toEqual([]);
+    expect(mentions).toStrictEqual([]);
   });
 
   it("handles mentions at start of message", () => {
@@ -383,6 +383,6 @@ describe("extractMentions", () => {
 
   it("handles empty string", () => {
     const mentions = extractMentions("");
-    expect(mentions).toEqual([]);
+    expect(mentions).toStrictEqual([]);
   });
 });

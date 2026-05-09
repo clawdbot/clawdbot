@@ -32,6 +32,6 @@ describe("irc inbound policy", () => {
       dmPolicy: "pairing",
     });
 
-    expect(resolved.effectiveGroupAllowFrom).toEqual([]);
+    expect(resolved.effectiveGroupAllowFrom).toStrictEqual([]);
   });
 });

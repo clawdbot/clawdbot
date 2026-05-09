@@ -21,7 +21,7 @@ describe("device bootstrap profile", () => {
 
     expect(
       resolveBootstrapProfileScopesForRole("node", ["node.exec", "operator.approvals"]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   test("bounds bootstrap handoff scopes across profile roles", () => {
@@ -34,7 +34,7 @@ describe("device bootstrap profile", () => {
 
     expect(
       resolveBootstrapProfileScopesForRoles(["node"], ["node.exec", "operator.admin"]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   test("normalizes issued handoff profiles to the bootstrap allowlist", () => {

@@ -1,5 +1,6 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isPlainObject } from "../utils.js";
 import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -9,10 +10,27 @@ import { getPluginSessionExtensionStateSync } from "./host-hook-state.js";
 import type { PluginJsonValue } from "./host-hooks.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
+export function hasTrustedToolPolicies(): boolean {
+  return (getActivePluginRegistry()?.trustedToolPolicies?.length ?? 0) > 0;
+}
+
+function normalizeDerivedEventFields(
+  value: Pick<PluginHookBeforeToolCallEvent, "derivedPaths"> | undefined,
+): Pick<PluginHookBeforeToolCallEvent, "derivedPaths"> {
+  return Array.isArray(value?.derivedPaths)
+    ? { derivedPaths: Object.freeze([...value.derivedPaths]) }
+    : {};
+}
+
 export async function runTrustedToolPolicies(
   event: PluginHookBeforeToolCallEvent,
   ctx: PluginHookToolContext,
-  options?: { config?: OpenClawConfig },
+  options?: {
+    config?: OpenClawConfig;
+    deriveEvent?: (
+      params: Record<string, unknown>,
+    ) => Pick<PluginHookBeforeToolCallEvent, "derivedPaths">;
+  },
 ): Promise<PluginHookBeforeToolCallResult | undefined> {
   const policies = getActivePluginRegistry()?.trustedToolPolicies ?? [];
   let adjustedParams = event.params;
@@ -31,6 +49,15 @@ export async function runTrustedToolPolicies(
       }
     }
     return resolvedSessionConfig;
+  };
+  const { derivedPaths, ...eventWithoutDerivedPaths } = event;
+  let currentDerivedEvent = normalizeDerivedEventFields({ derivedPaths });
+  const buildEvent = (): PluginHookBeforeToolCallEvent => {
+    return {
+      ...eventWithoutDerivedPaths,
+      params: adjustedParams,
+      ...currentDerivedEvent,
+    };
   };
   for (const registration of policies) {
     const policyCtx: PluginHookToolContext = {
@@ -59,10 +86,7 @@ export async function runTrustedToolPolicies(
         return pluginState[normalizedNamespace] as T | undefined;
       },
     };
-    const decision = await registration.policy.evaluate(
-      { ...event, params: adjustedParams },
-      policyCtx,
-    );
+    const decision = await registration.policy.evaluate(buildEvent(), policyCtx);
     if (!decision) {
       continue;
     }
@@ -84,9 +108,10 @@ export async function runTrustedToolPolicies(
     // pipeline) — it does NOT short-circuit the policy chain. Params and
     // approvals are remembered so later trusted policies can still inspect or
     // block the final call.
-    if ("params" in decision && decision.params) {
+    if ("params" in decision && isPlainObject(decision.params)) {
       adjustedParams = decision.params;
       hasAdjustedParams = true;
+      currentDerivedEvent = normalizeDerivedEventFields(options?.deriveEvent?.(adjustedParams));
     }
     if ("requireApproval" in decision && decision.requireApproval && !approval) {
       approval = decision.requireApproval;

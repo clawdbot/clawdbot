@@ -76,7 +76,7 @@ describe("trajectory cleanup", () => {
         restrictToStoreDir: true,
       });
 
-      expect(removed).toEqual([]);
+      expect(removed).toStrictEqual([]);
       expect((await fs.stat(runtimeFile)).isFile()).toBe(true);
       expect((await fs.stat(pointerPath)).isFile()).toBe(true);
     });

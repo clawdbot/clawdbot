@@ -75,7 +75,7 @@ describe("command-analysis explanation summary", () => {
         commandText: "echo ok",
         commandArgv: ["python3", "-c", "print(1)"],
       })?.riskKinds,
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       resolveCommandAnalysisSummaryForDisplay({
         host: "gateway",

@@ -962,7 +962,7 @@ describe("launchd install", () => {
       mode: "kickstart",
       waitForPid: process.pid,
     });
-    expect(state.launchctlCalls).toEqual([]);
+    expect(state.launchctlCalls).toStrictEqual([]);
   });
 
   it("surfaces detached handoff failures", async () => {

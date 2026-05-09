@@ -247,6 +247,59 @@
       }
     },
     {
+      "name": "@openclaw/matrix",
+      "description": "OpenClaw Matrix channel plugin",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "matrix",
+          "label": "Matrix",
+          "selectionLabel": "Matrix (plugin)",
+          "docsPath": "/channels/matrix",
+          "docsLabel": "matrix",
+          "blurb": "open protocol; install the plugin to enable.",
+          "order": 70,
+          "quickstartAllowFrom": true,
+          "doctorCapabilities": {
+            "dmAllowFromMode": "nestedOnly",
+            "groupModel": "sender",
+            "groupAllowFromFallbackToAllowFrom": false,
+            "warnOnEmptyGroupSenderAllowlist": true
+          },
+          "cliAddOptions": [
+            {
+              "flags": "--homeserver <url>",
+              "description": "Matrix homeserver URL"
+            },
+            {
+              "flags": "--user-id <id>",
+              "description": "Matrix user ID"
+            },
+            {
+              "flags": "--access-token <token>",
+              "description": "Matrix access token"
+            },
+            {
+              "flags": "--device-name <name>",
+              "description": "Matrix device name"
+            },
+            {
+              "flags": "--initial-sync-limit <n>",
+              "description": "Matrix initial sync limit"
+            }
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/matrix",
+          "npmSpec": "@openclaw/matrix",
+          "defaultChoice": "clawhub",
+          "minHostVersion": ">=2026.4.10",
+          "allowInvalidConfigRecovery": true
+        }
+      }
+    },
+    {
       "name": "@openclaw/msteams",
       "description": "OpenClaw Microsoft Teams channel plugin",
       "source": "official",

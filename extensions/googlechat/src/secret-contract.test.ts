@@ -55,6 +55,6 @@ describe("googlechat secret contract", () => {
 
     const workAccount = resolvedConfig.channels?.googlechat?.accounts?.work;
     expect(workAccount?.serviceAccount).toBe('{"client_email":"bot@example.com"}');
-    expect(context.warnings).toEqual([]);
+    expect(context.warnings).toStrictEqual([]);
   });
 });

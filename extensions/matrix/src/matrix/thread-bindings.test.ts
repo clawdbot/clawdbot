@@ -556,7 +556,7 @@ describe("matrix thread bindings", () => {
     });
 
     expect(replacementManager).not.toBe(initialManager);
-    expect(replacementManager.listBindings()).toEqual([]);
+    expect(replacementManager.listBindings()).toStrictEqual([]);
     expect(
       getSessionBindingService().resolveByConversation({
         channel: "matrix",

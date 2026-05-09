@@ -297,7 +297,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
       },
     );
     const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexHome?: unknown };
-    expect(launched.argv).toEqual([]);
+    expect(launched.argv).toStrictEqual([]);
     const expectedCodexHome = await fs.realpath(path.join(stateDir, "acpx", "codex-home"));
     expect(path.resolve(String(launched.codexHome))).toBe(expectedCodexHome);
   });

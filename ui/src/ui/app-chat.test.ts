@@ -19,6 +19,8 @@ const { executeSlashCommandMock, setLastActiveSessionKeyMock } = vi.hoisted(() =
   setLastActiveSessionKeyMock: vi.fn(),
 }));
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
 vi.mock("./app-last-active-session.ts", () => ({
   setLastActiveSessionKey: (...args: unknown[]) => setLastActiveSessionKeyMock(...args),
 }));
@@ -1120,7 +1122,7 @@ describe("handleSendChat", () => {
         sessionKey: "agent:main",
         message: "/btw what changed?",
         deliver: false,
-        idempotencyKey: expect.any(String),
+        idempotencyKey: expect.stringMatching(uuidPattern),
       }),
     );
     expect(host.chatQueue).toStrictEqual([]);
@@ -1337,7 +1339,7 @@ describe("handleSendChat", () => {
       sessionKey: "agent:main:main",
       message: "tighten the plan",
       deliver: false,
-      idempotencyKey: expect.any(String),
+      idempotencyKey: expect.stringMatching(uuidPattern),
       attachments: undefined,
     });
     expect(host.chatRunId).toBe("run-1");

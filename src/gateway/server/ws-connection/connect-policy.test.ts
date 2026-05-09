@@ -420,7 +420,7 @@ describe("ws connect policy", () => {
         authMethod: undefined,
         trustedProxyAuthOk: true,
       }),
-    ).toBe(true);
+    ).toBe(false);
 
     expect(
       shouldClearUnboundScopesForMissingDeviceIdentity({

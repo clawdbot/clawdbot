@@ -268,6 +268,6 @@ describe("createChannelApproverDmTargetResolver", () => {
           expiresAtMs: 1000,
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

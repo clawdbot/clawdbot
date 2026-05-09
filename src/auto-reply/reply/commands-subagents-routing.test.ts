@@ -158,7 +158,7 @@ describe("subagents command dispatch", () => {
   it("maps prefixes and args to subagent actions", () => {
     const listTokens = ["list"];
     expect(resolveSubagentsAction({ handledPrefix: COMMAND, restTokens: listTokens })).toBe("list");
-    expect(listTokens).toEqual([]);
+    expect(listTokens).toStrictEqual([]);
 
     const killTokens = ["1"];
     expect(resolveSubagentsAction({ handledPrefix: COMMAND_KILL, restTokens: killTokens })).toBe(

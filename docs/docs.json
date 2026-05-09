@@ -1202,6 +1202,7 @@
                   "plugins/memory-wiki",
                   "plugins/memory-lancedb",
                   "plugins/message-presentation",
+                  "plugins/oc-path",
                   "plugins/skill-workshop",
                   "plugins/zalouser",
                   {
@@ -1674,7 +1675,7 @@
                   },
                   {
                     "group": "Plugins and skills",
-                    "pages": ["cli/plugins", "cli/skills"]
+                    "pages": ["cli/plugins", "cli/path", "cli/skills"]
                   },
                   {
                     "group": "Interfaces",

@@ -3,6 +3,7 @@ import {
   describeImagesWithModel,
 } from "openclaw/plugin-sdk/media-understanding";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
@@ -61,6 +62,7 @@ vi.mock("./src/stream.js", async (importOriginal) => {
 });
 
 beforeEach(() => {
+  clearLiveCatalogCacheForTests();
   promptAndConfigureOllamaMock.mockClear();
   ensureOllamaModelPulledMock.mockClear();
   buildOllamaProviderMock.mockReset();
@@ -211,7 +213,7 @@ describe("ollama plugin", () => {
   it("skips ambient discovery when plugin discovery is disabled", async () => {
     const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {
         plugins: {
           entries: {
@@ -239,7 +241,7 @@ describe("ollama plugin", () => {
       models: [{ id: "llama3.2", name: "Llama 3.2" }],
     });
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {
         plugins: {
           entries: {
@@ -269,7 +271,7 @@ describe("ollama plugin", () => {
   it("skips ambient discovery without Ollama auth or meaningful config", async () => {
     const provider = registerProvider();
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {},
       env: { NODE_ENV: "development" },
       resolveProviderApiKey: () => ({ apiKey: "" }),
@@ -287,7 +289,7 @@ describe("ollama plugin", () => {
       models: [],
     });
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {
         models: {
           providers: {
@@ -315,7 +317,7 @@ describe("ollama plugin", () => {
       models: [],
     });
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {
         models: {
           providers: {
@@ -345,7 +347,7 @@ describe("ollama plugin", () => {
       models: [],
     });
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {
         models: {
           providers: {
@@ -375,7 +377,7 @@ describe("ollama plugin", () => {
       models: [],
     });
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {},
       env: { NODE_ENV: "development" },
       resolveProviderApiKey: () => ({ apiKey: "ollama-local" }),
@@ -544,7 +546,7 @@ describe("ollama plugin", () => {
   it("skips implicit localhost discovery when a custom remote Ollama provider is configured", async () => {
     const provider = registerProvider();
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {
         models: {
           providers: {
@@ -572,7 +574,7 @@ describe("ollama plugin", () => {
       models: [],
     });
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {
         models: {
           providers: {

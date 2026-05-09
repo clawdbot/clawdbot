@@ -302,8 +302,9 @@ describe("message lifecycle primitives", () => {
     expect(ctx.ackState).toBe("acked");
     expect(ctx.ackedAt).toBeGreaterThanOrEqual(beforeAck);
 
-    await ctx.nack(new Error("offset failed"));
-    expect(onNack).toHaveBeenCalledWith(expect.any(Error));
+    const nackError = new Error("offset failed");
+    await ctx.nack(nackError);
+    expect(onNack).toHaveBeenCalledWith(nackError);
     expect(ctx.ackState).toBe("nacked");
     expect(ctx.nackErrorMessage).toBe("offset failed");
   });

@@ -110,6 +110,16 @@ const mocks = vi.hoisted(() => {
       skippedMaxRetries: 0,
       deferredBackoff: 0,
     })),
+    resolveAgentConfig: vi.fn(() => undefined),
+    resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-test-workspace"),
+    resolveDefaultAgentId: vi.fn(() => "main"),
+    normalizeSessionDeliveryFields: vi.fn((source?: Record<string, unknown>) => ({
+      deliveryContext: source?.deliveryContext,
+      lastChannel: source?.lastChannel ?? source?.channel,
+      lastTo: source?.lastTo,
+      lastAccountId: source?.lastAccountId,
+      lastThreadId: source?.lastThreadId,
+    })),
     injectTimestamp: vi.fn((message: string) => `stamped:${message}`),
     timestampOptsFromConfig: vi.fn(() => ({})),
     recordInboundSessionAndDispatchReply: vi.fn(
@@ -124,9 +134,18 @@ const mocks = vi.hoisted(() => {
 vi.unmock("./server-restart-sentinel.js");
 vi.resetModules();
 
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveSessionAgentId: mocks.resolveSessionAgentId,
-}));
+vi.mock("../agents/agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/agent-scope.js")>(
+    "../agents/agent-scope.js",
+  );
+  return {
+    ...actual,
+    resolveAgentConfig: mocks.resolveAgentConfig,
+    resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+    resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+    resolveSessionAgentId: mocks.resolveSessionAgentId,
+  };
+});
 
 vi.mock("../infra/restart-sentinel.js", () => ({
   readRestartSentinel: mocks.readRestartSentinel,
@@ -147,6 +166,7 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("../config/sessions/thread-info.js", () => ({
+  parseSessionThreadInfoFast: mocks.parseSessionThreadInfo,
   parseSessionThreadInfo: mocks.parseSessionThreadInfo,
 }));
 
@@ -157,6 +177,7 @@ vi.mock("./session-utils.js", () => ({
 vi.mock("../utils/delivery-context.shared.js", () => ({
   deliveryContextFromSession: mocks.deliveryContextFromSession,
   mergeDeliveryContext: mocks.mergeDeliveryContext,
+  normalizeSessionDeliveryFields: mocks.normalizeSessionDeliveryFields,
 }));
 
 vi.mock("../channels/plugins/index.js", async () => {
@@ -176,12 +197,34 @@ vi.mock("../channels/plugins/index.js", async () => {
   };
 });
 
+vi.mock("../channels/turn/kernel.js", () => ({
+  dispatchAssembledChannelTurn: async (params: {
+    delivery: {
+      preparePayload?: (payload: { text?: string; replyToId?: string | null }) => {
+        text?: string;
+        replyToId?: string | null;
+      };
+      deliver: (payload: { text?: string; replyToId?: string | null }) => Promise<void>;
+      onError?: (err: unknown, info: { kind: string }) => void;
+    };
+  }) => {
+    await mocks.recordInboundSessionAndDispatchReply({
+      ...params,
+      deliver: async (payload: { text?: string; replyToId?: string | null }) =>
+        params.delivery.deliver(params.delivery.preparePayload?.(payload) ?? payload),
+      onDispatchError: (err: unknown, info: { kind: string }) =>
+        params.delivery.onError?.(err, info),
+    } as unknown as RecordInboundSessionAndDispatchReplyParams);
+  },
+}));
+
 vi.mock("../infra/outbound/targets.js", () => ({
   resolveOutboundTarget: mocks.resolveOutboundTarget,
 }));
 
 vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
 }));
 
 vi.mock("../infra/outbound/delivery-queue.js", () => ({
@@ -213,6 +256,7 @@ vi.mock("../logging/subsystem.js", () => {
     info: mocks.logInfo,
     warn: mocks.logWarn,
     error: mocks.logError,
+    isEnabled: vi.fn(() => false),
     child: vi.fn(),
   };
   logger.child.mockReturnValue(logger);

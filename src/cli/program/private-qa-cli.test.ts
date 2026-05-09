@@ -29,11 +29,13 @@ describe("private-qa-cli", () => {
       path.join(repoRoot, "dist", "plugin-sdk", "qa-lab.js"),
     ]);
     let importedSpecifier: string | undefined;
+    const isQaLabCliAvailable = vi.fn();
+    const registerQaLabCli = vi.fn();
     const importModule = vi.fn(async (specifier: string) => {
       importedSpecifier = specifier;
       return {
-        isQaLabCliAvailable: expect.any(Function),
-        registerQaLabCli: expect.any(Function),
+        isQaLabCliAvailable,
+        registerQaLabCli,
       };
     });
 
@@ -45,10 +47,8 @@ describe("private-qa-cli", () => {
 
     expect(importModule).toHaveBeenCalledTimes(1);
     expect(importedSpecifier).toContain("/dist/plugin-sdk/qa-lab.js");
-    expect(module).toMatchObject({
-      isQaLabCliAvailable: expect.any(Function),
-      registerQaLabCli: expect.any(Function),
-    });
+    expect(module.isQaLabCliAvailable).toBe(isQaLabCliAvailable);
+    expect(module.registerQaLabCli).toBe(registerQaLabCli);
   });
 
   it("rejects non-source package roots even when private QA is enabled", () => {

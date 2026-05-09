@@ -200,9 +200,13 @@ describe("resolveIncludeRoots", () => {
   const HOME = path.parse(process.cwd()).root + "fakehome";
 
   it("returns an empty list when OPENCLAW_INCLUDE_ROOTS is unset or blank", () => {
-    expect(resolveIncludeRoots(envWith({}), () => HOME)).toEqual([]);
-    expect(resolveIncludeRoots(envWith({ OPENCLAW_INCLUDE_ROOTS: "" }), () => HOME)).toEqual([]);
-    expect(resolveIncludeRoots(envWith({ OPENCLAW_INCLUDE_ROOTS: "   " }), () => HOME)).toEqual([]);
+    expect(resolveIncludeRoots(envWith({}), () => HOME)).toStrictEqual([]);
+    expect(resolveIncludeRoots(envWith({ OPENCLAW_INCLUDE_ROOTS: "" }), () => HOME)).toStrictEqual(
+      [],
+    );
+    expect(
+      resolveIncludeRoots(envWith({ OPENCLAW_INCLUDE_ROOTS: "   " }), () => HOME),
+    ).toStrictEqual([]);
   });
 
   it("splits on the platform path delimiter and resolves each entry to an absolute path", () => {

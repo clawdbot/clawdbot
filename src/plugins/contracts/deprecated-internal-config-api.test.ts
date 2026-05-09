@@ -3,6 +3,6 @@ import { collectDeprecatedInternalConfigApiViolations } from "../../../scripts/l
 
 describe("deprecated internal config API guardrails", () => {
   it("keeps production code off deprecated config load/write seams", () => {
-    expect(collectDeprecatedInternalConfigApiViolations()).toEqual([]);
+    expect(collectDeprecatedInternalConfigApiViolations()).toStrictEqual([]);
   });
 });

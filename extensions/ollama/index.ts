@@ -6,7 +6,7 @@ import {
   type ProviderAuthContext,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
-  type ProviderDiscoveryContext,
+  type ProviderCatalogContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildApiKeyCredential } from "openclaw/plugin-sdk/provider-auth";
@@ -199,9 +199,9 @@ export default definePluginEntry({
           },
         },
       ],
-      discovery: {
+      catalog: {
         order: "late",
-        run: async (ctx: ProviderDiscoveryContext) =>
+        run: async (ctx: ProviderCatalogContext) =>
           await resolveOllamaDiscoveryResult({
             ctx,
             pluginConfig: resolveCurrentPluginConfig(ctx.config),

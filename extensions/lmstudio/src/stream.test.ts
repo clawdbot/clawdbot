@@ -519,6 +519,49 @@ describe("lmstudio stream wrapper", () => {
     expect(String(done.message?.content?.[0]?.id)).toMatch(/^call_[a-f0-9]{24}$/);
   });
 
+  it("promotes standalone Harmony local-model tool text to a structured tool call", async () => {
+    const rawToolText =
+      'commentary to=read code {"path":"/path/to/file","line_start":1,"line_end":400}';
+    const baseStream = buildEventStreamFn([
+      { type: "start", partial: { content: [] } },
+      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "text_delta", contentIndex: 0, delta: rawToolText },
+      { type: "text_end", contentIndex: 0, content: rawToolText },
+      {
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: rawToolText }],
+          stopReason: "stop",
+        },
+      },
+    ]);
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, {}, undefined, {
+        tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
+      }),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    const done = events.find((event) => event.type === "done") as {
+      message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
+      reason?: string;
+    };
+    expect(done.reason).toBe("toolUse");
+    expect(done.message?.content?.[0]).toMatchObject({
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/path/to/file", line_start: 1, line_end: 400 },
+    });
+  });
+
   it("passes through bracketed text when the tool is not registered", async () => {
     const rawToolText = [
       "[mempalace_mempalace_search]",

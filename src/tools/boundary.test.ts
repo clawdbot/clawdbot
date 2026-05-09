@@ -40,6 +40,6 @@ describe("tool system boundary", () => {
         .map((reference) => `${entry.name}:${reference.line} ${reference.specifier}`);
     });
 
-    expect(violations).toEqual([]);
+    expect(violations).toStrictEqual([]);
   });
 });

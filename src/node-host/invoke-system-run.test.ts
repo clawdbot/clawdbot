@@ -1323,7 +1323,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
           expect(runCommand).toHaveBeenCalledTimes(1);
           expectInvokeOk(sendInvokeResult, { payloadContains: "inline-eval-ok" });
-          expect(loadExecApprovals().agents?.main?.allowlist ?? []).toEqual([]);
+          expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
         },
       });
     } finally {
@@ -1427,7 +1427,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
           expect(runCommand).toHaveBeenCalledTimes(1);
           expectInvokeOk(sendInvokeResult, { payloadContains: "inline-eval-ok" });
-          expect(loadExecApprovals().agents?.main?.allowlist ?? []).toEqual([]);
+          expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
         },
       });
     } finally {

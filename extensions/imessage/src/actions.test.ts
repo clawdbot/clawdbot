@@ -62,7 +62,7 @@ describe("imessage message actions", () => {
       currentChannelId: "chat_guid:iMessage;+;chat0000",
     } as never);
 
-    expect(described?.actions).toEqual([]);
+    expect(described?.actions).toStrictEqual([]);
   });
 
   it("advertises private API actions while private API status is unknown", () => {

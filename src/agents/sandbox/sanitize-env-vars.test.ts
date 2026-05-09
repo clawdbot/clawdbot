@@ -63,6 +63,6 @@ describe("sanitizeEnvVars", () => {
     });
 
     expect(result.allowed).toEqual({ NODE_ENV: "test" });
-    expect(result.blocked).toEqual([]);
+    expect(result.blocked).toStrictEqual([]);
   });
 });

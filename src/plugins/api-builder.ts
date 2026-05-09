@@ -37,6 +37,7 @@ export type BuildPluginApiParams = {
       | "registerMigrationProvider"
       | "registerAutoEnableProbe"
       | "registerProvider"
+      | "registerModelCatalogProvider"
       | "registerSpeechProvider"
       | "registerRealtimeTranscriptionProvider"
       | "registerRealtimeVoiceProvider"
@@ -99,6 +100,8 @@ const noopRegisterConfigMigration: OpenClawPluginApi["registerConfigMigration"] 
 const noopRegisterMigrationProvider: OpenClawPluginApi["registerMigrationProvider"] = () => {};
 const noopRegisterAutoEnableProbe: OpenClawPluginApi["registerAutoEnableProbe"] = () => {};
 const noopRegisterProvider: OpenClawPluginApi["registerProvider"] = () => {};
+const noopRegisterModelCatalogProvider: OpenClawPluginApi["registerModelCatalogProvider"] =
+  () => {};
 const noopRegisterSpeechProvider: OpenClawPluginApi["registerSpeechProvider"] = () => {};
 const noopRegisterRealtimeTranscriptionProvider: OpenClawPluginApi["registerRealtimeTranscriptionProvider"] =
   () => {};
@@ -195,6 +198,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerMigrationProvider: handlers.registerMigrationProvider ?? noopRegisterMigrationProvider,
     registerAutoEnableProbe: handlers.registerAutoEnableProbe ?? noopRegisterAutoEnableProbe,
     registerProvider: handlers.registerProvider ?? noopRegisterProvider,
+    registerModelCatalogProvider:
+      handlers.registerModelCatalogProvider ?? noopRegisterModelCatalogProvider,
     registerSpeechProvider: handlers.registerSpeechProvider ?? noopRegisterSpeechProvider,
     registerRealtimeTranscriptionProvider:
       handlers.registerRealtimeTranscriptionProvider ?? noopRegisterRealtimeTranscriptionProvider,

@@ -65,7 +65,7 @@ describe("createWebSearchProviderContractFields", () => {
       selectionPluginId: "ollama",
     });
 
-    expect(fields.inactiveSecretPaths).toEqual([]);
+    expect(fields.inactiveSecretPaths).toStrictEqual([]);
     expect(fields.getCredentialValue({ apiKey: "ignored" })).toBeUndefined();
 
     const searchConfig = { apiKey: "ignored" };

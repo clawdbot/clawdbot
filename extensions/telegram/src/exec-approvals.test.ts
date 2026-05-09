@@ -193,7 +193,7 @@ describe("telegram exec approvals", () => {
       },
     );
 
-    expect(getTelegramExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(getTelegramExecApprovalApprovers({ cfg })).toStrictEqual([]);
     expect(isTelegramExecApprovalClientEnabled({ cfg })).toBe(false);
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "12345" })).toBe(false);
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "67890" })).toBe(false);

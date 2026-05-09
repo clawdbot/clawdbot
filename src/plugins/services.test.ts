@@ -51,11 +51,9 @@ function expectServiceContext(
 }
 
 function expectServiceLogger(ctx: OpenClawPluginServiceContext) {
-  expect(ctx.logger).toMatchObject({
-    info: expect.any(Function),
-    warn: expect.any(Function),
-    error: expect.any(Function),
-  });
+  expect(typeof ctx.logger.info).toBe("function");
+  expect(typeof ctx.logger.warn).toBe("function");
+  expect(typeof ctx.logger.error).toBe("function");
 }
 
 function expectServiceContexts(

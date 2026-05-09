@@ -165,7 +165,7 @@ describe("inspectGatewayRestart", () => {
     });
 
     expect(snapshot.healthy).toBe(true);
-    expect(snapshot.staleGatewayPids).toEqual([]);
+    expect(snapshot.staleGatewayPids).toStrictEqual([]);
   });
 
   it("marks non-owned gateway listener pids as stale while runtime is running", async () => {
@@ -198,7 +198,7 @@ describe("inspectGatewayRestart", () => {
       includeUnknownListenersAsStale: false,
     });
 
-    expect(snapshot.staleGatewayPids).toEqual([]);
+    expect(snapshot.staleGatewayPids).toStrictEqual([]);
   });
 
   it("does not apply unknown-listener fallback while runtime is running", async () => {
@@ -207,7 +207,7 @@ describe("inspectGatewayRestart", () => {
       includeUnknownListenersAsStale: true,
     });
 
-    expect(snapshot.staleGatewayPids).toEqual([]);
+    expect(snapshot.staleGatewayPids).toStrictEqual([]);
   });
 
   it("does not treat known non-gateway listeners as stale in fallback mode", async () => {
@@ -225,7 +225,7 @@ describe("inspectGatewayRestart", () => {
       includeUnknownListenersAsStale: true,
     });
 
-    expect(snapshot.staleGatewayPids).toEqual([]);
+    expect(snapshot.staleGatewayPids).toStrictEqual([]);
   });
 
   it("uses a local gateway probe when ownership is ambiguous", async () => {
@@ -259,7 +259,7 @@ describe("inspectGatewayRestart", () => {
     });
 
     expect(snapshot.healthy).toBe(true);
-    expect(snapshot.staleGatewayPids).toEqual([]);
+    expect(snapshot.staleGatewayPids).toStrictEqual([]);
   });
 
   it.each([

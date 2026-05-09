@@ -655,7 +655,7 @@ describe("resolveProviderAuths key normalization", () => {
         config,
         env: buildSuiteEnv(home),
       });
-      expect(auths).toEqual([]);
+      expect(auths).toStrictEqual([]);
     });
   });
 
@@ -667,7 +667,7 @@ describe("resolveProviderAuths key normalization", () => {
         config: {},
         env: buildSuiteEnv(home),
       });
-      expect(auths).toEqual([]);
+      expect(auths).toStrictEqual([]);
     });
   });
 
@@ -714,7 +714,7 @@ describe("resolveProviderAuths key normalization", () => {
 
   it("ignores marker-backed config keys for provider usage auth resolution", async () => {
     const auths = await resolveMinimaxAuthFromConfiguredKey(NON_ENV_SECRETREF_MARKER);
-    expect(auths).toEqual([]);
+    expect(auths).toStrictEqual([]);
   });
 
   it("keeps all-caps plaintext config keys eligible for provider usage auth resolution", async () => {

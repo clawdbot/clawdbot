@@ -112,7 +112,7 @@ describe("config footprint guardrails", () => {
         "channels.discord.channels.*.allow",
         "channels.discord.accounts.*.channels.*.allow",
       ].filter((path) => basePaths.has(path)),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps bundled channel private-network config canonical in generated metadata", () => {

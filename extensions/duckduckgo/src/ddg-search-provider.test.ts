@@ -208,7 +208,7 @@ describe("duckduckgo web search provider", () => {
     `;
 
     expect(ddgClientTesting.isBotChallenge(challengeHtml)).toBe(true);
-    expect(ddgClientTesting.parseDuckDuckGoHtml(challengeHtml)).toEqual([]);
+    expect(ddgClientTesting.parseDuckDuckGoHtml(challengeHtml)).toStrictEqual([]);
     expect(ddgClientTesting.isBotChallenge(normalHtml)).toBe(false);
     expect(ddgClientTesting.parseDuckDuckGoHtml(normalHtml)).toEqual([
       {

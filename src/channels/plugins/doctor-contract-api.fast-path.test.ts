@@ -60,7 +60,7 @@ describe("channel doctor contract api fast path", () => {
   it("treats empty explicit doctor contract rules as authoritative", () => {
     const api = loadBundledChannelDoctorContractApi("whatsapp");
 
-    expect(api?.legacyConfigRules).toEqual([]);
+    expect(api?.legacyConfigRules).toStrictEqual([]);
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "whatsapp",
       artifactBasename: "doctor-contract-api.js",

@@ -110,7 +110,7 @@ describe("security audit node command findings", () => {
       },
     } satisfies OpenClawConfig);
 
-    expect(findings).toEqual([]);
+    expect(findings).toStrictEqual([]);
   });
 
   it("evaluates dangerous gateway.nodes.allowCommands findings", () => {

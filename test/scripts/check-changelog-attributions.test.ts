@@ -24,7 +24,7 @@ describe("check-changelog-attributions", () => {
       findForbiddenChangelogThanks(
         "- User-facing fix. Fixes #123. Thanks @external-contributor and @other-user.",
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps PR changelog gates on the same attribution policy", () => {

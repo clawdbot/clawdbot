@@ -44,6 +44,7 @@ vi.mock("./targets.js", () => ({
 
 vi.mock("./deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
   resolveOutboundDurableFinalDeliverySupport: mocks.resolveOutboundDurableFinalDeliverySupport,
 }));
 
@@ -417,5 +418,50 @@ describe("sendMessage", () => {
     });
 
     expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
+  });
+
+  it("does not throw best-effort direct send failures", async () => {
+    mocks.deliverOutboundPayloads.mockImplementationOnce(async (params: unknown) => {
+      (
+        params as {
+          onPayloadDeliveryOutcome?: (outcome: {
+            index: number;
+            payload: { text: string };
+            status: "failed";
+            error: Error;
+            stage: "send";
+          }) => void;
+        }
+      ).onPayloadDeliveryOutcome?.({
+        index: 0,
+        payload: { text: "hi" },
+        status: "failed",
+        error: new Error("transport unavailable"),
+        stage: "send",
+      });
+      return [];
+    });
+
+    await expect(
+      sendMessage({
+        cfg: {},
+        channel: "forum",
+        to: "123456",
+        content: "hi",
+        bestEffort: true,
+      }),
+    ).resolves.toMatchObject({
+      channel: "forum",
+      to: "123456",
+      via: "direct",
+      result: undefined,
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bestEffort: true,
+        queuePolicy: "best_effort",
+      }),
+    );
   });
 });

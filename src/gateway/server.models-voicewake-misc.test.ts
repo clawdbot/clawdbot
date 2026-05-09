@@ -322,7 +322,7 @@ describe("gateway server models + voicewake", () => {
       expect(initial.ok).toBe(true);
       expect(initial.payload?.config?.version).toBe(1);
       expect(initial.payload?.config?.defaultTarget).toEqual({ mode: "current" });
-      expect(initial.payload?.config?.routes).toEqual([]);
+      expect(initial.payload?.config?.routes).toStrictEqual([]);
 
       const changedP = onceMessage<{
         type: "event";
@@ -444,7 +444,7 @@ describe("gateway server models + voicewake", () => {
       expect(first.event).toBe("voicewake.routing.changed");
       expect(
         (first.payload as { config?: { routes?: unknown[] } } | undefined)?.config?.routes,
-      ).toEqual([]);
+      ).toStrictEqual([]);
 
       const broadcastP = onceMessage<{
         type: "event";
@@ -528,7 +528,7 @@ describe("gateway server models + voicewake", () => {
           const discoverCallsBefore = piSdkMock.discoverCalls;
           const res = await listModels({ view: "configured" });
           expect(res.ok).toBe(true);
-          expect(res.payload?.models).toEqual([]);
+          expect(res.payload?.models).toStrictEqual([]);
           expect(piSdkMock.discoverCalls).toBe(discoverCallsBefore);
         });
       },

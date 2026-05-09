@@ -14,7 +14,7 @@ describe("shared/string-normalization", () => {
       "null",
       "obj",
     ]);
-    expect(normalizeStringEntries(undefined)).toEqual([]);
+    expect(normalizeStringEntries(undefined)).toStrictEqual([]);
   });
 
   it("normalizes mixed allow-list entries to lowercase", () => {

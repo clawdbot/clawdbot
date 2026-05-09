@@ -184,8 +184,8 @@ describe("computeMMRScore", () => {
 
 describe("empty input behavior", () => {
   it("returns empty array for empty input", () => {
-    expect(mmrRerank([])).toEqual([]);
-    expect(applyMMRToHybridResults([])).toEqual([]);
+    expect(mmrRerank([])).toStrictEqual([]);
+    expect(applyMMRToHybridResults([])).toStrictEqual([]);
   });
 });
 

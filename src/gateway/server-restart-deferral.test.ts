@@ -88,7 +88,7 @@ describe("gateway restart deferral", () => {
 
     expect(getTotalPendingReplies()).toBe(0);
     expect(restartTriggered).toBe(false);
-    expect(replyErrors).toEqual([]);
+    expect(replyErrors).toStrictEqual([]);
     expect(deliveredReplies).toEqual(["Configuration updated!"]);
   });
 

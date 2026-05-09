@@ -150,9 +150,7 @@ describe("agentCommand runtime config", () => {
       expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledWith({
         config: loadedConfig,
         commandName: "agent",
-        targetIds: expect.objectContaining({
-          has: expect.any(Function),
-        }),
+        targetIds: new Set(["models.providers.*.apiKey"]),
         runtime,
       });
       const targetIds = resolveCommandConfigWithSecretsMock.mock.calls[0]?.[0].targetIds;

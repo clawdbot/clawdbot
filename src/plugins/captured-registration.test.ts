@@ -18,6 +18,18 @@ describe("captured plugin registration", () => {
           label: "Captured Provider",
           auth: [],
         });
+        api.registerModelCatalogProvider({
+          provider: "captured-provider",
+          kinds: ["text"],
+          staticCatalog: () => [
+            {
+              kind: "text",
+              provider: "captured-provider",
+              model: "captured-model",
+              source: "static",
+            },
+          ],
+        });
         api.registerVideoGenerationProvider({
           id: "captured-video",
           label: "Captured Video",
@@ -78,6 +90,9 @@ describe("captured plugin registration", () => {
 
     expect(captured.tools.map((tool) => tool.name)).toEqual(["captured-tool"]);
     expect(captured.providers.map((provider) => provider.id)).toEqual(["captured-provider"]);
+    expect(captured.modelCatalogProviders.map((provider) => provider.provider)).toEqual([
+      "captured-provider",
+    ]);
     expect(captured.videoGenerationProviders.map((provider) => provider.id)).toEqual([
       "captured-video",
     ]);

@@ -1,4 +1,5 @@
 import { Type, type TSchema } from "typebox";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   channelSupportsMessageCapability,
@@ -520,6 +521,7 @@ type MessageToolOptions = {
   hasRepliedRef?: { value: boolean };
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
 };
@@ -648,6 +650,8 @@ function buildMessageToolDescription(options?: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  requireExplicitTarget?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
 }): string {
@@ -679,13 +683,35 @@ function buildMessageToolDescription(options?: {
         ChannelMessageActionName | "send"
       >;
       return appendMessageToolReadHint(
-        `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
+        appendMessageToolVisibleReplyHint(
+          `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
+          resolvedOptions.sourceReplyDeliveryMode,
+          resolvedOptions.requireExplicitTarget,
+        ),
         sortedActions,
       );
     }
   }
 
-  return `${baseDescription} Supports actions: send, delete, react, poll, pin, threads, and more.`;
+  return appendMessageToolVisibleReplyHint(
+    `${baseDescription} Supports actions: send, delete, react, poll, pin, threads, and more.`,
+    resolvedOptions.sourceReplyDeliveryMode,
+    resolvedOptions.requireExplicitTarget,
+  );
+}
+
+function appendMessageToolVisibleReplyHint(
+  description: string,
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode,
+  requireExplicitTarget?: boolean,
+): string {
+  if (sourceReplyDeliveryMode !== "message_tool_only") {
+    return description;
+  }
+  const targetGuidance = requireExplicitTarget
+    ? "Include target when sending."
+    : "The target defaults to the current source conversation, so omit target unless sending elsewhere.";
+  return `${description} For this turn, visible replies to the current source conversation must use action="send" with message. ${targetGuidance} Normal final answers are private and are not posted.`;
 }
 
 function appendMessageToolReadHint(
@@ -743,6 +769,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     sessionKey: options?.agentSessionKey,
     sessionId: options?.sessionId,
     agentId: resolvedAgentId,
+    requireExplicitTarget: options?.requireExplicitTarget,
+    sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
     requesterSenderId: options?.requesterSenderId,
     senderIsOwner: options?.senderIsOwner,
   });

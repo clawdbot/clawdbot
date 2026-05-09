@@ -45,6 +45,6 @@ describe("createOutboundTestPlugin", () => {
         sendText: async () => ({ channel: "demo-outbound", messageId: "m1" }),
       },
     });
-    expect(plugin.config.listAccountIds(cfg)).toEqual([]);
+    expect(plugin.config.listAccountIds(cfg)).toStrictEqual([]);
   });
 });

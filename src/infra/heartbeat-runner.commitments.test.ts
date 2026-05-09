@@ -132,7 +132,7 @@ describe("runHeartbeatOnce commitments", () => {
           expect(ctx.OriginatingChannel).toBe("telegram");
           expect(ctx.OriginatingTo).toBe("155462274");
           expect(opts?.disableTools).toBe(true);
-          expect(opts?.skillFilter).toEqual([]);
+          expect(opts?.skillFilter).toStrictEqual([]);
           return { text: params?.replyText ?? "How did the interview go?" };
         },
       );

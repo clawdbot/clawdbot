@@ -75,7 +75,7 @@ describe("buildQaRuntimeEnv", () => {
       }),
     ).rejects.toThrow("node missing");
 
-    await expect(readdir(tempParent)).resolves.toEqual([]);
+    await expect(readdir(tempParent)).resolves.toStrictEqual([]);
   });
 
   it("keeps the slow-reply QA opt-out enabled under fast mode", () => {

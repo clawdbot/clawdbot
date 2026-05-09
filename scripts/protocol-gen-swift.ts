@@ -175,7 +175,7 @@ function emitStruct(name: string, schema: JsonSchema): string {
   const codingKeys: string[] = [];
   for (const [key, propSchema] of Object.entries(props)) {
     const propName = safeName(key);
-    const propType = swiftType(propSchema, required.has(key));
+    const propType = swiftType(propSchema, required.has(key), true);
     lines.push(`    public let ${propName}: ${propType}`);
     if (propName !== key) {
       codingKeys.push(`        case ${propName} = "${key}"`);
@@ -189,7 +189,7 @@ function emitStruct(name: string, schema: JsonSchema): string {
         .map(([key, prop]) => {
           const propName = safeName(key);
           const req = required.has(key);
-          return `        ${propName}: ${swiftType(prop, true)}${req ? "" : "?"}`;
+          return `        ${propName}: ${swiftType(prop, true, true)}${req ? "" : "?"}`;
         })
         .join(",\n") +
       ")\n" +

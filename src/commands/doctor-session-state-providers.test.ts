@@ -134,7 +134,7 @@ describe("doctor session state provider routes", () => {
       },
     });
 
-    expect(scan.manualReview).toEqual([]);
+    expect(scan.manualReview).toStrictEqual([]);
     expect(scan.repairs).toEqual([
       {
         key: sessionKey,
@@ -204,7 +204,7 @@ describe("doctor session state provider routes", () => {
       },
     });
 
-    expect(scan.repairs).toEqual([]);
+    expect(scan.repairs).toStrictEqual([]);
     expect(scan.manualReview).toEqual([
       {
         key: sessionKey,

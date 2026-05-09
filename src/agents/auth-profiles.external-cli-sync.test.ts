@@ -295,7 +295,7 @@ describe("external cli oauth resolution", () => {
       ),
     );
 
-    expect(profiles).toEqual([]);
+    expect(profiles).toStrictEqual([]);
   });
 
   it("returns null when the profile id/provider do not map to the same external source", () => {
@@ -342,7 +342,7 @@ describe("external cli oauth resolution", () => {
       providerIds: ["opencode-go"],
     });
 
-    expect(profiles).toEqual([]);
+    expect(profiles).toStrictEqual([]);
     expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
     expect(mocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
     expect(mocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
@@ -359,7 +359,7 @@ describe("external cli oauth resolution", () => {
 
     const profiles = resolveExternalCliAuthProfiles(makeStore());
 
-    expect(profiles).toEqual([]);
+    expect(profiles).toStrictEqual([]);
     expect(mocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
   });
 
@@ -465,7 +465,7 @@ describe("external cli oauth resolution", () => {
       providerIds: ["claude-cli"],
     });
 
-    expect(profiles).toEqual([]);
+    expect(profiles).toStrictEqual([]);
   });
 
   it("resolves fresher minimax external oauth profiles as runtime overlays", () => {
@@ -523,7 +523,7 @@ describe("external cli oauth resolution", () => {
       ),
     );
 
-    expect(profiles).toEqual([]);
+    expect(profiles).toStrictEqual([]);
   });
 
   it("does not overlay fresh minimax oauth over a still-usable local credential", () => {
@@ -548,6 +548,6 @@ describe("external cli oauth resolution", () => {
       ),
     );
 
-    expect(profiles).toEqual([]);
+    expect(profiles).toStrictEqual([]);
   });
 });

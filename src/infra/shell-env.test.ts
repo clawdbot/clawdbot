@@ -155,7 +155,7 @@ describe("shell env fallback", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(res.applied).toEqual([]);
+    expect(res.applied).toStrictEqual([]);
     expect(res.ok && res.skippedReason).toBe("already-has-keys");
     expect(exec).not.toHaveBeenCalled();
   });
@@ -203,7 +203,7 @@ describe("shell env fallback", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(res.applied).toEqual([]);
+    expect(res.applied).toStrictEqual([]);
     expect(res.ok && res.skippedReason).toBe("already-has-keys");
     expect(env.OPENAI_API_KEY).toBe("");
     expect(exec).not.toHaveBeenCalled();
@@ -334,7 +334,7 @@ describe("shell env fallback", () => {
       applied: [],
       skippedReason: "disabled",
     });
-    expect(getShellEnvAppliedKeys()).toEqual([]);
+    expect(getShellEnvAppliedKeys()).toStrictEqual([]);
 
     const failureExec = vi.fn(() => {
       throw new Error("boom");
@@ -352,7 +352,7 @@ describe("shell env fallback", () => {
       applied: [],
       error: "boom",
     });
-    expect(getShellEnvAppliedKeys()).toEqual([]);
+    expect(getShellEnvAppliedKeys()).toStrictEqual([]);
   });
 
   it("resolves PATH via login shell and caches it", () => {

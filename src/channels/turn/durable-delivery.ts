@@ -191,6 +191,9 @@ export async function deliverInboundReplyWithMessageSendContext(
   if (send.status === "failed") {
     return { status: "failed" as const, error: send.error };
   }
+  if (send.status === "partial_failed") {
+    return { status: "failed" as const, error: send.error };
+  }
 
   const delivery = createChannelDeliveryResultFromReceipt({
     receipt: send.receipt,

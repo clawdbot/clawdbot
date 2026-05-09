@@ -143,7 +143,7 @@ describe("buildSessionEntry", () => {
 
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
     expect(entry.content).toBe("");
-    expect(entry.lineMap).toEqual([]);
+    expect(entry.lineMap).toStrictEqual([]);
   });
 
   it("indexes usage-counted reset/deleted archives but still skips bak and checkpoint artifacts", async () => {
@@ -178,9 +178,9 @@ describe("buildSessionEntry", () => {
     // .bak and compaction checkpoints remain opaque pre-archive / snapshot
     // artifacts and stay empty so they do not get double-indexed.
     expect(bakEntry.content).toBe("");
-    expect(bakEntry.lineMap).toEqual([]);
+    expect(bakEntry.lineMap).toStrictEqual([]);
     expect(checkpointEntry.content).toBe("");
-    expect(checkpointEntry.lineMap).toEqual([]);
+    expect(checkpointEntry.lineMap).toStrictEqual([]);
   });
 
   it("keeps cron-run deleted archives opaque when the live session store entry is gone", async () => {
@@ -203,7 +203,7 @@ describe("buildSessionEntry", () => {
     const entry = requireSessionEntry(await buildSessionEntry(archivePath));
 
     expect(entry.content).toBe("");
-    expect(entry.lineMap).toEqual([]);
+    expect(entry.lineMap).toStrictEqual([]);
     expect(entry.generatedByCronRun).toBe(true);
   });
 
@@ -224,7 +224,7 @@ describe("buildSessionEntry", () => {
     const entry = requireSessionEntry(await buildSessionEntry(archivePath));
 
     expect(entry.content).toBe("");
-    expect(entry.lineMap).toEqual([]);
+    expect(entry.lineMap).toStrictEqual([]);
     expect(entry.generatedByCronRun).toBe(true);
   });
 

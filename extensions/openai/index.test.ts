@@ -386,7 +386,7 @@ describe("openai plugin", () => {
         } as never,
         tools: [noParamsTool],
       } as never),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       codexProvider.inspectToolSchemas?.({
         provider: "openai-codex",
@@ -400,7 +400,7 @@ describe("openai plugin", () => {
         } as never,
         tools: [noParamsTool],
       } as never),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("registers GPT-5 system prompt contributions when the friendly overlay is enabled", async () => {

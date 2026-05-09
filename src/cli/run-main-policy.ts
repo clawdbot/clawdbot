@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveManifestCommandAliasOwnerInRegistry,
+  resolveManifestToolOwnerInRegistry,
   type PluginManifestCommandAliasRecord,
   type PluginManifestCommandAliasRegistry,
+  type PluginManifestToolOwnerRecord,
 } from "../plugins/manifest-command-aliases.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -105,6 +107,11 @@ export function resolveMissingPluginCommandMessage(
       config?: OpenClawConfig;
       registry?: PluginManifestCommandAliasRegistry;
     }) => PluginManifestCommandAliasRecord | undefined;
+    resolveToolOwner?: (params: {
+      toolName: string | undefined;
+      config?: OpenClawConfig;
+      registry?: PluginManifestCommandAliasRegistry;
+    }) => PluginManifestToolOwnerRecord | undefined;
   },
 ): string | null {
   const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);
@@ -169,6 +176,47 @@ export function resolveMissingPluginCommandMessage(
 
   if (isReservedNonPluginCommandRoot(normalizedPluginId)) {
     return null;
+  }
+
+  const toolOwner = options?.registry
+    ? resolveManifestToolOwnerInRegistry({
+        toolName: normalizedPluginId,
+        registry: options.registry,
+      })
+    : options?.resolveToolOwner?.({
+        toolName: normalizedPluginId,
+        config,
+        ...(options?.registry ? { registry: options.registry } : {}),
+      });
+  if (toolOwner) {
+    // Apply plugins.allow / plugins.entries[X].enabled to the owning plugin so
+    // a disabled/denied plugin's manifest-declared tool name does not get a
+    // false attribution. The runtime resolver
+    // (resolveManifestToolOwner) already filters by control-plane availability,
+    // but pure-registry callers and any future ones still need this guard.
+    const ownerEnabled =
+      config?.plugins?.entries?.[toolOwner.pluginId]?.enabled !== false &&
+      (allow.length === 0 || allow.includes(toolOwner.pluginId));
+    if (ownerEnabled) {
+      // Per-account / per-tool runtime gates (e.g. Feishu's
+      // channels.feishu.enabled / tools.<x> toggles) are not declarable as
+      // manifest configSignals, so a positive manifest-availability signal
+      // proves "could be loaded if config permits", not "currently registered".
+      // Soften the wording when the runtime resolver could only prove
+      // manifest-level ownership.
+      if (toolOwner.availability === "manifest-only") {
+        return (
+          `"${normalizedPluginId}" may be provided by the "${toolOwner.pluginId}" plugin ` +
+          `as an agent tool, not a CLI subcommand. ` +
+          "Run `openclaw --help` to see available CLI subcommands."
+        );
+      }
+      return (
+        `"${normalizedPluginId}" is an agent tool available from the "${toolOwner.pluginId}" plugin, ` +
+        `not a CLI subcommand. Use it from an agent turn (model tool-use), not the CLI. ` +
+        "Run `openclaw --help` to see available CLI subcommands."
+      );
+    }
   }
 
   if (allow.length > 0 && !allow.includes(normalizedPluginId)) {

@@ -26,7 +26,7 @@ describe("session identifier helpers", () => {
       },
     });
 
-    expect(lines).toEqual([]);
+    expect(lines).toStrictEqual([]);
   });
 
   it("adds a Codex resume hint when agent identity is resolved", () => {

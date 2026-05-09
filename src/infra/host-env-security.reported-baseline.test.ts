@@ -139,7 +139,7 @@ describe("host env reported baseline coverage", () => {
       ...baseline.reportedDangerousOverrideOnlyKeys,
     ]);
     expect(overrideResult.rejectedOverrideBlockedKeys).toEqual(expectedRejectedOverrideKeys);
-    expect(overrideResult.rejectedOverrideInvalidKeys).toEqual([]);
+    expect(overrideResult.rejectedOverrideInvalidKeys).toStrictEqual([]);
 
     for (const key of expectedRejectedOverrideKeys) {
       expect(overrideResult.env[key]).toBeUndefined();
@@ -177,7 +177,7 @@ describe("host env reported baseline coverage", () => {
         },
       });
       expect(overrideResult.rejectedOverrideBlockedKeys).toEqual([key]);
-      expect(overrideResult.rejectedOverrideInvalidKeys).toEqual([]);
+      expect(overrideResult.rejectedOverrideInvalidKeys).toStrictEqual([]);
       expect(overrideResult.env[key]).toBeUndefined();
     }
   });

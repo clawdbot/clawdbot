@@ -12,8 +12,8 @@ export async function main(argv = process.argv.slice(2)) {
     { name: "runtime action config guard", args: ["check:no-runtime-action-load-config"] },
     !includeArchitecture
       ? {
-          name: "deprecated internal config API guard",
-          args: ["check:deprecated-internal-config-api"],
+          name: "deprecated API usage guard",
+          args: ["check:deprecated-api-usage"],
         }
       : null,
     { name: "temp path guard", args: ["check:temp-path-guardrails"] },

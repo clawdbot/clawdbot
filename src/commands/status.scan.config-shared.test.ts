@@ -128,7 +128,7 @@ describe("status.scan.config-shared", () => {
       allowMissingConfigFastPath: true,
     });
 
-    expect(result.secretDiagnostics).toEqual([]);
+    expect(result.secretDiagnostics).toStrictEqual([]);
   });
 
   it("does not add a status diagnostic for remote gateway mode", async () => {
@@ -153,6 +153,6 @@ describe("status.scan.config-shared", () => {
       allowMissingConfigFastPath: true,
     });
 
-    expect(result.secretDiagnostics).toEqual([]);
+    expect(result.secretDiagnostics).toStrictEqual([]);
   });
 });

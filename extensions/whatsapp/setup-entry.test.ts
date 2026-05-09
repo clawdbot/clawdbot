@@ -27,7 +27,7 @@ describe("whatsapp setup entry", () => {
         oauthDir: "/tmp/openclaw-whatsapp-empty",
         stateDir: "/tmp/openclaw-state",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(setupEntry.loadLegacySessionSurface?.()).toEqual({
       canonicalizeLegacySessionKey: expect.any(Function),
       isLegacyGroupSessionKey: expect.any(Function),

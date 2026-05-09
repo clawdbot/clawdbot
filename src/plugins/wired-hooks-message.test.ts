@@ -47,8 +47,8 @@ describe("message_sending hook runner", () => {
     {
       name: "runMessageSending can cancel message delivery",
       event: { to: "user-123", content: "blocked" },
-      hookResult: { cancel: true },
-      expected: { cancel: true },
+      hookResult: { cancel: true, cancelReason: "policy", metadata: { owner: "agent-2" } },
+      expected: { cancel: true, cancelReason: "policy", metadata: { owner: "agent-2" } },
     },
   ] as const)("$name", async ({ event, hookResult, expected }) => {
     await expectMessageHookCall({

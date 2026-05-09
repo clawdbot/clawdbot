@@ -299,18 +299,14 @@ describe("verifyGoogleChatRequest", () => {
 
     expect(mocks.gaxiosCtor).toHaveBeenCalledOnce();
     expect(googleAuthOptions).toMatchObject({
-      clientOptions: {
-        transporter: {
-          defaults: {
-            fetchImplementation: expect.any(Function),
-          },
-        },
-      },
       credentials: {
         client_email: "bot@example.iam.gserviceaccount.com",
         token_uri: "https://oauth2.googleapis.com/token",
       },
     });
+    expect(typeof googleAuthOptions.clientOptions?.transporter?.defaults?.fetchImplementation).toBe(
+      "function",
+    );
     expect(mocks.getAccessToken).toHaveBeenCalledOnce();
     expect("window" in globalThis).toBe(false);
   });
@@ -333,13 +329,7 @@ describe("verifyGoogleChatRequest", () => {
     const oauthOptions = mocks.oauthCtor.mock.calls[0]?.[0] as {
       transporter?: { defaults?: { fetchImplementation?: unknown } };
     };
-    expect(oauthOptions).toMatchObject({
-      transporter: {
-        defaults: {
-          fetchImplementation: expect.any(Function),
-        },
-      },
-    });
+    expect(typeof oauthOptions.transporter?.defaults?.fetchImplementation).toBe("function");
   });
 
   it("rejects add-on tokens when no principal binding is configured", async () => {

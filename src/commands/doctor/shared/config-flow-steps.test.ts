@@ -66,7 +66,7 @@ describe("doctor config flow steps", () => {
     } satisfies DoctorConfigPreflightResult["snapshot"]);
 
     expect(result.issueLines).toEqual([expect.stringContaining("- heartbeat:")]);
-    expect(result.changeLines).not.toEqual([]);
+    expect(result.changeLines).not.toStrictEqual([]);
     expect(result.state.fixHints).toContain(
       'Run "openclaw doctor --fix" to migrate legacy config keys.',
     );
@@ -94,7 +94,7 @@ describe("doctor config flow steps", () => {
       warnings: [],
     } satisfies DoctorConfigPreflightResult["snapshot"]);
 
-    expect(result.changeLines).toEqual([]);
+    expect(result.changeLines).toStrictEqual([]);
     expect(result.state.pendingChanges).toBe(true);
     expect(result.state.fixHints).toContain(
       'Run "openclaw doctor --fix" to migrate legacy config keys.',
@@ -282,7 +282,7 @@ describe("doctor config flow steps", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(result.repairs).toEqual([]);
+    expect(result.repairs).toStrictEqual([]);
     expect(result.state.cfg.auth?.profiles?.["openai:default"]).toEqual({
       provider: "openai",
       mode: "api_key",
@@ -433,7 +433,7 @@ describe("doctor config flow steps", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
     expect(result.state.cfg.auth?.profiles?.work).toEqual({
       provider: "openai",
       mode: "api_key",

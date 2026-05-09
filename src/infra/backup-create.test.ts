@@ -186,7 +186,7 @@ describe("createBackupArchive", () => {
         const pluginNodeModuleEntries = entries.filter((entry) =>
           entry.includes("/state/extensions/demo/node_modules/"),
         );
-        expect(pluginNodeModuleEntries).toEqual([]);
+        expect(pluginNodeModuleEntries).toStrictEqual([]);
 
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         await expect(

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -58,6 +59,10 @@ function requirePathToken(pathToken: PathTokenSetup | null): PathTokenSetup {
     throw new Error("Expected PATH token fixture");
   }
   return pathToken;
+}
+
+function sha256FileSync(filePath: string): string {
+  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
 function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): ScriptOperandFixture {
@@ -210,7 +215,7 @@ function expectMutableFileOperandApprovalPlan(fixture: ScriptOperandFixture, cwd
   expect(prepared.plan.mutableFileOperand).toEqual({
     argvIndex: fixture.expectedArgvIndex,
     path: fs.realpathSync(fixture.scriptPath),
-    sha256: expect.any(String),
+    sha256: sha256FileSync(fixture.scriptPath),
   });
 }
 
@@ -954,7 +959,7 @@ describe("hardenApprovedExecutionPaths", () => {
       snapshot: {
         argvIndex: 3,
         path: fs.realpathSync(scriptPath),
-        sha256: expect.any(String),
+        sha256: sha256FileSync(scriptPath),
       },
     });
   });

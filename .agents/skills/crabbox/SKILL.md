@@ -131,6 +131,55 @@ unclear:
 blacksmith testbox list
 ```
 
+## Efficient Bug E2E Verification
+
+Use the smallest Crabbox lane that proves the reported user path, not just the
+touched code. Aim for one after-fix E2E proof before commenting, closing, or
+opening a PR for a user-visible bug.
+
+Pick the lane by symptom:
+
+- Docker/setup/install bug: build a package tarball and run the matching
+  `scripts/e2e/*-docker.sh` or package script. This proves npm packaging,
+  install paths, runtime deps, config writes, and container behavior.
+- Provider/model/auth bug: use a live lane when a `.profile`/Testbox profile key
+  is available; otherwise use the repo's mock provider lane and state clearly
+  that live provider auth was not exercised.
+- Channel delivery bug: use the channel Docker/live lane when available; include
+  setup, config, gateway start, send/receive or agent-turn proof, and redacted
+  logs.
+- Gateway/session/tool bug: prefer an end-to-end CLI or Gateway RPC command that
+  creates real state and inspects the resulting files/API output.
+- Pure parser/config bug: targeted tests may be enough, but still run a
+  Crabbox command when OS, package, Docker, secrets, or service lifecycle could
+  change behavior.
+
+Efficient flow:
+
+1. Reproduce or prove the pre-fix symptom when feasible. If the issue cannot be
+   reproduced, capture the exact command and observed behavior instead.
+2. Patch locally and run narrow local tests for edit speed.
+3. Run one Crabbox E2E command that starts from the user-facing entrypoint:
+   package install, Docker setup, onboarding, channel add, gateway start, or
+   agent turn as appropriate.
+4. Record proof as: Testbox id, command, environment shape, redacted secret
+   source, and copied success/failure output.
+5. If the issue says "cannot reproduce", ask for the missing config/log fields
+   that would distinguish the tested path from the reporter's path.
+
+Keep it efficient:
+
+- Reuse existing E2E scripts and helper assertions before writing ad hoc shell.
+- Use one-shot Crabbox for a single proof; use a reusable Testbox only when
+  several commands must share built images, installed packages, or live state.
+- Prefer `OPENCLAW_CURRENT_PACKAGE_TGZ` with Docker/package lanes when testing a
+  candidate tarball; prefer the repo's package helper instead of direct source
+  execution when the bug might be packaging/install related.
+- Keep secrets redacted. It is fine to report key presence, source, and length;
+  never print secret values.
+- Include `--timing-json` on broad or flaky runs when command duration or sync
+  behavior matters.
+
 ## Reuse And Keepalive
 
 For most Blacksmith-backed Crabbox calls, one-shot is enough. Use reuse only

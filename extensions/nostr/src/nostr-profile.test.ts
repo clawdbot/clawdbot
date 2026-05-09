@@ -133,7 +133,7 @@ describe("createProfileEvent", () => {
 
     expect(event.kind).toBe(0);
     expect(event.pubkey).toBe(TEST_PUBKEY);
-    expect(event.tags).toEqual([]);
+    expect(event.tags).toStrictEqual([]);
     expect(event.id).toMatch(/^[0-9a-f]{64}$/);
     expect(event.sig).toMatch(/^[0-9a-f]{128}$/);
   });

@@ -31,7 +31,7 @@ describe("loadPromptRefImages", () => {
         prompt: "just text",
         workspaceDir: "/workspace",
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     expect(loadImageFromRefSpy).not.toHaveBeenCalled();
     expect(sanitizeImageBlocksSpy).not.toHaveBeenCalled();

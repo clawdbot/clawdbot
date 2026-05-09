@@ -265,7 +265,7 @@ describe("failure safety", () => {
       expect(result.dbPath).toContain("state.sqlite");
       expect(result.steps.length).toBeGreaterThanOrEqual(4);
       const failedSteps = result.steps.filter((step) => !step.ok);
-      expect(failedSteps).toEqual([]);
+      expect(failedSteps).toStrictEqual([]);
 
       // The probe's temporary stored value must not leak into the result.
       const serialised = JSON.stringify(result);

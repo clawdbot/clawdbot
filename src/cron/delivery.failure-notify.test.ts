@@ -15,6 +15,7 @@ vi.mock("./isolated-agent/delivery-target.js", () => ({
 
 vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
 }));
 
 vi.mock("../infra/outbound/identity.js", () => ({

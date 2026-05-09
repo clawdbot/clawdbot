@@ -40,7 +40,7 @@ describe("resolveDiagnosticFlags", () => {
         resolveDiagnosticFlags(cfg, {
           OPENCLAW_DIAGNOSTICS: raw,
         } as NodeJS.ProcessEnv),
-      ).toEqual([]);
+      ).toStrictEqual([]);
     }
   });
 });

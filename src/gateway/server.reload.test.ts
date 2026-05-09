@@ -435,7 +435,7 @@ describe("gateway hot reload", () => {
     );
 
     await expect(params.applyReload()).rejects.toThrow(params.expectedError);
-    expect(drainSystemEvents(params.sessionKey)).toEqual([]);
+    expect(drainSystemEvents(params.sessionKey)).toStrictEqual([]);
   }
 
   async function expectSecretReloadRecovered(params: {

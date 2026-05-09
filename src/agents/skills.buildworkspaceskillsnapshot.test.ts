@@ -105,7 +105,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
     const snapshot = buildSnapshot(workspaceDir);
 
     expect(snapshot.prompt).toBe("");
-    expect(snapshot.skills).toEqual([]);
+    expect(snapshot.skills).toStrictEqual([]);
   });
 
   it("omits disable-model-invocation skills from the prompt", async () => {

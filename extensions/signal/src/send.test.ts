@@ -106,6 +106,6 @@ describe("sendMessageSignal receipts", () => {
     });
 
     expect(result.messageId).toBe("unknown");
-    expect(result.receipt.platformMessageIds).toEqual([]);
+    expect(result.receipt.platformMessageIds).toStrictEqual([]);
   });
 });

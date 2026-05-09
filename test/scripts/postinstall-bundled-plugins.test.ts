@@ -576,7 +576,7 @@ describe("bundled plugin postinstall", () => {
         log: { log: vi.fn(), warn },
         homedir: () => "/home/alice",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining(

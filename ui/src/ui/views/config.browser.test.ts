@@ -986,7 +986,7 @@ describe("config view", () => {
     const customButton = findButtonByText(container, "Light Green");
     expect(customButton.disabled).toBe(false);
     customButton.click();
-    expect(setTheme).toHaveBeenCalledWith("custom", expect.any(Object));
+    expect(setTheme).toHaveBeenCalledWith("custom", { element: customButton });
 
     const replaceButton = findButtonContainingText(container, "Replace Light Green");
     const clearButton = findButtonContainingText(container, "Clear Light Green");

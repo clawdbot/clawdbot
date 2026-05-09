@@ -703,7 +703,7 @@ describe("OpenAIWebSocketManager", () => {
       expect(sent["type"]).toBe("response.create");
       expect(sent["generate"]).toBe(false);
       expect(sent["model"]).toBe("gpt-5.4");
-      expect(sent["input"]).toEqual([]);
+      expect(sent["input"]).toStrictEqual([]);
       expect(sent["instructions"]).toBe("You are helpful.");
     });
 

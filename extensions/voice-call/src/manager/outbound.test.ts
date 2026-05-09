@@ -154,10 +154,9 @@ describe("voice-call outbound helpers", () => {
       mode: "notify",
       message: "hello there",
     });
-    expect(result).toEqual({
-      callId: expect.any(String),
-      success: true,
-    });
+    expect(result.success).toBe(true);
+    expect(result.callId).toBeTypeOf("string");
+    expect(result.callId).not.toBe("");
     const callId = result.callId;
 
     expect(mapVoiceToPollyMock).toHaveBeenCalledWith("nova");
@@ -192,10 +191,9 @@ describe("voice-call outbound helpers", () => {
 
     const result = await initiateCall(ctx as never, "+14155550123");
 
-    expect(result).toEqual({
-      callId: expect.any(String),
-      success: true,
-    });
+    expect(result.success).toBe(true);
+    expect(result.callId).toBeTypeOf("string");
+    expect(result.callId).not.toBe("");
     expect(ctx.activeCalls.get(result.callId)?.sessionKey).toBe(`voice:call:${result.callId}`);
   });
 
@@ -220,10 +218,9 @@ describe("voice-call outbound helpers", () => {
       dtmfSequence: "ww123456#",
     });
 
-    expect(result).toEqual({
-      callId: expect.any(String),
-      success: true,
-    });
+    expect(result.success).toBe(true);
+    expect(result.callId).toBeTypeOf("string");
+    expect(result.callId).not.toBe("");
     const callId = result.callId;
 
     expect(generateDtmfRedirectTwimlMock).toHaveBeenCalledWith(
@@ -292,11 +289,11 @@ describe("voice-call outbound helpers", () => {
       webhookUrl: "https://example.com/webhook",
     };
 
-    await expect(initiateCall(ctx as never, "+14155550123")).resolves.toEqual({
-      callId: expect.any(String),
-      success: false,
-      error: "provider down",
-    });
+    const result = await initiateCall(ctx as never, "+14155550123");
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("provider down");
+    expect(result.callId).toBeTypeOf("string");
+    expect(result.callId).not.toBe("");
     expect(ctx.activeCalls.size).toBe(0);
   });
 
@@ -443,18 +440,21 @@ describe("voice-call outbound helpers", () => {
   it("ends connected calls, clears timers, and rejects pending transcripts", async () => {
     const { call, ctx, hangupCall } = createActiveCallContext();
 
+    const beforeEndMs = Date.now();
     await expect(endCall(ctx as never, "call-1")).resolves.toEqual({ success: true });
+    const afterEndMs = Date.now();
     expect(hangupCall).toHaveBeenCalledWith({
       callId: "call-1",
       providerCallId: "provider-1",
       reason: "hangup-bot",
     });
-    expect(call).toEqual(
-      expect.objectContaining({
-        endReason: "hangup-bot",
-        endedAt: expect.any(Number),
-      }),
-    );
+    expect(call).toMatchObject({ endReason: "hangup-bot" });
+    const endedAt = (call as { endedAt?: unknown }).endedAt;
+    expect(endedAt).toBeTypeOf("number");
+    if (typeof endedAt === "number") {
+      expect(endedAt).toBeGreaterThanOrEqual(beforeEndMs);
+      expect(endedAt).toBeLessThanOrEqual(afterEndMs);
+    }
     expect(transitionStateMock).toHaveBeenCalledWith(call, "hangup-bot");
     expect(clearMaxDurationTimerMock).toHaveBeenCalledWith(
       { maxDurationTimers: ctx.maxDurationTimers },
@@ -472,20 +472,23 @@ describe("voice-call outbound helpers", () => {
   it("preserves timeout reasons when ending timed out calls", async () => {
     const { call, ctx, hangupCall } = createActiveCallContext();
 
+    const beforeEndMs = Date.now();
     await expect(endCall(ctx as never, "call-1", { reason: "timeout" })).resolves.toEqual({
       success: true,
     });
+    const afterEndMs = Date.now();
     expect(hangupCall).toHaveBeenCalledWith({
       callId: "call-1",
       providerCallId: "provider-1",
       reason: "timeout",
     });
-    expect(call).toEqual(
-      expect.objectContaining({
-        endReason: "timeout",
-        endedAt: expect.any(Number),
-      }),
-    );
+    expect(call).toMatchObject({ endReason: "timeout" });
+    const endedAt = (call as { endedAt?: unknown }).endedAt;
+    expect(endedAt).toBeTypeOf("number");
+    if (typeof endedAt === "number") {
+      expect(endedAt).toBeGreaterThanOrEqual(beforeEndMs);
+      expect(endedAt).toBeLessThanOrEqual(afterEndMs);
+    }
     expect(transitionStateMock).toHaveBeenCalledWith(call, "timeout");
     expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(
       { transcriptWaiters: ctx.transcriptWaiters },

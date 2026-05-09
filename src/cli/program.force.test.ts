@@ -59,7 +59,7 @@ describe("gateway --force helpers", () => {
       err.status = 1; // lsof uses exit 1 for no matches
       throw err;
     });
-    expect(listPortListeners(18789)).toEqual([]);
+    expect(listPortListeners(18789)).toStrictEqual([]);
   });
 
   it("skips lsof when the port is already bindable", async () => {
@@ -277,7 +277,7 @@ describe("gateway --force helpers (Windows netstat path)", () => {
 
   it("returns empty list when netstat finds no listeners on the port", () => {
     (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(9999, 42));
-    expect(listPortListeners(18789)).toEqual([]);
+    expect(listPortListeners(18789)).toStrictEqual([]);
   });
 
   it("parses PIDs from netstat output correctly", () => {
@@ -287,7 +287,7 @@ describe("gateway --force helpers (Windows netstat path)", () => {
 
   it("does not incorrectly match a port that is a substring (e.g. 80 vs 8080)", () => {
     (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(8080, 42));
-    expect(listPortListeners(80)).toEqual([]);
+    expect(listPortListeners(80)).toStrictEqual([]);
   });
 
   it("deduplicates PIDs that appear multiple times", () => {

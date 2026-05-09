@@ -219,11 +219,11 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       await server.start();
       expect(mocks.getRealtimeTranscriptionProvider).not.toHaveBeenCalled();
       expect(mocks.listRealtimeTranscriptionProviders).toHaveBeenCalledWith(null);
-      expect(server.getMediaStreamHandler()).toMatchObject({
-        handleUpgrade: expect.any(Function),
-        sendAudio: expect.any(Function),
-        closeAll: expect.any(Function),
-      });
+      const mediaStreamHandler = server.getMediaStreamHandler();
+      expect(mediaStreamHandler).not.toBeNull();
+      expect(mediaStreamHandler?.handleUpgrade).toBeTypeOf("function");
+      expect(mediaStreamHandler?.sendAudio).toBeTypeOf("function");
+      expect(mediaStreamHandler?.closeAll).toBeTypeOf("function");
     } finally {
       await server.stop();
     }

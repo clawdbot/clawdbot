@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSupportedVideoGenerationModes } from "../../video-generation/capabilities.js";
 import { listRuntimeVideoGenerationProviders } from "../../video-generation/runtime.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildVideoGenerationTaskStatusDetails,
   buildVideoGenerationTaskStatusText,
@@ -79,11 +80,16 @@ function summarizeVideoGenerationCapabilities(
 
 export function createVideoGenerateListActionResult(
   config?: OpenClawConfig,
+  options?: { agentDir?: string; authStore?: AuthProfileStore },
 ): VideoGenerateActionResult {
   const providers = listRuntimeVideoGenerationProviders({ config });
   return createMediaGenerateProviderListActionResult({
+    kind: "video_generation",
     providers,
     emptyText: "No video-generation providers are registered.",
+    cfg: config,
+    agentDir: options?.agentDir,
+    authStore: options?.authStore,
     listModes: listSupportedVideoGenerationModes,
     summarizeCapabilities: summarizeVideoGenerationCapabilities,
   });

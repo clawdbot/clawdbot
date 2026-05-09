@@ -1277,7 +1277,7 @@ describe("image tool implicit imageModel config", () => {
   it("exposes an Anthropic-safe image schema without union keywords", async () => {
     await withMinimaxImageToolFromTempAgentDir(async (tool) => {
       const violations = findSchemaUnionKeywords(tool.parameters, "image.parameters");
-      expect(violations).toEqual([]);
+      expect(violations).toStrictEqual([]);
 
       const schema = tool.parameters as {
         properties?: Record<string, unknown>;

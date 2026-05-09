@@ -138,6 +138,11 @@ type RecordChannelMessageReplyDispatchParams = {
 
 /**
  * Resolve the shared dispatch base and immediately record + dispatch one inbound reply turn.
+ *
+ * @deprecated Compatibility reply-dispatch bridge. New channel plugins should
+ * expose a `message` adapter via `defineChannelMessageAdapter(...)` and route
+ * sends through `deliverInboundReplyWithMessageSendContext(...)` or
+ * `sendDurableMessageBatch(...)`.
  */
 export async function dispatchChannelMessageReplyWithBase(
   params: BuildInboundReplyDispatchBaseParams &
@@ -171,7 +176,14 @@ export async function dispatchInboundReplyWithBase(
   await dispatchChannelMessageReplyWithBase(params);
 }
 
-/** Record the inbound session first, then dispatch the reply using normalized outbound delivery. */
+/**
+ * Record the inbound session first, then dispatch the reply using normalized outbound delivery.
+ *
+ * @deprecated Compatibility reply-dispatch bridge. New channel plugins should
+ * expose a `message` adapter via `defineChannelMessageAdapter(...)` and route
+ * sends through `deliverInboundReplyWithMessageSendContext(...)` or
+ * `sendDurableMessageBatch(...)`.
+ */
 export async function recordChannelMessageReplyDispatch(
   params: RecordChannelMessageReplyDispatchParams,
 ): Promise<void> {
@@ -246,7 +258,11 @@ export async function recordInboundSessionAndDispatchReply(
   await recordChannelMessageReplyDispatch(params);
 }
 
+/** @deprecated Compatibility helper for legacy reply dispatch bridges. */
 export const buildChannelMessageReplyDispatchBase = buildInboundReplyDispatchBase;
+/** @deprecated Compatibility helper for legacy reply dispatch results. */
 export const hasFinalChannelMessageReplyDispatch = hasFinalChannelTurnDispatch;
+/** @deprecated Compatibility helper for legacy reply dispatch results. */
 export const hasVisibleChannelMessageReplyDispatch = hasVisibleChannelTurnDispatch;
+/** @deprecated Compatibility helper for legacy reply dispatch results. */
 export const resolveChannelMessageReplyDispatchCounts = resolveChannelTurnDispatchCounts;

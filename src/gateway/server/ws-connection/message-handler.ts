@@ -149,6 +149,30 @@ export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
 };
 
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function resolveTrustedProxyControlUiScopes(params: {
+  requestedScopes: string[];
+  upgradeReq: IncomingMessage;
+}): string[] {
+  const rawHeader = firstHeaderValue(params.upgradeReq.headers["x-openclaw-scopes"]);
+  if (rawHeader === undefined) {
+    return params.requestedScopes;
+  }
+  const declaredScopes = new Set(
+    rawHeader
+      .split(",")
+      .map((scope) => scope.trim())
+      .filter((scope) => scope.length > 0),
+  );
+  if (declaredScopes.size === 0) {
+    return [];
+  }
+  return params.requestedScopes.filter((scope) => declaredScopes.has(scope));
+}
+
 function resolvePinnedClientMetadata(params: {
   claimedPlatform?: string;
   claimedDeviceFamily?: string;
@@ -875,6 +899,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           authOk,
           authMethod,
         });
+        if (trustedProxyAuthOk) {
+          scopes = resolveTrustedProxyControlUiScopes({
+            requestedScopes: scopes,
+            upgradeReq,
+          });
+          connectParams.scopes = scopes;
+        }
         const skipControlUiPairingForDevice = shouldSkipControlUiPairing(
           controlUiAuthPolicy,
           role,
@@ -1143,8 +1174,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 return;
               }
               hasServerApprovedDeviceTokenBaseline = true;
-            } else if (trustedProxyAuthOk) {
-              clearUnboundScopes();
             } else if (
               skipControlUiPairingForDevice ||
               (skipLocalBackendSelfPairing && authMethod !== "device-token")

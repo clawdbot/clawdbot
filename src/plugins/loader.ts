@@ -324,6 +324,7 @@ type PluginRegistrySnapshot = {
     channels: PluginRegistry["channels"];
     channelSetups: PluginRegistry["channelSetups"];
     providers: PluginRegistry["providers"];
+    modelCatalogProviders: PluginRegistry["modelCatalogProviders"];
     cliBackends: NonNullable<PluginRegistry["cliBackends"]>;
     textTransforms: PluginRegistry["textTransforms"];
     speechProviders: PluginRegistry["speechProviders"];
@@ -365,6 +366,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       channels: [...registry.channels],
       channelSetups: [...registry.channelSetups],
       providers: [...registry.providers],
+      modelCatalogProviders: [...registry.modelCatalogProviders],
       cliBackends: [...(registry.cliBackends ?? [])],
       textTransforms: [...registry.textTransforms],
       speechProviders: [...registry.speechProviders],
@@ -405,6 +407,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.channels = snapshot.arrays.channels;
   registry.channelSetups = snapshot.arrays.channelSetups;
   registry.providers = snapshot.arrays.providers;
+  registry.modelCatalogProviders = snapshot.arrays.modelCatalogProviders;
   registry.cliBackends = snapshot.arrays.cliBackends;
   registry.textTransforms = snapshot.arrays.textTransforms;
   registry.speechProviders = snapshot.arrays.speechProviders;

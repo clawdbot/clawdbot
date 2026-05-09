@@ -245,7 +245,7 @@ describe("loadProviderCatalogModelsForList", () => {
         env: baseParams.env,
         providerFilter: "moonshot",
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
   });
@@ -271,7 +271,7 @@ describe("loadProviderCatalogModelsForList", () => {
         providerFilter: "moonshot",
         staticOnly: true,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   });
 
   it("only skips registry for providers with actual static catalogs", async () => {
@@ -375,7 +375,7 @@ describe("loadProviderCatalogModelsForList", () => {
       }),
     );
     expect(workspaceStaticCatalog).not.toHaveBeenCalled();
-    expect(rows).toEqual([]);
+    expect(rows).toStrictEqual([]);
   });
 
   it("keeps unknown provider filters eligible for early empty results", async () => {

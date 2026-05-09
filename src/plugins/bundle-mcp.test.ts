@@ -35,7 +35,7 @@ async function expectResolvedPathEqual(actual: unknown, expected: string): Promi
 }
 
 function expectNoDiagnostics(diagnostics: unknown[]) {
-  expect(diagnostics).toEqual([]);
+  expect(diagnostics).toStrictEqual([]);
 }
 
 const tempHarness = createBundleMcpTempHarness();

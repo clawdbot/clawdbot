@@ -34,7 +34,7 @@ describe("collectMissingDefaultAccountBindingWarnings", () => {
       bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "alerts" } }],
     };
 
-    expect(collectMissingDefaultAccountBindingWarnings(cfg)).toEqual([]);
+    expect(collectMissingDefaultAccountBindingWarnings(cfg)).toStrictEqual([]);
   });
 
   it("warns when bindings cover only a subset of configured accounts", () => {
@@ -68,7 +68,7 @@ describe("collectMissingDefaultAccountBindingWarnings", () => {
       bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "*" } }],
     };
 
-    expect(collectMissingDefaultAccountBindingWarnings(cfg)).toEqual([]);
+    expect(collectMissingDefaultAccountBindingWarnings(cfg)).toStrictEqual([]);
   });
 
   it("does not warn when default account is present", () => {
@@ -84,6 +84,6 @@ describe("collectMissingDefaultAccountBindingWarnings", () => {
       bindings: [{ agentId: "ops", match: { channel: "telegram" } }],
     };
 
-    expect(collectMissingDefaultAccountBindingWarnings(cfg)).toEqual([]);
+    expect(collectMissingDefaultAccountBindingWarnings(cfg)).toStrictEqual([]);
   });
 });

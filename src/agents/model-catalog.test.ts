@@ -180,7 +180,7 @@ describe("loadModelCatalog", () => {
 
       const cfg = {} as OpenClawConfig;
       const first = await loadModelCatalog({ config: cfg });
-      expect(first).toEqual([]);
+      expect(first).toStrictEqual([]);
 
       const second = await loadModelCatalog({ config: cfg });
       expect(second).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);

@@ -811,7 +811,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(seen.prompt).toBe("hello");
     expect(seen.prompt).not.toContain("[Inter-session message]");
-    expect(seen.messages).toEqual([]);
+    expect(seen.messages).toStrictEqual([]);
     expect(seen.systemPrompt ?? "").toBe("");
     expect(result.finalPromptText).toBe("hello");
     expect(result.systemPromptReport?.systemPrompt ?? "").toBe("");

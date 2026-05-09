@@ -135,7 +135,7 @@ describe("fetchCodexUsage", () => {
 
     const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
     expect(result.plan).toBe("$7.50");
-    expect(result.windows).toEqual([]);
+    expect(result.windows).toStrictEqual([]);
   });
 
   it("falls back invalid credit strings to a zero balance", async () => {

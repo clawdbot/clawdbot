@@ -167,7 +167,7 @@ describe("configured plugin install release step", () => {
       }),
     );
     expect(result.pluginIds).toEqual(["codex"]);
-    expect(result.channelIds).toEqual([]);
+    expect(result.channelIds).toStrictEqual([]);
   });
 
   it("collects external web search and ACP runtime plugins from config-only usage", async () => {
@@ -191,7 +191,7 @@ describe("configured plugin install release step", () => {
     });
 
     expect(result.pluginIds).toEqual(["acpx", "brave"]);
-    expect(result.channelIds).toEqual([]);
+    expect(result.channelIds).toStrictEqual([]);
   });
 
   it("does not collect channel ids when the matching plugin id is blocked", async () => {
@@ -210,7 +210,7 @@ describe("configured plugin install release step", () => {
         },
         env: {},
       }).channelIds,
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       collectReleaseConfiguredPluginIds({
@@ -226,7 +226,7 @@ describe("configured plugin install release step", () => {
         },
         env: {},
       }).channelIds,
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("marks the release step complete when there is nothing to install", async () => {
@@ -403,7 +403,7 @@ describe("configured plugin install release step", () => {
     });
 
     expect(result.pluginIds).toEqual(["lobster"]);
-    expect(result.channelIds).toEqual([]);
+    expect(result.channelIds).toStrictEqual([]);
   });
 
   it("skips allow-only plugin ids that already have material plugin entries", async () => {

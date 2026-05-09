@@ -19,8 +19,8 @@ describe("shared/node-match", () => {
     expect(resolveNodeMatches(nodes, "mac studio")).toEqual([nodes[0]]);
     expect(resolveNodeMatches(nodes, "  Mac---Studio!! ")).toEqual([nodes[0]]);
     expect(resolveNodeMatches(nodes, "pi-456")).toEqual([nodes[1]]);
-    expect(resolveNodeMatches(nodes, "pi")).toEqual([]);
-    expect(resolveNodeMatches(nodes, "   ")).toEqual([]);
+    expect(resolveNodeMatches(nodes, "pi")).toStrictEqual([]);
+    expect(resolveNodeMatches(nodes, "   ")).toStrictEqual([]);
   });
 
   it("resolves unique matches and prefers a unique connected node", () => {

@@ -35,7 +35,7 @@ describe("security/dm-policy-shared", () => {
       },
     });
     expect(called).toBe(false);
-    expect(storeAllowFrom).toEqual([]);
+    expect(storeAllowFrom).toStrictEqual([]);
   }
 
   function resolveCommandGate(overrides: {
@@ -77,7 +77,7 @@ describe("security/dm-policy-shared", () => {
         throw new Error("offline");
       },
     });
-    expect(state.configAllowFrom).toEqual([]);
+    expect(state.configAllowFrom).toStrictEqual([]);
     expect(state.hasWildcard).toBe(false);
     expect(state.allowCount).toBe(0);
     expect(state.isMultiUserDm).toBe(false);
@@ -158,7 +158,7 @@ describe("security/dm-policy-shared", () => {
       groupAllowFromFallbackToAllowFrom: false,
     });
     expect(lists.effectiveAllowFrom).toEqual(["owner", "paired-user"]);
-    expect(lists.effectiveGroupAllowFrom).toEqual([]);
+    expect(lists.effectiveGroupAllowFrom).toStrictEqual([]);
   });
 
   it("infers pinned main DM owner from a single configured allowlist entry", () => {

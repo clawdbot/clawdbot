@@ -16,7 +16,7 @@ describe("state migration fs helpers", () => {
     await withTempDir({ prefix: "openclaw-state-migrations-fs-" }, async (base) => {
       const nested = path.join(base, "nested");
 
-      expect(safeReadDir(nested)).toEqual([]);
+      expect(safeReadDir(nested)).toStrictEqual([]);
       ensureDir(nested);
       fs.writeFileSync(path.join(nested, "file.txt"), "ok", "utf8");
 

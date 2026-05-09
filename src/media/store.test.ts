@@ -37,7 +37,14 @@ describe("media store", () => {
   }
 
   async function expectPathMissing(targetPath: string): Promise<void> {
-    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    let statError: unknown;
+    try {
+      await fs.stat(targetPath);
+    } catch (error) {
+      statError = error;
+    }
+    expect(statError).toBeInstanceOf(Error);
+    expect((statError as NodeJS.ErrnoException).code).toBe("ENOENT");
   }
 
   async function expectOriginalFilenameCase(params: {
@@ -134,9 +141,14 @@ describe("media store", () => {
       );
       await withTempStore(async (_store) => {
         const mediaDir = await storeWithMock.ensureMediaDir();
-        await expect(
-          storeWithMock.saveMediaBuffer(Buffer.from("voice"), "audio/ogg", "failed-buffer"),
-        ).rejects.toMatchObject({ code: "ENOSPC" });
+        let saveError: unknown;
+        try {
+          await storeWithMock.saveMediaBuffer(Buffer.from("voice"), "audio/ogg", "failed-buffer");
+        } catch (error) {
+          saveError = error;
+        }
+        expect(saveError).toBeInstanceOf(Error);
+        expect((saveError as NodeJS.ErrnoException).code).toBe("ENOSPC");
 
         const failedDir = path.join(mediaDir, "failed-buffer");
         const entries = await fs.readdir(failedDir).catch(() => []);
@@ -260,12 +272,21 @@ describe("media store", () => {
         params.setupSource !== undefined
           ? await params.setupSource(home)
           : path.join(home, params.relativeSourcePath ?? "");
-      const rejection = expect(store.saveMediaSource(sourcePath)).rejects;
       if (typeof params.expectedError === "string") {
+        const rejection = expect(store.saveMediaSource(sourcePath)).rejects;
         await rejection.toThrow(params.expectedError);
         return;
       }
-      await rejection.toMatchObject(params.expectedError);
+      let sourceError: unknown;
+      try {
+        await store.saveMediaSource(sourcePath);
+      } catch (error) {
+        sourceError = error;
+      }
+      expect(sourceError).toBeInstanceOf(Error);
+      for (const [key, value] of Object.entries(params.expectedError)) {
+        expect((sourceError as Record<string, unknown>)[key]).toStrictEqual(value);
+      }
     });
   }
 

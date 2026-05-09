@@ -355,7 +355,7 @@ async function expectRejectedPackageExtensionEntry(params: {
     ).toBe(true);
     return;
   }
-  expect(result.diagnostics).toEqual([]);
+  expect(result.diagnostics).toStrictEqual([]);
 }
 
 afterEach(() => {
@@ -401,7 +401,7 @@ describe("discoverOpenClawPlugins", () => {
       expect(findCandidateById(candidates, "linked-plugin")?.rootDir).toBe(
         fs.realpathSync(linkedPluginDir),
       );
-      expect(diagnostics).toEqual([]);
+      expect(diagnostics).toStrictEqual([]);
     },
   );
 
@@ -427,7 +427,7 @@ describe("discoverOpenClawPlugins", () => {
       expect(findCandidateById(candidates, "workspace-linked-plugin")?.rootDir).toBe(
         fs.realpathSync(linkedPluginDir),
       );
-      expect(diagnostics).toEqual([]);
+      expect(diagnostics).toStrictEqual([]);
     },
   );
 
@@ -442,7 +442,7 @@ describe("discoverOpenClawPlugins", () => {
 
       const { candidates, diagnostics } = await discoverWithStateDir(stateDir, {});
       expectCandidateIds(candidates, { excludes: ["missing"] });
-      expect(diagnostics).toEqual([]);
+      expect(diagnostics).toStrictEqual([]);
     },
   );
 
@@ -473,7 +473,7 @@ describe("discoverOpenClawPlugins", () => {
       present: ["workspace-plugin"],
       absent: ["stray-workspace-plugin"],
     });
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toStrictEqual([]);
   });
 
   it("resolves tilde workspace dirs against the provided env", () => {
@@ -578,7 +578,7 @@ describe("discoverOpenClawPlugins", () => {
     );
 
     expectCandidateOrder(candidates, ["real-plugin"]);
-    expect(diagnostics).toEqual([]);
+    expect(diagnostics).toStrictEqual([]);
   });
 
   it("ignores packaged bundled plugin paths in configured load paths", () => {
@@ -745,7 +745,7 @@ describe("discoverOpenClawPlugins", () => {
       }),
     );
     expect(countMatching(candidates, (candidate) => candidate.idHint === "synology-chat")).toBe(1);
-    expect(diagnostics).toEqual([]);
+    expect(diagnostics).toStrictEqual([]);
   });
 
   it("loads package extension packs", async () => {

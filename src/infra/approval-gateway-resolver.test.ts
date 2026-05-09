@@ -27,14 +27,15 @@ describe("resolveApprovalOverGateway", () => {
       clientDisplayName: "QuietChat approval (default)",
     });
 
-    expect(hoisted.withOperatorApprovalsGatewayClient).toHaveBeenCalledWith(
-      {
-        config: { gateway: { auth: { token: "cfg-token" } } },
-        gatewayUrl: "ws://gateway.example.test",
-        clientDisplayName: "QuietChat approval (default)",
-      },
-      expect.any(Function),
-    );
+    expect(hoisted.withOperatorApprovalsGatewayClient).toHaveBeenCalledTimes(1);
+    const [gatewayClientOptions, gatewayClientRunner] =
+      hoisted.withOperatorApprovalsGatewayClient.mock.calls[0];
+    expect(gatewayClientOptions).toEqual({
+      config: { gateway: { auth: { token: "cfg-token" } } },
+      gatewayUrl: "ws://gateway.example.test",
+      clientDisplayName: "QuietChat approval (default)",
+    });
+    expect(gatewayClientRunner).toBeTypeOf("function");
     expect(hoisted.clientRequest).toHaveBeenCalledWith("exec.approval.resolve", {
       id: "approval-1",
       decision: "allow-once",

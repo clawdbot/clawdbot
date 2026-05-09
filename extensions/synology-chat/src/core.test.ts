@@ -145,8 +145,8 @@ describe("synology-chat core", () => {
 
 describe("synology-chat account resolution", () => {
   it("lists no accounts when the channel is missing", () => {
-    expect(listAccountIds({})).toEqual([]);
-    expect(listAccountIds({ channels: {} })).toEqual([]);
+    expect(listAccountIds({})).toStrictEqual([]);
+    expect(listAccountIds({ channels: {} })).toStrictEqual([]);
   });
 
   it("lists the default account when base config has a token", () => {

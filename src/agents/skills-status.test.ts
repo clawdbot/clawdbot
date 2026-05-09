@@ -38,7 +38,7 @@ describe("buildWorkspaceSkillStatus", () => {
 
     const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
     expect(report.skills).toHaveLength(1);
-    expect(report.skills[0]?.install).toEqual([]);
+    expect(report.skills[0]?.install).toStrictEqual([]);
   });
 
   it("does not expose raw config values in config checks", () => {

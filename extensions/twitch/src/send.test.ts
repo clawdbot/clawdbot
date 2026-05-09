@@ -207,8 +207,8 @@ describe("send", () => {
 
       expect(result.ok).toBe(true);
       expect(result.messageId).toBe("skipped");
-      expect(result.receipt.platformMessageIds).toEqual([]);
-      expect(result.receipt.parts).toEqual([]);
+      expect(result.receipt.platformMessageIds).toStrictEqual([]);
+      expect(result.receipt.parts).toStrictEqual([]);
     });
 
     it("should return error when client manager not found", async () => {

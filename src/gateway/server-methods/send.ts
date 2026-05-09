@@ -1,4 +1,5 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
@@ -6,7 +7,6 @@ import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import {
   ensureOutboundSessionEntry,
   resolveOutboundSessionRoute,
@@ -538,7 +538,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           sessionKey: outboundSessionKey,
           conversationType: outboundRoute?.chatType,
         });
-        const results = await deliverOutboundPayloads({
+        const send = await sendDurableMessageBatch({
           cfg,
           channel: outboundChannel,
           to: deliveryTarget,
@@ -560,6 +560,10 @@ export const sendHandlers: GatewayRequestHandlers = {
               }
             : undefined,
         });
+        if (send.status === "failed" || send.status === "partial_failed") {
+          throw send.error;
+        }
+        const results = send.status === "sent" ? send.results : [];
 
         const result = results.at(-1);
         if (!result) {

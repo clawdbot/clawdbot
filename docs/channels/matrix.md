@@ -11,11 +11,13 @@ It uses the official `matrix-js-sdk` and supports DMs, rooms, threads, media, re
 
 ## Install
 
-Install Matrix before configuring the channel:
+Install Matrix from ClawHub before configuring the channel:
 
 ```bash
 openclaw plugins install @openclaw/matrix
 ```
+
+Bare plugin specs try ClawHub first, then npm fallback. To force the registry source, use `openclaw plugins install clawhub:@openclaw/matrix` or `openclaw plugins install npm:@openclaw/matrix`.
 
 From a local checkout:
 

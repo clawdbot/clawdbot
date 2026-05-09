@@ -144,7 +144,8 @@ describe("sendLineReplyChunks", () => {
       createTextMessageWithQuickReplies,
     } = createReplyChunksHarness();
     const onReplyError = vi.fn();
-    replyMessageLine.mockRejectedValueOnce(new Error("reply failed"));
+    const replyError = new Error("reply failed");
+    replyMessageLine.mockRejectedValueOnce(replyError);
 
     const result = await sendLineReplyChunks({
       to: "line:group:1",
@@ -162,7 +163,7 @@ describe("sendLineReplyChunks", () => {
     });
 
     expect(result.replyTokenUsed).toBe(true);
-    expect(onReplyError).toHaveBeenCalledWith(expect.any(Error));
+    expect(onReplyError).toHaveBeenCalledWith(replyError);
     expect(pushMessageLine).toHaveBeenNthCalledWith(1, "line:group:1", "1", {
       cfg: LINE_TEST_CFG,
       accountId: "default",

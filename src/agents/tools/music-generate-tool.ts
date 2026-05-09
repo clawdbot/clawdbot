@@ -599,7 +599,10 @@ export function createMusicGenerateTool(options?: {
       const action = resolveAction(args);
 
       if (action === "list") {
-        return createMusicGenerateListActionResult(cfg);
+        return createMusicGenerateListActionResult(cfg, {
+          agentDir: options?.agentDir,
+          authStore: options?.authProfileStore,
+        });
       }
 
       if (action === "status") {

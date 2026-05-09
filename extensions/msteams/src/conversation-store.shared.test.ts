@@ -57,79 +57,86 @@ describe.each(storeFactories)("msteams conversation store ($name)", ({ createSto
   it("upserts, lists, removes, and resolves users by both AAD and Bot Framework ids", async () => {
     const store = await createStore();
 
-    await store.upsert("conv-a", {
-      conversation: { id: "conv-a" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-      user: { id: "user-a", aadObjectId: "aad-a", name: "Alice" },
-    });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-25T20:00:00.000Z"));
+      await store.upsert("conv-a", {
+        conversation: { id: "conv-a" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+        user: { id: "user-a", aadObjectId: "aad-a", name: "Alice" },
+      });
 
-    await store.upsert("conv-b", {
-      conversation: { id: "conv-b" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-      user: { id: "user-b", aadObjectId: "aad-b", name: "Bob" },
-    });
+      vi.setSystemTime(new Date("2026-03-25T20:00:30.000Z"));
+      await store.upsert("conv-b", {
+        conversation: { id: "conv-b" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+        user: { id: "user-b", aadObjectId: "aad-b", name: "Bob" },
+      });
 
-    await expect(store.get("conv-a")).resolves.toEqual({
-      conversation: { id: "conv-a" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-      user: { id: "user-a", aadObjectId: "aad-a", name: "Alice" },
-      lastSeenAt: expect.any(String),
-    });
+      await expect(store.get("conv-a")).resolves.toEqual({
+        conversation: { id: "conv-a" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+        user: { id: "user-a", aadObjectId: "aad-a", name: "Alice" },
+        lastSeenAt: "2026-03-25T20:00:00.000Z",
+      });
 
-    await expect(store.list()).resolves.toEqual([
-      {
-        conversationId: "conv-a",
-        reference: {
-          conversation: { id: "conv-a" },
-          channelId: "msteams",
-          serviceUrl: "https://service.example.com",
-          user: { id: "user-a", aadObjectId: "aad-a", name: "Alice" },
-          lastSeenAt: expect.any(String),
+      await expect(store.list()).resolves.toEqual([
+        {
+          conversationId: "conv-a",
+          reference: {
+            conversation: { id: "conv-a" },
+            channelId: "msteams",
+            serviceUrl: "https://service.example.com",
+            user: { id: "user-a", aadObjectId: "aad-a", name: "Alice" },
+            lastSeenAt: "2026-03-25T20:00:00.000Z",
+          },
         },
-      },
-      {
+        {
+          conversationId: "conv-b",
+          reference: {
+            conversation: { id: "conv-b" },
+            channelId: "msteams",
+            serviceUrl: "https://service.example.com",
+            user: { id: "user-b", aadObjectId: "aad-b", name: "Bob" },
+            lastSeenAt: "2026-03-25T20:00:30.000Z",
+          },
+        },
+      ]);
+
+      await expect(store.findPreferredDmByUserId("  aad-b  ")).resolves.toEqual({
         conversationId: "conv-b",
         reference: {
           conversation: { id: "conv-b" },
           channelId: "msteams",
           serviceUrl: "https://service.example.com",
           user: { id: "user-b", aadObjectId: "aad-b", name: "Bob" },
-          lastSeenAt: expect.any(String),
+          lastSeenAt: "2026-03-25T20:00:30.000Z",
         },
-      },
-    ]);
+      });
+      await expect(store.findPreferredDmByUserId("user-a")).resolves.toEqual({
+        conversationId: "conv-a",
+        reference: {
+          conversation: { id: "conv-a" },
+          channelId: "msteams",
+          serviceUrl: "https://service.example.com",
+          user: { id: "user-a", aadObjectId: "aad-a", name: "Alice" },
+          lastSeenAt: "2026-03-25T20:00:00.000Z",
+        },
+      });
+      await expect(store.findByUserId("user-a")).resolves.toEqual(
+        await store.findPreferredDmByUserId("user-a"),
+      );
+      await expect(store.findPreferredDmByUserId("   ")).resolves.toBeNull();
 
-    await expect(store.findPreferredDmByUserId("  aad-b  ")).resolves.toEqual({
-      conversationId: "conv-b",
-      reference: {
-        conversation: { id: "conv-b" },
-        channelId: "msteams",
-        serviceUrl: "https://service.example.com",
-        user: { id: "user-b", aadObjectId: "aad-b", name: "Bob" },
-        lastSeenAt: expect.any(String),
-      },
-    });
-    await expect(store.findPreferredDmByUserId("user-a")).resolves.toEqual({
-      conversationId: "conv-a",
-      reference: {
-        conversation: { id: "conv-a" },
-        channelId: "msteams",
-        serviceUrl: "https://service.example.com",
-        user: { id: "user-a", aadObjectId: "aad-a", name: "Alice" },
-        lastSeenAt: expect.any(String),
-      },
-    });
-    await expect(store.findByUserId("user-a")).resolves.toEqual(
-      await store.findPreferredDmByUserId("user-a"),
-    );
-    await expect(store.findPreferredDmByUserId("   ")).resolves.toBeNull();
-
-    await expect(store.remove("conv-a")).resolves.toBe(true);
-    await expect(store.get("conv-a")).resolves.toBeNull();
-    await expect(store.remove("missing")).resolves.toBe(false);
+      await expect(store.remove("conv-a")).resolves.toBe(true);
+      await expect(store.get("conv-a")).resolves.toBeNull();
+      await expect(store.remove("missing")).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("preserves existing timezone when upsert omits timezone", async () => {

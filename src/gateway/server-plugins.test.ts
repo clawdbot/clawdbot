@@ -87,6 +87,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   channelSetups: [],
   commands: [],
   providers: [],
+  modelCatalogProviders: [],
   speechProviders: [],
   realtimeTranscriptionProviders: [],
   realtimeVoiceProviders: [],
@@ -635,7 +636,7 @@ describe("loadGatewayPlugins", () => {
 
     expect(clearActivatedPluginRuntimeState).toHaveBeenCalledTimes(1);
     expect(loadOpenClawPlugins).not.toHaveBeenCalled();
-    expect(result.pluginRegistry.plugins).toEqual([]);
+    expect(result.pluginRegistry.plugins).toStrictEqual([]);
     expect(result.gatewayMethods).toEqual(["sessions.get"]);
   });
 

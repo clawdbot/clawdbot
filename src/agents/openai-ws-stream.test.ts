@@ -414,11 +414,11 @@ function makeResponseObject(
 
 describe("convertTools", () => {
   it("returns empty array for undefined tools", () => {
-    expect(convertTools(undefined)).toEqual([]);
+    expect(convertTools(undefined)).toStrictEqual([]);
   });
 
   it("returns empty array for empty tools", () => {
-    expect(convertTools([])).toEqual([]);
+    expect(convertTools([])).toStrictEqual([]);
   });
 
   it("converts tools to FunctionToolDefinition format", () => {
@@ -994,7 +994,7 @@ describe("convertMessagesToInputItems", () => {
     const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
-    expect(items).toEqual([]);
+    expect(items).toStrictEqual([]);
   });
 
   it("falls back to toolUseId when toolCallId is missing", () => {
@@ -1052,7 +1052,7 @@ describe("convertMessagesToInputItems", () => {
     const items = convertMessagesToInputItems([msg] as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
-    expect(items).toEqual([]);
+    expect(items).toStrictEqual([]);
   });
 
   it("skips thinking blocks in assistant messages", () => {
@@ -1205,7 +1205,7 @@ describe("convertMessagesToInputItems", () => {
   });
 
   it("returns empty array for empty messages", () => {
-    expect(convertMessagesToInputItems([])).toEqual([]);
+    expect(convertMessagesToInputItems([])).toStrictEqual([]);
   });
 });
 
@@ -1356,7 +1356,7 @@ describe("buildAssistantMessageFromResponse", () => {
   it("handles empty output gracefully", () => {
     const response = makeResponseObject("resp_7");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
-    expect(msg.content).toEqual([]);
+    expect(msg.content).toStrictEqual([]);
     expect(msg.stopReason).toBe("stop");
   });
 
@@ -3195,7 +3195,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
       input: Array<{ type: string; id?: string; call_id?: string }>;
     };
     expect(sent2.previous_response_id).toBe("resp_turn1_reasoning");
-    expect(sent2.input).toEqual([]);
+    expect(sent2.input).toStrictEqual([]);
   });
 
   it("replays encrypted-only reasoning when websocket must send full context", async () => {

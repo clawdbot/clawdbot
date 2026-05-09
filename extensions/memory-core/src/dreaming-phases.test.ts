@@ -2766,7 +2766,7 @@ describe("previewRemHarness", () => {
       },
     });
 
-    expect(preview.groundedInputPaths).toEqual([]);
+    expect(preview.groundedInputPaths).toStrictEqual([]);
     expect(preview.grounded).toBeNull();
   });
 
@@ -2803,8 +2803,8 @@ describe("previewRemHarness", () => {
     });
 
     expect(preview.remSkipped).toBe(true);
-    expect(preview.rem.candidateTruths).toEqual([]);
-    expect(preview.rem.bodyLines).toEqual([]);
+    expect(preview.rem.candidateTruths).toStrictEqual([]);
+    expect(preview.rem.bodyLines).toStrictEqual([]);
     expect(preview.deep.candidates[0]?.snippet).toContain("Always check weather");
   });
 });

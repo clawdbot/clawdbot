@@ -31,7 +31,7 @@ describe("install.sh", () => {
     const rawAptInstalls = script
       .split("\n")
       .filter((line) => /\b(?:sudo\s+)?apt-get\s+install\b/.test(line));
-    expect(rawAptInstalls).toEqual([]);
+    expect(rawAptInstalls).toStrictEqual([]);
   });
 
   it("exports noninteractive apt env during Linux startup", () => {

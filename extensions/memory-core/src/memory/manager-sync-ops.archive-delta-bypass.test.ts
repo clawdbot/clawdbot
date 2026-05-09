@@ -152,9 +152,9 @@ describe("session archive delta bypass", () => {
 
     await harness.processPendingSessionDeltas();
 
-    expect(harness.getDirtySessionFiles()).toEqual([]);
+    expect(harness.getDirtySessionFiles()).toStrictEqual([]);
     expect(harness.isSessionsDirty()).toBe(false);
-    expect(harness.syncCalls).toEqual([]);
+    expect(harness.syncCalls).toStrictEqual([]);
   });
 
   it("keeps live transcripts below the configured thresholds", async () => {
@@ -164,8 +164,8 @@ describe("session archive delta bypass", () => {
 
     await harness.processPendingSessionDeltas();
 
-    expect(harness.getDirtySessionFiles()).toEqual([]);
+    expect(harness.getDirtySessionFiles()).toStrictEqual([]);
     expect(harness.isSessionsDirty()).toBe(false);
-    expect(harness.syncCalls).toEqual([]);
+    expect(harness.syncCalls).toStrictEqual([]);
   });
 });

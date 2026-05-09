@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/amazon-bedrock-mantle-provider",
-  "version": "2026.5.6",
+  "version": "2026.5.8",
   "private": true,
   "description": "OpenClaw Amazon Bedrock Mantle (OpenAI-compatible) provider plugin",
   "type": "module",

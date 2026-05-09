@@ -26,7 +26,7 @@ describe("agents bind matrix integration", () => {
 
     const parsed = parseBindingSpecs({ agentId: "main", specs: ["matrix"], config: {} });
 
-    expect(parsed.errors).toEqual([]);
+    expect(parsed.errors).toStrictEqual([]);
     expect(parsed.bindings).toEqual([
       { type: "route", agentId: "main", match: { channel: "matrix", accountId: "main" } },
     ]);

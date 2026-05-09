@@ -328,6 +328,20 @@ import {
   SessionsSendParamsSchema,
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
+  type TaskSummary,
+  TaskSummarySchema,
+  type TasksCancelParams,
+  TasksCancelParamsSchema,
+  type TasksCancelResult,
+  TasksCancelResultSchema,
+  type TasksGetParams,
+  TasksGetParamsSchema,
+  type TasksGetResult,
+  TasksGetResultSchema,
+  type TasksListParams,
+  TasksListParamsSchema,
+  type TasksListResult,
+  TasksListResultSchema,
   type ShutdownEvent,
   ShutdownEventSchema,
   type SkillsBinsParams,
@@ -540,6 +554,9 @@ export const validateSessionsCompactionRestoreParams = ajv.compile<SessionsCompa
 );
 export const validateSessionsUsageParams =
   ajv.compile<SessionsUsageParams>(SessionsUsageParamsSchema);
+export const validateTasksListParams = ajv.compile<TasksListParams>(TasksListParamsSchema);
+export const validateTasksGetParams = ajv.compile<TasksGetParams>(TasksGetParamsSchema);
+export const validateTasksCancelParams = ajv.compile<TasksCancelParams>(TasksCancelParamsSchema);
 export const validateConfigGetParams = ajv.compile<ConfigGetParams>(ConfigGetParamsSchema);
 export const validateConfigSetParams = ajv.compile<ConfigSetParams>(ConfigSetParamsSchema);
 export const validateConfigApplyParams = ajv.compile<ConfigApplyParams>(ConfigApplyParamsSchema);
@@ -804,6 +821,13 @@ export {
   ArtifactsListParamsSchema,
   ArtifactsGetParamsSchema,
   ArtifactsDownloadParamsSchema,
+  TaskSummarySchema,
+  TasksListParamsSchema,
+  TasksListResultSchema,
+  TasksGetParamsSchema,
+  TasksGetResultSchema,
+  TasksCancelParamsSchema,
+  TasksCancelResultSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
   ConfigApplyParamsSchema,
@@ -1049,6 +1073,13 @@ export type {
   SessionsDeleteParams,
   SessionsCompactParams,
   SessionsUsageParams,
+  TaskSummary,
+  TasksListParams,
+  TasksListResult,
+  TasksGetParams,
+  TasksGetResult,
+  TasksCancelParams,
+  TasksCancelResult,
   CronJob,
   CronListParams,
   CronStatusParams,

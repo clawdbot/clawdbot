@@ -128,8 +128,8 @@ describe("Gemini embedding provider", () => {
       fallback: "none",
     });
 
-    await expect(provider.embedQuery("   ")).resolves.toEqual([]);
-    await expect(provider.embedBatch([])).resolves.toEqual([]);
+    await expect(provider.embedQuery("   ")).resolves.toStrictEqual([]);
+    await expect(provider.embedBatch([])).resolves.toStrictEqual([]);
     await expect(provider.embedQuery("test query")).resolves.toEqual([0.6, 0.8, 0]);
 
     const structuredBatch = await provider.embedBatchInputs?.([

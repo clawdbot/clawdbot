@@ -57,7 +57,7 @@ describe("buildBootstrapContextFiles", () => {
   });
   it("skips empty or whitespace-only content", () => {
     const files = [makeFile({ content: "   \n  " })];
-    expect(buildBootstrapContextFiles(files)).toEqual([]);
+    expect(buildBootstrapContextFiles(files)).toStrictEqual([]);
   });
   it("truncates large bootstrap content", () => {
     const head = `HEAD-${"a".repeat(600)}`;
@@ -178,7 +178,7 @@ describe("buildBootstrapContextFiles", () => {
       maxChars: 200,
       totalMaxChars: 40,
     });
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("keeps missing markers under small total budgets", () => {
@@ -222,7 +222,7 @@ describe("buildBootstrapContextFiles", () => {
     expect(warnings).toHaveLength(3);
     expect(
       warnings.filter((warning) => !warning.includes('missing or invalid "path" field')),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 

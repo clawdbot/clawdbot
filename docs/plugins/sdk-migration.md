@@ -250,7 +250,7 @@ releases.
     helpers for external plugins during the migration window and warn once with
     the `runtime-config-load-write` compatibility code. Bundled plugins and repo
     runtime code are protected by scanner guardrails in
-    `pnpm check:deprecated-internal-config-api` and
+    `pnpm check:deprecated-api-usage` and
     `pnpm check:no-runtime-action-load-config`: new production plugin usage
     fails outright, direct config writes fail, gateway server methods must use
     the request runtime snapshot, runtime channel send/action/client helpers

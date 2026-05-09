@@ -69,7 +69,7 @@ describe("verify-docker-attestations", () => {
       inspectAttestation: () => createAttestation(),
     });
 
-    expect(errors).toEqual([]);
+    expect(errors).toStrictEqual([]);
   });
 
   it("accepts attestation manifests with omitted artifactType", () => {
@@ -84,7 +84,7 @@ describe("verify-docker-attestations", () => {
       },
     });
 
-    expect(errors).toEqual([]);
+    expect(errors).toStrictEqual([]);
   });
 
   it("reports unexpected attestation artifact types", () => {

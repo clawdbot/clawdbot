@@ -132,6 +132,6 @@ describe("collectWhatsAppStatusIssues", () => {
       },
     ]);
 
-    expect(issues).toEqual([]);
+    expect(issues).toStrictEqual([]);
   });
 });

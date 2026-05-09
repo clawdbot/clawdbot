@@ -262,7 +262,7 @@ describe("pw-tools-core", () => {
         expect(parentSwappedBeforeFinalize).toBe(true);
         expect(saveAs).toHaveBeenCalledOnce();
         await expectPathMissing(outsideTargetPath);
-        await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
+        await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
       });
     },
   );
@@ -432,7 +432,7 @@ describe("pw-tools-core", () => {
 
         await expect(p).rejects.toThrow(/output directory/i);
         expect(saveAs).not.toHaveBeenCalled();
-        await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
+        await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
       });
     },
   );

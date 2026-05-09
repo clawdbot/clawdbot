@@ -64,7 +64,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
           ]),
         },
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("collects dangerous sandbox, hook, browser, and fs flags", () => {

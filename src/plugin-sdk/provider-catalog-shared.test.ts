@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogProvider } from "../model-catalog/types.js";
 import {
   applyProviderNativeStreamingUsageCompat,
   buildManifestModelProviderConfig,
+  clearLiveCatalogCacheForTests,
+  getCachedLiveCatalogValue,
   readConfiguredProviderCatalogEntries,
   supportsNativeStreamingUsageCompat,
 } from "./provider-catalog-shared.js";
@@ -20,6 +22,75 @@ function buildModel(id: string, supportsUsageInStreaming?: boolean): ModelDefini
     ...(supportsUsageInStreaming === undefined ? {} : { compat: { supportsUsageInStreaming } }),
   };
 }
+
+describe("provider-catalog-shared live catalog cache", () => {
+  beforeEach(() => {
+    clearLiveCatalogCacheForTests();
+  });
+
+  it("reuses in-flight and fresh live catalog loads for matching keys", async () => {
+    let now = 1_000;
+    const load = vi.fn(async () => ({ models: ["a"] }));
+
+    const first = getCachedLiveCatalogValue({
+      keyParts: ["provider", "models", "secret-token"],
+      load,
+      ttlMs: 100,
+      now: () => now,
+    });
+    const second = getCachedLiveCatalogValue({
+      keyParts: ["provider", "models", "secret-token"],
+      load,
+      ttlMs: 100,
+      now: () => now,
+    });
+
+    await expect(first).resolves.toEqual({ models: ["a"] });
+    await expect(second).resolves.toEqual({ models: ["a"] });
+    expect(load).toHaveBeenCalledTimes(1);
+
+    now = 1_050;
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models", "secret-token"],
+        load,
+        ttlMs: 100,
+        now: () => now,
+      }),
+    ).resolves.toEqual({ models: ["a"] });
+    expect(load).toHaveBeenCalledTimes(1);
+
+    now = 1_101;
+    await getCachedLiveCatalogValue({
+      keyParts: ["provider", "models", "secret-token"],
+      load,
+      ttlMs: 100,
+      now: () => now,
+    });
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache failed live catalog loads", async () => {
+    const load = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models"],
+        load,
+      }),
+    ).rejects.toThrow("boom");
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models"],
+        load,
+      }),
+    ).resolves.toBe("ok");
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("provider-catalog-shared native streaming usage compat", () => {
   it("detects native streaming usage compat from the endpoint capabilities", () => {
@@ -59,6 +130,43 @@ describe("provider-catalog-shared native streaming usage compat", () => {
 });
 
 describe("provider-catalog-shared configured catalog entries", () => {
+  it("normalizes bare retired Gemini ids for Google-owned configured providers", () => {
+    expect(
+      readConfiguredProviderCatalogEntries({
+        providerId: "google",
+        config: {
+          models: {
+            providers: {
+              google: {
+                baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                models: [
+                  {
+                    id: "gemini-3-pro-preview",
+                    name: "Gemini 3 Pro Preview",
+                    input: ["text", "image"],
+                    reasoning: true,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 1048576,
+                    maxTokens: 65536,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        provider: "google",
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3 Pro Preview",
+        input: ["text", "image"],
+        reasoning: true,
+        contextWindow: 1048576,
+      },
+    ]);
+  });
+
   it("preserves configured audio and video input modalities while normalizing nested Gemini ids", () => {
     expect(
       readConfiguredProviderCatalogEntries({

@@ -484,6 +484,6 @@ describe("buildCommandsListResult", () => {
     const invalidScopes = result.commands
       .map((command) => command.scope)
       .filter((scope) => typeof scope !== "string");
-    expect(invalidScopes).toEqual([]);
+    expect(invalidScopes).toStrictEqual([]);
   });
 });

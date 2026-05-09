@@ -56,9 +56,19 @@ describe("backupCreateCommand verify wrapper", () => {
     const result = await backupCreateCommand(runtime, { verify: true });
 
     expect(result.verified).toBe(true);
-    expect(backupVerifyCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({ log: expect.any(Function) }),
-      expect.objectContaining({ archive: "/tmp/openclaw-backup.tar.gz", json: false }),
-    );
+    expect(backupVerifyCommandMock).toHaveBeenCalledOnce();
+    const [verifyRuntime, verifyOptions] = backupVerifyCommandMock.mock.calls[0] ?? [];
+    expect(verifyOptions).toStrictEqual({
+      archive: "/tmp/openclaw-backup.tar.gz",
+      json: false,
+    });
+    const verifyLog = verifyRuntime?.log;
+    expect(verifyRuntime).toStrictEqual({
+      log: verifyLog,
+      error: runtime.error,
+      exit: runtime.exit,
+    });
+    expect(verifyLog).not.toBe(runtime.log);
+    expect(typeof verifyLog).toBe("function");
   });
 });

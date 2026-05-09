@@ -90,7 +90,7 @@ describe("bundled plugin load path repair", () => {
     expect(result.changes).toEqual([
       `- plugins.load.paths: removed bundled feishu path alias ${legacyPath}`,
     ]);
-    expect(result.config.plugins?.load?.paths).toEqual([]);
+    expect(result.config.plugins?.load?.paths).toStrictEqual([]);
   });
 
   it("removes current packaged bundled paths during doctor repair", () => {
@@ -100,7 +100,7 @@ describe("bundled plugin load path repair", () => {
 
     const result = maybeRepairBundledPluginLoadPaths(createPluginLoadPathConfig([bundledPath]));
 
-    expect(result.config.plugins?.load?.paths).toEqual([]);
+    expect(result.config.plugins?.load?.paths).toStrictEqual([]);
   });
 
   it("derives legacy paths from the bundled directory name instead of plugin id", () => {
@@ -137,7 +137,7 @@ describe("bundled plugin load path repair", () => {
 
     const result = maybeRepairBundledPluginLoadPaths(createPluginLoadPathConfig([legacyPath]));
 
-    expect(result.config.plugins?.load?.paths).toEqual([]);
+    expect(result.config.plugins?.load?.paths).toStrictEqual([]);
   });
 
   it("removes dist-runtime bundled paths", () => {
@@ -148,7 +148,7 @@ describe("bundled plugin load path repair", () => {
 
     const result = maybeRepairBundledPluginLoadPaths(createPluginLoadPathConfig([legacyPath]));
 
-    expect(result.config.plugins?.load?.paths).toEqual([]);
+    expect(result.config.plugins?.load?.paths).toStrictEqual([]);
   });
 
   it("preserves non-string path entries when repairing legacy bundled paths", () => {
@@ -201,6 +201,6 @@ describe("bundled plugin load path repair", () => {
       },
     });
 
-    expect(hits).toEqual([]);
+    expect(hits).toStrictEqual([]);
   });
 });

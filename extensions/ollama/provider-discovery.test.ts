@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +11,7 @@ import { ollamaProviderDiscovery } from "./provider-discovery.js";
 const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
 
 afterEach(() => {
+  clearLiveCatalogCacheForTests();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
@@ -62,7 +64,7 @@ describe("Ollama provider", () => {
       NODE_ENV: "test",
       ...params.env,
     };
-    const result = await ollamaProviderDiscovery.discovery.run({
+    const result = await ollamaProviderDiscovery.catalog.run({
       config: params.config ?? {},
       agentDir: createAgentDir(),
       env,

@@ -237,7 +237,7 @@ describe("slackPlugin.security.collectAuditFindings lazy module forwarding", () 
     const account = slackPlugin.config.resolveAccount(cfg, "default");
     const result = await collectAuditFindings({ cfg, account } as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 });
 

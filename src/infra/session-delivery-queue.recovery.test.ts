@@ -33,7 +33,7 @@ describe("session-delivery queue recovery", () => {
 
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(summary.recovered).toBe(1);
-      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
+      expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
     });
   });
 

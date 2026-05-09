@@ -113,7 +113,7 @@ describe("listInspectedDirectoryEntriesFromSources", () => {
       normalizeId: (entry) => entry.replace(/^user:/i, ""),
     });
 
-    expect(entries).toEqual([]);
+    expect(entries).toStrictEqual([]);
   });
 
   it("lists entries from inspected account sources", () => {

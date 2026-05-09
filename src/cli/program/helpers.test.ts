@@ -40,8 +40,8 @@ describe("program helpers", () => {
   it("resolveActionArgs returns empty array for missing/invalid args", () => {
     const command = new Command();
     (command as unknown as { args?: unknown }).args = "not-an-array";
-    expect(resolveActionArgs(command)).toEqual([]);
-    expect(resolveActionArgs(undefined)).toEqual([]);
+    expect(resolveActionArgs(command)).toStrictEqual([]);
+    expect(resolveActionArgs(undefined)).toStrictEqual([]);
   });
 
   it("resolveCommandOptionArgs serializes explicit options", () => {
@@ -83,6 +83,6 @@ describe("program helpers", () => {
 
     command.parse(["node", "test"]);
 
-    expect(resolveCommandOptionArgs(command)).toEqual([]);
+    expect(resolveCommandOptionArgs(command)).toStrictEqual([]);
   });
 });

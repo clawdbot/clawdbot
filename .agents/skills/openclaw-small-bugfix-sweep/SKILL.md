@@ -7,17 +7,19 @@ description: Fix only small, high-certainty OpenClaw bugs from a pasted issue/PR
 
 Batch workflow for pasted OpenClaw issue/PR refs.
 Execute, do not summarize.
-Triage does not commit, push, create PRs, comment, close, label, land, or merge.
+Triage reviews, proves, and patches local fixes first; publishing waits for Peter's manual review.
 
 ## Peter Review Gate
 
 Peter always wants to review code before commits.
-After local fixes and proof, stop with the diff summary, touched files, and test/gate output.
-Do not commit unless Peter writes `commit` in the current instruction for the exact diff being handled.
-Do not treat earlier messages, inferred intent, "next", sweep momentum, or bundled publish language as commit permission.
-If Peter asks for follow-up work without saying `commit`, keep the files dirty after local fixes and proof.
-Do not push, comment, close, label, land, merge, or otherwise publish until Peter explicitly asks for that exact action after the code has been reviewed.
-If Peter asks for a bundled action like `commit push close`, first confirm the code has already been reviewed in chat; if not, stop with the dirty diff and ask for review/approval.
+Default flow:
+1. Review each issue deeply enough to prove current behavior and root cause.
+2. Fix only easy, high-confidence bugs with narrow ownership and focused proof.
+3. Stop with the dirty diff summary, touched files, and test/gate output for Peter's manual review.
+4. After Peter approves shipping, make one commit per accepted fix, with a changelog entry for each user-facing fix.
+5. Pull/rebase, push, then comment and close only the fixed or explicitly triaged-closed issues.
+
+Do not batch unrelated issue fixes into one commit. Do not push, create PRs, comment, close, label, land, merge, or otherwise publish during the review/prove phase.
 
 ## Companion Skills
 
@@ -58,8 +60,9 @@ Skip with terse reason. Do not pad with low-confidence fixes.
 - no drive-by refactors
 - tests near failing surface
 - docs only for changed public behavior
-- no commit unless Peter writes `commit` in the current instruction
-- no push/create PR/comment/close/label/land/merge unless explicitly asked for that exact action after review
+- no commit during the review/prove phase
+- after Peter approves shipping, one commit plus changelog per accepted user-facing fix
+- no push/create PR/comment/close/label/land/merge until Peter approves shipping after review
 
 ## PR Rules
 

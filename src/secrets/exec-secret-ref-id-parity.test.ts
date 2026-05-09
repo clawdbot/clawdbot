@@ -226,7 +226,7 @@ describe("exec SecretRef id parity", () => {
   }
 
   it("derives sampled class coverage from target registry metadata", () => {
-    expect(unclassifiedTargetIds).toEqual([]);
+    expect(unclassifiedTargetIds).toStrictEqual([]);
     expect(sampledTargetsByClass.length).toBeGreaterThan(0);
   });
 

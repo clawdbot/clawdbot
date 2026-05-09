@@ -4,6 +4,7 @@ import {
   buildRealtimeVoiceAgentConsultPrompt,
   collectRealtimeVoiceAgentConsultVisibleText,
   parseRealtimeVoiceAgentConsultArgs,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   resolveRealtimeVoiceAgentConsultToolPolicy,
   resolveRealtimeVoiceAgentConsultTools,
@@ -28,13 +29,17 @@ describe("realtime voice agent consult tool", () => {
   });
 
   it("accepts provider question aliases from realtime tool calls", () => {
-    expect(parseRealtimeVoiceAgentConsultArgs({ prompt: "  Check the repo. " })).toMatchObject({
+    expect(parseRealtimeVoiceAgentConsultArgs({ prompt: "  Check the repo. " })).toStrictEqual({
+      context: undefined,
       question: "Check the repo.",
+      responseStyle: undefined,
     });
     expect(
       parseRealtimeVoiceAgentConsultArgs({ query: "  Send a Discord message. " }),
-    ).toMatchObject({
+    ).toStrictEqual({
+      context: undefined,
       question: "Send a Discord message.",
+      responseStyle: undefined,
     });
   });
 
@@ -76,8 +81,8 @@ describe("realtime voice agent consult tool", () => {
     expect(resolveRealtimeVoiceAgentConsultToolPolicy("bad", "safe-read-only")).toBe(
       "safe-read-only",
     );
-    expect(resolveRealtimeVoiceAgentConsultTools("safe-read-only")).toEqual([
-      expect.objectContaining({ name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME }),
+    expect(resolveRealtimeVoiceAgentConsultTools("safe-read-only")).toStrictEqual([
+      REALTIME_VOICE_AGENT_CONSULT_TOOL,
     ]);
     expect(resolveRealtimeVoiceAgentConsultTools("none")).toStrictEqual([]);
     expect(resolveRealtimeVoiceAgentConsultToolsAllow("safe-read-only")).toEqual([
@@ -103,10 +108,7 @@ describe("realtime voice agent consult tool", () => {
 
     expect(
       resolveRealtimeVoiceAgentConsultTools("safe-read-only", [duplicateConsultTool, customTool]),
-    ).toEqual([
-      expect.objectContaining({ name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME }),
-      customTool,
-    ]);
+    ).toStrictEqual([REALTIME_VOICE_AGENT_CONSULT_TOOL, customTool]);
     expect(resolveRealtimeVoiceAgentConsultTools("none", [customTool])).toEqual([customTool]);
   });
 });

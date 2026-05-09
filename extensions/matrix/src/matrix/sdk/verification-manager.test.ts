@@ -162,7 +162,7 @@ describe("MatrixVerificationManager", () => {
     const summary = manager.trackVerificationRequest(request);
 
     expect(summary.id).toMatch(/^verification-\d+$/u);
-    expect(summary.methods).toEqual([]);
+    expect(summary.methods).toStrictEqual([]);
     expect(summary.phaseName).toBe("requested");
   });
 

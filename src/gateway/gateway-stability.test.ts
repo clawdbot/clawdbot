@@ -145,7 +145,7 @@ describe("gateway stability lane", () => {
     const unexpectedReasons = sessionEvents
       .map((event) => event.reason)
       .filter((reason) => reason !== STABILITY_REASON);
-    expect(unexpectedReasons).toEqual([]);
+    expect(unexpectedReasons).toStrictEqual([]);
 
     stopDiagnosticStabilityRecorder();
     emitDiagnosticEvent({

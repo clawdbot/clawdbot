@@ -38,7 +38,7 @@ describe("secrets runtime snapshot request secret refs", () => {
       loadAuthStore,
     });
 
-    expect(snapshot.authStores).toEqual([]);
+    expect(snapshot.authStores).toStrictEqual([]);
   });
 
   it("resolves model provider request secret refs for headers, auth, and tls material", async () => {

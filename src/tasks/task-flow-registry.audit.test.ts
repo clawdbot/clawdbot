@@ -93,7 +93,7 @@ describe("task-flow-registry audit", () => {
       },
     });
 
-    expect(listTaskFlowAuditFindings()).toEqual([]);
+    expect(listTaskFlowAuditFindings()).toStrictEqual([]);
   });
 
   it("detects stuck managed flows and missing blocked tasks", async () => {

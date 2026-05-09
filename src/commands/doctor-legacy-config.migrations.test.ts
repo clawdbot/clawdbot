@@ -123,7 +123,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
     });
     expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   };
 
   beforeAll(() => {
@@ -176,7 +176,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           },
         },
       }).changes,
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       normalizeCompatibilityConfigValues({
@@ -209,7 +209,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
 
     expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("does not add whatsapp config when only auth exists (issue #900)", () => {
@@ -286,7 +286,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     } as unknown as OpenClawConfig);
 
     expect(res.config.channels?.discord?.token).toBe("secretref-env:not-valid");
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("moves WhatsApp access defaults into accounts.default for named accounts", () => {
@@ -384,7 +384,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.models?.providers?.google?.baseUrl).toBe(
       "https://generativelanguage.googleapis.com/v1beta",
     );
-    expect(res.config.models?.providers?.google?.models).toEqual([]);
+    expect(res.config.models?.providers?.google?.models).toStrictEqual([]);
     expect(res.config.skills?.entries).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3-pro-image-preview).",
@@ -523,7 +523,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         },
       },
     });
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("migrates legacy Codex primary refs to OpenAI refs without agent runtime pins", () => {
@@ -592,7 +592,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues(input);
 
     expect(res.config).toEqual(input);
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("migrates legacy Claude CLI primary refs to Anthropic refs plus model runtime", () => {
@@ -712,7 +712,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues(input);
 
     expect(res.config).toEqual(input);
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("prefers legacy nano-banana env.GEMINI_API_KEY over skill apiKey during migration", () => {
@@ -733,7 +733,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.models?.providers?.google?.baseUrl).toBe(
       "https://generativelanguage.googleapis.com/v1beta",
     );
-    expect(res.config.models?.providers?.google?.models).toEqual([]);
+    expect(res.config.models?.providers?.google?.models).toStrictEqual([]);
     expect(res.changes).toContain(
       "Moved skills.entries.nano-banana-pro.env.GEMINI_API_KEY → models.providers.google.apiKey.",
     );
@@ -981,7 +981,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues(input);
 
     expect(res.config).toEqual(input);
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("migrates tools.message.allowCrossContextSend to canonical crossContext settings", () => {

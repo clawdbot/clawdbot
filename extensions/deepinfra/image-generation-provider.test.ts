@@ -96,34 +96,56 @@ describe("deepinfra image generation provider", () => {
       } as never,
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "deepinfra",
-        capability: "image",
-        baseUrl: "https://api.deepinfra.com/v1/openai",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.deepinfra.com/v1/openai/images/generations",
-        timeoutMs: 12_345,
-        body: {
-          model: "black-forest-labs/FLUX-1-schnell",
-          prompt: "red square",
-          n: 2,
-          size: "512x512",
-          response_format: "b64_json",
+    expect(resolveProviderHttpRequestConfigMock.mock.calls).toEqual([
+      [
+        {
+          baseUrl: "https://api.deepinfra.com/v1/openai",
+          defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
+          allowPrivateNetwork: false,
+          request: undefined,
+          defaultHeaders: {
+            Authorization: "Bearer deepinfra-key",
+          },
+          provider: "deepinfra",
+          capability: "image",
+          transport: "http",
         },
-      }),
-    );
+      ],
+    ]);
+    expect(postJsonRequestMock).toHaveBeenCalledOnce();
+    const [jsonRequest] = postJsonRequestMock.mock.calls[0] ?? [];
+    const jsonRequestHeaders = Reflect.get(jsonRequest ?? {}, "headers");
+    expect(jsonRequestHeaders).toBeInstanceOf(Headers);
+    expect(Object.fromEntries((jsonRequestHeaders as Headers).entries())).toEqual({
+      authorization: "Bearer deepinfra-key",
+      "content-type": "application/json",
+    });
+    expect(jsonRequest).toEqual({
+      url: "https://api.deepinfra.com/v1/openai/images/generations",
+      headers: jsonRequestHeaders,
+      timeoutMs: 12_345,
+      body: {
+        model: "black-forest-labs/FLUX-1-schnell",
+        prompt: "red square",
+        n: 2,
+        size: "512x512",
+        response_format: "b64_json",
+      },
+      fetchFn: fetch,
+      allowPrivateNetwork: false,
+      dispatcherPolicy: undefined,
+    });
     expect(result.images).toHaveLength(1);
     const [firstImage] = result.images;
     if (!firstImage) {
       throw new Error("Expected generated DeepInfra image");
     }
-    expect(firstImage.mimeType).toBe("image/jpeg");
-    expect(firstImage.fileName).toBe("image-1.jpg");
-    expect(firstImage.revisedPrompt).toBe("red square");
+    expect(firstImage).toEqual({
+      buffer: jpegBytes,
+      mimeType: "image/jpeg",
+      fileName: "image-1.jpg",
+      revisedPrompt: "red square",
+    });
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -152,16 +174,26 @@ describe("deepinfra image generation provider", () => {
       cfg: {} as never,
     });
 
-    expect(postMultipartRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.deepinfra.com/v1/openai/images/edits",
-      }),
-    );
-    const firstCall = postMultipartRequestMock.mock.calls[0];
-    if (!firstCall) {
+    expect(postMultipartRequestMock).toHaveBeenCalledOnce();
+    const [multipartRequest] = postMultipartRequestMock.mock.calls[0] ?? [];
+    if (!multipartRequest) {
       throw new Error("Expected DeepInfra multipart request");
     }
-    const form = firstCall[0].body as FormData;
+    const multipartHeaders = Reflect.get(multipartRequest, "headers");
+    expect(multipartHeaders).toBeInstanceOf(Headers);
+    expect(Object.fromEntries((multipartHeaders as Headers).entries())).toEqual({
+      authorization: "Bearer deepinfra-key",
+    });
+    const form = Reflect.get(multipartRequest, "body") as FormData;
+    expect(multipartRequest).toEqual({
+      url: "https://api.deepinfra.com/v1/openai/images/edits",
+      headers: multipartHeaders,
+      body: form,
+      timeoutMs: undefined,
+      fetchFn: fetch,
+      allowPrivateNetwork: false,
+      dispatcherPolicy: undefined,
+    });
     expect(form.get("model")).toBe("black-forest-labs/FLUX-1-schnell");
     expect(form.get("prompt")).toBe("make it neon");
     expect(form.get("response_format")).toBe("b64_json");

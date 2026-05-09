@@ -5,7 +5,7 @@ describe("extractMarkdownFormatRuns", () => {
   it("returns the text unchanged when there is no markdown", () => {
     const { text, ranges } = extractMarkdownFormatRuns("plain text reply");
     expect(text).toBe("plain text reply");
-    expect(ranges).toEqual([]);
+    expect(ranges).toStrictEqual([]);
   });
 
   it("extracts a bold span", () => {
@@ -35,7 +35,7 @@ describe("extractMarkdownFormatRuns", () => {
   it("respects word boundaries on single-underscore italics", () => {
     const { text, ranges } = extractMarkdownFormatRuns("snake_case_var ok");
     expect(text).toBe("snake_case_var ok");
-    expect(ranges).toEqual([]);
+    expect(ranges).toStrictEqual([]);
   });
 
   it("treats single-underscore as italic when surrounded by whitespace", () => {
@@ -47,13 +47,13 @@ describe("extractMarkdownFormatRuns", () => {
   it("does not treat empty marker pairs as formatting", () => {
     const { text, ranges } = extractMarkdownFormatRuns("**  ** literal");
     expect(text).toBe("**  ** literal");
-    expect(ranges).toEqual([]);
+    expect(ranges).toStrictEqual([]);
   });
 
   it("leaves a lone asterisk alone", () => {
     const { text, ranges } = extractMarkdownFormatRuns("price * quantity");
     expect(text).toBe("price * quantity");
-    expect(ranges).toEqual([]);
+    expect(ranges).toStrictEqual([]);
   });
 
   it("computes ranges in output coordinates, not input", () => {
@@ -88,7 +88,7 @@ describe("extractMarkdownFormatRuns", () => {
   it("respects word boundaries on double-underscore underline", () => {
     const { text, ranges } = extractMarkdownFormatRuns("def __init__(self):");
     expect(text).toBe("def __init__(self):");
-    expect(ranges).toEqual([]);
+    expect(ranges).toStrictEqual([]);
   });
 
   it("does not leak literal asterisks from triple markers when intent is unclear", () => {

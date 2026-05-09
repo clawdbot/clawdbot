@@ -72,8 +72,8 @@ describe("music-generation runtime", () => {
 
     expect(result.provider).toBe("music-plugin");
     expect(result.model).toBe("track-v1");
-    expect(result.attempts).toEqual([]);
-    expect(result.ignoredOverrides).toEqual([]);
+    expect(result.attempts).toStrictEqual([]);
+    expect(result.ignoredOverrides).toStrictEqual([]);
     expect(seenAuthStore).toEqual(authStore);
     expect(seenTimeoutMs).toBe(12_345);
     expect(result.tracks).toEqual([
@@ -119,7 +119,7 @@ describe("music-generation runtime", () => {
     const result = await runGenerateMusic(params);
 
     expect(result.provider).toBe("music-plugin");
-    expect(listedConfigs).toEqual([]);
+    expect(listedConfigs).toStrictEqual([]);
   });
 
   it("auto-detects and falls through to another configured music-generation provider by default", async () => {
@@ -364,7 +364,7 @@ describe("music-generation runtime", () => {
     expect(seenRequest).toEqual({
       durationSeconds: 30,
     });
-    expect(result.ignoredOverrides).toEqual([]);
+    expect(result.ignoredOverrides).toStrictEqual([]);
     expect(result.normalization).toMatchObject({
       durationSeconds: {
         requested: 45,

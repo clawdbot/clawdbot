@@ -206,7 +206,7 @@ describe("Discord dependency ownership", () => {
     const manifest = readPackageManifest("package.json");
     const discordDependencies = allDependencyNames(manifest).filter(isDiscordPackageDependency);
 
-    expect(discordDependencies).toEqual([]);
+    expect(discordDependencies).toStrictEqual([]);
   });
 
   for (const manifestPath of listPackageManifests(EXTENSION_ROOT)) {
@@ -220,7 +220,7 @@ describe("Discord dependency ownership", () => {
       const manifest = readPackageManifest(manifestPath);
       const discordDependencies = allDependencyNames(manifest).filter(isDiscordPackageDependency);
 
-      expect(discordDependencies).toEqual([]);
+      expect(discordDependencies).toStrictEqual([]);
     });
   }
 });
@@ -280,7 +280,7 @@ describe("extension runtime dependency manifests", () => {
           !allowedIndirect.has(dependencyName) && !runtimeText.includes(dependencyName),
       );
 
-      expect(unused).toEqual([]);
+      expect(unused).toStrictEqual([]);
     });
   }
 });

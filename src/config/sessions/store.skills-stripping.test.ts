@@ -205,7 +205,7 @@ describe("embedded runner falls back to disk when resolvedSkills is absent", () 
     });
 
     expect(result.shouldLoadSkillEntries).toBe(false);
-    expect(result.skillEntries).toEqual([]);
+    expect(result.skillEntries).toStrictEqual([]);
   });
 });
 

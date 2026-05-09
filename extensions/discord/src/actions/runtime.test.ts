@@ -338,7 +338,7 @@ describe("handleDiscordMessagingAction", () => {
         maxSelections: 2,
         durationHours: 24,
       },
-      expect.any(Object),
+      { cfg: DISCORD_TEST_CFG, content: undefined },
     );
   });
 
@@ -370,7 +370,11 @@ describe("handleDiscordMessagingAction", () => {
       },
     } as OpenClawConfig;
     await handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions, cfg);
-    expect(readMessagesDiscord).toHaveBeenCalledWith("C1", expect.any(Object), { cfg });
+    expect(readMessagesDiscord).toHaveBeenCalledWith(
+      "C1",
+      { limit: undefined, before: undefined, after: undefined, around: undefined },
+      { cfg },
+    );
   });
 
   it("adds normalized timestamps to fetchMessage payloads", async () => {

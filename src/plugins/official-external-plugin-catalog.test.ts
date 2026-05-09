@@ -44,7 +44,7 @@ describe("official external plugin catalog", () => {
     );
   });
 
-  it("keeps Matrix and Mattermost out of the external catalog until cutover", () => {
+  it("lists Matrix as an official external ClawHub channel after cutover", () => {
     const ids = new Set<string>();
     for (const entry of listOfficialExternalPluginCatalogEntries()) {
       const pluginId = resolveOfficialExternalPluginId(entry);
@@ -53,7 +53,14 @@ describe("official external plugin catalog", () => {
       }
     }
 
-    expect(ids.has("matrix")).toBe(false);
+    expect(ids.has("matrix")).toBe(true);
     expect(ids.has("mattermost")).toBe(false);
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("matrix"))).toEqual(
+      expect.objectContaining({
+        clawhubSpec: "clawhub:@openclaw/matrix",
+        npmSpec: "@openclaw/matrix",
+        defaultChoice: "clawhub",
+      }),
+    );
   });
 });

@@ -33,7 +33,7 @@ describe("signalMessageActions", () => {
   it("lists actions based on configured accounts and reaction gates", () => {
     expect(
       signalMessageActions.describeMessageTool?.({ cfg: {} as OpenClawConfig })?.actions ?? [],
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       signalMessageActions.describeMessageTool?.({
